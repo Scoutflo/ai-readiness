@@ -9,6 +9,9 @@ No. The toolkit runs inside your Claude Code. Your credentials stay in your envi
 **Can an audit change anything in my systems?**
 No. Audit skills are read-only by design and doctor-gated; the only writes are local report files. Setup skills are separate, state every change up front, and do nothing until you explicitly confirm.
 
+**What does the 0–100 score mean?**
+It measures your setup against a stated best-practice target for that audit's domain, weighted by category (the scorecard shows each category's weight and its passed/total checks). 85 is the end-to-end gate: at or above it — with every critical service covered and no category excluded — the report may claim end-to-end coverage. Below it, the executive summary states your gap in points and the two or three findings that recover the most. Scoring is conservative: a check only earns full credit when it was verified live this run, so a low first score usually means "unproven", not "broken". Full mechanics are in `report-standard/severity-and-scoring.md`.
+
 **Does it help with alert noise or alert fatigue?**
 Yes. Every audit scores alert hygiene alongside coverage: it flags rules that flap (fire and resolve in a loop), rules that have fired so long they've become wallpaper, alerts with no debounce that trip on a single blip, missing grouping or inhibition, duplicate delivery, and resolve-noise. Each noisy rule is named with the exact setting to fix it. It reports the structural signs of noise directly; it does not invent an "X% of your alerts are actionable" figure — a true alert-to-incident rate needs a feed from your paging tool.
 

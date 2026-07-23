@@ -19,6 +19,23 @@ First run, in order:
 
 Then run any `audit-*` skill and read the report in `./scoutflo-audits/<target>/<date>/report.md`. Not sure which audits apply to you? `/scoutflo:start` lists the full catalog.
 
+### Verify or update the installed version
+
+```
+/plugin
+```
+
+The plugin list shows the installed version (compare against [CHANGELOG.md](../CHANGELOG.md)) and offers update; the marketplace serves the latest release from the repository's `main` branch.
+
+### Uninstall
+
+```
+/plugin uninstall scoutflo@scoutflo
+/plugin marketplace remove scoutflo
+```
+
+Your credentials (`~/.scoutflo/toolkit.yaml`, token env variables) and generated reports (`./scoutflo-audits/`) are yours and are not removed; delete them yourself if you want a full cleanup.
+
 ## Team
 
 Commit this to `.claude/settings.json` in the repository your team works from. Everyone who opens the repo in Claude Code gets the marketplace and the plugin automatically, kept up to date:

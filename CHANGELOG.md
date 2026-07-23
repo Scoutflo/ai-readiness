@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.41
+
+Docs polish: FAQ gained a "What does the 0-100 score mean?" entry (target
+profile, the 85 end-to-end gate, conservative-scoring note); the install
+guide gained "Verify or update the installed version" and "Uninstall"
+sections (including what is deliberately left behind: credentials and
+local reports).
+
 ## 0.1.40
 
 Report-quality pass driven by first team feedback on real reports.
