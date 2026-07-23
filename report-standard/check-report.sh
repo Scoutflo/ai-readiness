@@ -76,6 +76,15 @@ if printf '%s\n' "$topo_body" | grep -q '^| Service |'; then
     && fail "Topology Readiness table uses raw T1-T6 codes as column headers; use the plain-English check names from topology-readiness.md (codes belong in the legend line only)"
   printf '%s\n' "$topo_body" | awk -F'|' '/^\| [a-z]/ {v=$(NF-2); gsub(/ /,"",v); if (v ~ /^[0-9]+$/ && v !~ /\//) found=1} END {exit !found}' \
     && fail "Topology Readiness confidence column shows a bare number; render the scale as n/10 (see topology-readiness.md)"
+
+  # 7. No internal jargon or file paths leaking into customer-facing prose. The
+  #    legend line ("Checks T1-T6 per...") is the one sanctioned exception and
+  #    is excluded before this scan; everything else in the section is prose a
+  #    customer reads and must be plain language (see topology-readiness.md's
+  #    "Internal identifiers — never customer-facing" section).
+  topo_prose="$(printf '%s\n' "$topo_body" | grep -v '^<sub>Checks T1-T6')"
+  printf '%s\n' "$topo_prose" | grep -E 'sync-ready|sync-readiness|MONITORED_BY|SENDS_METRICS_TO|SENDS_LOGS_TO|SENDS_TRACES_TO|DEPLOYED_AS|topology-export\.json|topology\.md|correlation attribute' \
+    && fail "Topology Readiness prose leaks internal jargon or file names (sync-ready, MONITORED_BY-style edge names, topology-export.json, etc.) into customer-facing text; rewrite in plain language per topology-readiness.md"
 fi
 
 if [ "$FAIL" -eq 0 ]; then

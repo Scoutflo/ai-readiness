@@ -1,72 +1,87 @@
 # Scoutflo Topology Readiness
 
-Every audit report carries a Scoutflo Topology Readiness section. It answers one question per critical service: **once the report's findings are fixed, will this service work with Scoutflo platform source sync and correlation sync?** A customer who reaches "ready" across their critical services can adopt the platform without a topology rebuild; that is the point of the section.
+Every audit report carries a Scoutflo Topology Readiness section. **Read this section as: "if you connect this service to the Scoutflo platform today, will Scoutflo be able to automatically tell which alerts, logs, and metrics belong to it?"** That's a different question from the report's 0-100 score. The score asks "is this service well-monitored?" This section asks "is it *labeled and wired clearly enough* that an automated system — not a human reading dashboards — can reliably match a signal to the right service?" A service can score well and still fail this section, and vice versa; the report shows both because they answer different questions.
 
-Input: `./scoutflo-audits/topology-export.json` (written by `/scoutflo:map-topology`, spec in the skill's `references/scoutflo-export.md`). If the file or `topology.md` is missing, the section says exactly that and points at `/scoutflo:map-topology`; it never guesses.
+This section is written for anyone reading the report, with no assumption they know anything about Scoutflo's internals. It never uses Scoutflo-internal terms, code names, or file paths in its customer-facing prose — see "Writing rules for this section" below for what that means in practice and why it matters if the reader hands this report to their own AI assistant.
+
+Behind the scenes, this section is generated from a machine-readable map of the customer's services (built by a separate mapping step). If that map doesn't exist yet, or was built for a different part of the estate than this report covers, the section says so in plain terms and names the one command that fixes it — it never silently skips itself or says a bare "unavailable".
 
 ## The six checks per critical service
 
-Each check has a plain-English name — that name is what report tables and prose use. The `T1`-`T6` codes are stable internal identifiers for cross-references and deltas; like finding IDs, they are demoted in rendered reports (a legend line under the table), never used as column headers, and a reader should never need them to understand the section.
+Each critical service is checked against six criteria. Report tables and prose use only the plain-English name in the left column below — the short codes are internal bookkeeping (see "Internal identifiers" below) and must never appear in anything the customer reads.
 
-| Code | Check (canonical rendered name) | Pass condition |
+| Plain-English name (what the report shows) | What it checks, in plain terms | Internal code |
 | --- | --- | --- |
-| T1 | Service identity | Unique `name`; valid `service_type`, `environment`, `business_criticality`; correlation attributes present: `service_name`, `namespace`, `cluster_id` (values lowercase, no URLs/hostnames/IPs — correlation engines drop such values) |
-| T2 | Workload mapping | The service has a `DEPLOYED_AS` edge to a workload resource carrying all four mandatory attributes: `cluster_id`, `namespace`, `workload_name`, `workload_type` (import rejects workloads without them) |
-| T3 | Telemetry connections | At least one edge per signal the service emits: `SENDS_METRICS_TO`, `SENDS_LOGS_TO`, `SENDS_TRACES_TO`, `MONITORED_BY` — sourced from the watchpoints table, not assumed |
-| T4 | Connection details | Each observability edge carries its provider's required attributes (sentry: `project`; prometheus-family: `jobLabel`, `namespace`, `metricsPath`; loki: `namespace`, `app`; victorialogs: `serviceName`, `namespace`; tempo/victoriatraces: `serviceName`; vcs/ticketing per the export spec) |
-| T5 | Tool identity | Each referenced backend resource has `identity.provider` and `identity.external_id`, so alerts from that backend can be resolved back to the service |
-| T6 | Match confidence | Every edge from T3 is at confidence >= 8 (scale 0-10) **and** carries an actionable anchor combination: a `service`-category identity attribute plus either a Kubernetes anchor (`namespace`, `pod`, or `container` category) or, for Sentry specifically, a `project` or `environment` category attribute. A confidence-8+ edge missing that anchor combination is not actionable on the real platform even though the number alone would suggest it is — do not pass T6 on the number by itself. Declared edges that an audit verified live count as 8+; declared-but-unverified stays below |
+| Service identity | Does the service have a clean, unique name and basic classification (type, environment, criticality) that a human and a machine would both read the same way — no stray URLs or IP addresses in the name fields, which automated matching silently ignores? | T1 |
+| Workload mapping | Is the service actually linked to the real infrastructure object running it (its Kubernetes deployment, VM, or equivalent), with enough detail (cluster, namespace, workload name and type) that the platform can find it? | T2 |
+| Telemetry connections | Has each kind of signal this service produces — metrics, logs, traces, and alerts — been explicitly connected to where that signal lives, rather than left to be guessed? | T3 |
+| Connection details | For each of those connections, are the specific fields the monitoring tool needs (for example, which label identifies this service in Prometheus, or which project name identifies it in Sentry) filled in, not just "a connection exists"? | T4 |
+| Tool identity | Is the monitoring tool itself (the specific Grafana, Prometheus, Sentry, etc. instance) clearly identified, so that when it produces an alert, the platform knows which tool it came from? | T5 |
+| Match confidence | Given everything above, how sure can the platform actually be that a given alert or log line belongs to *this* service and not a different one with a similar name elsewhere in the estate? Scored 0-10; only 8 or higher is treated as reliable enough to act on automatically | T6 |
 
-**Confidence is always rendered with its scale**: write `5/10`, never a bare `5`. This is a specific case of the report standard's general rule that every number carries its denominator or scale (see [report-template.md](report-template.md)).
+**Confidence is always shown with its scale**: write `5/10`, never a bare `5` — a bare number invites the reader (or their own LLM) to guess what scale it's on.
 
-### Identity attributes must be correlation-ready, not just present
+## Internal identifiers — never customer-facing
 
-T4 and T6 check different things, so do not assume a field that satisfies T4 automatically satisfies T6. **T4** confirms an observability edge carries the provider's own identifying fields (for example Prometheus `jobLabel`/`namespace`/`metricsPath`, Sentry `project`). **T6** confirms those values are carried in a form the platform can actually anchor a signal on: a service/workload/app identity plus a Kubernetes anchor (`namespace`, `pod`, or `container`) or, for Sentry, a `project`/`environment`.
+`T1`-`T6` are the internal, stable identifiers this document and the audit skills use to refer to each check unambiguously across reports and over time (the way `ALR-002` or `LGTM-039` identify a specific finding). They exist for people maintaining or extending this toolkit, not for readers of a customer report. Renders of this section:
+- use the plain-English names as column headers, always;
+- may include the codes once, in a small legend line below the table (`Checks T1-T6 per topology-readiness.md`), so a maintainer following a bug report can locate the exact check — but a customer never needs to read or understand that legend to understand the table itself;
+- never use terms like "edge", "`MONITORED_BY`", "`SENDS_METRICS_TO`", "correlation attribute", or any internal file name (`topology-export.json`, `topology.md`) in prose sentences a customer reads. Those are the data model this toolkit uses internally to compute the table — say what was checked and what's missing in plain terms instead (see the rewritten examples under "Verdict per service" and the action-plan rules below).
 
-The practical rule for a clean export: carry the service identity on a plain snake_case `service` or `service_name` attribute, alongside a `namespace` (or `pod`/`container`). A camelCase or provider-specific field — for example `serviceName` on CloudWatch, VictoriaLogs, Tempo, or VictoriaTraces — can satisfy that provider's own schema (so it passes T4) while still not anchoring correlation (so it fails T6). When a provider's identity field is camelCase, also emit a literal `service_name` with the same value so the anchor is unambiguous. Scoutflo maintains the current, exact attribute and naming requirements; check your export against Scoutflo's topology documentation before an import.
+This matters beyond politeness: a customer who cannot make sense of unfamiliar jargon is likely to paste the report into their own AI assistant and ask what it means. If the assistant has never seen Scoutflo's internal data model, undefined terms like "sync-ready" or "`MONITORED_BY` edge" give it nothing to ground an answer in — it will confidently invent one, and that invented explanation will look just as authoritative as the real content around it. Plain language closes that gap; jargon opens it.
+
+### Internal note: Connection details vs. Match confidence are not the same pass
+
+*(This subsection is for people maintaining the audit skills, not for report prose. Nothing below should appear in a customer-facing report — the plain-English equivalent is "having a connection isn't enough; the platform also needs to be confident it's connected to the right service," which is already covered by the two-row explanation in the table above.)*
+
+T4 and T6 check different things internally, so a field that satisfies T4 does not automatically satisfy T6. T4 confirms a signal connection carries the provider's own identifying fields (for example Prometheus `jobLabel`/`namespace`/`metricsPath`, Sentry `project`). T6 confirms those values are carried in a form the platform can actually anchor a signal on: a service/workload/app identity plus a Kubernetes anchor (`namespace`, `pod`, or `container`) or, for Sentry, a `project`/`environment`. The practical rule for a clean export: carry the service identity on a plain snake_case `service` or `service_name` attribute, alongside a `namespace` (or `pod`/`container`). A camelCase or provider-specific field — for example `serviceName` on CloudWatch, VictoriaLogs, Tempo, or VictoriaTraces — can satisfy that provider's own schema (so it passes T4) while still not anchoring correlation (so it fails T6). When a provider's identity field is camelCase, also emit a literal `service_name` with the same value so the anchor is unambiguous.
 
 ## Verdict per service
 
-- **ready** — all six pass.
-- **partial** — T1 and T2 pass, at least one of T3-T6 fails. Name the exact gap ("logs edge missing", "sentry edge missing `project`").
-- **not-ready** — T1 or T2 fails. Identity gaps block everything downstream; say so first.
+- **ready** — all six checks pass.
+- **partial** — Service identity and Workload mapping pass, but at least one of the other four checks fails. Name the exact gap in plain terms a reader can act on ("no logs connection declared for this service" rather than "logs edge missing").
+- **not-ready** — Service identity or Workload mapping fails. These two are foundational; if the platform can't even identify or locate the service, nothing downstream can be evaluated, so say that first.
 
-Section headline: `<r> of <n> critical services sync-ready`. The Slack brief carries the same counts, no service names needed.
+Section headline, written for the reader with no internal terms: `<r> of <n> critical services are ready for automatic Scoutflo correlation` (do not use "sync-ready" — spell out what readiness means each time it appears, since the phrase alone means nothing to someone seeing it for the first time). The Slack brief carries the same counts, no service names needed.
 
-## Required: the sync-readiness action plan
+## Required: the readiness action plan
 
-Whenever at least one service is below **ready**, the section ends with an action table — one row per blocking gap, written so a reader can paste any row into a ticket (Jira or otherwise) without rewording. Vague rows ("improve edge attributes") are a conformance bug; each row names the exact object and the exact change:
+Whenever at least one service is below **ready**, the section ends with an action table — one row per blocking gap, written in plain language so a reader can paste any row into a ticket (Jira or otherwise) without rewording and without needing to know Scoutflo's internal terms. Vague rows ("improve connection attributes") are a conformance bug; each row names the exact, real-world object and the exact change — a config field, a command, a dashboard setting, a receiver name — never an internal data-model term like "edge" or a file path like `topology-export.json`:
 
 | # | Service | Blocked on | Do this | Done when |
 | --- | --- | --- | --- | --- |
-| 1 | checkout | Connection details | Add `jobLabel` and `metricsPath` to checkout's `SENDS_METRICS_TO` edge attributes in the export (values from the live scrape config) | Re-run the audit: checkout's Connection details column reads pass |
-| 2 | checkout | Match confidence | Fix the dead default receiver (finding ALR-002), then re-verify the `MONITORED_BY` edge live | Edge confidence reads 8/10 or higher with the anchor attributes present |
+| 1 | checkout | Connection details | In your Prometheus scrape config for checkout, confirm the `jobLabel` and `metricsPath` values, then add them to checkout's metrics connection so Scoutflo can query the right target | Re-run the audit: checkout's Connection details column reads pass |
+| 2 | checkout | Match confidence | Fix the dead default alert receiver (finding ALR-002), then re-check that alerts for checkout actually reach it | The alert-connection confidence reads 8/10 or higher |
 
-Rules: **Do this** is one concrete imperative naming the object (edge, attribute, receiver, file) and the change — commands or exact field names where they exist, referencing the finding ID when one exists. **Done when** is an observable condition a teammate can verify without context. Order rows by verdict severity (not-ready services first), then by check order. All services ready: state that in one line and omit the table.
+Rules: **Do this** is one concrete imperative naming the real object (a config field, a receiver, a dashboard, a command) and the exact change — referencing the finding ID when one exists, but describing the fix itself in plain infrastructure terms, not the internal data-model term for it. **Done when** is an observable condition a teammate can verify without any Scoutflo-specific context. Order rows by verdict severity (not-ready services first), then by check order. All services ready: state that in one line and omit the table.
 
-## When the export is missing or does not match the audit target
+## When the underlying service map is missing or doesn't match this report's target
 
-Three distinct states, each rendered differently — never a bare "unavailable":
+Three distinct states, each rendered differently in plain language — never a bare "unavailable", and never naming the internal file (say "the service map for this environment" or similar, not `topology-export.json`):
 
-1. **No export exists** (`topology-export.json`/`topology.md` absent): say that, and give the unlock in one line: "Run `/scoutflo:map-topology` against the cluster serving these services, then re-run this audit — this section will then score each service."
-2. **Export exists but describes a different target** (its `cluster_id`/services do not overlap this audit's estate — e.g. a Kubernetes export while auditing a cloud account): say which target the export belongs to, that no row can be honestly scored against it, and the unlock: map the estate this audit covers (or, for non-Kubernetes estates, hand-author the export per `scoutflo-export.md`) and re-run.
-3. **Estate has no Kubernetes topology at all** (pure cloud/SaaS target): state that the section applies once services are modeled in an export, and point at `scoutflo-export.md` for the manual shape.
+1. **No map exists yet**: say that, and give the one-line fix: "Run `/scoutflo:map-topology` against the environment serving these services, then re-run this audit — this section will then be able to check each service."
+2. **A map exists but covers a different environment** (e.g. it describes a Kubernetes cluster while this report audits a cloud account, or a different cluster than the one these services actually run on): say plainly which environment the existing map covers, that none of this report's services can be honestly checked against it, and the fix: map the environment this report actually covers, then re-run.
+3. **This kind of estate has no service map concept at all** (a pure cloud/SaaS target with no Kubernetes layer): say the section will apply once services are modeled, and point at the mapping command as the way to do that.
 
-In every state the section still renders (never silently dropped), and the Slack brief's readiness line reads `readiness not recorded` rather than a guessed count.
+In every state the section still renders (never silently dropped), and the Slack brief's readiness line reads "readiness not recorded" rather than a guessed count.
 
-## How audits use this
+## How audits use this (internal)
 
-- Audit skills evaluate T1-T6 read-only from `topology-export.json` plus their own live checks (an audit that just verified a Sentry project exists upgrades that edge's T6).
-- Gaps that map to an existing finding reference the finding ID; gaps with no finding get a `TOPO-` prefixed row in the findings table with a remediation pointer to `/scoutflo:map-topology` (fill watchpoints, re-run) or the relevant setup skill.
-- Readiness is reported, never scored into the 0-100 audit score. It is a parallel verdict with its own column, so a customer can be observability-healthy but not yet sync-ready, and see both truths.
+*(Internal implementation notes for maintainers — none of this belongs in customer-facing report prose.)*
 
-## Why these checks
+- Audit skills evaluate T1-T6 read-only from `topology-export.json` plus their own live checks (an audit that just verified a Sentry project exists upgrades that check's T6 confidence).
+- Gaps that map to an existing finding reference the finding ID; gaps with no finding get a `TOPO-` prefixed row in the findings table with a remediation pointer to `/scoutflo:map-topology` (fill watchpoints, re-run) or the relevant setup skill. `TOPO-` and other internal prefixes never appear in the customer-facing prose of this section — only in the findings table, which is understood to be an internal-ID index.
+- Readiness is reported, never scored into the 0-100 audit score. It is a parallel verdict with its own column, so a customer can be observability-healthy but not yet ready for automatic correlation, and see both truths without either one hiding the other.
 
-Platform correlation matches a signal to a service only when a service/workload/app name AND (a namespace/pod/container match, or, for Sentry, a project/environment match) both hold between topology and signal, with the integration identified by its provider and external id. T1-T6 are exactly the fields that make those matches possible. A high confidence number by itself is not the gate — the platform requires both the confidence and the identity/anchor combination before it treats a proposal as actionable, which is why T6 checks both. The precise attribute and confidence requirements are maintained by Scoutflo; verify your export against current Scoutflo topology documentation before an actual import.
+## Why these checks (internal rationale)
 
-## Two known boundaries of this per-service model
+*(Internal — explains the design to maintainers; do not surface this reasoning in customer report prose. The plain-English equivalent for a customer is already in the intro paragraph and the six-row table above.)*
 
-T1-T6 judge each critical service in isolation. Two real classes of gap sit outside that scope and are worth naming explicitly, because a customer can pass all six checks for every service and still have a broken graph in these two specific ways:
+Platform correlation matches a signal to a service only when a service/workload/app name AND (a namespace/pod/container match, or, for Sentry, a project/environment match) both hold between the service map and the signal, with the monitoring tool identified by its provider and external id. T1-T6 are exactly the fields that make those matches possible. A high confidence number by itself is not the gate — the platform requires both the confidence and the identity/anchor combination before it treats a proposal as actionable, which is why the Match confidence check verifies both.
 
-- **Multi-cluster identity bleed.** When the same service name repeats across two or more clusters, a workload-identity match that isn't cluster-scoped can resolve a service to a workload running in the *wrong* cluster. This is invisible from T1-T6 alone, since each check passes per-service without ever comparing across clusters. If the estate spans 2+ clusters with any repeated service names, explicitly verify each service's `DEPLOYED_AS` edge resolves to a workload in its own cluster, not a same-named one elsewhere — this is a real, confirmed platform-level failure mode, not a hypothetical.
-- **Cross-service call edges are out of scope for T1-T6 by design**, since T1-T6 is a per-service check. A topology where every service individually passes T1-T6 can still have zero recorded `CALLS` relationships between services — meaning cross-service blast-radius reasoning has no data to work from, even though every individual service looks "sync-ready." `map-topology`'s traffic map is the place this gets captured (via Ingress/Service-selector/VirtualService/ServiceEntry-backed edges on the fallback and mesh paths respectively); a customer whose traffic map is sparse or empty should not be read as "topology ready" for cross-service investigation quality, only for per-service correlation. Note this distinction explicitly in any readiness conversation with a customer rather than letting a clean T1-T6 scorecard imply more than it proves.
+## Two things this section cannot see, even when every service passes
+
+The six checks above look at each critical service on its own. Two real gaps sit outside that scope, and it's worth stating both plainly in any report — a customer can pass every check for every service and still have these two problems, so a clean table should never be read as "the whole picture is fine":
+
+- **A service name that repeats across more than one cluster can get matched to the wrong one.** If two different clusters both run something called, say, `checkout`, an identity match that isn't scoped to a specific cluster can resolve alerts or logs to the wrong `checkout` — the one in the other cluster. This is invisible to the six checks, because each one is evaluated per service without ever comparing across clusters. If an estate spans more than one cluster and any service name repeats between them, this is worth verifying by hand: confirm each service's real workload link points at a workload in its own cluster, not a same-named one elsewhere. This is a confirmed real failure mode, not a hypothetical edge case. *(Internal: this corresponds to checking that the `DEPLOYED_AS` connection resolves within the declared `cluster_id`.)*
+- **These checks don't cover whether services can see each other.** Passing all six checks proves the platform can identify and connect to each service individually — it says nothing about whether the platform has any record of which services call which other services. A customer whose services all pass individually can still have zero recorded traffic relationships between them, which means investigating "what else might this outage affect" has no data to work from, even though every service on its own looks fully ready. This is a separate, additional thing to map (the traffic/call-graph step), and a report should say so explicitly rather than letting a clean per-service table imply that cross-service investigation is also covered — it is not, unless that traffic map has separately been built and populated.

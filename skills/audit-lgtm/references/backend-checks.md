@@ -478,11 +478,12 @@ Reading the results. LGTM-060: any single-replica statefulset holding metrics, l
 
 ## 12. Per-service coverage queries (LGTM-030 to LGTM-035, gated by LGTM-039)
 
-**LGTM-039 telemetry-scope probe — run ONCE, before any per-service row.** Establishes whether the metrics backend actually monitors the cluster the kubeconfig points at; SKILL.md Phase 6 defines how each outcome reclassifies the rows below.
+**LGTM-039 telemetry-scope probe — run ONCE, before any per-service row.** Establishes whether the metrics backend actually monitors the cluster each critical service runs on; SKILL.md Phase 6 defines how each outcome reclassifies the rows below.
+
+**Trust `topology-export.json`'s declared `cluster_id` per service first — never the current kubectl context.** The kubectl context active during this run is frequently *not* the cluster the critical services live on (a central telemetry stack is commonly reached by port-forward or a separate context, exactly while the services themselves run elsewhere) — comparing telemetry only against "whatever context is active right now" silently passes the gate in that exact case and lets real scope mismatches through as false-positive LGTM-030s. Each service in `topology-export.json` already carries its own `attributes.cluster_id` (written by `/scoutflo:map-topology`); that field, not the live kubectl context, is Side B.
 
 ```bash
 set -eu
-KUBE_CONTEXT="your-kube-context"               # kubernetes.context
 METRICS_URL="https://prometheus.example.com"   # prometheus.url (adjust prefix per sections 3-4)
 METRICS_TOKEN="${PROM_TOKEN:-}"
 MAUTH="Authorization: Bearer ${METRICS_TOKEN}"; [ -n "$METRICS_TOKEN" ] || MAUTH="Accept: application/json"
@@ -497,17 +498,21 @@ curl -fsS --max-time 10 -H "$MAUTH" --get \
   "${METRICS_URL}/api/v1/query" | jq -r '.data.result[] | "\(.metric.cluster // "(no cluster label)") nodes=\(.value[1])"'
 curl -fsS --max-time 10 -H "$MAUTH" "${METRICS_URL}/api/v1/label/namespace/values" | jq -r '.data[]?' | sort > /tmp/lgtm-ns-telemetry.txt
 
-# Side B: what the local cluster actually is.
+# Side B, primary source: each critical service's declared cluster_id from the export.
+jq -r '.services[] | "\(.name)\t\(.attributes.cluster_id // "MISSING")"' ./scoutflo-audits/topology-export.json
+
+# Side B, fallback only — use ONLY when topology-export.json is absent or a service's
+# cluster_id is null/MISSING (score that service's gate as undetermined otherwise; do not
+# silently substitute the active kubectl context for a missing declared cluster_id):
+KUBE_CONTEXT="your-kube-context"               # kubernetes.context
 kubectl --context "$KUBE_CONTEXT" get nodes -o name | wc -l
 kubectl --context "$KUBE_CONTEXT" get nodes -o jsonpath='{.items[0].metadata.name}'
 kubectl --context "$KUBE_CONTEXT" get namespaces -o name | sed 's|namespace/||' | sort > /tmp/lgtm-ns-local.txt
-
-# Compare: node names/count and namespace overlap.
 comm -12 /tmp/lgtm-ns-local.txt /tmp/lgtm-ns-telemetry.txt | wc -l   # shared namespaces
 comm -23 /tmp/lgtm-ns-local.txt /tmp/lgtm-ns-telemetry.txt | head    # local-only (backend doesn't see these)
 ```
 
-Interpretation: matching node names (spot-check one local node name against `kube_node_info{node=...}`) or a namespace overlap covering the critical services' namespaces = same cluster, proceed. Local critical-service namespaces absent from the telemetry side while the telemetry side carries namespaces that do not exist locally = different cluster; every local-workload row below is `blocked` per SKILL.md Phase 6, filed once as LGTM-039 with both inventories as evidence. No `kube_node_info`, no cluster label, thin namespace sets = undetermined; state it and score conservatively without inventing a critical finding.
+Interpretation, evaluated **per critical service**, not once globally: take that service's `attributes.cluster_id` from `topology-export.json` and check whether the telemetry backend's Side A cluster values/labels include it (exact match, or the backend's node inventory and namespace overlap corroborate it). A service whose declared cluster_id matches the telemetry side = same cluster, proceed with scoring for that service. A service whose declared cluster_id does not appear anywhere in the telemetry backend's cluster values, node inventory, or namespace overlap = different cluster; that service's workload-coverage row is `blocked` per SKILL.md Phase 6, filed as LGTM-039 naming both cluster_ids as evidence. Only fall back to the kubectl-context comparison (Side B fallback above) for services with no `cluster_id` in the export, and when you do, say so explicitly in the LGTM-039 finding rather than presenting it as equivalent evidence — a kubectl-context match is weaker proof than a declared, map-topology-authored `cluster_id` match. No `kube_node_info`, no cluster label, thin namespace sets, and no declared `cluster_id` = undetermined; state it and score conservatively without inventing a critical finding. Because the gate is now per-service, a single run can have some services pass the gate and others blocked — do not collapse this to one global verdict.
 
 Then run the queries below once per critical service from `./scoutflo-audits/topology.md`. Label names are yours to tune.
 
