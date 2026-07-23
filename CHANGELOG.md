@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.39
+
+Preserved T6 evaluation precision after the v0.1.38 genericization. The
+public Topology Readiness spec now states the customer-actionable naming
+rule explicitly — carry a plain snake_case `service_name`; a camelCase or
+provider-specific field (e.g. `serviceName`) can pass a provider''''s own
+schema (T4) but not anchor correlation (T6) — without exposing the internal
+mapping algorithm. The T6 check itself was never changed; report output
+quality is unaffected.
+
 ## 0.1.38
 
 Kept platform-internal correlation mechanism out of the public spec. The
