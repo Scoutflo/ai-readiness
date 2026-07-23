@@ -56,6 +56,7 @@ One permanent ID per check. IDs never change or get reused; retired checks keep 
 | LGTM-036 | Service coverage | Owner and escalation route known per critical service | low |
 | LGTM-037 | Service coverage | Runbook link on paging alerts per critical service | low |
 | LGTM-038 | Service coverage | Deploy or change context available (markers, annotations, image tags) | low |
+| LGTM-039 | Service coverage | Telemetry scope established: the backends demonstrably monitor the audited cluster (mismatch reclassifies coverage rows to blocked, never fail) | info |
 | LGTM-040 | Traces layer | Trace endpoint reachable and ready | high |
 | LGTM-041 | Traces layer | Deployed trace backend matches the advertised one | medium |
 | LGTM-042 | Traces layer | Search returns recent traces | high |
@@ -475,9 +476,40 @@ kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" get configmap -o json \
 
 Reading the results. LGTM-060: any single-replica statefulset holding metrics, logs, or traces is a finding unless an accepted RPO/RTO with proven backups is on record. LGTM-061: PVC size alone is not retention; read the store's retention flag or chart values (`helm --kube-context "$KUBE_CONTEXT" -n "$MON_NS" get values <release>` is read-only) and record the period per store. LGTM-063: an unauthenticated `200` from a metrics store, Alertmanager, or a raw Grafana render is exposure; `401`, `403`, or a `302` to a login is the healthy shape. LGTM-064: `No resources found` on both queries means one bad node drain can take monitoring down silently. LGTM-066: the jq filter is a heuristic for where to look, not proof; open the named ConfigMaps and confirm before filing, and never copy the matched values into evidence. For LGTM-065, sample label cardinality from the metrics store (Prometheus: `/api/v1/status/tsdb` top label pairs) and look for IDs, emails, session tokens, or full URLs used as label values.
 
-## 12. Per-service coverage queries (LGTM-030 to LGTM-035)
+## 12. Per-service coverage queries (LGTM-030 to LGTM-035, gated by LGTM-039)
 
-Run once per critical service from `./scoutflo-audits/topology.md`. Label names are yours to tune.
+**LGTM-039 telemetry-scope probe — run ONCE, before any per-service row.** Establishes whether the metrics backend actually monitors the cluster the kubeconfig points at; SKILL.md Phase 6 defines how each outcome reclassifies the rows below.
+
+```bash
+set -eu
+KUBE_CONTEXT="your-kube-context"               # kubernetes.context
+METRICS_URL="https://prometheus.example.com"   # prometheus.url (adjust prefix per sections 3-4)
+METRICS_TOKEN="${PROM_TOKEN:-}"
+MAUTH="Authorization: Bearer ${METRICS_TOKEN}"; [ -n "$METRICS_TOKEN" ] || MAUTH="Accept: application/json"
+
+# Side A: what the telemetry backend thinks it monitors.
+# Cluster-identifying label values on ingested series (label name varies by
+# setup: cluster, k8s_cluster_name, kubernetes_cluster — try each configured one):
+curl -fsS --max-time 10 -H "$MAUTH" "${METRICS_URL}/api/v1/label/cluster/values" | jq -r '.data[]?'
+# Node inventory as seen by the backend (kube-state-metrics / kubelet series):
+curl -fsS --max-time 10 -H "$MAUTH" --get \
+  --data-urlencode 'query=count(kube_node_info) by (cluster)' \
+  "${METRICS_URL}/api/v1/query" | jq -r '.data.result[] | "\(.metric.cluster // "(no cluster label)") nodes=\(.value[1])"'
+curl -fsS --max-time 10 -H "$MAUTH" "${METRICS_URL}/api/v1/label/namespace/values" | jq -r '.data[]?' | sort > /tmp/lgtm-ns-telemetry.txt
+
+# Side B: what the local cluster actually is.
+kubectl --context "$KUBE_CONTEXT" get nodes -o name | wc -l
+kubectl --context "$KUBE_CONTEXT" get nodes -o jsonpath='{.items[0].metadata.name}'
+kubectl --context "$KUBE_CONTEXT" get namespaces -o name | sed 's|namespace/||' | sort > /tmp/lgtm-ns-local.txt
+
+# Compare: node names/count and namespace overlap.
+comm -12 /tmp/lgtm-ns-local.txt /tmp/lgtm-ns-telemetry.txt | wc -l   # shared namespaces
+comm -23 /tmp/lgtm-ns-local.txt /tmp/lgtm-ns-telemetry.txt | head    # local-only (backend doesn't see these)
+```
+
+Interpretation: matching node names (spot-check one local node name against `kube_node_info{node=...}`) or a namespace overlap covering the critical services' namespaces = same cluster, proceed. Local critical-service namespaces absent from the telemetry side while the telemetry side carries namespaces that do not exist locally = different cluster; every local-workload row below is `blocked` per SKILL.md Phase 6, filed once as LGTM-039 with both inventories as evidence. No `kube_node_info`, no cluster label, thin namespace sets = undetermined; state it and score conservatively without inventing a critical finding.
+
+Then run the queries below once per critical service from `./scoutflo-audits/topology.md`. Label names are yours to tune.
 
 ```bash
 set -eu
@@ -531,7 +563,7 @@ curl -fsS --max-time 10 -H "$MAUTH" "${METRICS_URL}/api/v1/rules" \
     '.data.groups[].rules[] | select(.query? // "" | contains($s)) | "\(.name) severity=\(.labels.severity // "none")"'
 ```
 
-Row scoring: a nonzero count is `pass` for that signal; zero where the signal should exist is `fail`; zero because tracing is intentionally sampled out or not deployed for this service, with the decision recorded, is `not-in-scope`. All applicable signals at zero makes this service part of LGTM-030, critical. Rules matching by name substring is a starting heuristic; confirm the rule's selector actually targets the service before crediting LGTM-035. For LGTM-036 to LGTM-038, check the paging rules' annotations for `runbook_url` and owner labels, and dashboards for deploy markers.
+Row scoring: a nonzero count is `pass` for that signal; zero where the signal should exist is `fail`; zero because tracing is intentionally sampled out or not deployed for this service, with the decision recorded, is `not-in-scope`; zero where the LGTM-039 probe showed the backend does not monitor this service's cluster is `blocked`, never `fail`. All applicable signals at zero makes this service part of LGTM-030, critical — only under a confirmed same-cluster scope. Rules matching by name substring is a starting heuristic; confirm the rule's selector actually targets the service before crediting LGTM-035. For LGTM-036 to LGTM-038, check the paging rules' annotations for `runbook_url` and owner labels, and dashboards for deploy markers.
 
 For LGTM-032 specifically: the existence query passing is `partial`, not `pass`, on its own. Full `pass` needs the depth queries too — per-pod cAdvisor series (proves resource-saturation questions are answerable per pod, not just in aggregate), a populated status-code label on the HTTP metric (proves error-rate-by-code is measurable, not just total request count), and a real latency histogram (proves percentile/SLO questions are answerable, not just averages). A service with metrics that exist but lack all three is a real, common shape: it looks "covered" in a naive dashboard scan while an actual investigation into "is this pod resource-starved" or "what's our p99" has nothing to query.
 

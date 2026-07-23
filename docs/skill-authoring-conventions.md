@@ -177,6 +177,7 @@ The parts authors get wrong most often:
 - Evidence quotes real command output. If the skill cannot show the command and its output, the check does not exist.
 - No end-to-end claim below the gate. Write "good base coverage" instead.
 - Blocked categories are excluded and stated, never silently dropped or scored as if checked.
+- Past the doctor and live-safety gates, the run always ends in a written report, whatever state the estate is in — mid-run failures become `blocked` checks or excluded categories, never an abort (severity-and-scoring.md rule 6).
 - History has two artifacts with two jobs: finding-level matching and the delta read the most recent two `findings.json` files; the score trend renders from `history.jsonl`, which every run appends to. Never match findings against the ledger.
 
 ### Canonical vs derived artifacts

@@ -1,5 +1,41 @@
 # Changelog
 
+## 0.1.40
+
+Report-quality pass driven by first team feedback on real reports.
+
+- **Every number carries its scale.** New general template rule; Topology
+  Readiness confidence now renders `n/10`, never a bare number. Enforced by
+  `check-report.sh`.
+- **Topology Readiness reads in plain English.** The six checks now render
+  under their plain-English names (Service identity, Workload mapping,
+  Telemetry connections, Connection details, Tool identity, Match
+  confidence); the `T1`-`T6` codes are demoted to a legend line, the same
+  pattern as finding IDs. Enforced by `check-report.sh`.
+- **Ticket-ready remediation.** The Topology Readiness section now ends
+  with a required sync-readiness action plan (Service / Blocked on / Do
+  this / Done when) whenever any service is below ready — each row concrete
+  enough to paste into an issue tracker unchanged. Findings' **How to fix**
+  is now 1-3 concrete steps naming the exact object, plus a required
+  **Done when** verification line (enforced by `check-report.sh`).
+- **Missing or mismatched topology export is now actionable.** Three
+  distinct rendered states (no export / export for a different target /
+  non-Kubernetes estate), each with a one-line unlock path — never a bare
+  "unavailable". All audit skills aligned.
+- **A report at any estate state.** New toolkit-wide scoring rule: once past
+  the doctor and live-safety gates, an audit always ends in `findings.json`
+  and `report.md` — mid-run failures become `blocked` checks or excluded
+  categories with the blocker as evidence, never an abort. A worst-state
+  estate yields a low score and a long action list, not a crash.
+- **audit-lgtm: telemetry-scope gate (new check LGTM-039).** A central
+  monitoring stack hosted on one cluster while monitoring another no longer
+  produces false criticals: Phase 6 now probes whether the backends
+  actually monitor the audited cluster (cluster labels, `kube_node_info`,
+  namespace overlap) before scoring coverage. On mismatch, coverage rows
+  are `blocked` with the reason — never LGTM-030 — and telemetry-only
+  service labels are not treated as orphans. New pressure scenario covers
+  the hosted-vs-monitored cluster split.
+
 ## 0.1.39
 
 Preserved T6 evaluation precision after the v0.1.38 genericization. The

@@ -59,11 +59,23 @@ echo "$REQUIRED" | while IFS= read -r sec; do
 done || FAIL=1
 
 # 5. Findings format: when a finding is rendered, it must use the human-first
-#    What / Where / Why / How shape (a demoted 'ref:' ID, not a table row).
+#    What / Where / Why / How / Done-when shape (a demoted 'ref:' ID, not a table row).
 findings_body="$(awk '/^## Findings$/{f=1; next} /^## /{f=0} f' "$REPORT")"
 if printf '%s\n' "$findings_body" | grep -qE '[A-Z]{2,6}-[0-9]{2,4}'; then
   printf '%s\n' "$findings_body" | grep -q "What's wrong" \
     || fail "Findings are present but not in the What's wrong / Where / Why it matters / How to fix shape (see report-template.md); the old ID|Severity|Title table no longer conforms"
+  printf '%s\n' "$findings_body" | grep -q 'Done when' \
+    || fail "Findings lack a '**Done when:**' verification line; every rendered finding needs one (see report-template.md)"
+fi
+
+# 6. Topology Readiness rendering: plain-English column headers (raw T1-T6
+#    codes must not be table headers) and confidence carrying its /10 scale.
+topo_body="$(awk '/^## Scoutflo Topology Readiness$/{f=1; next} /^## /{f=0} f' "$REPORT")"
+if printf '%s\n' "$topo_body" | grep -q '^| Service |'; then
+  printf '%s\n' "$topo_body" | grep -E '^\| Service \|' | grep -qE 'T[1-6][^0-9]' \
+    && fail "Topology Readiness table uses raw T1-T6 codes as column headers; use the plain-English check names from topology-readiness.md (codes belong in the legend line only)"
+  printf '%s\n' "$topo_body" | awk -F'|' '/^\| [a-z]/ {v=$(NF-2); gsub(/ /,"",v); if (v ~ /^[0-9]+$/ && v !~ /\//) found=1} END {exit !found}' \
+    && fail "Topology Readiness confidence column shows a bare number; render the scale as n/10 (see topology-readiness.md)"
 fi
 
 if [ "$FAIL" -eq 0 ]; then
