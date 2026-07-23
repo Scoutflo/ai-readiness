@@ -1,0 +1,28 @@
+{
+  "name": "scoutflo",
+  "displayName": "Scoutflo AI Readiness",
+  "version": "0.1.39",
+  "description": "Audit, harden, and monitor your infra and observability stacks (LGTM/VictoriaMetrics, Grafana, Sentry, Prometheus alerting, DigitalOcean, GCP, AWS) with scored reports, Slack briefs, and guided remediation. Runs entirely on your side with your credentials.",
+  "author": {
+    "name": "Scoutflo",
+    "url": "https://scoutflo.com"
+  },
+  "homepage": "https://scoutflo.com",
+  "repository": "https://github.com/Scoutflo/ai-readiness",
+  "license": "Apache-2.0",
+  "keywords": [
+    "sre",
+    "observability",
+    "audit",
+    "monitoring",
+    "alerting",
+    "grafana",
+    "sentry",
+    "prometheus",
+    "victoriametrics",
+    "kubernetes",
+    "digitalocean",
+    "gcp",
+    "aws"
+  ]
+}
