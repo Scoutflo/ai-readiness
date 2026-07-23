@@ -1,0 +1,81 @@
+# Scoutflo AI Readiness: scheduled combined audit.
+# Filled in by /scoutflo:schedule-audits; edit the marked lines to customize.
+#
+# Secrets required (repo Settings > Secrets and variables > Actions):
+#   ANTHROPIC_API_KEY       Claude API key the headless run bills against
+#   SCOUTFLO_TOOLKIT_YAML   full contents of your toolkit.yaml (keeps hostnames out of the repo)
+#   One secret per *_env name in your toolkit.yaml (GRAFANA_TOKEN, SENTRY_TOKEN, ...)
+#   SCOUTFLO_SLACK_WEBHOOK  only if the Slack brief is enabled
+#
+# Cost: every run is a headless Claude session billed to ANTHROPIC_API_KEY.
+# Usage scales with the number of configured audits. Weekly is a sane start.
+
+name: scoutflo-audit
+
+on:
+  schedule:
+    - cron: "0 6 * * 1" # weekly, Monday 06:00 UTC. Example, tune to your cadence.
+  workflow_dispatch: {} # manual trigger for the first verification run
+
+permissions:
+  contents: read
+
+concurrency:
+  group: scoutflo-audit
+  cancel-in-progress: false
+
+jobs:
+  audit:
+    # Hosted runners reach public endpoints only. Use a self-hosted runner
+    # for VPN-only or in-cluster targets.
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      # Mirror every *_env name from your toolkit.yaml. Add or remove lines to match.
+      GRAFANA_TOKEN: ${{ secrets.GRAFANA_TOKEN }}
+      SENTRY_TOKEN: ${{ secrets.SENTRY_TOKEN }}
+      SCOUTFLO_SLACK_WEBHOOK: ${{ secrets.SCOUTFLO_SLACK_WEBHOOK }}
+    steps:
+      - name: Install Claude Code
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Install the Scoutflo AI Readiness
+        run: |
+          claude plugin marketplace add Scoutflo/ai-readiness
+          claude plugin install scoutflo@scoutflo
+
+      - name: Write toolkit config from the secret store
+        env:
+          SCOUTFLO_TOOLKIT_YAML: ${{ secrets.SCOUTFLO_TOOLKIT_YAML }}
+        run: |
+          mkdir -p "$HOME/.scoutflo"
+          printf '%s\n' "$SCOUTFLO_TOOLKIT_YAML" > "$HOME/.scoutflo/toolkit.yaml"
+
+      - name: Restore previous reports so deltas compute
+        uses: actions/cache@v4
+        with:
+          path: scoutflo-audits
+          key: scoutflo-audits-${{ github.run_id }}
+          restore-keys: |
+            scoutflo-audits-
+
+      - name: Run the combined audit
+        # Headless runs cannot answer permission prompts, so the tools the
+        # audits need are granted up front. The runner is ephemeral and holds
+        # only the secrets listed above.
+        run: |
+          claude -p "/scoutflo:audit-all --slack" \
+            --allowedTools "Skill,Read,Write,Edit,Glob,Grep,Bash"
+
+      - name: Upload reports as a build artifact
+        # Optional: remove this step if you do not want reports stored in CI.
+        # Artifacts are visible to anyone with read access to this repo, and
+        # reports describe your infrastructure. Keep retention short.
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scoutflo-audits-${{ github.run_id }}
+          path: scoutflo-audits/
+          retention-days: 30 # example, tune to your policy
+          if-no-files-found: warn

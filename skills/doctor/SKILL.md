@@ -1,0 +1,172 @@
+---
+name: doctor
+description: Preflight connection check; a bundled read-only script reads ~/.scoutflo/toolkit.yaml, makes one cheap call per configured integration, and emits a JSON-per-check matrix with fix hints and distinct exit codes. Use when the user mentions doctor, preflight, connection check, cannot reach Grafana, Sentry, or Prometheus, 401 or timeout errors before an audit, or blocked audit checks. Do not use to create or rotate credentials (use connect) or for scored assessment (use the audit-* skills).
+---
+
+# Doctor: Connection Preflight
+
+Doctor answers one question before any audit or setup skill spends your time: can this machine actually reach everything `~/.scoutflo/toolkit.yaml` says it can, with the credentials currently in the environment?
+
+Run it after `/scoutflo:connect`, before your first `/scoutflo:audit-all`, and whenever an audit reports a blocked check. Every `audit-*` and `setup-*` skill re-runs the subset of these checks it needs as its own doctor gate; this skill is the full matrix in one place.
+
+All checking lives in one bundled script, `scripts/doctor.sh`. It is read-only, non-interactive, and never prints a secret: tokens are checked for presence and sent only inside request headers. The single exception to read-only is the optional Slack test post, which sends a visible message and runs only when you pass `--slack-test` after the user explicitly confirms. Doctor produces no `findings.json` and no score; it is a preflight, not an audit, and a failed check here is a stop-and-fix, never a finding.
+
+## Prerequisites
+
+- `curl` required; `jq` checked because every other skill needs it.
+- `yq` optional. Without it, the script falls back to a POSIX parser that handles the flat two-level layout of `templates/toolkit.yaml.example`. Anything more nested needs `yq`.
+- `kubectl`, only when the config has a `kubernetes:` block.
+
+## Step 1: Run the script
+
+Fixed step: run as written, do not modify flags, do not re-implement the checks by hand.
+
+```bash
+# ${CLAUDE_PLUGIN_ROOT} is set by the plugin runtime. Running from a repo
+# checkout instead: export CLAUDE_PLUGIN_ROOT as the repo root first.
+OUT_DIR="./scoutflo-audits/doctor/$(date -u +%Y-%m-%d)"   # run directory for this doctor run
+sh "${CLAUDE_PLUGIN_ROOT}/skills/doctor/scripts/doctor.sh" --out "${OUT_DIR}"
+echo "doctor_exit=$?"
+# Expect: doctor_exit=0 when every configured integration passes.
+# 1 = toolkit.yaml missing, 2 = a required env var is unset, 3 = a live check failed.
+```
+
+The script emits one JSON line per check to stdout, human-readable progress to stderr, and appends every row to `${OUT_DIR}/matrix.tsv`. Reruns append below the earlier rows; for a clean table, delete `matrix.tsv` first or pass a fresh `--out`.
+
+Flags:
+
+| Flag | Meaning |
+| --- | --- |
+| `--out DIR` | Run directory for `matrix.tsv`. Default: `./scoutflo-audits/doctor/<UTC date>` |
+| `--config FILE` | Config to read. Default: `~/.scoutflo/toolkit.yaml` |
+| `--slack-test` | Send the Slack webhook test post. Only after explicit user confirmation; see below |
+
+## Step 2: Interpret the results
+
+Judgment step: read the JSON lines and decide what to fix first. Each line has seven fields:
+
+```json
+{"integration":"grafana","check":"health","configured":"yes","env_var":"GRAFANA_TOKEN","result":"pass","http_code":"200","hint":"-"}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `integration` | Template-order row: toolkit, grafana, sentry, prometheus, alertmanager, loki, tempo, mimir, victoriametrics, vmalert, digitalocean, gcp, kubernetes, slack |
+| `check` | What was checked: `env` (variable presence), a live endpoint (`health`, `identity`, `org`, `query`, `status`, `ready`, `rbac`, `account`, `monitoring-api`, `webhook-post`), `binary-*`, or `configured` for unconfigured rows |
+| `configured` | `yes` when the block exists with a non-empty `url`, `host`, `token_env`, `project`, or `context`. Unconfigured rows are informational, never failures |
+| `env_var` | The `*_env` variable name, `none` when the block names no token, `-` when not applicable. Names only; values never |
+| `result` | `pass`, `fail`, `env-missing`, or `skipped` |
+| `http_code` | Captured status code; `"000"` means the transport failed before any HTTP response; `null` for non-HTTP checks |
+| `hint` | The concrete fix, quoting the observed failure shape (curl exit code or HTTP status), never a guess |
+
+Result vocabulary:
+
+- `pass`: the check succeeded.
+- `fail`: the check ran and failed. The hint says why and what to fix.
+- `env-missing`: the block names a `*_env` variable that is not set in this shell. The integration's live checks are recorded as `skipped`, never attempted, so no empty Authorization header is ever sent.
+- `skipped`: not attempted for a stated reason (unconfigured, blocked by `env-missing`, or the Slack post awaiting confirmation). Skipped rows never fail the run.
+
+Exit code precedence: `2` (env var missing) wins over `3` (live check failed), because exporting the variable may fix the live checks too. Fix in that order.
+
+## Step 3: Render the connection matrix
+
+```bash
+OUT_DIR="./scoutflo-audits/doctor/$(date -u +%Y-%m-%d)"   # same directory used in Step 1
+column -t -s "$(printf '\t')" "${OUT_DIR}/matrix.tsv"
+```
+
+Typical output:
+
+```
+integration      check         configured  env_var        result   http_code  hint
+toolkit          binary-curl   yes         -              pass     -          -
+toolkit          binary-jq     yes         -              pass     -          -
+grafana          env           yes         GRAFANA_TOKEN  pass     -          -
+grafana          health        yes         GRAFANA_TOKEN  pass     200        -
+grafana          identity      yes         GRAFANA_TOKEN  pass     200        -
+sentry           env           yes         SENTRY_TOKEN   env-missing  -      export SENTRY_TOKEN in this shell, then rerun doctor
+sentry           org           yes         SENTRY_TOKEN   skipped  -          blocked: SENTRY_TOKEN is not set
+prometheus       query         yes         none           fail     000        curl exit 7: connection refused; wrong port, service not exposed, or the port-forward is not running
+loki             configured    no          -              skipped  -          add a loki block via /scoutflo:connect if you run Loki
+kubernetes       rbac          yes         -              pass     -          -
+slack            webhook-post  yes         SCOUTFLO_SLACK_WEBHOOK  skipped  -  test post sends a visible channel message; rerun with --slack-test after the user confirms
+```
+
+Close with a verdict:
+
+- Exit 0: "Ready. Run /scoutflo:map-topology, then /scoutflo:audit-all."
+- Exit 2 or 3: name the affected skills, fix, then rerun doctor. Exit 2 wording names the env var ("audit-sentry will not run until SENTRY_TOKEN is set"); exit 3 wording quotes the live evidence ("grafana failed its live check: http_code 000, curl exit 7 - host unreachable"), never the env var. Never advise starting an audit over a failed row, and never downgrade a doctor failure into a finding.
+
+Verify the verdict mechanically before declaring it:
+
+```bash
+OUT_DIR="./scoutflo-audits/doctor/$(date -u +%Y-%m-%d)"   # same directory used in Step 1
+awk -F '\t' 'NR>1 && $3=="yes" && ($5=="fail" || $5=="env-missing")' "${OUT_DIR}/matrix.tsv"
+# Expect: no output. Every printed row is exactly a check still to fix.
+```
+
+## What the script checks
+
+One cheap read-only call per configured integration. Unconfigured integrations are skipped cleanly; they are never failures.
+
+| Integration | Live check | Healthy | Common failure meaning |
+| --- | --- | --- | --- |
+| grafana | GET `/api/health`, then GET `/api/org` | 200, 200 | 401: bad or expired token. 403 on `/api/org` with health 200: token authenticated but lacks even the Viewer basic role. Transport failure: wrong `grafana.url`. `GET /api/user` is deliberately never used: confirmed live on Grafana 10.4.1 that a real, correctly-scoped service-account token hard-403s there regardless of role, since that endpoint identifies an interactively logged-in user, not a service account |
+| sentry | GET `/api/0/organizations/<org>/` | 200 | 404: wrong region host or org slug; run the region probe in `connect` `references/providers.md` |
+| prometheus | GET `/api/v1/query?query=vector(1)` | 200 | `vector(1)` succeeds even with zero targets, so it tests the API, not your fleet. `/-/ready` is deliberately not used: it varies by deployment |
+| alertmanager | GET `/api/v2/status` | 200 | 404 with a working root usually means the URL points at something other than Alertmanager |
+| loki, tempo, mimir | GET `/ready` | 200 | Behind a multi-tenant gateway or path prefix, `/ready` may 404 while queries work; verify the health path against your deployment before concluding the store is down |
+| victoriametrics | GET `/health` | 200 | Cluster editions may serve health per component; verify the path against your deployment |
+| vmalert | GET `/health` | 200 | If `/health` is not exposed in your setup, `GET /api/v1/rules` returning JSON is an equivalent read-only proof |
+| digitalocean | GET `/v2/account` | 200 | 401: token missing, invalid, or expired. 403: token valid but scoped too low for account read |
+| gcp | `gcloud auth print-access-token` (or `application-default` when `credentials_env` is set), then GET the Monitoring API `notificationChannels` | non-empty token, then 200 | No token at all: not logged in, or the key file `credentials_env` names is missing or invalid; run `gcloud auth login` or fix the key file. 403 on the API call: identity lacks `monitoring.viewer`. 404: `gcp.project` is wrong |
+| kubernetes | `kubectl --context <ctx> auth can-i get pods` | `yes` | `no`: the context reaches the cluster but lacks read RBAC; bind the `view` ClusterRole. A context error: the config value does not exist in your kubeconfig; run `kubectl config get-contexts` |
+| slack | POST test message (only with `--slack-test`) | 200 and the message appears | 404 or `no_service`: the webhook was revoked; create a new one via `/scoutflo:connect` |
+
+Authorization headers are sent only when the block names a `token_env` and that variable is non-empty. A named-but-unset variable yields `env-missing`, not a call with an empty bearer. GCP has no static `token_env`; its identity comes from `gcloud`, and the same empty-credential rule applies: no access token, no call.
+
+## The Slack test post
+
+This is the one check that writes: it posts a visible message to your channel. Ask the user for explicit confirmation in the conversation before passing `--slack-test`; if declined or unanswered, the default `skipped` row is a valid healthy-enough state. The webhook URL is itself the credential; the script never prints it, and neither should you.
+
+```bash
+# Only after the user has explicitly confirmed the visible test post.
+OUT_DIR="./scoutflo-audits/doctor/$(date -u +%Y-%m-%d)"   # run directory for this doctor run
+sh "${CLAUDE_PLUGIN_ROOT}/skills/doctor/scripts/doctor.sh" --out "${OUT_DIR}" --slack-test
+echo "doctor_exit=$?"
+# Expect: doctor_exit=0 and a slack webhook-post row with result pass, http_code 200.
+```
+
+## Fix hints per failure class
+
+The script's hints quote the observed failure shape. This table is the deeper read once you have a row in hand:
+
+| Failure class | Likely cause | Fix |
+| --- | --- | --- |
+| exit 1, config not found | No `~/.scoutflo/toolkit.yaml` | Run `/scoutflo:connect`; it seeds the file from `templates/toolkit.yaml.example` |
+| `env-missing` | The `*_env` variable is not exported in this shell | Export it here (env vars are per-shell), or load it from your profile; created per `connect` `references/providers.md` |
+| `http_code` 000, curl exit 6 | DNS lookup failed | Typo in the URL, or the host resolves only on VPN or internal DNS |
+| `http_code` 000, curl exit 7 | Connection refused | Wrong port, service not exposed, or the port-forward is not running |
+| `http_code` 000, curl exit 28 | Timeout | Firewall or network path; confirm you can reach the host at all before raising `CURL_MAX_TIME` |
+| `http_code` 000, curl exit 35 or 60 | TLS failure | Internal CA not trusted by your system; install the CA properly, never disable verification |
+| HTTP 401 | Token missing, invalid, or expired | Recreate per the provider section in `connect`; confirm the variable is exported in this shell |
+| HTTP 403 | Token valid, scope or role too low | Raise to the tier scopes in `connect` `references/providers.md` |
+| HTTP 404 | Wrong path, wrong region host, or a path prefix | Sentry: run the region probe. Gateways: verify the health path against your deployment |
+| kubernetes `rbac` fail with "no" | Context reaches the cluster, read RBAC missing | Bind the `view` ClusterRole per `connect` `references/providers.md` |
+| kubernetes `rbac` fail with a context error | `kubernetes.context` not in your kubeconfig | `kubectl config get-contexts`, then fix the config value |
+| A key you set reads as unconfigured | Block name or indentation mismatch, or nesting beyond the fallback parser | Compare against `templates/toolkit.yaml.example`; install `yq` for anything nested |
+
+## Common Failure Modes
+
+| Failure | Prevention |
+| --- | --- |
+| Doctor passes in one terminal, the audit fails in another | Env vars are per-shell; export them in your profile or run doctor and the audit in the same shell |
+| Empty `Authorization` header sent to an unauthenticated endpoint, causing a proxy 401 | Run the bundled script; it attaches the header only when `token_env` is named and set. Never hand-roll a check that adds the header unconditionally |
+| Checks re-implemented inline instead of running the script | The script is the check contract: exit codes, JSON shape, and header guards live there. Inline curl loops drift and leak |
+| `/ready` 404 behind a path-prefixed gateway read as "service down" | Health paths vary by deployment; verify the path, and treat a successful real query as authoritative |
+| Sentry 404 read as "org does not exist" | Wrong region host; probe both region hosts before concluding anything about the org |
+| Grafana health `ok` but every later audit call 403 | The script checks identity via `/api/org` during doctor, not mid-audit; fix the 403 row before any audit |
+| Slack test post fired without asking | The post is visible to the channel; pass `--slack-test` only on explicit confirmation, and `skipped` is a valid state |
+| Secret value printed while debugging a failing check | Debug with the recorded `http_code` and curl exit codes; the script never prints values, and neither should any manual follow-up |
+| A failed doctor row carried into an audit as a "blocked finding" | Doctor failures stop the run; fix and rerun doctor before starting any audit |
+| Stale rows read after a rerun into the same `--out` directory | `matrix.tsv` appends; delete it first or use a fresh `--out`, and treat the JSON stdout of the latest run as the truth |

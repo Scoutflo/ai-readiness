@@ -1,0 +1,3 @@
+# Claude Adapter
+
+Follow the contributor instructions in @AGENTS.md.

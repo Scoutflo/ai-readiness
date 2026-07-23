@@ -1,0 +1,26 @@
+# Scoutflo SRE Toolkit: crontab entry for recurring audits.
+# Filled in by /scoutflo:schedule-audits. Install via `crontab -e`, verify with `crontab -l`.
+#
+# Prerequisites on this machine:
+#   1. Claude Code installed and authenticated (subscription login, or export
+#      ANTHROPIC_API_KEY in the env file below). Cron's PATH is minimal: find
+#      the absolute binary path with `command -v claude` and use it in the entry.
+#   2. ~/.scoutflo/toolkit.yaml filled in (run /scoutflo:connect).
+#   3. An env file at ~/.scoutflo/env with `chmod 600`: one export line per
+#      *_env variable named in your toolkit.yaml, plus SCOUTFLO_SLACK_WEBHOOK
+#      if the brief is enabled. Pull values from your secret manager. Never
+#      commit this file anywhere.
+#
+# Notes:
+#   - The machine must be awake at the scheduled time; cron does not run missed jobs.
+#   - Cost: every run is a headless Claude session; usage scales with the number
+#     of configured audits. Weekly is a sane starting cadence.
+#   - Reports accumulate under the project's scoutflo-audits/ directory, so
+#     deltas compute automatically between runs.
+#   - Check ~/.scoutflo/audit-cron.log after the first scheduled run.
+#
+# Fields: minute hour day-of-month month day-of-week
+# Example: weekly, Monday 06:00 local time. Tune to your cadence.
+# Replace /path/to/your/project and /usr/local/bin/claude (from `command -v claude`).
+
+0 6 * * 1  cd /path/to/your/project && . "$HOME/.scoutflo/env" && /usr/local/bin/claude -p "/scoutflo:audit-all --slack" --allowedTools "Skill,Read,Write,Edit,Glob,Grep,Bash" >> "$HOME/.scoutflo/audit-cron.log" 2>&1

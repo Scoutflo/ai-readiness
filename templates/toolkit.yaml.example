@@ -1,0 +1,72 @@
+# Scoutflo SRE Toolkit configuration
+# Copy to ~/.scoutflo/toolkit.yaml and fill in your targets.
+#
+# Rules:
+# - Hosts, orgs, and names go here in plain text.
+# - Secrets NEVER go in this file. Every *_env field names an environment
+#   variable that holds the secret. Export those vars in your shell or CI.
+# - Delete the blocks for integrations you do not use.
+# - Multiple targets of the same type: use a YAML list under the key.
+
+grafana:
+  url: https://grafana.example.com          # your Grafana base URL
+  token_env: GRAFANA_TOKEN                  # service-account token (read-only for audits)
+  tier: read-only                           # read-only | elevated; audits require read-only
+
+sentry:
+  host: sentry.io                           # sentry.io, us.sentry.io, de.sentry.io, or self-hosted host
+  org: your-org-slug
+  token_env: SENTRY_TOKEN                   # org auth token (read-only scopes for audits)
+  tier: read-only
+
+prometheus:
+  url: https://prometheus.example.com
+  alertmanager_url: https://alertmanager.example.com
+  # token_env: PROM_TOKEN                   # optional, if endpoints require auth
+
+loki:
+  url: https://loki.example.com
+  # token_env: LOKI_TOKEN
+
+tempo:
+  url: https://tempo.example.com
+  # token_env: TEMPO_TOKEN
+
+mimir:
+  url: https://mimir.example.com
+  # token_env: MIMIR_TOKEN
+  # tenant_id: your-tenant                  # if multi-tenant
+
+victoriametrics:
+  url: https://vm.example.com
+  # vmalert_url: https://vmalert.example.com
+  # token_env: VM_TOKEN
+
+digitalocean:
+  token_env: DIGITALOCEAN_ACCESS_TOKEN      # doctl honors this natively; read-only scope for audits
+  tier: read-only
+
+gcp:
+  project: your-project-id                  # GCP project ID the audits target (one project per run)
+  # region: us-central1                     # example; only needed for regional load balancer checks
+  # credentials_env: GOOGLE_APPLICATION_CREDENTIALS  # optional; names the variable holding a service
+  #                                         # account key file path. Omit to use your active gcloud login.
+  tier: read-only                           # read-only | elevated; audits require read-only
+
+aws:
+  account_id: "123456789012"                # AWS account ID the audits target (one account per run)
+  region: us-east-1                         # default region; multi-region checks state their own region
+  # profile: your-aws-profile                # optional; named profile in ~/.aws/config. Omit to use the
+  #                                         # active credential chain (env vars, instance role, SSO).
+  # role_env: AWS_ROLE_ARN                   # optional; names the variable holding a role ARN to assume
+  tier: read-only                           # read-only | elevated; audits require read-only
+  # cost_checks: true                        # optional, default true; set false to skip the Cost & Resource
+  #                                         # Optimization section entirely, even if Compute Optimizer/Cost
+  #                                         # Explorer/Trusted Advisor permissions are present
+
+kubernetes:
+  context: your-kube-context                # kubectl context for cluster checks
+  # monitoring_namespace: monitoring
+
+slack:
+  webhook_env: SCOUTFLO_SLACK_WEBHOOK       # incoming-webhook URL for audit briefs

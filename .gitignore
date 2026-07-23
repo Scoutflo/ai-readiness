@@ -1,0 +1,5 @@
+# Audit output never belongs in version control
+scoutflo-audits/
+
+# OS noise
+.DS_Store
