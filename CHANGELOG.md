@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.1.38
+
+Kept platform-internal correlation mechanism out of the public spec. The
+Scoutflo Topology Readiness spec (report-standard/topology-readiness.md)
+and the export guidance now describe *what* makes a service sync-ready —
+identity, workload mapping, observability edges with the provider''''s own
+identifying attributes, integration identity, and confidence — without the
+internal field-to-category mapping, engine internals, or contract-derivation
+detail. Those are Scoutflo''''s and are maintained separately. Customer-facing
+checks and report behavior are unchanged; only the level of internal detail
+in the public docs was reduced.
+
 ## 0.1.37
 
 Reworked the human-facing report **Findings** format so a report reads like
@@ -641,16 +653,14 @@ correct edge.
 
 ## 0.1.7 (unreleased)
 
-Re-grounded the Scoutflo Topology Readiness spec against the real,
-the platform's current correlation-scoring logic (verified against the platform's current code rather than a stale local snapshot) rather than the earlier, slightly
+Refined the Scoutflo Topology Readiness spec against
+the current topology-correlation requirements rather than the earlier, slightly
 out-of-date read. Found T6's "confidence >= 8" rule was a real
-oversimplification: the actual correlation engine
-(`ACTIONABLE_CORRELATION_CONFIDENCE = 8`) also requires
-`hasActionableAttributeDNA()` - a service/workload/app identity
+oversimplification: the platform also requires a service/workload/app identity
 attribute plus either a Kubernetes anchor (namespace/pod/container) or,
 for Sentry specifically, a project/environment attribute - before an
 edge is actionable. A confidence-8+ edge missing that anchor
-combination is downgraded to `warning_only` on the real platform even
+combination is downgraded to a non-actionable warning state even
 though the number alone would suggest it passes. Fixed T6 in
 `report-standard/topology-readiness.md` and the matching confidence
 guidance in `skills/map-topology/references/scoutflo-export.md` to
