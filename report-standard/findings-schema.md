@@ -105,11 +105,16 @@
 | `status` | string | yes | `validated-live`, `configured`, or `blocked`. See below |
 | `lifecycle` | string | yes | `new`, `unchanged`, `regressed`, or `suppressed`. Computed per the finding lifecycle rules below; `resolved` IDs are recorded in the delta, not as open findings |
 | `points_recoverable` | integer | yes | Whole points the overall score gains when this finding's check moves to `pass`, computed per the gap model in [severity-and-scoring.md](severity-and-scoring.md). `0` for `info` findings, findings in excluded categories, and findings in a parallel non-scored section (see below) |
-| `affected` | array of strings | no | Services or objects the finding applies to. Use topology.md service names when it exists |
+| `affected` | array of strings | no | Services or objects the finding applies to — the "where". Name the concrete resource/route/alarm/receiver/host, not a vague scope. Use topology.md service names when it exists |
+| `impact` | string | no | One line: the concrete consequence if this stays unfixed — the "why it matters". Feeds the report's **Why it matters** line; omit only when the title already makes the consequence obvious |
 | `evidence` | array | yes | One or more evidence items; see evidence rules |
 | `recommendation` | string | yes | What to do about it, in one or two sentences, addressed to the reader |
 | `remediation` | string | yes | Pointer to the fix: a setup skill name, optionally with an anchor (`setup-lgtm#fix-default-receiver`), or a doc anchor in this repo |
 | `estimated_monthly_savings_usd` | number | no | Only on findings in a cost/optimization parallel section, and only when the figure comes straight from an AWS-native recommendation source (Compute Optimizer, Cost Explorer) — never a hand-computed estimate. Omit the field entirely rather than guess a number |
+
+### How report.md renders a finding
+
+The human `report.md` renders each finding as **What's wrong** (from `title`), **Where** (from `affected`), **Why it matters** (from `impact`), and **How to fix** (from `recommendation` + `remediation`), under a plain-English heading, with the coded `id` demoted to a small `ref:` line — see [report-template.md](report-template.md). `findings.json` keeps every field for machine use, and the coded `id` stays the stable key for deltas, evidence, and exemptions. The report is human-first; the JSON is machine-first; they never disagree on the facts.
 
 ### Parallel non-scored sections
 

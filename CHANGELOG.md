@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.1.37
+
+Reworked the human-facing report **Findings** format so a report reads like
+something any user can follow, not a coded table. Each finding now renders
+as a plain-English heading plus **What's wrong / Where / Why it matters /
+How to fix**, with the stable check ID demoted to a small `ref:` line (it
+still drives delta tracking, the evidence appendix, and exemptions — a
+reader just no longer needs it to understand the finding). Added an optional
+`impact` field to `findings.json` to carry the "why". The output-conformance
+gate (`report-standard/check-report.sh`) now **enforces** the new shape: the
+old `ID | Severity | Title` findings table no longer conforms. Nothing
+changed about what is detected or scored — only how findings are presented.
+
 ## 0.1.36
 
 Public-release readiness. Added the Apache-2.0 `LICENSE` and set the

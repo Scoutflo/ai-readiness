@@ -58,6 +58,14 @@ echo "$REQUIRED" | while IFS= read -r sec; do
   prev_line="$ln"
 done || FAIL=1
 
+# 5. Findings format: when a finding is rendered, it must use the human-first
+#    What / Where / Why / How shape (a demoted 'ref:' ID, not a table row).
+findings_body="$(awk '/^## Findings$/{f=1; next} /^## /{f=0} f' "$REPORT")"
+if printf '%s\n' "$findings_body" | grep -qE '[A-Z]{2,6}-[0-9]{2,4}'; then
+  printf '%s\n' "$findings_body" | grep -q "What's wrong" \
+    || fail "Findings are present but not in the What's wrong / Where / Why it matters / How to fix shape (see report-template.md); the old ID|Severity|Title table no longer conforms"
+fi
+
 if [ "$FAIL" -eq 0 ]; then
   echo "REPORT-OK: $REPORT conforms to report-template.md"
 else
