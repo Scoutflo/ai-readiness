@@ -275,6 +275,65 @@ else
   fi
 fi
 
+# --- pagerduty ------------------------------------------------------------------------
+# PagerDuty auth is "Authorization: Token token=<key>", not a Bearer header, so this
+# block uses its own curl calls instead of live_check/http_get.
+# The abilities probe validates the key; the analytics probe is a POST that reads
+# (filter body, changes nothing) — read-only keys are documented GET-only, so a 403
+# there is recorded as skipped-with-reason, never a failure: audit-pagerduty reads
+# that row to decide whether to run its actionability section or exclude it honestly.
+
+PD_TOKEN_VAR_CHECK="$(cfg pagerduty token_env)"
+if [ -z "$PD_TOKEN_VAR_CHECK" ]; then
+  row pagerduty configured no - skipped - "add a pagerduty block via /scoutflo:connect if you run PagerDuty"
+else
+  CONFIGURED_COUNT=$((CONFIGURED_COUNT + 1))
+  PD_REGION="$(cfg pagerduty region)"
+  case "$PD_REGION" in
+    eu) PD_API="https://api.eu.pagerduty.com" ;;
+    *)  PD_API="https://api.pagerduty.com" ;;
+  esac
+  resolve_token pagerduty
+  if token_gate pagerduty abilities analytics; then
+    note "doctor: checking pagerduty abilities: GET ${PD_API}/abilities"
+    PD_RC=0
+    PD_CODE="$(curl -s -o /dev/null -w '%{http_code}' \
+      --connect-timeout "$CONNECT_TIMEOUT" --max-time "$MAX_TIME" \
+      -H "Authorization: Token token=${TOKEN}" \
+      -H "Content-Type: application/json" "${PD_API}/abilities")" || PD_RC=$?
+    if [ "$PD_RC" -ne 0 ]; then
+      row pagerduty abilities yes "$TOKEN_VAR" fail "000" "$(transport_hint "$PD_RC") (${PD_API}/abilities)"
+    elif [ "$PD_CODE" = "200" ]; then
+      row pagerduty abilities yes "$TOKEN_VAR" pass "$PD_CODE" "-"
+    elif [ "$PD_CODE" = "401" ]; then
+      row pagerduty abilities yes "$TOKEN_VAR" fail "$PD_CODE" "HTTP 401: key invalid or revoked, or wrong region host (pagerduty.region: us vs eu); recreate per connect references/providers.md"
+    else
+      row pagerduty abilities yes "$TOKEN_VAR" fail "$PD_CODE" "$(http_hint "$PD_CODE")"
+    fi
+    if [ "$PD_CODE" = "200" ]; then
+      # Read-only-by-effect POST: aggregated incident metrics over the last 7 days.
+      note "doctor: checking pagerduty analytics: POST ${PD_API}/analytics/metrics/incidents/all (read-only filter body)"
+      PDA_RC=0
+      PDA_CODE="$(curl -s -o /dev/null -w '%{http_code}' \
+        --connect-timeout "$CONNECT_TIMEOUT" --max-time "$MAX_TIME" \
+        -X POST \
+        -H "Authorization: Token token=${TOKEN}" \
+        -H "Content-Type: application/json" \
+        --data '{"filters":{"created_at_start":"'"$(date -u -v-7d +%Y-%m-%dT00:00:00Z 2>/dev/null || date -u -d '7 days ago' +%Y-%m-%dT00:00:00Z)"'"}}' \
+        "${PD_API}/analytics/metrics/incidents/all")" || PDA_RC=$?
+      if [ "$PDA_RC" -ne 0 ]; then
+        row pagerduty analytics yes "$TOKEN_VAR" skipped "000" "$(transport_hint "$PDA_RC"); audit-pagerduty will exclude the actionability section with this reason"
+      elif [ "$PDA_CODE" = "200" ]; then
+        row pagerduty analytics yes "$TOKEN_VAR" pass "$PDA_CODE" "-"
+      elif [ "$PDA_CODE" = "403" ] || [ "$PDA_CODE" = "402" ]; then
+        row pagerduty analytics yes "$TOKEN_VAR" skipped "$PDA_CODE" "HTTP ${PDA_CODE}: analytics blocked for this key or plan (read-only keys are GET-only; Analytics may need a higher plan); audit-pagerduty will exclude the actionability section with this reason, not fail"
+      else
+        row pagerduty analytics yes "$TOKEN_VAR" skipped "$PDA_CODE" "HTTP ${PDA_CODE}: analytics not confirmed; audit-pagerduty will exclude the actionability section with this reason"
+      fi
+    fi
+  fi
+fi
+
 # --- prometheus and alertmanager (one block, shared optional token) -----------------
 
 PROM_URL="$(cfg prometheus url)"

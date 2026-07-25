@@ -16,6 +16,7 @@ Skim this table to see everything you need before opening any provider UI. Full 
 | [Grafana](#grafana) | Service account token | Basic role `Viewer` (add `Data sources > Reader` on Cloud/Enterprise) | Administration > Users and access > Service accounts |
 | [Sentry](#sentry) | Internal integration token | `org:read`, `project:read`, `event:read`, `alerts:read` (+ `team:read`, `member:read` for ownership checks) | Organization Settings > Developer Settings > Custom Integrations |
 | [DigitalOcean](#digitalocean) | Custom-scoped API token | Read on app, database, monitoring, uptime, domain — never a full-access token | API > Tokens > Generate New Token |
+| [PagerDuty](#pagerduty) | General Access REST API key | Read-only key (the "Read-only API Key" checkbox at creation) | Integrations > API Access Keys > Create New API Key |
 | [GCP](#google-cloud-gcp) | Service account | `roles/monitoring.viewer`, `roles/logging.viewer`, `roles/compute.viewer`, `roles/container.viewer` | IAM & Admin > Service Accounts > Create service account |
 | [Prometheus + Alertmanager](#prometheus-and-alertmanager) | URL reachability, optional bearer token | No scopes to grant unless behind an auth proxy | Just the URL, if reachable without auth |
 | [Loki / Tempo / Mimir / VictoriaMetrics](#loki-tempo-mimir-victoriametrics) | URL, optional tenant + token | No scopes to grant unless behind an auth proxy | Just the URL, plus `tenant_id` for Mimir |
@@ -185,6 +186,55 @@ doctl account get -o json | jq -e '(if type=="array" then .[0] else . end) | .st
 doctl account get -o json | jq -r '(if type=="array" then .[0] else . end) | "team=\(.team.uuid // "personal")"'
 # Confirm the team UUID matches the account you intend to audit; write it into
 # digitalocean.team for multi-team accounts.
+```
+
+## PagerDuty
+
+### Config
+
+```yaml
+pagerduty:
+  token_env: PAGERDUTY_TOKEN            # env var holding the REST API key
+  tier: read-only                       # tier of the key behind token_env
+  # region: us                          # us (api.pagerduty.com) or eu (api.eu.pagerduty.com)
+```
+
+The API base is `https://api.pagerduty.com` for US-region accounts and `https://api.eu.pagerduty.com` for EU service regions. If you are unsure, US is the default; a wrong region returns 401 for a valid key, so probe after exporting.
+
+### Scopes per tier
+
+| Tier | Used by | Credential |
+| --- | --- | --- |
+| Read-only | audit-pagerduty | A **General Access REST API key** created with the **Read-only API Key** checkbox ticked (restricts the key to GET calls). Account-level; created by an admin or account owner. |
+| Elevated | (future setup-pagerduty) | A separate General Access key without the read-only restriction, created only when setup work starts. |
+
+Two caveats to know at creation time:
+
+- Read-only keys are documented as GET-only. The Analytics endpoints this toolkit uses for the alert-to-incident actionability section are POST requests (they carry a filter body but change nothing; they are read-only by effect, not by verb). Whether your account's read-only key passes them is probed by `/scoutflo:doctor`, and the audit degrades that one section honestly if not. If the probe fails and you want the actionability section, use a full General Access key and record `tier: elevated` — the audit itself still only reads.
+- User API tokens (created under My Profile) inherit that user's permissions and disappear with the user. Prefer the account-level key for a durable audit credential.
+
+### Where to click
+
+1. Sign in as an admin or account owner.
+2. Integrations > API Access Keys > Create New API Key.
+3. Description `scoutflo-audit` per the tier naming rule. Tick **Read-only API Key**.
+4. Copy the key once; it is not shown again.
+5. For future setup work, create a second key named `scoutflo-setup` without the read-only restriction instead of widening this one.
+
+### Export and verify
+
+```bash
+# YOU run this in your own terminal; an agent never executes this line.
+printf 'PAGERDUTY_TOKEN: ' && read -rs PAGERDUTY_TOKEN && export PAGERDUTY_TOKEN && printf '\n'
+
+PD_API="https://api.pagerduty.com"   # pagerduty.region: us -> api.pagerduty.com, eu -> api.eu.pagerduty.com
+code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 \
+  -H "Authorization: Token token=${PAGERDUTY_TOKEN}" \
+  -H "Content-Type: application/json" "${PD_API}/abilities")
+[ "$code" = "200" ] && echo PASS || echo "FAIL: got $code"
+# Expect: PASS. 401 means the key is wrong, revoked, or the region host is wrong.
+# Note: /users/me returns an error for account-level keys by design; /abilities is
+# the correct cheap identity probe for this credential type.
 ```
 
 ## Google Cloud (GCP)

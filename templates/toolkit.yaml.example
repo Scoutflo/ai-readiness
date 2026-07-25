@@ -19,6 +19,11 @@ sentry:
   token_env: SENTRY_TOKEN                   # org auth token (read-only scopes for audits)
   tier: read-only
 
+pagerduty:
+  token_env: PAGERDUTY_TOKEN                # General Access REST API key (read-only for audits)
+  tier: read-only
+  # region: us                              # us (api.pagerduty.com) or eu (api.eu.pagerduty.com); default us
+
 prometheus:
   url: https://prometheus.example.com
   alertmanager_url: https://alertmanager.example.com

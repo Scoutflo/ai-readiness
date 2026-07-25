@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.1.44
+
+New integration: **PagerDuty** (`/scoutflo:audit-pagerduty`) — the first
+paging-layer audit, and the first skill with a vendor-analytics-backed
+**actionability** section: auto-resolved incident share, MTTA, and
+sleep-hour interruptions per service, read from PagerDuty's own Analytics
+API (never fabricated; the whole category is excluded with the doctor-probe
+reason when the key or plan cannot reach Analytics). Scored categories:
+escalation and on-call (SPOF policies, rendered schedule coverage, dead
+schedule references, email-only responders), alert grouping and noise
+(all four grouping types incl. the newest unified type, Event
+Orchestration suppress review, permanent maintenance windows), incident
+health (unacked aging, priorities, urgency), service hygiene (orphaned/
+stale services, Rulesets EOL migration debt, PagerDuty's own Standards
+scores read as a corroboration anchor — disagreement is itself a finding),
+plus AIOps plan-gating reported honestly as "not on your plan", never as
+misconfiguration. Handles the Schedules v3 rollout (v2 detail endpoint
+400s on upgraded schedules) from day one. `connect` gains the PagerDuty
+read-only key recipe (with the analytics POST caveat); `doctor` gains the
+abilities probe plus a non-failing analytics probe the audit reads to
+include or exclude its actionability category.
+
 ## 0.1.43
 
 Docs fix: install instructions didn't distinguish the one-time terminal
