@@ -1,5 +1,55 @@
 # Changelog
 
+## 0.1.47
+
+New integration: **JSM Operations** (`/scoutflo:audit-jsm`) — Stage 2.4 of the
+new-integrations wave, and the cloud successor to standalone Opsgenie. Scored,
+read-only audit of the Jira Service Management Operations account that carries
+your paging, across four categories: alert delivery and escalation (teams with
+no escalation or a single step with no repeat, routing rules that join an empty
+schedule, disabled ingestion integrations), alert noise (notification-policy
+dedup, blanket `suppress`, delay, auto-close, auto-restart storms, stable
+`alias` for dedup, alert policies, permanent maintenance blackouts), coverage
+and health (dead heartbeats, critical-service paging paths, teams named as
+audited-or-uncovered, stale integrations), and actionability (unacknowledged
+aging, MTTA, and the share of alerts closed with no acknowledgement).
+
+Built against the current **JSM Operations REST API v1** on `api.atlassian.com`
+(`/jsm/ops/api/{cloud_id}/v1/...`), verified against Atlassian's published
+OpenAPI spec — not classic Opsgenie. Correctness guards baked into the checks
+and the pressure scenarios:
+
+- **Not classic Opsgenie.** Auth is an Atlassian API token over HTTP Basic
+  (`email:token`), never `api.opsgenie.com` and never a `GenieKey` header
+  (standalone Opsgenie is end-of-sale, hard shutdown 2027-04-05).
+- **Verified API shapes.** Alert timestamps are flat `ackTime`/`closeTime` (no
+  `report` nesting), heartbeat health is a `status` enum
+  (`Responsive|Unresponsive|Off|Pending`) with no `expired` field, maintenance
+  windows are flat `startDate`/`endDate`+`status`, and the alerts list is
+  hard-capped at `offset + size < 20000`.
+- **No analytics API.** JSM Operations has no reporting/analytics endpoint, so
+  MTTA and the acked/auto-closed share are computed client-side from alert
+  timestamps within the retrieval cap, with the window and alert count stated
+  every time — never fabricated or implied as vendor analytics.
+- **Team-scoped.** Notification policies and heartbeats hang off a team id, so
+  every coverage denominator names the teams audited and any team skipped.
+
+- skills/audit-jsm: SKILL.md + references/jsm-checks.md (JSM-001..032).
+  Topology Readiness treats JSM as its real platform identity — a `ticketing.jsm`
+  incident sink (a service that creates tickets in JSM), not an alerting source
+  like PagerDuty; the Operations paging hygiene is a layered signal correlated
+  by the optional `serviceName`/`team` fields.
+- connect: JSM Operations section (cloud_id discovery, Atlassian API token over
+  Basic auth, GET-only read-only tier, GenieKey-is-not-for-audits note);
+  toolkit.yaml.example jsm block.
+- doctor: JSM block (cloud_id resolve, Basic auth, `/v1/alerts?size=1` probe,
+  401/403/404 interpretation); doctor SKILL.md documented.
+- Wired into audit-all, start, README, and plugin/marketplace metadata; three
+  pressure scenarios (Opsgenie/GenieKey trap, heartbeat status-not-expired,
+  no-analytics fabrication).
+
+Not yet live-tested against a real JSM Operations account (deferred, tracked).
+
 ## 0.1.46
 
 New integration: **ELK / Kibana** (`/scoutflo:audit-elk`) — Stage 2.6 of the

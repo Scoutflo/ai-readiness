@@ -38,6 +38,7 @@ Expected output: one key per line, for example `grafana`, `sentry`, `prometheus`
 | `pagerduty` | `audit-pagerduty` |
 | `datadog` | `audit-datadog` |
 | `elk` | `audit-elk` |
+| `jsm` | `audit-jsm` |
 | `prometheus.alertmanager_url` or `victoriametrics.vmalert_url` | `audit-alert-routing` |
 | `digitalocean` | `audit-digitalocean` |
 | `gcp` | `audit-gcp` |

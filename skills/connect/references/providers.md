@@ -19,6 +19,7 @@ Skim this table to see everything you need before opening any provider UI. Full 
 | [PagerDuty](#pagerduty) | General Access REST API key | Read-only key (the "Read-only API Key" checkbox at creation) | Integrations > API Access Keys > Create New API Key |
 | [Datadog](#datadog) | API key + Application key pair | Scoped app key: `monitors_read`, `monitors_downtime`, `events_read`, `slos_read` (+ `usage_read`, `billing_read` for the cost section) | Organization Settings > API Keys, then Application Keys |
 | [ELK / Kibana](#elk--kibana) | Elasticsearch API key | Kibana feature privileges `Read` on Stack Rules, Rules Settings, and Actions and Connectors | Kibana > Stack Management > API keys (or Elasticsearch `POST /_security/api_key`) |
+| [JSM Operations](#jsm-operations) | Atlassian API token (Basic auth) | Read-only enforced by GET-only use; a JSM agent/user account with Operations access | id.atlassian.com > Security > API tokens |
 | [GCP](#google-cloud-gcp) | Service account | `roles/monitoring.viewer`, `roles/logging.viewer`, `roles/compute.viewer`, `roles/container.viewer` | IAM & Admin > Service Accounts > Create service account |
 | [Prometheus + Alertmanager](#prometheus-and-alertmanager) | URL reachability, optional bearer token | No scopes to grant unless behind an auth proxy | Just the URL, if reachable without auth |
 | [Loki / Tempo / Mimir / VictoriaMetrics](#loki-tempo-mimir-victoriametrics) | URL, optional tenant + token | No scopes to grant unless behind an auth proxy | Just the URL, plus `tenant_id` for Mimir |
@@ -358,6 +359,70 @@ curl -fsS --max-time 10 -H "Authorization: ApiKey ${KIBANA_API_KEY}" \
   "${KIBANA_URL}/api/alerting/_health" | jq -e '.is_sufficiently_secure != null'
 # Expect: exit 0 (prints true). 401 = wrong key; 404 = wrong host (pointed at
 # Elasticsearch instead of Kibana, or a base-path/space-prefix mismatch).
+```
+
+## JSM Operations
+
+### Config
+
+```yaml
+jsm:
+  site: your-site.atlassian.net            # your Atlassian site host; used to discover cloud_id
+  email_env: JSM_EMAIL                     # env var holding the Atlassian account email (Basic-auth username)
+  token_env: JSM_API_TOKEN                 # env var holding the Atlassian API token (Basic-auth password)
+  tier: read-only                          # read-only is enforced by GET-only use, not by a token scope
+  # cloud_id: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx  # optional UUID; set it to skip the site-based discovery step
+  # teams: [team-id-a, team-id-b]           # Operations team IDs to audit; omit to discover from /v1/teams
+```
+
+This is the **JSM Operations REST API** (`api.atlassian.com/jsm/ops/api/{cloud_id}/v1/...`), the cloud successor to standalone Opsgenie. **Do not point this at `api.opsgenie.com`** — standalone Opsgenie is end-of-sale (2025-06-04) with a hard shutdown on 2027-04-05, and its per-account keys are retired at migration. The classic `GenieKey` header does not authenticate this cloud API at all.
+
+### Auth is an Atlassian API token over HTTP Basic
+
+The credential is an **Atlassian API token** used as the password in HTTP Basic auth, with your account email as the username: `Authorization: Basic base64(email:token)`. There is no read-only *scope* on the token — an API token inherits the permissions of the user it belongs to. Read-only is enforced by this toolkit using **GET only**; to make that guarantee real, create the token under a JSM user whose Operations role is a viewer/read role, not an admin.
+
+| Tier | Used by | How read-only is guaranteed |
+| --- | --- | --- |
+| Read-only | audit-jsm | GET-only usage in the skill, under a token whose user holds a read/observer Operations role. There is no reporting/analytics API, so nothing here writes. |
+| Elevated | (future setup-jsm) | A token under a user with policy/maintenance write access, created only when setup work starts. |
+
+### Discover your cloud_id
+
+Every Operations API path needs your site's `cloud_id`. The audit resolves it from `jsm.site`; you can also set `jsm.cloud_id` directly to skip the lookup:
+
+```bash
+# YOU run this in your own terminal. tenant_info is an unauthenticated site endpoint.
+SITE="your-site.atlassian.net"   # jsm.site
+curl -fsS --max-time 10 "https://${SITE}/_edge/tenant_info" | jq -r '.cloudId'
+# Prints the cloud_id (a UUID). If your site blocks that edge route, the documented
+# alternative needs an OAuth token: GET https://api.atlassian.com/oauth/token/accessible-resources
+# and read the .id of your site's resource.
+```
+
+### Teams are the scope for policies and heartbeats
+
+Notification policies and heartbeats in JSM Operations are **team-scoped**, not global: `GET /v1/teams/{teamId}/policies?type=notification` and `GET /v1/teams/{teamId}/heartbeats`. List the Operations team IDs you want audited in `jsm.teams` (the audit discovers them from `/v1/teams` when omitted) so coverage denominators are honest about which teams were checked. Global alert policies (`/v1/alerts/policies`) and maintenance windows (`/v1/maintenances`) are account-wide.
+
+### Where to click
+
+1. Sign in at `id.atlassian.com` > Security > **Create and manage API tokens** > Create API token. Name it `scoutflo-audit`. Copy it once; it is shown only at creation.
+2. Confirm the account you created it under has an Operations **read/observer** role in JSM (not admin), so GET-only use is a real read-only tier.
+3. Note your site host (the `*.atlassian.net` in your JSM URL) for `jsm.site`.
+4. For setup work later, create a separate token under a user with write access rather than widening this one.
+
+### Export and verify
+
+```bash
+# YOU run these in your own terminal; an agent never executes these lines.
+printf 'JSM_EMAIL: ' && read -r JSM_EMAIL && export JSM_EMAIL
+printf 'JSM_API_TOKEN: ' && read -rs JSM_API_TOKEN && export JSM_API_TOKEN && printf '\n'
+
+SITE="your-site.atlassian.net"   # jsm.site
+CLOUD_ID="$(curl -fsS --max-time 10 "https://${SITE}/_edge/tenant_info" | jq -r '.cloudId')"
+# One page of alerts is the cheapest Operations-scoped read; -u sends Basic auth.
+code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 -u "${JSM_EMAIL}:${JSM_API_TOKEN}" \
+  "https://api.atlassian.com/jsm/ops/api/${CLOUD_ID}/v1/alerts?size=1")
+[ "$code" = "200" ] && echo "JSM Operations PASS" || echo "FAIL: got $code (401 = bad token/email; 403 = user lacks Operations access; 404 = wrong cloud_id)"
 ```
 
 ## Google Cloud (GCP)

@@ -469,6 +469,76 @@ else
   fi
 fi
 
+# --- jsm operations -----------------------------------------------------------------
+# JSM Operations (the cloud successor to standalone Opsgenie) authenticates with an
+# Atlassian API token over HTTP Basic (email:token), NOT a Bearer header and NOT a
+# classic Opsgenie GenieKey. Every path needs the site's cloud_id; resolve it from
+# jsm.cloud_id when set, else from the unauthenticated tenant_info edge route. The
+# cheapest Operations-scoped probe is one page of alerts.
+
+JSM_SITE="$(cfg jsm site)"
+JSM_CLOUD_ID_CFG="$(cfg jsm cloud_id)"
+if [ -z "$JSM_SITE" ] && [ -z "$JSM_CLOUD_ID_CFG" ]; then
+  row jsm configured no - skipped - "add a jsm block via /scoutflo:connect if you run JSM Operations (Opsgenie successor)"
+else
+  CONFIGURED_COUNT=$((CONFIGURED_COUNT + 1))
+  JSM_EMAIL_VAR="$(cfg jsm email_env)"
+  JSM_TOKEN_VAR="$(cfg jsm token_env)"
+  JSM_EMAIL_VAL=""
+  JSM_TOKEN_VAL=""
+  JSM_BLOCKED=0
+  if [ -z "$JSM_EMAIL_VAR" ] || [ -z "$JSM_TOKEN_VAR" ]; then
+    row jsm config yes - fail - "jsm needs both email_env and token_env in toolkit.yaml; set them per connect references/providers.md"
+    JSM_BLOCKED=1
+  else
+    JSM_EMAIL_VAL="$(printenv "$JSM_EMAIL_VAR" 2>/dev/null || true)"
+    JSM_TOKEN_VAL="$(printenv "$JSM_TOKEN_VAR" 2>/dev/null || true)"
+    if [ -z "$JSM_EMAIL_VAL" ]; then
+      row jsm env yes "$JSM_EMAIL_VAR" env-missing - "export ${JSM_EMAIL_VAR} in this shell, then rerun doctor; it is the Basic-auth username (your Atlassian email)"
+      JSM_BLOCKED=1
+    elif [ -z "$JSM_TOKEN_VAL" ]; then
+      row jsm env yes "$JSM_TOKEN_VAR" env-missing - "export ${JSM_TOKEN_VAR} in this shell, then rerun doctor; created per connect references/providers.md"
+      JSM_BLOCKED=1
+    else
+      row jsm env yes "${JSM_EMAIL_VAR}+${JSM_TOKEN_VAR}" pass - -
+    fi
+  fi
+  if [ "$JSM_BLOCKED" -eq 1 ]; then
+    row jsm alerts-read yes "${JSM_TOKEN_VAR:-none}" skipped - "blocked: JSM credentials not resolved"
+  else
+    # Resolve cloud_id: config value wins; else tenant_info (unauthenticated, no secret).
+    JSM_CLOUD_ID="$JSM_CLOUD_ID_CFG"
+    if [ -z "$JSM_CLOUD_ID" ]; then
+      note "doctor: resolving jsm cloud_id: GET https://${JSM_SITE}/_edge/tenant_info"
+      JSM_CLOUD_ID="$(curl -s --connect-timeout "$CONNECT_TIMEOUT" --max-time "$MAX_TIME" \
+        "https://${JSM_SITE}/_edge/tenant_info" 2>/dev/null | jq -r '.cloudId // empty' 2>/dev/null || true)"
+    fi
+    if [ -z "$JSM_CLOUD_ID" ]; then
+      row jsm alerts-read yes "$JSM_TOKEN_VAR" fail - "could not resolve cloud_id from jsm.site '${JSM_SITE}' (tenant_info route blocked or wrong site); set jsm.cloud_id explicitly per connect references/providers.md"
+    else
+      JSM_BASE="https://api.atlassian.com/jsm/ops/api/${JSM_CLOUD_ID}/v1"
+      note "doctor: checking jsm alerts-read: GET ${JSM_BASE}/alerts?size=1"
+      JSM_RC=0
+      JSM_CODE="$(curl -s -o /dev/null -w '%{http_code}' \
+        --connect-timeout "$CONNECT_TIMEOUT" --max-time "$MAX_TIME" \
+        -u "${JSM_EMAIL_VAL}:${JSM_TOKEN_VAL}" "${JSM_BASE}/alerts?size=1")" || JSM_RC=$?
+      if [ "$JSM_RC" -ne 0 ]; then
+        row jsm alerts-read yes "$JSM_TOKEN_VAR" fail "000" "$(transport_hint "$JSM_RC") (${JSM_BASE}/alerts)"
+      elif [ "$JSM_CODE" = "200" ]; then
+        row jsm alerts-read yes "$JSM_TOKEN_VAR" pass "$JSM_CODE" "-"
+      elif [ "$JSM_CODE" = "401" ]; then
+        row jsm alerts-read yes "$JSM_TOKEN_VAR" fail "$JSM_CODE" "HTTP 401: bad API token or email; the token is the Basic-auth password and ${JSM_EMAIL_VAR} the username (not a GenieKey); recreate per connect references/providers.md"
+      elif [ "$JSM_CODE" = "403" ]; then
+        row jsm alerts-read yes "$JSM_TOKEN_VAR" fail "$JSM_CODE" "HTTP 403: the token's user lacks JSM Operations access; grant a read/observer Operations role per connect references/providers.md"
+      elif [ "$JSM_CODE" = "404" ]; then
+        row jsm alerts-read yes "$JSM_TOKEN_VAR" fail "$JSM_CODE" "HTTP 404: wrong cloud_id (resolved '${JSM_CLOUD_ID}') or the site has no Operations; verify jsm.site/jsm.cloud_id"
+      else
+        row jsm alerts-read yes "$JSM_TOKEN_VAR" fail "$JSM_CODE" "$(http_hint "$JSM_CODE")"
+      fi
+    fi
+  fi
+fi
+
 # --- prometheus and alertmanager (one block, shared optional token) -----------------
 
 PROM_URL="$(cfg prometheus url)"
