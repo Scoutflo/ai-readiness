@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.1.43
+
+Docs fix: install instructions didn't distinguish the one-time terminal
+step from everyday Claude.app chat use, which caused a real install failure
+(`/plugin` typed into Claude.app's chat, which doesn't support that command
+there). README.md and docs/install.md now explicitly call out that
+`claude plugin marketplace add` / `claude plugin install` (and the
+list/update/uninstall equivalents) only run in the standalone `claude`
+terminal CLI, and that after that one-time step, every `/scoutflo:...`
+skill works directly in Claude.app's chat with no terminal needed. Added
+the missing CLI-install prerequisite (`npm install -g @anthropic-ai/claude-code`)
+and a new FAQ entry ("Do I need a terminal to use this?").
+
+## 0.1.42
+
+Fixes two real bugs found during a report-bundle regeneration and
+adversarial review: the LGTM-039 telemetry-scope gate compared the active
+kubectl context instead of each critical service's declared `cluster_id`
+in `topology-export.json`, so a central monitoring stack watching a
+different cluster than the one a service runs on (a common deployment
+pattern) produced a false-positive LGTM-030 (no telemetry) instead of the
+correct info-level LGTM-039 (scope mismatch). The gate now checks per
+service, using the declared `cluster_id` first. Separately, the Scoutflo
+Topology Readiness section's customer-facing prose leaked internal
+data-model jargon (`sync-ready`, `MONITORED_BY`, `topology-export.json`,
+T-codes) — rewritten for a reader with no Scoutflo context, with a new
+`check-report.sh` gate that fails the build if that jargon reappears.
+
 ## 0.1.41
 
 Docs polish: FAQ gained a "What does the 0-100 score mean?" entry (target

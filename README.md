@@ -11,20 +11,32 @@ Audit, harden, and monitor your infrastructure and observability stacks from ins
 
 ## Install
 
-Inside Claude Code:
+Installing is a **one-time terminal step**. Using the plugin afterward is **not** — once installed, it works directly inside Claude.app's chat via `/scoutflo:...` commands, no terminal needed for day-to-day use.
 
-```
-/plugin marketplace add Scoutflo/ai-readiness
-/plugin install scoutflo@scoutflo
+**Step 1 — one time, in a real terminal window** (Terminal.app, iTerm, etc. — not the Claude.app chat box). If you don't have the `claude` command yet:
+
+```bash
+npm install -g @anthropic-ai/claude-code
 ```
 
-Then run:
+Then, still in that terminal:
+
+```bash
+claude plugin marketplace add Scoutflo/ai-readiness
+claude plugin install scoutflo@scoutflo
+```
+
+`/plugin marketplace add` and `/plugin install` only work as commands inside the standalone `claude` terminal CLI. They are **not** available as slash commands inside Claude.app's chat window — typing `/plugin ...` there will fail with "isn't available in this environment," which just means you're in the wrong surface for this one step, not that anything is broken.
+
+**Step 2 — restart Claude Code / Claude.app** (fully quit and reopen, not just a new chat tab) so it picks up the plugin from the shared config the terminal command just wrote.
+
+**Step 3 — everyday use, back inside Claude.app (or any Claude Code surface), no terminal needed:**
 
 ```
 /scoutflo:start
 ```
 
-That orients you — what's installed, what to do first, where reports land.
+That orients you — what's installed, what to do first, where reports land. Every skill after this (`/scoutflo:connect`, `/scoutflo:audit-lgtm`, etc.) is a normal slash command you type directly in the chat.
 
 For team-wide or org-wide rollout instead of one person at a time, see [docs/install.md](docs/install.md).
 
@@ -112,6 +124,7 @@ Every `report.md` is validated against a fixed output-conformance standard befor
 
 ## Requirements
 
+- The `claude` terminal CLI (`npm install -g @anthropic-ai/claude-code`) — needed once, for the install step in a terminal. Claude.app alone (without ever having run the CLI) can't install a plugin.
 - Claude Code (latest), with an active subscription
 - `bash`, `curl`, `jq` on your `PATH`
 - The CLI for whatever you're auditing (`kubectl`/`istioctl` for Kubernetes, `doctl` for DigitalOcean, `gcloud` for GCP, `aws` for AWS) — `/scoutflo:doctor` tells you if anything's missing
@@ -119,8 +132,9 @@ Every `report.md` is validated against a fixed output-conformance standard befor
 
 ## Troubleshooting
 
-- **`/plugin marketplace add` fails or hangs.** Check your network and that your GitHub credentials are set up (an SSH key, or `gh auth login`) — the marketplace uses your existing GitHub credentials to fetch the repo. Then try again.
-- **After installing, the `/scoutflo:*` commands don't show up.** New plugin installs need a fresh session to load — close the chat/tab you installed in and start a new one. An in-progress conversation won't pick up a plugin installed partway through it.
+- **`/plugin isn't available in this environment.`** You typed a `/plugin ...` command inside Claude.app's chat window. `/plugin marketplace add` and `/plugin install` only run in the standalone `claude` terminal CLI — open a real terminal, run `claude`, and run the commands there (see Install above). Once installed, you go back to using Claude.app normally — only this one setup step needs a terminal.
+- **`/plugin marketplace add` fails or hangs (in the terminal).** Check your network and that your GitHub credentials are set up (an SSH key, or `gh auth login`) — the marketplace uses your existing GitHub credentials to fetch the repo. Then try again.
+- **After installing, the `/scoutflo:*` commands don't show up.** New plugin installs need a full restart to load — fully quit Claude Code / Claude.app and reopen it, not just a new chat/tab. An in-progress conversation, or even a new tab in an already-running app, won't pick up a plugin installed partway through the session.
 - **A command says "not recognized here" but then answers anyway.** Some Claude Code clients have their own fixed list of built-in slash commands separate from installed-plugin commands; this message just means the client's own list doesn't include it, not that the skill failed. If it responds with real content right after, it worked.
 
 ## Feedback and issues

@@ -1,5 +1,8 @@
 # FAQ
 
+**Do I need a terminal to use this, or does it work inside Claude.app's chat?**
+Both — for different steps. Installing the plugin (`claude plugin marketplace add`, `claude plugin install`) only works in the standalone `claude` terminal CLI; typing `/plugin ...` inside Claude.app's chat window fails with "isn't available in this environment" — that's not a bug, it just means those specific commands aren't supported in that surface. It's a one-time step: once installed via the terminal, restart Claude Code / Claude.app, and every skill (`/scoutflo:start`, `/scoutflo:connect`, `/scoutflo:audit-*`, etc.) works as a normal slash command typed directly in Claude.app's chat — no terminal needed for day-to-day use. See [docs/install.md](install.md) for the exact commands.
+
 **Does any of my data go to Scoutflo?**
 No. The toolkit runs inside your Claude Code. Your credentials stay in your environment, every API call originates from your machine or CI, and there is no telemetry, no report upload, and no callback. The only outbound calls go to your own integrations and, if you configure it, your own Slack webhook.
 
