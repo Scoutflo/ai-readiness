@@ -50,6 +50,12 @@ zenduty:
   tier: read-only                           # NOTE: Zenduty has no read-only key scope; read-only is by GET-only use. Prefer a Bot Token (Beta).
   # teams: [team-unique-id-a]               # Zenduty team unique_ids to audit; omit to discover from /api/account/teams/
 
+groundcover:
+  token_env: GROUNDCOVER_API_KEY            # env var holding the API key; sent as "Authorization: Bearer <key>"
+  tier: read-only                           # bind the key to a Viewer-role service account for a true read-only tier
+  # backend_id: your-backend                # required only for multi-backend accounts; sent as the X-Backend-Id header
+  # api_url: https://api.groundcover.com    # override the API base if your deployment uses a different host
+
 prometheus:
   url: https://prometheus.example.com
   alertmanager_url: https://alertmanager.example.com

@@ -579,6 +579,56 @@ else
   fi
 fi
 
+# --- groundcover --------------------------------------------------------------------
+# Groundcover authenticates with "Authorization: Bearer <key>" on a service-account key,
+# plus an "X-Backend-Id" header for multi-backend accounts. There is no whoami endpoint,
+# so POST /api/monitors/list (with an empty sources filter) is the cheapest read and the
+# doctor probe. It is a read-by-query POST, not a mutation.
+
+GC_TOKEN_VAR_CHECK="$(cfg groundcover token_env)"
+if [ -z "$GC_TOKEN_VAR_CHECK" ]; then
+  row groundcover configured no - skipped - "add a groundcover block via /scoutflo:connect if you run groundcover"
+else
+  CONFIGURED_COUNT=$((CONFIGURED_COUNT + 1))
+  GC_TOKEN_VAR="$GC_TOKEN_VAR_CHECK"
+  GC_TOKEN="$(printenv "$GC_TOKEN_VAR" 2>/dev/null || true)"
+  GC_API="$(cfg groundcover api_url)"
+  [ -n "$GC_API" ] || GC_API="https://api.groundcover.com"
+  GC_API="${GC_API%/}"
+  GC_BACKEND="$(cfg groundcover backend_id)"
+  if [ -z "$GC_TOKEN" ]; then
+    row groundcover env yes "$GC_TOKEN_VAR" env-missing - "export ${GC_TOKEN_VAR} in this shell, then rerun doctor; created per connect references/providers.md"
+    row groundcover monitors-read yes "$GC_TOKEN_VAR" skipped - "blocked: ${GC_TOKEN_VAR} is not set"
+  else
+    row groundcover env yes "$GC_TOKEN_VAR" pass - -
+    note "doctor: checking groundcover monitors-read: POST ${GC_API}/api/monitors/list"
+    GC_RC=0
+    if [ -n "$GC_BACKEND" ]; then
+      GC_CODE="$(curl -s -o /dev/null -w '%{http_code}' \
+        --connect-timeout "$CONNECT_TIMEOUT" --max-time "$MAX_TIME" \
+        -H "Authorization: Bearer ${GC_TOKEN}" -H "X-Backend-Id: ${GC_BACKEND}" \
+        -H "Content-Type: application/json" \
+        -X POST "${GC_API}/api/monitors/list" --data '{"sources":[]}')" || GC_RC=$?
+    else
+      GC_CODE="$(curl -s -o /dev/null -w '%{http_code}' \
+        --connect-timeout "$CONNECT_TIMEOUT" --max-time "$MAX_TIME" \
+        -H "Authorization: Bearer ${GC_TOKEN}" -H "Content-Type: application/json" \
+        -X POST "${GC_API}/api/monitors/list" --data '{"sources":[]}')" || GC_RC=$?
+    fi
+    if [ "$GC_RC" -ne 0 ]; then
+      row groundcover monitors-read yes "$GC_TOKEN_VAR" fail "000" "$(transport_hint "$GC_RC") (${GC_API}/api/monitors/list)"
+    elif [ "$GC_CODE" = "200" ]; then
+      row groundcover monitors-read yes "$GC_TOKEN_VAR" pass "$GC_CODE" "-"
+    elif [ "$GC_CODE" = "401" ]; then
+      row groundcover monitors-read yes "$GC_TOKEN_VAR" fail "$GC_CODE" "HTTP 401: API key invalid or expired; recreate on a Viewer-role service account per connect references/providers.md"
+    elif [ "$GC_CODE" = "403" ]; then
+      row groundcover monitors-read yes "$GC_TOKEN_VAR" fail "$GC_CODE" "HTTP 403: key lacks access, or this is a multi-backend account and groundcover.backend_id (X-Backend-Id) is missing or wrong"
+    else
+      row groundcover monitors-read yes "$GC_TOKEN_VAR" fail "$GC_CODE" "$(http_hint "$GC_CODE")"
+    fi
+  fi
+fi
+
 # --- prometheus and alertmanager (one block, shared optional token) -----------------
 
 PROM_URL="$(cfg prometheus url)"

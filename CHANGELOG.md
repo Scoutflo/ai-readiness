@@ -1,5 +1,63 @@
 # Changelog
 
+## 0.1.49
+
+New integration: **groundcover** (`/scoutflo:audit-groundcover`) — Stage 2.5
+of the new-integrations wave, and the sixth and final Phase 2 integration.
+Scored, read-only audit of the groundcover monitors that watch your telemetry,
+across four categories: monitor firing hygiene (`pendingFor` debounce,
+`customResolveThreshold` hysteresis, `autoResolve`, deliberate `noDataState`
+and `executionErrorState`), notification noise (re-notification storms,
+resolve-churn, `connectedApps` route-bypass, detect-but-page-nobody), monitor
+health and silences (paused live monitors, open-ended recurring silences), and
+coverage and destination liveness (dead workflow destinations, severity use,
+critical-service coverage).
+
+Built against the current groundcover API, verified against the live docs.
+groundcover's monitors and workflows are built on Keep, so the audit is honest
+about the ceiling and the correctness traps:
+
+- **Auth is `Authorization: Bearer <key>`** on a service-account API key, plus
+  an `X-Backend-Id` header on multi-backend accounts (a multi-backend 403 is a
+  missing-`backend_id` config gap, not an empty account). A **Viewer**-role
+  service account is a true read-only tier. The doctor/list probe is `POST
+  /api/monitors/list` with `{"sources":[]}` (a read-by-query — there is no
+  whoami endpoint).
+- **Honest ceiling, not fabricated findings.** groundcover has no group-by
+  alert bundling, no inhibition rules, and no native deduplication or
+  throttling (any such logic is hand-coded in Keep-style workflows). The audit
+  states this ceiling and never files a finding for a control the platform does
+  not have; `category` groups the Monitor List UI only, not notifications.
+- **Capability-gated runtime state.** The per-monitor runtime-state source
+  (firing history, last evaluation error, live silence flags) is not confirmed
+  in groundcover's public docs, so the audit probes it once and marks the two
+  health checks that depend on it (GC-022/GC-023) `not-in-scope` when it is
+  absent, rather than guessing a monitor's live state. The config checks never
+  depend on it.
+- **Silences.** Recurring silences are read via `GET
+  /api/monitors/recurring-silences` for open-ended-suppression hygiene;
+  one-time silences have no list endpoint, so the report states a silenced
+  monitor may not be visible rather than claiming a clean bill.
+
+- skills/audit-groundcover: SKILL.md + references/groundcover-checks.md
+  (GC-001..032). Topology Readiness treats groundcover as its real platform
+  identity — a `monitoring.groundcover` alerting provider that, unlike the
+  all-optional PagerDuty and Zenduty schemas, requires `namespace` and
+  `workloadName`, giving it a strong Kubernetes-anchored identity; carries the
+  camelCase `workloadName`/`serviceName` anchor-mirror caveat.
+- connect: groundcover section (Bearer auth, Viewer-role service account,
+  `X-Backend-Id` for multi-backend); toolkit.yaml.example groundcover block.
+- doctor: groundcover block (`POST /api/monitors/list` probe, Bearer +
+  optional `X-Backend-Id`, 401/403 interpretation); doctor SKILL.md documented.
+- Wired into audit-all, start, README, and plugin/marketplace metadata; three
+  pressure scenarios (missing-controls fabrication, unverified runtime state,
+  multi-backend 403).
+
+Not yet live-tested against a real groundcover account (deferred, tracked).
+
+With this release the Phase 2 new-integrations set is complete: PagerDuty,
+Datadog, ELK/Kibana, JSM Operations, Zenduty, and groundcover.
+
 ## 0.1.48
 
 New integration: **Zenduty (Xurrent IMR)** (`/scoutflo:audit-zenduty`) — Stage

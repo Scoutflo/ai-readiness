@@ -21,6 +21,7 @@ Skim this table to see everything you need before opening any provider UI. Full 
 | [ELK / Kibana](#elk--kibana) | Elasticsearch API key | Kibana feature privileges `Read` on Stack Rules, Rules Settings, and Actions and Connectors | Kibana > Stack Management > API keys (or Elasticsearch `POST /_security/api_key`) |
 | [JSM Operations](#jsm-operations) | Atlassian API token (Basic auth) | Read-only enforced by GET-only use; a JSM agent/user account with Operations access | id.atlassian.com > Security > API tokens |
 | [Zenduty](#zenduty-xurrent-imr) | API key (`Authorization: Token`) | No read-only key scope; use a **Bot Token (Beta)** with view-only permissions, GET-only use | Account Settings > API Keys (Bot Tokens for least privilege) |
+| [Groundcover](#groundcover) | Service-account API key (`Authorization: Bearer`) | A **Viewer-role** service account = true read-only tier | Settings > Access > Service Accounts, then API Keys |
 | [GCP](#google-cloud-gcp) | Service account | `roles/monitoring.viewer`, `roles/logging.viewer`, `roles/compute.viewer`, `roles/container.viewer` | IAM & Admin > Service Accounts > Create service account |
 | [Prometheus + Alertmanager](#prometheus-and-alertmanager) | URL reachability, optional bearer token | No scopes to grant unless behind an auth proxy | Just the URL, if reachable without auth |
 | [Loki / Tempo / Mimir / VictoriaMetrics](#loki-tempo-mimir-victoriametrics) | URL, optional tenant + token | No scopes to grant unless behind an auth proxy | Just the URL, plus `tenant_id` for Mimir |
@@ -471,6 +472,55 @@ printf 'ZENDUTY_TOKEN: ' && read -rs ZENDUTY_TOKEN && export ZENDUTY_TOKEN && pr
 code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 \
   -H "Authorization: Token ${ZENDUTY_TOKEN}" "https://www.zenduty.com/api/account/teams/")
 [ "$code" = "200" ] && echo "Zenduty PASS" || echo "FAIL: got $code (401 = bad or non-Token-prefixed key; 429 = rate-limited, wait a minute)"
+```
+
+## Groundcover
+
+### Config
+
+```yaml
+groundcover:
+  token_env: GROUNDCOVER_API_KEY           # env var holding the API key; sent as "Authorization: Bearer <key>"
+  tier: read-only                          # bind the key to a Viewer-role service account
+  # backend_id: your-backend               # required only for multi-backend accounts (X-Backend-Id header)
+  # api_url: https://api.groundcover.com   # override the API base if your deployment uses a different host
+```
+
+Groundcover's monitors and workflows are its alerting layer. The audit reads them read-only through the groundcover API at `https://api.groundcover.com`.
+
+### Auth is a service-account API key, and Viewer is a real read-only tier
+
+The credential is an **API key bound to a service account**, sent as `Authorization: Bearer <key>`. A service account carries an RBAC role (Admin, Editor, or **Viewer**), and the key inherits that role's permissions — so binding the audit key to a **Viewer** service account gives you a genuine read-only tier, unlike PagerDuty or Zenduty where read-only is only enforced by GET-only use.
+
+| Tier | Used by | Scope |
+| --- | --- | --- |
+| Read-only | audit-groundcover | An API key on a **Viewer**-role service account. The audit uses list/read calls only. |
+| Elevated | (future setup-groundcover) | A key on an Editor/Admin service account, created only when setup work starts. |
+
+### Multi-backend accounts need a backend id
+
+If your groundcover account has more than one backend, the API requires an `X-Backend-Id` header naming which backend to query; set `groundcover.backend_id` and the skills send it. Single-backend accounts can omit it. The backend id is shown under Settings > Access > API Keys. Sending it when present is always safe.
+
+### Where to click
+
+1. In groundcover, Settings > Access > Service Accounts. Create a service account named `scoutflo-audit` with the **Viewer** role.
+2. Under that service account (or Settings > Access > API Keys), create an API key and copy it once.
+3. If your account is multi-backend, note the Backend ID shown alongside the key for `groundcover.backend_id`.
+4. For setup work later, create a separate key on an Editor/Admin service account rather than widening this one.
+
+### Export and verify
+
+```bash
+# YOU run these in your own terminal; an agent never executes these lines.
+printf 'GROUNDCOVER_API_KEY: ' && read -rs GROUNDCOVER_API_KEY && export GROUNDCOVER_API_KEY && printf '\n'
+
+GC_API="https://api.groundcover.com"   # groundcover.api_url
+# Listing monitors is the cheapest read and the doctor probe (there is no whoami endpoint).
+# Add -H "X-Backend-Id: <backend>" if your account is multi-backend.
+code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 \
+  -H "Authorization: Bearer ${GROUNDCOVER_API_KEY}" -H "Content-Type: application/json" \
+  -X POST "${GC_API}/api/monitors/list" --data '{"sources":[]}')
+[ "$code" = "200" ] && echo "Groundcover PASS" || echo "FAIL: got $code (401 = bad key; 403 = key lacks Viewer access or wrong/missing X-Backend-Id)"
 ```
 
 ## Google Cloud (GCP)

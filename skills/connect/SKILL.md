@@ -1,6 +1,6 @@
 ---
 name: connect
-description: Guided credential setup; creates minimal-scope tokens per tier for Grafana, Sentry, PagerDuty, Datadog, ELK/Kibana, JSM Operations, Zenduty, Prometheus, Loki, Tempo, Mimir, VictoriaMetrics, Kubernetes, and Slack, and writes ~/.scoutflo/toolkit.yaml. Use when the user wants to connect or onboard the toolkit, add an integration, rotate a token, or set up credentials, including the audit-brief Slack webhook. Do not use for alert-delivery webhooks (Grafana contact points, Alertmanager receivers; use setup-grafana or setup-lgtm) or to verify reachability (use doctor).
+description: Guided credential setup; creates minimal-scope tokens per tier for Grafana, Sentry, PagerDuty, Datadog, ELK/Kibana, JSM Operations, Zenduty, Groundcover, Prometheus, Loki, Tempo, Mimir, VictoriaMetrics, Kubernetes, and Slack, and writes ~/.scoutflo/toolkit.yaml. Use when the user wants to connect or onboard the toolkit, add an integration, rotate a token, or set up credentials, including the audit-brief Slack webhook. Do not use for alert-delivery webhooks (Grafana contact points, Alertmanager receivers; use setup-grafana or setup-lgtm) or to verify reachability (use doctor).
 ---
 
 # Connect: Credential and Config Setup
@@ -51,7 +51,7 @@ Two conventions are rules, not suggestions:
 
 Configure only what you run. Unconfigured integrations are skipped cleanly by every skill; they are not failures.
 
-Ask which integrations to configure as a plain numbered list in a normal chat message, per the "Asking questions" rule above — this table has up to 14 rows, well past the option ceiling that rule warns about.
+Ask which integrations to configure as a plain numbered list in a normal chat message, per the "Asking questions" rule above — this table has up to 15 rows, well past the option ceiling that rule warns about.
 
 | Integration | Used by | Config block | Suggested env var | Tier summary |
 | --- | --- | --- | --- | --- |
@@ -62,6 +62,7 @@ Ask which integrations to configure as a plain numbered list in a normal chat me
 | ELK / Kibana | audit-elk | `elk:` | `KIBANA_API_KEY` | read-only Kibana feature privileges for audits |
 | JSM Operations | audit-jsm | `jsm:` | `JSM_EMAIL` + `JSM_API_TOKEN` | Atlassian API token over Basic auth; read-only by GET-only use |
 | Zenduty | audit-zenduty | `zenduty:` | `ZENDUTY_TOKEN` | `Authorization: Token` API key; Bot Token (Beta) for least privilege, read-only by GET-only use |
+| Groundcover | audit-groundcover | `groundcover:` | `GROUNDCOVER_API_KEY` | service-account API key on a Viewer role = true read-only tier |
 | Prometheus + Alertmanager | audit-lgtm, setup-lgtm, audit-alert-routing | `prometheus:` | `PROM_TOKEN` (only if your endpoints require auth) | URL reachability; optional bearer |
 | Loki | audit-lgtm, setup-lgtm | `loki:` | `LOKI_TOKEN` (optional) | URL; optional tenant and token |
 | Tempo | audit-lgtm, setup-lgtm | `tempo:` | `TEMPO_TOKEN` (optional) | URL; optional tenant and token |
@@ -83,6 +84,7 @@ Judgment step: collect the non-secret facts for every integration you picked bef
 | ELK / Kibana | `elk.kibana_url`, `elk.token_env`, `elk.tier`; optional `spaces` | `kibana_url: https://kibana.example.com` |
 | JSM Operations | `jsm.site`, `jsm.email_env`, `jsm.token_env`, `jsm.tier`; optional `cloud_id`, `teams` | `site: your-site.atlassian.net` |
 | Zenduty | `zenduty.token_env`, `zenduty.tier`; optional `teams` | `token_env: ZENDUTY_TOKEN` |
+| Groundcover | `groundcover.token_env`, `groundcover.tier`; optional `backend_id`, `api_url` | `token_env: GROUNDCOVER_API_KEY` |
 | Prometheus + Alertmanager | `prometheus.url`, `prometheus.alertmanager_url`; add `token_env` and `tier` only behind an auth proxy | `url: https://prometheus.example.com` |
 | Loki | `loki.url`; optional `token_env` and `tier` | `url: https://loki.example.com` |
 | Tempo | `tempo.url`; optional `token_env` and `tier` | `url: https://tempo.example.com` |
