@@ -42,10 +42,10 @@ For team-wide or org-wide rollout instead of one person at a time, see [docs/ins
 
 ## Your first 15 minutes
 
-1. **`/scoutflo:connect`** — tell it which integrations you use (Grafana, Sentry, PagerDuty, Datadog, Prometheus, DigitalOcean, GCP, AWS, whatever applies). For each one it shows you the exact click-path to create a minimal-scope, read-only credential in that provider's own UI, and the exact command to export it in your own shell. It never asks you to paste a token into the chat, and never runs that command for you.
+1. **`/scoutflo:connect`** — tell it which integrations you use (Grafana, Sentry, PagerDuty, Datadog, ELK/Kibana, Prometheus, DigitalOcean, GCP, AWS, whatever applies). For each one it shows you the exact click-path to create a minimal-scope, read-only credential in that provider's own UI, and the exact command to export it in your own shell. It never asks you to paste a token into the chat, and never runs that command for you.
 2. **`/scoutflo:doctor`** — validates every credential you just set up with one cheap, read-only call per integration. Tells you exactly what's broken and how to fix it if anything is.
 3. **`/scoutflo:map-topology`** (recommended, one time) — builds a real map of your services from Kubernetes/Istio. Once this exists, every audit report uses your actual service names instead of generic ones.
-4. **Run your first audit** — pick whichever matches what you connected: `/scoutflo:audit-lgtm`, `/scoutflo:audit-grafana`, `/scoutflo:audit-sentry`, `/scoutflo:audit-pagerduty`, `/scoutflo:audit-datadog`, `/scoutflo:audit-alert-routing`, `/scoutflo:audit-digitalocean`, `/scoutflo:audit-gcp`, or `/scoutflo:audit-aws`. Or run everything you've configured at once with `/scoutflo:audit-all`.
+4. **Run your first audit** — pick whichever matches what you connected: `/scoutflo:audit-lgtm`, `/scoutflo:audit-grafana`, `/scoutflo:audit-sentry`, `/scoutflo:audit-pagerduty`, `/scoutflo:audit-datadog`, `/scoutflo:audit-elk`, `/scoutflo:audit-alert-routing`, `/scoutflo:audit-digitalocean`, `/scoutflo:audit-gcp`, or `/scoutflo:audit-aws`. Or run everything you've configured at once with `/scoutflo:audit-all`.
 5. **Read the report** in `./scoutflo-audits/<target>/<date>/report.md` — a scored, evidence-backed breakdown of what's healthy and what isn't, with a direct pointer to the fix for each finding.
 
 That's it — nothing else is required to get real value out of this.
@@ -85,6 +85,7 @@ Secrets live only in environment variables you export yourself. `~/.scoutflo/too
 | `/scoutflo:audit-sentry` | Org and project config, privacy scrubbing, alert-rule tiers, releases, monitors |
 | `/scoutflo:audit-pagerduty` | Paging health: services, escalation policies, on-call coverage, alert grouping and noise, incident aging — plus a vendor-analytics-backed **actionability** section (auto-resolved share, MTTA, sleep-hour interruptions) when your plan and key allow |
 | `/scoutflo:audit-datadog` | Monitor health: notification delivery and dead `@handles`, noise controls (recovery thresholds, no-data, renotify, auto-resolve), indefinite mutes and broad downtimes, SLO and composite coverage — plus a separate, non-scored **Cost & Resource Optimization** section from Datadog's own usage data |
+| `/scoutflo:audit-elk` | Kibana Alerting across every space: rules that notify nobody or target a dead connector, rules stuck in execution error, noise controls (flapping detection, `alert_delay`, action throttling, indefinite snoozes), and rule-type coverage — version-aware for Kibana 9.x |
 | `/scoutflo:audit-alert-routing` | Proves an alert actually reaches a human — rule → Alertmanager → receiver, live — and scores **alert noise / alert fatigue**: flapping, permanently-firing rules, missing `for` debounce, missing grouping or inhibition, duplicate delivery, resolve noise |
 | `/scoutflo:audit-digitalocean` | App Platform, managed databases, uptime checks, alert routing |
 | `/scoutflo:audit-gcp` | Cloud Monitoring, uptime checks, GKE telemetry, logging, load-balancer health |

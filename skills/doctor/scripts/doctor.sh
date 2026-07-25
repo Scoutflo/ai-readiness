@@ -425,6 +425,50 @@ else
   fi
 fi
 
+# --- elk / kibana -------------------------------------------------------------------
+# Kibana authenticates the Elasticsearch API key with "Authorization: ApiKey <encoded>",
+# not a Bearer header, so this block uses its own curl call. /api/alerting/_health is the
+# cheapest alerting-scoped probe and is itself an audit signal.
+
+ELK_KIBANA_URL="$(cfg elk kibana_url)"
+if [ -z "$ELK_KIBANA_URL" ]; then
+  row elk configured no - skipped - "add an elk block via /scoutflo:connect if you run Kibana alerting"
+else
+  CONFIGURED_COUNT=$((CONFIGURED_COUNT + 1))
+  ELK_KIBANA_URL="${ELK_KIBANA_URL%/}"
+  ELK_TOKEN_VAR="$(cfg elk token_env)"
+  ELK_TOKEN=""
+  ELK_TOKEN_STATE="none"
+  if [ -n "$ELK_TOKEN_VAR" ]; then
+    ELK_TOKEN="$(printenv "$ELK_TOKEN_VAR" 2>/dev/null || true)"
+    if [ -n "$ELK_TOKEN" ]; then ELK_TOKEN_STATE="set"; else ELK_TOKEN_STATE="missing"; fi
+  fi
+  if [ -z "$ELK_TOKEN_VAR" ]; then
+    row elk config yes - fail - "elk.token_env is empty in toolkit.yaml; name the variable holding the Kibana API key"
+  elif [ "$ELK_TOKEN_STATE" = "missing" ]; then
+    row elk env yes "$ELK_TOKEN_VAR" env-missing - "export ${ELK_TOKEN_VAR} in this shell, then rerun doctor; created per connect references/providers.md"
+    row elk alerting-health yes "$ELK_TOKEN_VAR" skipped - "blocked: ${ELK_TOKEN_VAR} is not set"
+  else
+    row elk env yes "$ELK_TOKEN_VAR" pass - -
+    note "doctor: checking elk alerting-health: GET ${ELK_KIBANA_URL}/api/alerting/_health"
+    ELK_RC=0
+    ELK_CODE="$(curl -s -o /dev/null -w '%{http_code}' \
+      --connect-timeout "$CONNECT_TIMEOUT" --max-time "$MAX_TIME" \
+      -H "Authorization: ApiKey ${ELK_TOKEN}" "${ELK_KIBANA_URL}/api/alerting/_health")" || ELK_RC=$?
+    if [ "$ELK_RC" -ne 0 ]; then
+      row elk alerting-health yes "$ELK_TOKEN_VAR" fail "000" "$(transport_hint "$ELK_RC") (${ELK_KIBANA_URL}/api/alerting/_health)"
+    elif [ "$ELK_CODE" = "200" ]; then
+      row elk alerting-health yes "$ELK_TOKEN_VAR" pass "$ELK_CODE" "-"
+    elif [ "$ELK_CODE" = "404" ]; then
+      row elk alerting-health yes "$ELK_TOKEN_VAR" fail "$ELK_CODE" "HTTP 404: elk.kibana_url likely points at Elasticsearch, not Kibana, or a space/base-path prefix is wrong; alerting rules live in Kibana (:5601 self-managed)"
+    elif [ "$ELK_CODE" = "401" ] || [ "$ELK_CODE" = "403" ]; then
+      row elk alerting-health yes "$ELK_TOKEN_VAR" fail "$ELK_CODE" "HTTP ${ELK_CODE}: key invalid, or the role lacks Kibana Read on Stack Rules; grant the privileges in connect references/providers.md"
+    else
+      row elk alerting-health yes "$ELK_TOKEN_VAR" fail "$ELK_CODE" "$(http_hint "$ELK_CODE")"
+    fi
+  fi
+fi
+
 # --- prometheus and alertmanager (one block, shared optional token) -----------------
 
 PROM_URL="$(cfg prometheus url)"

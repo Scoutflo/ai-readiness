@@ -18,6 +18,7 @@ Skim this table to see everything you need before opening any provider UI. Full 
 | [DigitalOcean](#digitalocean) | Custom-scoped API token | Read on app, database, monitoring, uptime, domain — never a full-access token | API > Tokens > Generate New Token |
 | [PagerDuty](#pagerduty) | General Access REST API key | Read-only key (the "Read-only API Key" checkbox at creation) | Integrations > API Access Keys > Create New API Key |
 | [Datadog](#datadog) | API key + Application key pair | Scoped app key: `monitors_read`, `monitors_downtime`, `events_read`, `slos_read` (+ `usage_read`, `billing_read` for the cost section) | Organization Settings > API Keys, then Application Keys |
+| [ELK / Kibana](#elk--kibana) | Elasticsearch API key | Kibana feature privileges `Read` on Stack Rules, Rules Settings, and Actions and Connectors | Kibana > Stack Management > API keys (or Elasticsearch `POST /_security/api_key`) |
 | [GCP](#google-cloud-gcp) | Service account | `roles/monitoring.viewer`, `roles/logging.viewer`, `roles/compute.viewer`, `roles/container.viewer` | IAM & Admin > Service Accounts > Create service account |
 | [Prometheus + Alertmanager](#prometheus-and-alertmanager) | URL reachability, optional bearer token | No scopes to grant unless behind an auth proxy | Just the URL, if reachable without auth |
 | [Loki / Tempo / Mimir / VictoriaMetrics](#loki-tempo-mimir-victoriametrics) | URL, optional tenant + token | No scopes to grant unless behind an auth proxy | Just the URL, plus `tenant_id` for Mimir |
@@ -306,6 +307,57 @@ code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 \
   -H "DD-API-KEY: ${DATADOG_API_KEY}" -H "DD-APPLICATION-KEY: ${DATADOG_APP_KEY}" \
   "https://api.${DD_SITE}/api/v1/monitor?page_size=1")
 [ "$code" = "200" ] && echo "app key + monitors_read PASS" || echo "FAIL: got $code (403 = app key invalid, unscoped for monitors_read, or wrong site)"
+```
+
+## ELK / Kibana
+
+### Config
+
+```yaml
+elk:
+  kibana_url: https://kibana.example.com   # Kibana base URL (NOT the Elasticsearch URL); no trailing slash
+  token_env: KIBANA_API_KEY                # env var holding the Elasticsearch API key
+  tier: read-only                          # tier of the key behind token_env
+  # spaces: [default]                       # Kibana spaces to audit; omit to audit the default space only
+```
+
+Alerting rules live in **Kibana**, not Elasticsearch, so `kibana_url` is the Kibana application endpoint — a different host and port from the Elasticsearch API (on self-managed, Kibana is `:5601`, Elasticsearch is `:9200`; on Elastic Cloud they are two separate endpoints). One Elasticsearch API key authenticates both the Elasticsearch and Kibana APIs, so there is no separate "Kibana key" to create.
+
+### Rules are space-isolated
+
+Kibana alerting rules and connectors belong to a **space**. A key that reads the `default` space sees only the `default` space's rules; auditing another space means iterating `/s/<space_id>/api/alerting/...`. List the spaces you want audited in `elk.spaces` (the audit defaults to `default` when omitted) so coverage denominators are honest about which spaces were checked.
+
+### Scopes per tier
+
+Read-only for the audit is a set of **Kibana feature privileges**, granted to the role the API key inherits, not an Elasticsearch cluster privilege:
+
+| Tier | Used by | Privileges |
+| --- | --- | --- |
+| Read-only | audit-elk | Kibana `Read` on **Stack Rules**, **Rules Settings**, and **Actions and Connectors**, in each space you audit. Add `monitor_watcher` cluster privilege only if you want the legacy-Watcher split check. |
+| Elevated | (future setup-elk) | Kibana `All` on the same features, created as a separate key when setup work starts. |
+
+Version note: this audit targets the current `/api/alerting/rule(s)` API. Kibana **9.0 removed** the legacy `/api/alerts/*` routes, and maintenance-window listing (`GET /api/maintenance_window/_find`) is a **public API only from 9.2**; the audit version-gates those checks rather than assuming them.
+
+### Where to click
+
+1. In Kibana, Stack Management > API keys > Create API key (this mints an Elasticsearch key usable on both APIs). Name it `scoutflo-audit`.
+2. Restrict it: under Elasticsearch security, the key's role needs the Kibana feature privileges above; if your key supports role descriptors, scope it to `read` on the alerting and connectors features rather than granting a broad role.
+3. Copy the key's **encoded** value (the base64 `id:api_key` form) once.
+4. For setup work later, mint a second key named `scoutflo-setup` with the write privileges.
+
+### Export and verify
+
+```bash
+# YOU run this in your own terminal; an agent never executes this line.
+printf 'KIBANA_API_KEY: ' && read -rs KIBANA_API_KEY && export KIBANA_API_KEY && printf '\n'
+
+KIBANA_URL="https://kibana.example.com"   # elk.kibana_url
+# Kibana takes the encoded key as "Authorization: ApiKey <encoded>". _health is the
+# cheapest alerting-scoped probe and is itself audit-worthy.
+curl -fsS --max-time 10 -H "Authorization: ApiKey ${KIBANA_API_KEY}" \
+  "${KIBANA_URL}/api/alerting/_health" | jq -e '.is_sufficiently_secure != null'
+# Expect: exit 0 (prints true). 401 = wrong key; 404 = wrong host (pointed at
+# Elasticsearch instead of Kibana, or a base-path/space-prefix mismatch).
 ```
 
 ## Google Cloud (GCP)

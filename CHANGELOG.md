@@ -1,5 +1,47 @@
 # Changelog
 
+## 0.1.46
+
+New integration: **ELK / Kibana** (`/scoutflo:audit-elk`) — Stage 2.6 of the
+new-integrations wave. Scored, read-only audit of Kibana Alerting (Stack Rules
+and their connectors) across every Kibana space you point it at, version-aware
+for Kibana 9.x. Four scored categories: rule delivery (enabled rules with no
+action, rules targeting a connector with missing secrets or a deprecated
+connector, orphaned connectors, alerting-framework health), rule health (rules
+stuck in execution error or warning, failed last runs, live controls left
+disabled), alert noise (flapping detection, `alert_delay` debounce, action
+throttling vs re-notify-every-interval, per-alert fan-out on high-cardinality
+rules, indefinite snoozes and `mute_all`, permanent maintenance windows), and
+coverage (rule-type spread, critical-service coverage from topology, and the
+legacy-Watcher-vs-Kibana-Alerting split so a Kibana-only view does not silently
+imply Watcher-covered services are unmonitored).
+
+Three ELK-specific correctness guards baked into the checks and the pressure
+scenarios: `flapping: null` means "use the space default" (which is ON) and is
+NOT a finding, only an explicit `enabled: false` or a weak window is; the
+maintenance-window public API is 9.2+, so ELK-025 version-gates itself to
+`not-in-scope` on 8.x/9.0/9.1 rather than filing a 404 as a broken feature;
+and a 404 on `/api/alerting/*` is read as `elk.kibana_url` pointing at
+Elasticsearch, not "no rules configured". Rules are space-isolated, so every
+coverage denominator names the spaces audited and any space skipped.
+
+- skills/audit-elk: SKILL.md + references/elk-checks.md (ELK-001..032), auth
+  is `Authorization: ApiKey <encoded>` with one Elasticsearch API key (works on
+  both the Elasticsearch and Kibana APIs; alerting rules are a Kibana API),
+  presence-checked only. Topology Readiness treats ELK as its real platform
+  identity — a `logging.elk` log source (`SENDS_LOGS_TO` reaches full confidence
+  on the log-index fields) with alerting layered on as a `MONITORED_BY`-style
+  signal on the optional `alertRuleId`.
+- connect: ELK/Kibana section (space-isolation, ES API key on both APIs, Kibana
+  feature privileges for Stack Rules and Connectors); toolkit.yaml.example block.
+- doctor: ELK block (`/api/alerting/_health` probe, ApiKey auth, 404/401/403
+  interpretation); doctor SKILL.md documented.
+- Wired into audit-all, start, README, and plugin/marketplace metadata; three
+  pressure scenarios (Elasticsearch-URL 404, flapping-null false finding,
+  maintenance-window version gate).
+
+Not yet live-tested against a real Kibana instance (deferred, tracked).
+
 ## 0.1.45
 
 New integration: **Datadog** (`/scoutflo:audit-datadog`) — Stage 2.3 of the

@@ -1,8 +1,8 @@
 {
   "name": "scoutflo",
   "displayName": "Scoutflo AI Readiness",
-  "version": "0.1.45",
-  "description": "Audit, harden, and monitor your infra and observability stacks (LGTM/VictoriaMetrics, Grafana, Sentry, PagerDuty, Datadog, Prometheus alerting, DigitalOcean, GCP, AWS) with scored reports, Slack briefs, and guided remediation. Runs entirely on your side with your credentials.",
+  "version": "0.1.46",
+  "description": "Audit, harden, and monitor your infra and observability stacks (LGTM/VictoriaMetrics, Grafana, Sentry, PagerDuty, Datadog, ELK/Kibana, Prometheus alerting, DigitalOcean, GCP, AWS) with scored reports, Slack briefs, and guided remediation. Runs entirely on your side with your credentials.",
   "author": {
     "name": "Scoutflo",
     "url": "https://scoutflo.com"
@@ -25,6 +25,9 @@
     "kubernetes",
     "digitalocean",
     "gcp",
-    "aws"
+    "aws",
+    "elk",
+    "kibana",
+    "elastic"
   ]
 }
