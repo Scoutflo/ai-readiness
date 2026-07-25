@@ -452,6 +452,32 @@ Expect: exit 0 and `SNTRY-014 pass: <project>`. A fail is either an unfiltered e
 
 A rule migrated to Sentry's newer workflow-engine model can come back from `/rules/` with both `conditions: []` and `filters: []` yet carry a non-empty `errors` array (for example `"Filter not supported: issue_priority_greater_or_equal"`) — confirmed live. Read as literally empty conditions/filters, this jq would flag it as an unconditioned catch-all every time; check for a populated `errors` array first and treat that case as "condition present but not representable in this API view," not proven noise, before scoring SNTRY-014 fail on it.
 
+**SNTRY-015, orphaned detectors (workflow-engine orgs, capability-gated).** Probe the org-level detectors endpoint once. It 404s on classic-model orgs — that is `not-in-scope`, not a fail. On a 200, a detector with an empty `workflowIds` array detects a condition but drives no automation, so it notifies nobody (the new-model equivalent of SNTRY-001/SNTRY-005's no-receiver case):
+
+```bash
+set -eu
+# Resolved from ~/.scoutflo/toolkit.yaml
+SENTRY_HOST="us.sentry.io"   # sentry.host
+SENTRY_ORG="your-org-slug"   # sentry.org
+API="https://${SENTRY_HOST}/api/0"
+[ -n "${SENTRY_TOKEN:-}" ] || { echo "SENTRY_TOKEN is not set; run /scoutflo:connect"; exit 1; }
+
+det="$(mktemp)"
+code=$(curl -s -o "$det" -w '%{http_code}' --max-time 30 \
+  -H "Authorization: Bearer ${SENTRY_TOKEN}" "${API}/organizations/${SENTRY_ORG}/detectors/")
+if [ "$code" = "404" ]; then
+  echo "SNTRY-015 not-in-scope: workflow-engine detectors endpoint absent (classic-model org); SNTRY-001/005 cover the no-receiver case"
+elif [ "$code" = "200" ]; then
+  jq -r '[.[] | select(((.workflowIds // []) | length) == 0) | {id, name, type}]' "$det"
+  echo "SNTRY-015: each listed detector has workflowIds == [] — connected to no automation, notifies nobody (high)"
+else
+  echo "SNTRY-015 blocked: detectors read returned ${code}; record as blocked evidence, not a pass"
+fi
+rm -f "$det"
+```
+
+Expect: on a classic org, the `not-in-scope` line and nothing scored. On a workflow-engine org, an empty array (`[]`) is the healthy result; any listed detector is an orphaned-detector finding named in `affected`. A non-200/404 status blocks the check with the code as evidence. Uptime lives here as a detector `type` of `uptime_domain_failure`, not a separate endpoint.
+
 **SNTRY-011, duplicate paths.** Compare condition sets across a project's own rules, and compare its issue rules against any metric alert on the same signal from `metric-alerts.json`:
 
 ```bash
@@ -571,6 +597,7 @@ Permanent IDs. Never renumber, never reuse a retired ID; deltas depend on stabil
 | SNTRY-012 | service-coverage | medium | Every critical service maps to a project with recent accepted events, or the mapping is explicitly `not-in-scope` by decision |
 | SNTRY-013 | alert-rules-and-routing | high | Every production project has at least one immediate-tier and one review-tier rule, correctly environment-scoped by the rule's own `environment` field |
 | SNTRY-014 | alert-rules-and-routing | medium | No rule pages on unfiltered every-event conditions or re-pages below your frequency floor |
+| SNTRY-015 | alert-rules-and-routing | high | Workflow-engine orgs (capability-gated): no detector with an empty `workflowIds` array — a detector connected to no automation notifies nobody; `not-in-scope` on classic-model orgs where the endpoint 404s |
 | SNTRY-101 | alert-rules-and-routing | medium | Every notifying issue rule gates with a non-empty `filters` set; a broad trigger with an empty `filters` array fires un-tuned (every-event/frequency subset stays owned by SNTRY-014) |
 | SNTRY-102 | alert-rules-and-routing | medium | On a multi-environment project, every notifying issue rule sets its own `environment`; a null `environment` runs the rule across all environments and pages on dev/staging noise |
 | SNTRY-103 | alert-rules-and-routing | medium | Every metric alert sets `resolveThreshold`, pairs a `warning` trigger with `critical`, and uses a `timeWindow` (or `comparisonDelta`/`detectionType`) wide enough not to flap on transients |

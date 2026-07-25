@@ -24,6 +24,7 @@ One permanent ID per check. IDs never change or get reused; retired checks keep 
 | AWS-004 | Alerting coverage and configuration | No alarm stuck in INSUFFICIENT_DATA from a dead dimension filter | high |
 | AWS-005 | Alerting coverage and configuration | Minimum dashboard coverage per critical service | low |
 | AWS-006 | Alerting coverage and configuration | Composite/anomaly-detection alarms in use are reviewed for a sane trigger | info |
+| AWS-007 | Alerting coverage and configuration | Application Signals SLOs have a burn-rate config and an alarm on it (not-in-scope when App Signals is unused) | medium |
 | AWS-010 | Alert routing and delivery | Every alarm names at least one SNS topic in AlarmActions | critical |
 | AWS-011 | Alert routing and delivery | Every referenced SNS topic has a confirmed (non-PendingConfirmation) subscription | high |
 | AWS-012 | Alert routing and delivery | Severity-tiered topics, not one undifferentiated topic | medium |
@@ -51,6 +52,7 @@ One permanent ID per check. IDs never change or get reused; retired checks keep 
 | AWS-053 | Log forwarding and account-level observability | AWS Config recorder on | medium |
 | AWS-054 | Log forwarding and account-level observability | VPC Flow Logs enabled for VPCs carrying critical workloads | medium |
 | AWS-055 | Log forwarding and account-level observability | Central-sink and retention decision complete with a named owner | low |
+| AWS-056 | Log forwarding and account-level observability | No CloudWatch Logs anomaly detector stuck in FAILED or PAUSED | medium |
 | AWS-060 | Alerting coverage and configuration | Paging alarms debounce single datapoints via M-of-N (DatapointsToAlarm < EvaluationPeriods) or an adequate Period | medium |
 | AWS-061 | Alerting coverage and configuration | No paging alarm pages on data gaps or thin percentile samples (TreatMissingData not breaching, InsufficientDataActions not on a paging topic, EvaluateLowSampleCountPercentile=ignore) | medium |
 | AWS-062 | Alerting coverage and configuration | No paging alarm flaps across the 30-day StateUpdate history | medium |
@@ -141,7 +143,7 @@ aws_cli ec2 describe-flow-logs --output json \
 
 Expected: one JSON file per surface. An empty `ecs-services.json` or `eks.json` on an account that genuinely runs neither means that portion of Compute health and coverage is `not-in-scope`, declared in the scorecard, not a failure. Any `AccessDenied` error is evidence of a missing role; record it and mark the affected checks `blocked`.
 
-## 5. Alerting coverage and configuration (AWS-001 to AWS-006)
+## 5. Alerting coverage and configuration (AWS-001 to AWS-007)
 
 ```bash
 set -eu
@@ -157,6 +159,26 @@ jq -r 'select((.description | length) < 40) | .name' "${RAW_DIR}/alarms.json"
 ```
 
 Expected: cross-reference the first list's resource IDs against the section 4 inventories (`rds.json`, `target-groups.json`, `asgs.json`, `lambda.json`); any critical resource id absent from the list is the `AWS-001` finding, named exactly. `AWS-004` is not automatically a fail: an alarm in `INSUFFICIENT_DATA` because the resource is genuinely new or paused is a note, not a defect; an alarm in `INSUFFICIENT_DATA` for a live, serving resource because its dimension filter names the wrong resource id is the real finding. `AWS-002`, `AWS-005`, and `AWS-006` are judgment steps: read the alarm's `Threshold`/`ComparisonOperator` pair (or the composite alarm's `AlarmRule`) against the resource's known load pattern, and check `cloudwatch list-dashboards`/`get-dashboard` for a view naming this service.
+
+**AWS-007 (Application Signals SLO burn-rate alarm).** Only where the account uses Application Signals; when `list-service-level-objectives` returns empty or the service is not enabled, AWS-007 is `not-in-scope`, never a fail.
+
+```bash
+set -eu
+aws_cli() { aws "$@"; }   # your resolved profile/region wrapper from section 4
+# List SLOs; for each, read its config and check for a burn-rate configuration.
+aws_cli application-signals list-service-level-objectives --output json 2>/dev/null \
+  | jq -r '.SloSummaries[]?.Arn' | while read -r arn; do
+      aws_cli application-signals get-service-level-objective --id "$arn" --output json \
+        | jq -r '.Slo | "\(.Name)\tburn_rate_configs=\((.BurnRateConfigurations // []) | length)"'
+    done
+# An SLO with burn_rate_configs=0 has no burn-rate metric (AWS-007). For SLOs WITH a burn-rate
+# config, confirm an alarm actually watches it: the SLO object carries NO alarm reference, so
+# cross-reference describe-alarms for an alarm whose metric is the SLO's burn-rate/attainment metric.
+aws_cli cloudwatch describe-alarms --output json \
+  | jq -r '.MetricAlarms[]? | select((.Namespace // "") | test("ApplicationSignals"; "i")) | .AlarmName'
+```
+
+Expected: every SLO shows `burn_rate_configs >= 1` AND appears (by its metric) among the Application Signals alarms. An SLO with `burn_rate_configs=0`, or one whose burn-rate metric no alarm watches, is the AWS-007 finding: the SLO tracks attainment on a dashboard but pages nobody when the budget burns. Presence of a `BurnRateConfigurations` entry alone is not proof of an alarm — the alarm must exist in `describe-alarms`.
 
 - ❌ `AWS-003 pass: every alarm has a non-empty AlarmDescription field.`
 - ✅ `AWS-003 partial: descriptions exist but none name the environment or a datapoint to check first; a responder reading "High CPU" alone learns nothing at 3am.`
@@ -409,9 +431,20 @@ head -c 200 "$BODY"; echo; rm -f "$BODY"
 
 Expected: `200`. A `404`, `410`, or a parked page means the check watches a dead or migrated target; `000` means DNS or connect failure, either a real outage or a moved hostname, settle ownership before filing an outage.
 
-## 10. Log forwarding and account-level observability (AWS-050 to AWS-055)
+## 10. Log forwarding and account-level observability (AWS-050 to AWS-056)
 
 `AWS-050`: from `log-groups.json`, cross-reference critical-service log group names against `aws logs describe-subscription-filters --log-group-name <name>`; an empty result on a critical group's log group is the finding unless the team has a written decision that logs stay local to CloudWatch. `AWS-051`: any critical log group with `retention_days: null` (meaning "Never expire") is the finding. `AWS-052`: from `cloudtrail.json`, at least one trail with `multi_region: true` must exist and be actively logging (`aws cloudtrail get-trail-status --name <trail>` returns `IsLogging: true`); absence is a critical, account-wide gap. `AWS-053`: from `config-recorders.json`, any recorder with `recording: false`, or an empty list entirely, is the finding. `AWS-054`: from `flow-logs.json`, any VPC carrying critical workloads absent from the list, or present with `status` other than `ACTIVE`, is the finding. `AWS-055` is a judgment step over the team's own answers: which backend receives forwarded logs, what retention, what redaction, who owns cost and access; a backend with none of those answered is `partial`, not `pass`.
+
+`AWS-056`: CloudWatch Logs anomaly detectors in a broken state. Read-only `list-log-anomaly-detectors`:
+
+```bash
+set -eu
+aws_cli() { aws "$@"; }   # your resolved profile/region wrapper from section 4
+aws_cli logs list-log-anomaly-detectors --output json 2>/dev/null \
+  | jq -r '.anomalyDetectors[]? | "\(.detectorName // .anomalyDetectorArn)\t\(.anomalyDetectorStatus)"'
+```
+
+Expected: each detector's `anomalyDetectorStatus` is one of `INITIALIZING | TRAINING | ANALYZING | FAILED | DELETED | PAUSED`. A `FAILED` or `PAUSED` detector on a critical log group is the AWS-056 finding: it looks configured but surfaces no anomalies. Absence of any detector is not a finding (they are opt-in); only a broken one is. `INITIALIZING`/`TRAINING` are transient and informational.
 
 - ❌ `Logs pass: CloudTrail is enabled.`
 - ✅ `Logs partial: CloudTrail is enabled and multi-region (AWS-052 pass), but three production log groups have no retention set and no subscription filter, so incident logs age out silently with nothing centrally searchable (AWS-050 fail, AWS-051 fail, named log groups listed).`

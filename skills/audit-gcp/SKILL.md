@@ -177,16 +177,16 @@ Build the raw picture with the commands in [references/gcp-checks.md](references
 
 Commands in [references/gcp-checks.md](references/gcp-checks.md) section 5. Judge whether an alert that fires reaches a human: any enabled channel at all (`GCP-001`, critical when none), every enabled policy names at least one channel (`GCP-002`), channels split per environment instead of one catch-all (`GCP-003`), delivery proven by an observed Monitoring-generated notification rather than assumed (`GCP-004`, capped at `configured` without one; Cloud Monitoring's incident history has no public list API, so a team-confirmed sighting is the documented manual exception), no disabled or unverified channel still referenced by policies (`GCP-005`), and no forgotten snooze muting a critical policy (`GCP-006`).
 
-## Phase 4: Uptime and availability (GCP-010 to GCP-015)
+## Phase 4: Uptime and availability (GCP-010 to GCP-016)
 
-Commands in section 6. Every active public serving endpoint has an uptime check (`GCP-010`); every check has an alert policy on its `check_passed` metric, because a check without a policy notifies nobody (`GCP-011`); SSL-expiry visibility exists for HTTPS endpoints (`GCP-012`); every check target answers `200` live this session (`GCP-013`); checkers span regions where regional failure matters (`GCP-014`); and no check watches a dead or migrated target (`GCP-015`). Probe every target live and capture the status code as evidence.
+Commands in section 6. Every active public serving endpoint has an uptime check (`GCP-010`); every check has an alert policy on its `check_passed` metric, because a check without a policy notifies nobody (`GCP-011`); SSL-expiry visibility exists for HTTPS endpoints (`GCP-012`); every check target answers `200` live this session (`GCP-013`); checkers span regions where regional failure matters (`GCP-014`); no check watches a dead or migrated target (`GCP-015`); and no uptime check is `disabled: true` while still referenced by an alert policy — a disabled check evaluates nothing, so its policy silently never fires, and failure logging (`logCheckFailures`) being off leaves failed probes undiagnosable (`GCP-016`). Probe every target live and capture the status code as evidence.
 
 - ❌ `Uptime pass: a check exists for the storefront host.`
 - ✅ `Uptime partial: the check exists but no policy rides its check_passed metric (GCP-011), and the target answered 401 this run, which makes it a noise generator (GCP-013), affected: storefront.`
 
 ## Phase 5: Compute VM coverage (GCP-020 to GCP-024)
 
-Commands in section 7. Per serving VM group: CPU pressure policies with two named tiers where the workload is stable (`GCP-020`); memory and disk coverage credited only after agent metrics prove live per VM (`GCP-021`); Ops Agent presence itself (`GCP-022`); every threshold or absence condition filter returns live time series, because a filter matching zero series can never fire (`GCP-023`); and metadata or user-label filters validated against the real label shape (`GCP-024`). MQL and PromQL conditions cannot be validated by the series probe; record them as `configured` unless separately proven.
+Commands in section 7. Per serving VM group: CPU pressure policies with two named tiers where the workload is stable (`GCP-020`); memory and disk coverage credited only after agent metrics prove live per VM (`GCP-021`); Ops Agent presence itself (`GCP-022`); every threshold or absence condition filter returns live time series, because a filter matching zero series can never fire (`GCP-023`); and metadata or user-label filters validated against the real label shape (`GCP-024`). MQL and PromQL conditions cannot be validated by the series probe; record them as `configured` unless separately proven. The full current condition set to inventory is six kinds — `conditionThreshold`, `conditionAbsent`, `conditionMatchedLog`, `conditionMonitoringQueryLanguage`, `conditionPrometheusQueryLanguage`, and `conditionSql` — so a newer SQL-based condition is never silently skipped.
 
 ## Phase 6: GKE coverage (GCP-030 to GCP-033)
 
@@ -216,7 +216,7 @@ Runs on the large path only (see [Estate sizing](#estate-sizing) above). All sta
 
 Two hard rules, matching the estate-sizing rules above: alert routing, GKE, logs, and alert-quality checks (Phases 3, 6, 8, 9) are project- or category-scoped, not per-object, and always run once per run regardless of path. Delete the run directory after `findings.json` and `report.md` are written; it is working state, not a report.
 
-### Alert hygiene: policy noise controls (GCP-063 to GCP-066)
+### Alert hygiene: policy noise controls (GCP-063 to GCP-067)
 
 Folds into Phase 9, after the `GCP-060` to `GCP-062` alert-quality checks. Phases 3 through 8 prove a policy that fires reaches a human; this subsection asks the opposite question a responder feels at 3am: does a firing policy generate a sustainable notification stream, or does its own configuration turn it into noise? Every check reads the per-policy `alertStrategy` and condition fields already captured in Phase 2's `alert-policies.jsonl` (no new call, no mutation) and applies a tunable threshold as the reader. Commands are in [references/gcp-checks.md](references/gcp-checks.md) section 17.
 
@@ -232,6 +232,7 @@ Checks:
 - **GCP-064 (auto-close).** `alertStrategy.autoClose` closes an open incident after the policy stops receiving data; when unset the effective default is seven days, so a transient condition can leave an incident open, and renotifying, for a week. A deliberate, tighter value (example, tune it: `AUTOCLOSE_MAX="86400s"`) is the fix. Absence is low severity: a stuck-open incident is renotify noise and a stale board, not a missed page.
 - **GCP-065 (repeat-notification throttle).** `alertStrategy.notificationRateLimit.period` caps notifications to one per period while an incident stays open; absent on a high-churn policy means a notification per evaluation. It is already required on log-based policies, so read it there too. Flag its absence on the noisiest metric policies (the top-talkers the coverage work already surfaces), not on every quiet one, or the finding becomes noise itself.
 - **GCP-066 (renotify and resolve cadence).** `alertStrategy.notificationChannelStrategy[].renotifyInterval` must sit inside the documented 30m-24h range when set (`RENOTIFY_MIN="1800s"`, `RENOTIFY_MAX="86400s"`; examples, tune them) rather than silently defaulting, and `alertStrategy.notificationPrompts` including `CLOSED` emits a resolve notification per incident, roughly doubling that policy's volume. `CLOSED` is often a deliberate choice, so this is `info` unless it inflates a policy already flagged noisy by `GCP-065`, where it rises to `low`.
+- **GCP-067 (MQL migration debt).** Count enabled policies with any `conditionMonitoringQueryLanguage` condition. Google Cloud customer support for MQL ended 2025-07-22: existing MQL policies still evaluate and can still be created through the API, but the console can no longer create or edit them, so an MQL condition is console-unmaintainable and is migration debt (the documented alternative query language is PromQL, `conditionPrometheusQueryLanguage`). This is `low`, one finding listing the affected policies; it never fails a policy that is working, it flags the maintenance cliff. Commands in [references/gcp-checks.md](references/gcp-checks.md) section 17.5.
 
 ## Phase 10: Coverage matrix and topology readiness
 
@@ -251,12 +252,12 @@ Score per [severity-and-scoring.md](../../report-standard/severity-and-scoring.m
 | Category | Weight | ID range |
 | --- | ---: | --- |
 | Alert routing and delivery | 20 | GCP-001 to GCP-006 |
-| Uptime and availability | 15 | GCP-010 to GCP-015 |
+| Uptime and availability | 15 | GCP-010 to GCP-016 |
 | Compute VM coverage | 15 | GCP-020 to GCP-024 |
 | GKE coverage | 15 | GCP-030 to GCP-033 |
 | Logs as a signal | 15 | GCP-050 to GCP-054 |
 | Load balancer coverage | 10 | GCP-040 to GCP-043 |
-| Alert quality | 5 | GCP-060 to GCP-066 |
+| Alert quality | 5 | GCP-060 to GCP-067 |
 | Dashboards and correlation | 5 | GCP-070 to GCP-071 |
 
 The full check catalog and the target profile (what 100 means per category) are at the top of [references/gcp-checks.md](references/gcp-checks.md). IDs are stable: the same defect gets the same ID every run, one finding per failed check, affected objects enumerated. Compute `points_recoverable` per finding by re-running the scoring model with that check at full credit; `info` findings and excluded categories carry 0. The executive summary states the gap to target and the two or three findings with the highest `points_recoverable` as the biggest levers.

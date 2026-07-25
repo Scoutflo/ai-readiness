@@ -104,14 +104,16 @@ One permanent ID per check. IDs never change or get reused; retired checks keep 
 | ALR-016 | Alert hygiene | Paging routes group related alerts and inhibit redundant ones | medium |
 | ALR-017 | Alert hygiene | No unintended duplicate delivery; Alertmanager HA dedup is healthy | medium |
 | ALR-018 | Alert hygiene | Resolve-notification volume on paging receivers is deliberate, not accidental | info |
+| ALR-019 | Route matching | No route/inhibition matcher pins `le`/`quantile` to an integer value that Prometheus 3.x normalizes to a float | high |
+| ALR-020 | Config integrity | No receiver on the deprecated `msteams_configs` delivery path (retired Office 365 connector) | medium |
 
 Category weights for scoring:
 
 | Category | Weight | IDs |
 | --- | ---: | --- |
-| Config integrity | 20 | ALR-002, ALR-003 |
+| Config integrity | 20 | ALR-002, ALR-003, ALR-020 |
 | Dispatch proof | 20 | ALR-005, ALR-006, ALR-009 |
-| Route matching | 15 | ALR-004, ALR-011 |
+| Route matching | 15 | ALR-004, ALR-011, ALR-019 |
 | Rule presence | 15 | ALR-001 |
 | Alert hygiene | 15 | ALR-012, ALR-013, ALR-014, ALR-015, ALR-016, ALR-017, ALR-018 |
 | Triage metadata | 10 | ALR-007, ALR-008 |
@@ -201,6 +203,8 @@ Two rules keep this phase honest:
 
 An anonymized worked example of exactly this failure pattern, a receiver drifted live while the repo stayed correct, is in section 11 of the reference.
 
+**ALR-020 (deprecated msteams delivery path).** While reading the rendered receivers, flag any receiver that carries an `msteams_configs` block. Microsoft is retiring the Office 365 connector that integration depends on, and Alertmanager 0.28.0 added `msteamsv2_configs` (adaptive-card Workflows format) as its replacement; the old block still parses but the delivery path is dying, so a receiver still on `msteams_configs` is an at-risk delivery path (medium). The read-only signal is the presence of the `msteams_configs:` key in `config.original`; the fix is migrating that receiver to `msteamsv2_configs`.
+
 ## Phase 5: Active alerts and route matching (ALR-004, ALR-011)
 
 Query `api/v2/alerts` and capture, for every active alert: name, namespace, severity, and the receiver Alertmanager resolved it to. The resolved receiver is the strongest matcher proof available, because it is what the route tree did, not what it should do. Commands in sections 6 and 7 of the reference.
@@ -210,6 +214,8 @@ Then compare three sets:
 1. Firing-alert namespace distribution (from Prometheus `ALERTS`) against route matcher scope. A namespace that fires alerts but is covered by no matcher lands on the default route; if the default receiver is null or unwatched, that namespace pages nobody (ALR-004).
 2. topology.md against matcher coverage: every namespace and service topology.md names must be covered by a matcher or by a deliberate, stated default-route decision. Uncovered topology services are an ALR-004 finding with each service named in `affected`.
 3. Alerts firing longer than `LONG_FIRING_HOURS` (example value, tune to your environment) against the receivers they resolve to. Unrelated long-firing alerts sharing a paging receiver bury real pages (ALR-011).
+
+**ALR-019 (le/quantile matcher normalization — a silent-correctness trap on Prometheus 3.x).** Prometheus 3.0 normalizes the values of the `le` label (classic histograms) and the `quantile` label (summaries) to a float representation on ingestion: a series formerly carrying `le="1"` now carries `le="1.0"`. Any Alertmanager route matcher or inhibition matcher that pins one of these labels to an integer-looking value silently stops selecting those series after the upgrade, so a route that used to catch the alert now sends it to the default route and an inhibition that used to suppress a downstream alert no longer fires. Scan the rendered `config.original` route tree (`match`, `matchers`) and every `inhibit_rule` (`equal`, `source_matchers`, `target_matchers`) for `le` or `quantile` pinned to a bare integer — the read-only signal is a matcher value matching `^(le|quantile)\s*=~?\s*"?\d+"?$` with no decimal point. On a Prometheus-3.x target that is an ALR-019 finding (high): rewrite the matcher to the normalized value (`le="1.0"`) or a decimal-tolerant regex. Gate this on the target's Prometheus major version (read from `api/v1/status/buildinfo`); on 2.x the integer form still matches, so report it as not-in-scope with the detected version rather than a fail. Note also that Alertmanager's UTF-8 strict matcher mode is still opt-in (fallback mode is the default through 0.33.x), so a regex matcher whose value contains a literal `.` (`le=~"1.0"`) is under-anchored — the `.` matches any character and should be escaped (`le=~"1\.0"`); flag that as the same finding's secondary note, not a separate check.
 
 ## Phase 6: Dispatch proof and receiver liveness (ALR-005, ALR-006)
 

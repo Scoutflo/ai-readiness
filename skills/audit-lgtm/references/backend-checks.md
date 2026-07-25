@@ -235,7 +235,27 @@ curl -fsS --max-time 10 -H "$AUTH" "${VMALERT_URL}/metrics" \
 
 Expected: rules present, no `lastError` lines, `vmalert_alerts_send_errors_total` at 0 while `vmalert_alerts_sent_total` grows. Send errors climbing means vmalert cannot reach its notifier: alerts evaluate and go nowhere. Record counter values, never the notifier URL.
 
+vmalert now also evaluates **VictoriaLogs** rules (`type: vlogs`, alongside `prometheus` and `graphite`), so a rule's `type`/`.Type` field is not always PromQL/MetricsQL. When reading `/api/v1/rules`, honor each rule's declared type and never flag a `vlogs`-type rule as a malformed metrics rule — its expression is LogsQL. To isolate them, `/api/v1/rules` supports a `datasource_type` filter (also `search`, `group_limit`, `page_num`):
+
+```bash
+set -eu
+VMALERT_URL="https://vmalert.example.com"   # victoriametrics.vmalert_url
+VM_TOKEN="${VM_TOKEN:-}"
+AUTH="Authorization: Bearer ${VM_TOKEN}"
+[ -n "$VM_TOKEN" ] || AUTH="Accept: application/json"
+
+# Bucket rules by type so a vlogs (VictoriaLogs/LogsQL) rule is not judged as PromQL.
+# Default per-element (inside the iteration), not over the whole stream, or untyped rules vanish.
+curl -fsS --max-time 10 -H "$AUTH" "${VMALERT_URL}/api/v1/rules" \
+  | jq -r '[.data.groups[].rules[] | (.type // "prometheus")] | group_by(.) | map("\(.[0]): \(length)") | .[]'
+# VictoriaLogs rules only, via the datasource_type filter:
+curl -fsS --max-time 10 -H "$AUTH" "${VMALERT_URL}/api/v1/rules?datasource_type=vlogs" \
+  | jq -r '[.data.groups[].rules[]?] | "\(length) vlogs rules"' || echo "no vlogs rules or filter unsupported on this version"
+```
+
 ## 5. Loki (LGTM-020, LGTM-022, LGTM-023, LGTM-024, LGTM-025)
+
+Deployment-mode note (feeds the LGTM-060 reliability read, not a new ID): Loki's **Simple Scalable Deployment (SSD)** mode — the three-target `-target=read` / `-target=write` / `-target=backend` split — is **deprecated and will be removed in Loki 4.0**, replaced by the HA single-binary (monolithic) mode. When the Loki topology is SSD (visible from those `-target` args on the pods inventoried in Phase 2), note it as pre-4.0 deprecation debt: it still runs today but will not under Loki 4.0. This is an advisory reliability note, not a scored fail on its own.
 
 ```bash
 set -eu
@@ -454,6 +474,14 @@ kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" get ds -o json \
   | jq -r '.items[] | "\(.metadata.name): desired=\(.status.desiredNumberScheduled) ready=\(.status.numberReady)"'
 kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" logs "ds/${COLLECTOR}" --since="$SINCE" 2>/dev/null \
   | grep -ciE 'error|dropped|failed|retry' || echo "0 error lines"
+
+# LGTM-025 (EOL collectors): flag Promtail (EOL 2026-03-02) and Grafana Agent (EOL 2025-11-01)
+# pods still running; both are superseded by Grafana Alloy. Scan daemonset AND deployment images
+# across the namespace, not just the one named COLLECTOR, so a second legacy collector is caught.
+kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" get ds,deploy -o json \
+  | jq -r '.items[].spec.template.spec.containers[].image
+      | select(test("promtail|grafana[-/]agent|grafana/agent"))'
+echo "flag: each image above is an EOL collector (Promtail/Grafana Agent) -> migration-debt finding, migrate to grafana/alloy"
 
 # LGTM-061 / LGTM-062: storage sizing as retention input; snapshot objects if a backup operator runs
 kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" get pvc

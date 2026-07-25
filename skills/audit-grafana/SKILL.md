@@ -76,8 +76,11 @@ BATCH_SIZE="15"           # dashboards per batch on the large path; example, tun
 
 DASHBOARDS="$(curl -fsS --max-time 15 -H "Authorization: Bearer ${GRAFANA_TOKEN}" \
   "${GRAFANA_URL}/api/search?type=dash-db&limit=5000" | jq 'length')"
+# Recording rules (rules carrying a `record` block, GA since Grafana 11.3) are not alert
+# rules; exclude them from the alert-rule count so coverage is judged against alerting only.
 RULES="$(curl -fsS --max-time 15 -H "Authorization: Bearer ${GRAFANA_TOKEN}" \
-  "${GRAFANA_URL}/api/v1/provisioning/alert-rules" 2>/dev/null | jq 'length' 2>/dev/null || echo 0)"
+  "${GRAFANA_URL}/api/v1/provisioning/alert-rules" 2>/dev/null \
+  | jq '[.[] | select((.record // null) == null)] | length' 2>/dev/null || echo 0)"
 DATASOURCES="$(curl -fsS --max-time 15 -H "Authorization: Bearer ${GRAFANA_TOKEN}" \
   "${GRAFANA_URL}/api/datasources" | jq 'length')"
 TOTAL=$((DASHBOARDS + RULES + DATASOURCES))
@@ -313,7 +316,14 @@ Judge only live JSON. `dashboards/<uid>.json` came from the API this run; if you
 
 Inspection only. Do not send test notifications, create silences, or touch state; a routed live test pages real humans and belongs in `setup-grafana` behind its confirmation gate, or in `audit-alert-routing`.
 
-Checks GRAF-050 to GRAF-056, against `alert-rules.json`, `contact-points.json`, and `notification-policies.json` from the raw dump:
+Checks GRAF-050 to GRAF-056, against `alert-rules.json`, `contact-points.json`, and `notification-policies.json` from the raw dump.
+
+Two version-awareness notes before judging, both confirmed against current Grafana:
+
+- **Recording rules are not alert rules.** Since Grafana 11.3 a Grafana-managed rule may carry a `record` block (with `metric`, `from`, and `target_datasource_uid`) instead of alerting semantics. Exclude any rule where `.record != null` from the alert-rule checks and the coverage denominator, count it separately, and for a recording rule check only that `record.target_datasource_uid` resolves to a live datasource; scoring it as an alert rule with no receiver is a false finding.
+- **The provisioning API is deprecated but still functional.** On Grafana 12.x the alerting provisioning endpoints (`/api/v1/provisioning/{alert-rules,contact-points,policies,mute-timings,templates}`) are deprecated in favor of the App Platform APIs at `/apis/notifications.alerting.grafana.app/v1beta1/namespaces/{ns}/{receivers,routingtrees,templategroups,timeintervals}`; the old endpoints keep working "until a future release". This audit still reads the provisioning API and that is correct for now. Gate any future switch on the new endpoint responding, not a hardcoded version number; if a provisioning read returns 404/410 on a newer Grafana, fall forward to the App Platform path rather than recording an empty result.
+
+The checks:
 
 1. **Receiver wiring (GRAF-050).** Walk the policy tree and list every referenced receiver, then confirm each exists among contact points and is not a placeholder:
 
@@ -338,7 +348,9 @@ Checks GRAF-050 to GRAF-056, against `alert-rules.json`, `contact-points.json`, 
 
    ```bash
    RAW_DIR="./scoutflo-audits/grafana/$(date -u +%Y-%m-%d)/raw"   # this run's raw dir
-   jq '[ .[] | select(((.labels.severity // "") == "") or ((.labels.service // "") == ""))
+   # Exclude recording rules (.record != null): they route nothing and carry no severity/service.
+   jq '[ .[] | select((.record // null) == null)
+         | select(((.labels.severity // "") == "") or ((.labels.service // "") == ""))
          | {uid, title} ]' "${RAW_DIR}/alert-rules.json"
    ```
 
@@ -361,7 +373,7 @@ Checks:
 
 - **GRAF-100 (missing `for`).** From `alert-rules.json`, `for` per rule. A paging-severity rule with `for: 0s` fires on a single evaluation and pages on a transient breach that may self-correct before anyone looks. A `for` matched to the signal's volatility is the fix.
 - **GRAF-101 (flap protection).** Two resolve-damping controls, both absent by default. `keep_firing_for` (the Recovering state) holds an alert firing for a set duration after its condition clears, so a metric oscillating around the threshold does not emit repeated firing/resolved/firing cycles; `keep_firing_for: 0s` or absent is no hold. A recovery-threshold (a distinct bound for returning to Normal, separate from the firing bound) is the config form of hysteresis. Read the rule's threshold condition for a recovery bound versus a single evaluator — the internal field naming varies by Grafana version, so read the condition, do not pattern-match one field name. A flap-prone paging rule with `keep_firing_for: 0s` and a single-threshold condition has no anti-flap damping.
-- **GRAF-102 (muting hygiene).** Every mute timing a route references via `mute_time_intervals` must resolve to a definition in `GET /api/v1/provisioning/mute-timings`; a dangling reference is a config error. Then list active silences via the Grafana Alertmanager silences API: an active silence with a far-future or perpetually-renewed `endsAt` is hiding real alerts, not managing noise — flag it with its matcher and `createdBy`. (Grafana auto-deletes expired silences after 5 days, so a lingering active one is a deliberate act.)
+- **GRAF-102 (muting hygiene).** Every mute timing a route references via `mute_time_intervals` must resolve to a definition in `GET /api/v1/provisioning/mute-timings`; a dangling reference is a config error. (Grafana 12.1 renamed "Mute Timings" to "Active Time Intervals" in the UI; the provisioning resource is still `mute-timings` and the App Platform resource is `timeintervals`. Use the "Active Time Intervals" wording in the report when the target is 12.1 or newer, "Mute Timings" otherwise; the check itself is unchanged.) Then list active silences via the Grafana Alertmanager silences API: an active silence with a far-future or perpetually-renewed `endsAt` is hiding real alerts, not managing noise — flag it with its matcher and `createdBy`. (Grafana auto-deletes expired silences after 5 days, so a lingering active one is a deliberate act.)
 - **GRAF-103 (resolve-noise).** From `contact-points.json`, `disableResolveMessage`. A paging contact point with `disableResolveMessage: false` emits both a fire and a resolve per incident, roughly doubling its volume. Often deliberate, so this is `low`; the provisioning API carries no per-receiver counter, so name it as a config signal, never as measured volume.
 
 Two folds into the existing checks, no new IDs:

@@ -23,6 +23,7 @@ Runnable, read-only checks for the [Cost and Resource Optimization](../SKILL.md#
 | AWSOPT-008 | Broader cost/security/fault-tolerance checks | Trusted Advisor (`support:Describe*`), Business/Enterprise support only | From Trusted Advisor's own estimate, when it provides one |
 | AWSOPT-009 | S3 buckets with no lifecycle rule holding aged Standard-class objects | S3 `Get*`/`List*` | None (presence fact) |
 | AWSOPT-010 | EBS/RDS snapshot sprawl against the team's stated retention policy | EC2/RDS `Describe*` | None (presence fact) |
+| AWSOPT-011 | Aggregated cross-service recommendations from Cost Optimization Hub | Cost Optimization Hub (`cost-optimization-hub:List*`), enrollment required | From the Hub's own `estimatedMonthlySavings` |
 
 ## 3. Doctor-gate dependency
 
@@ -53,6 +54,30 @@ aws_cli() {
 }
 aws_cli compute-optimizer get-enrollment-status --output json | jq -r '.status'
 ```
+
+**AWSOPT-011 (Cost Optimization Hub).** The Hub aggregates rightsizing, idle-resource, and commitment recommendations across services into one place, each with a native `estimatedMonthlySavings` figure. Like Compute Optimizer, it requires enrollment; check that first, and on a non-enrolled account report `excluded, reason: "Cost Optimization Hub not enrolled"`, never an empty pass. All three operations are read-only `List*`.
+
+```bash
+set -eu
+AWS_PROFILE_CFG=""            # aws.profile
+AWS_REGION_CFG="us-east-1"    # aws.region
+aws_cli() {
+  if [ -n "$AWS_PROFILE_CFG" ]; then
+    aws --profile "$AWS_PROFILE_CFG" ${AWS_REGION_CFG:+--region "$AWS_REGION_CFG"} "$@"
+  else
+    aws ${AWS_REGION_CFG:+--region "$AWS_REGION_CFG"} "$@"
+  fi
+}
+# Enrollment first: recommendations are empty unless the account has opted in.
+aws_cli cost-optimization-hub list-enrollment-statuses --output json 2>/dev/null \
+  | jq -r '.items[]?.status // "NOT_ENROLLED"'
+# When enrolled, pull the aggregated recommendations; the savings field is exactly
+# estimatedMonthlySavings (not estimatedMonthlySavingsAmount) — take it verbatim, never recompute.
+aws_cli cost-optimization-hub list-recommendations --output json 2>/dev/null \
+  | jq -r '.items[]? | "\(.recommendationId)\t\(.currentResourceType)\t\(.estimatedMonthlySavings)"'
+```
+
+Expected: an `Active` enrollment status, then one line per recommendation with the Hub's own `estimatedMonthlySavings`. Anything other than an active enrollment means AWSOPT-011 reports `excluded, reason: "Cost Optimization Hub not enrolled"` and stops. The dollar figure is reported verbatim from `estimatedMonthlySavings`, never recomputed.
 
 Expected: `Active`. Anything else (`Inactive`, `Pending`, an `AccessDeniedException`) means AWSOPT-001 reports `excluded, reason: "Compute Optimizer not enrolled for this account"` and stops; never fall back to a CPU-percentage-based estimate computed from `cloudwatch get-metric-statistics`. When active, pull recommendations directly:
 

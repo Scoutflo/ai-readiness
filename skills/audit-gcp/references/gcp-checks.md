@@ -43,6 +43,7 @@ One permanent ID per check. IDs never change or get reused; retired checks keep 
 | GCP-013 | Uptime and availability | Check targets answer 200 live this session; no auth-only or timing-out targets | medium |
 | GCP-014 | Uptime and availability | Multi-region checkers where regional failure matters | low |
 | GCP-015 | Uptime and availability | No checks against dead or migrated targets | medium |
+| GCP-016 | Uptime and availability | No disabled uptime check still referenced by a policy; failure logging on | medium |
 | GCP-020 | Compute VM coverage | CPU pressure policy on serving VMs, two tiers where stable | high |
 | GCP-021 | Compute VM coverage | Memory and disk coverage claimed only with agent metric evidence | high |
 | GCP-022 | Compute VM coverage | Ops Agent present on serving VMs | medium |
@@ -68,6 +69,7 @@ One permanent ID per check. IDs never change or get reused; retired checks keep 
 | GCP-064 | Alert quality | alertStrategy.autoClose is a deliberate value, not the effective 7-day default | low |
 | GCP-065 | Alert quality | High-churn policies throttle repeat notifications via alertStrategy.notificationRateLimit.period | low |
 | GCP-066 | Alert quality | Renotify cadence in range and resolve prompts deliberate (renotifyInterval, notificationPrompts) | info |
+| GCP-067 | Alert quality | No MQL conditions (console-unmaintainable since 2025-07-22); migration debt to PromQL | low |
 | GCP-070 | Dashboards and correlation | Dashboards link signals for critical services | low |
 | GCP-071 | Dashboards and correlation | Dashboards without corresponding alerting flagged | info |
 
@@ -126,6 +128,7 @@ gcloud monitoring uptime list-configs --project "$GCP_PROJECT" --format=json \
   | jq '[.[] | {name, displayName, period, timeout,
       host: (.monitoredResource.labels.host // null),
       path: (.httpCheck.path // null), use_ssl: (.httpCheck.useSsl // null),
+      disabled: (.disabled // false), log_check_failures: (.logCheckFailures // false),
       regions: (.selectedRegions // ["all-default"])}]' > "${RAW_DIR}/uptime-checks.json"
 gcloud monitoring dashboards list --project "$GCP_PROJECT" --format=json \
   | jq '[.[] | {name, displayName}]' > "${RAW_DIR}/dashboards.json"
@@ -193,7 +196,7 @@ Expected: a positive channel count, no zero-channel policy lines, no disabled-or
 - ❌ `GCP-004 pass: four channels exist and all are enabled.`
 - ✅ `GCP-004 partial: channels exist and are enabled, but no Monitoring-generated notification was observed reaching any of them this run; routing stays configured.`
 
-## 6. Uptime and availability (GCP-010 to GCP-015)
+## 6. Uptime and availability (GCP-010 to GCP-016)
 
 ```bash
 set -eu
@@ -209,6 +212,9 @@ jq -r '.conditions[]?.conditionThreshold.filter // empty
 # GCP-012: SSL-expiry policies.
 jq -r 'select([.conditions[]?.conditionThreshold.filter // ""] | any(contains("time_until_ssl_cert_expires"))) | .displayName' \
   "${RAW_DIR}/alert-policies.jsonl"
+# GCP-016: disabled uptime checks (evaluate nothing) and checks with failure logging off.
+jq -r '.[] | select(.disabled == true) | .name | sub(".*/"; "")' "${RAW_DIR}/uptime-checks.json"
+jq -r '.[] | select(.log_check_failures == false) | .name | sub(".*/"; "")' "${RAW_DIR}/uptime-checks.json"
 ```
 
 Expected: every serving host appears in the checked list (`GCP-010`); every check id from the second list appears inside a `check_id="..."` capture from the third (`GCP-011`); at least one SSL-expiry policy covers your HTTPS estate or per-check SSL validation is on (`GCP-012`). **An uptime check with no alert policy notifies nobody; it only draws a graph.** That distinction is the whole point of `GCP-011`.
@@ -227,6 +233,8 @@ head -c 200 "$BODY"; echo; rm -f "$BODY"
 ```
 
 Expected: `200`. A `401` means the check watches an auth-only endpoint and is a noise generator unless expected-status matching was configured deliberately (`GCP-013`). A `404`, `410`, or a parked page means a dead or migrated target (`GCP-015`); `000` means DNS or connect failure, which is either a real outage or a moved hostname; settle ownership before filing an outage. `GCP-014`: `regions` pinned to a single region for a globally used endpoint is the judgment call; note what would change it (single-region users, internal-only endpoint).
+
+`GCP-016`: the first list is uptime checks with `disabled: true` — a disabled check evaluates nothing, so any `check_id` from this list that also appears in a `check_passed` policy filter (cross-reference the GCP-011 capture) is a silent gap: the policy looks wired but can never fire. The second list is checks with `logCheckFailures: false` (failure logging off), where a failed probe leaves no Cloud Logging trail to diagnose from; report these as a lower-severity diagnosability gap. Both fields come straight from the `uptime-checks.json` capture, no extra call.
 
 ## 7. Compute VM coverage (GCP-020 to GCP-024)
 
@@ -579,7 +587,7 @@ Rules:
 - `findings.json` and `report.md` are written only once 16.6 passes. A run stopped mid-batch leaves its worklist and partial findings in the run directory as the resume point; it never overwrites the previous complete report.
 - Delete the run directory after `findings.json` and `report.md` are written; it is working state, not a report. Deleting it early forces a fresh start on the next invocation.
 
-## 17. Alert hygiene: policy noise controls (GCP-063 to GCP-066)
+## 17. Alert hygiene: policy noise controls (GCP-063 to GCP-067)
 
 Runs the Phase 9 alert-hygiene subsection. Every block is read-only and reuses the per-policy JSON already captured in section 4's `alert-policies.jsonl` (full policy objects, so `alertStrategy` and every condition are present); nothing here calls the API again or mutates. Honest ceiling, repeated because it belongs in the evidence: these are structural noise signals read off each policy's configuration, not an actionability rate. Cloud Monitoring keeps no public incident-history list API (the same limit `GCP-004` records), so the run cannot compute a fired-vs-actionable ratio and never reports one; it reports which policies are structurally noisy. Cloud Monitoring is rich per policy but has no cross-policy inhibition, no incident grouping, and no recurring time-based mute schedule (snoozes are one-off intervals) — state those as coverage limits, not findings. Snooze staleness that mutes a live critical policy is `GCP-006` (section 5) and is not re-checked here. Apply the named thresholds (`DURATION_MIN`, `AUTOCLOSE_MAX`, `RENOTIFY_MIN`, `RENOTIFY_MAX`) as the reader, exactly as the rest of this audit does; all are example values.
 
@@ -671,3 +679,20 @@ echo "flag: renotifyInterval outside ${RENOTIFY_MIN}-${RENOTIFY_MAX} (GCP-066); 
 ```
 
 Expected: renotify intervals inside `RENOTIFY_MIN`-`RENOTIFY_MAX` where set, and `CLOSED` present only where a resolve notification is genuinely wanted. `CLOSED` roughly doubles a policy's volume, so it is `info` on its own and rises to `low` when it inflates a policy already flagged by 17.3. `OPENED (implied)` is the baseline and is not itself a finding.
+
+### 17.5 MQL migration debt (GCP-067)
+
+Google Cloud customer support for MQL ended 2025-07-22: existing `conditionMonitoringQueryLanguage` policies still evaluate and can still be created through the API, but the console can no longer create or edit them. The documented alternative query language is PromQL (`conditionPrometheusQueryLanguage`). This is a maintenance-cliff signal, not a working-policy failure.
+
+```bash
+set -eu
+RUN_DATE="$(date -u +%Y-%m-%d)"
+RAW_DIR="./scoutflo-audits/gcp/${RUN_DATE}/raw"
+
+# GCP-067: enabled policies carrying any MQL condition (console-unmaintainable since 2025-07-22).
+jq -r 'select((.enabled // true) == true)
+  | select([.conditions[]? | has("conditionMonitoringQueryLanguage")] | any)
+  | .displayName' "${RAW_DIR}/alert-policies.jsonl"
+```
+
+Expected: no output on a fully-migrated project. Each line is a policy whose MQL condition can no longer be edited in the console; file one `GCP-067` finding (`low`) listing the affected policies and pointing at PromQL as the migration target. Never fail a policy that is evaluating correctly; this flags the editing cliff, not a broken alert. Log-match, threshold, absence, PromQL, and SQL (`conditionSql`) conditions are unaffected and not counted here.

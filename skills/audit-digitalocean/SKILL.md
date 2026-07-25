@@ -188,6 +188,11 @@ Commands in section 7. Per active app: deployment lifecycle alerts at least for 
 
 Runtime posture: a health check exists per service component (`DO-030`) and its path answers `200` live without auth, Origin, or session dependency (`DO-031`); single-instance production services named (`DO-032`); autoscaling posture recorded without recommending guessed thresholds (`DO-033`).
 
+Two current-spec refinements, both read from the app spec already captured in Phase 2:
+
+- **Liveness vs readiness (folds into DO-030).** App Platform components carry two distinct health-check blocks: the readiness `health_check` (stops routing traffic to an unhealthy instance) and a separate `liveness_health_check` (GA June 2025 — restarts the component when it fails). They are different objects with different defaults. A component that defines only `health_check` never auto-restarts when it hangs: traffic is withheld but the stuck instance sits there. Flag service components with a readiness `health_check` but no `liveness_health_check` as a DO-030 gap (a hang goes unrecovered), distinct from the "no health check at all" case.
+- **Autoscaled without an alert on the scaled metric (folds into DO-033/DO-024).** A component with an `autoscaling` block (`min_instance_count`/`max_instance_count` plus a `metrics` object — `metrics.cpu.percent`, or the request-based `metrics.requests_per_second.per_instance` / `metrics.request_duration.p95_milliseconds`, GA May 2026) that has no App Platform alert rule on the metric it scales on is flying blind: it scales silently and pages nobody when it pins at `max_instance_count`. **Read this from the app spec's own `alerts` array (and `doctl apps list-alerts`), never from `doctl monitoring alert list`** — DO Monitoring alert policies have no App Platform metric type, so cross-referencing autoscaling against that surface is a category error. The finding is an autoscaled component whose app-spec `alerts` do not include the scaled metric (or at least a restart/CPU rule that would surface the pin).
+
 Thresholds you compare against come from the starting alert set in section 12 of the reference; every number there is an example to tune, not a prescription.
 
 ## Phase 6: Managed databases (DO-040 to DO-048)

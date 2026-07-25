@@ -1,5 +1,62 @@
 # Changelog
 
+## 0.1.50
+
+Freshness and correctness pass across the seven pre-Phase-2 audit skills (the
+"existing-7 backlog"): deprecation-aware and current-API checks, each verified
+against official documentation before editing. No new skills; existing skills
+gain checks and version-awareness.
+
+- **audit-alert-routing:** **ALR-019** (high) — the Prometheus 3.0 `le`/`quantile`
+  float-normalization trap: a route or inhibition matcher pinned to an integer
+  (`le="1"`) silently stops matching after the series is normalized to `le="1.0"`,
+  so it is version-gated on the target's Prometheus major and rewritten to the
+  float form or a decimal-tolerant regex. **ALR-020** (medium) — a receiver still
+  on the deprecated `msteams_configs` block (retired Office 365 connector) is a
+  dying delivery path; migrate to `msteamsv2_configs` (Alertmanager 0.28.0+).
+- **audit-gcp:** **GCP-016** (medium) — a disabled uptime check still referenced
+  by a policy (silently never fires), plus failure-logging (`logCheckFailures`)
+  off. **GCP-067** (low) — MQL conditions are migration debt: console support for
+  MQL ended 2025-07-22 (policies still evaluate, but the console can no longer
+  create or edit them; PromQL is the alternative). The condition inventory now
+  covers all six current types including `conditionSql`.
+- **audit-grafana:** recording rules (a `record` block, GA since 11.3) are
+  excluded from the alert-rule count and label checks so they are not scored as
+  alert rules with no receiver; the provisioning-API deprecation (App Platform
+  APIs at `notifications.alerting.grafana.app/v1beta1` on 12.x) is documented as
+  a dual-read gated on endpoint availability, not a version number; the Mute
+  Timings → Active Time Intervals (12.1) rename is noted for report wording.
+- **audit-sentry:** **SNTRY-015** (high, capability-gated) — on workflow-engine
+  orgs, a detector with an empty `workflowIds` array detects but notifies nobody
+  (the new-model equivalent of a rule with no action); `not-in-scope` on
+  classic-model orgs where the detectors endpoint 404s.
+- **audit-lgtm:** flag EOL collectors still running — Promtail (EOL 2026-03-02)
+  and Grafana Agent (EOL 2025-11-01), both superseded by Grafana Alloy — as
+  migration debt under LGTM-025; honor vmalert's `type: vlogs` (VictoriaLogs)
+  rules and the `datasource_type` filter so a vlogs rule is not judged as PromQL;
+  note the Loki SSD-mode pre-4.0 deprecation as a reliability signal.
+- **audit-digitalocean:** the distinct `liveness_health_check` (GA June 2025) is
+  read alongside the readiness `health_check` under DO-030 — a component with
+  only readiness never auto-restarts on a hang; an autoscaled component with no
+  App Platform alert on its scaled metric is flagged under DO-033, read from the
+  app-spec `alerts` array (not `doctl monitoring alert list`, which has no App
+  Platform metric type).
+- **audit-aws:** **AWS-007** (medium) — an Application Signals SLO with no
+  burn-rate config, or whose burn-rate metric no alarm watches (the SLO object
+  carries no alarm reference, so it is cross-referenced against
+  `describe-alarms`); `not-in-scope` when Application Signals is unused.
+  **AWS-056** (medium) — a CloudWatch Logs anomaly detector stuck `FAILED` or
+  `PAUSED`. **AWSOPT-011** (non-scored cost) — Cost Optimization Hub aggregated
+  recommendations, enrollment-gated, savings taken verbatim from the Hub's
+  `estimatedMonthlySavings`.
+
+Every added command is read-only (GET / `list-*` / `describe-*` / documented
+read-by-query), each new scored check is wired into its catalog and category
+weights, and the whole change set passed an adversarial correctness review
+(read-only safety, scoring integrity, capability-gating, and claim accuracy all
+verified). With this the build phase is closed: Phase 1 (7 skills), Phase 2 (6
+new integrations), and the existing-7 freshness backlog are all complete.
+
 ## 0.1.49
 
 New integration: **groundcover** (`/scoutflo:audit-groundcover`) — Stage 2.5

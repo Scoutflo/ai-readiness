@@ -61,7 +61,7 @@ Load `./scoutflo-audits/topology.md` if it exists; its service list is your crit
 ## Ground rules
 
 - Evidence is a re-fetched API response. The Phase 2 raw dump is discovery input; before filing any finding, re-fetch the specific object with a single GET this run and quote that response. Configuration seen only in the dump is `configured`, never `validated-live`.
-- API errors are evidence. Record the status code and what it implies; never convert a 403 or 404 into empty success. The workflow-engine endpoint is feature-gated and 404s on many orgs; a 404 there means the feature is absent, not that the org is broken.
+- API errors are evidence. Record the status code and what it implies; never convert a 403 or 404 into empty success. The workflow-engine endpoints (`/organizations/{org}/detectors/` and `/organizations/{org}/workflows/`) are feature-gated and 404 on many orgs; a 404 there means the feature is absent on that org, not that the org is broken. These endpoints are the new alerting model (detectors = what to detect, workflows = what to do) and their docs are current, but no explicit GA/stability label is published and the classic per-project `rules/` surface still works, so this audit treats them as capability-gated: probe once, act on them if present, fall back to the classic surface if not, never fail an org for their absence.
 - Never score from object counts. Fifty projects and two hundred rules prove nothing; credit comes from live state a responder could act on.
   - ❌ `Scored alert rules and routing 90: fifty projects and two hundred rules exist.`
   - ✅ `Scored alert rules and routing 45: rules exist and are tiered, but SNTRY-005 shows every non-email action references a dead or missing integration, so credit stops at partial.`
@@ -230,6 +230,8 @@ Default-rule noise is checked with the other rule checks in Phase 3.
 
 List rules per project via `/projects/{org}/{project}/rules/`. The workflow-engine listing is an optional extra check that tolerates 404 (feature-gated); its absence proves nothing and blocks nothing.
 
+**Workflow-engine orphaned-detector check (SNTRY-015, capability-gated).** On orgs migrated to the workflow-engine model, probe `GET /organizations/{org}/detectors/` once. If it returns 200, this is the new-model equivalent of the classic "alert rule with no notification action": a detector carrying an empty `workflowIds` array detects a condition but is connected to no automation, so it notifies nobody. List every detector where `workflowIds` is `[]` (the linkage is readable both ways — a workflow also carries `detectorIds` — and the list endpoint supports `sortBy=connectedWorkflows`), naming each in `affected`. If the probe 404s, record SNTRY-015 as `not-in-scope` (the org is on the classic model, where SNTRY-001/SNTRY-005 already cover the no-receiver case) — never a fail. Uptime is a detector `type` (`uptime_domain_failure`) in this model, not its own endpoint; do not expect a standalone org uptime API.
+
 Judge the rule set against the two-tier model. The recommended baseline is two tiers, each with its own receiver path (example model; tune families and thresholds to your event volume):
 
 - **Immediate**: fatal events, new unhandled errors, regressions, escalations, user-impact and error-surge thresholds. Routed where your on-call actually looks.
@@ -308,7 +310,7 @@ Then render the Scoutflo Topology Readiness section per [topology-readiness.md](
 
 | Category | Weight | Checks |
 | --- | ---: | --- |
-| Alert rules and routing | 25 | SNTRY-001, 005, 011, 013, 014, 101, 102, 103, 104, 105 |
+| Alert rules and routing | 25 | SNTRY-001, 005, 011, 013, 014, 015, 101, 102, 103, 104, 105 |
 | Privacy and data protection | 15 | SNTRY-002, 010 |
 | Project configuration | 15 | SNTRY-003, 004 |
 | Releases and source context | 15 | SNTRY-006, 009 |

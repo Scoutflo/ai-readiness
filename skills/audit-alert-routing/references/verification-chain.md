@@ -457,7 +457,7 @@ Rules specific to this skill's large path:
 ✅ Scanned `./scoutflo-audits/alert-routing/runs/*/worklist.tsv` first, found one with 160 rows still `pending`, and resumed it instead of minting a new `RUN_ID`.
 
 
-## 13. Alert hygiene: range queries and config reads (ALR-012 to ALR-018)
+## 13. Alert hygiene: range queries and config reads (ALR-012 to ALR-020)
 
 Runs Phase 8. Every block is read-only and reuses endpoints the earlier phases already reach. Honest ceiling, repeated because it belongs in the evidence: these are structural noise signals, not an actionability rate; the flapping and volume windows are bounded by how far back Prometheus still holds the `ALERTS` series and by the continuity of `alertmanager_notifications_total` (a pod restart truncates it), so report the effective lookback the run actually had; and flapping faster than `STEP` is invisible. Every block surfaces evidence; apply the named thresholds (`FLAP_EPISODES`, `STUCK_FRACTION`, etc.) as the reader, exactly as the rest of this audit does. A `401`/`403` on any read here blocks its check; it is never a clean or passing result.
 
@@ -622,4 +622,54 @@ curl -s -H "$AUTH" "${AM_URL}/api/v2/silences" \
       | "silence \(.id) starts=\(.startsAt) ends=\(.endsAt) by=\(.createdBy // "?") "
         + "matchers=\([.matchers[]? | "\(.name)=\(.value)"] | join(","))"'
 echo "flag: an active silence with a far-future or perpetually-renewed endsAt is an ALR-013 finding — name its matcher and createdBy"
+```
+
+### 13.7 le/quantile matcher normalization on Prometheus 3.x (ALR-019)
+
+Prometheus 3.0 normalizes `le` (classic histograms) and `quantile` (summaries) label values to a float form on ingestion: `le="1"` becomes `le="1.0"`. An exact-string route or inhibition matcher pinned to the integer form silently stops selecting those series after the upgrade. Gate the whole check on the target's Prometheus major version.
+
+```bash
+set -eu
+PROM_URL="https://prometheus.example.com"   # prometheus.url
+AM_URL="https://alertmanager.example.com"   # prometheus.alertmanager_url
+PROM_TOKEN="${PROM_TOKEN:-}"
+AUTH="Authorization: Bearer ${PROM_TOKEN}"
+[ -n "$PROM_TOKEN" ] || AUTH="Accept: application/json"
+
+# Version gate: this trap only bites on Prometheus 3.x.
+PVER="$(curl -s -H "$AUTH" "${PROM_URL}/api/v1/status/buildinfo" | jq -r '.data.version // "0"')"
+PMAJOR="${PVER%%.*}"
+echo "prometheus version: ${PVER}"
+if [ "${PMAJOR:-0}" -lt 3 ]; then
+  echo "ALR-019 not-in-scope: Prometheus ${PVER} keeps the integer le/quantile form; no normalization trap"
+else
+  # Scan the rendered route tree and inhibit rules for le/quantile pinned to a bare integer.
+  # Read config.original from api/v2/status; grep every le=/quantile= matcher without a decimal point.
+  curl -s -H "$AUTH" "${AM_URL}/api/v2/status" \
+    | jq -r '.config.original // ""' \
+    | grep -nE '\b(le|quantile)\b[[:space:]]*=~?[[:space:]]*"?[0-9]+"?([^.0-9]|$)' \
+    || echo "no integer-pinned le/quantile matcher found"
+  echo "flag (Prometheus 3.x): each hit is an ALR-019 finding — the series now carries the float form (le=\"1.0\"); rewrite the matcher to the normalized value or a decimal-tolerant regex. A regex matcher with a literal '.' (le=~\"1.0\") is under-anchored; escape it (le=~\"1\\.0\")."
+fi
+```
+
+Note: the grep is a candidate finder over the rendered config text, not the verdict. Read each hit in context — a matcher like `le="1.0"` (already normalized) or `le=~"1\\.0"` (correctly escaped) is fine; only a bare integer (`le="1"`, `quantile="0"`) is the finding. UTF-8 strict matcher mode is still opt-in in Alertmanager (fallback mode is the default through 0.33.x), so the escaping note applies regardless of parser mode.
+
+### 13.8 Deprecated msteams delivery path (ALR-020)
+
+`msteams_configs` depends on the Office 365 connector Microsoft is retiring; Alertmanager 0.28.0 added `msteamsv2_configs` (adaptive-card Workflows format) as the replacement. A receiver still on the old block parses but is a dying delivery path.
+
+```bash
+set -eu
+AM_URL="https://alertmanager.example.com"   # prometheus.alertmanager_url
+PROM_TOKEN="${PROM_TOKEN:-}"
+AUTH="Authorization: Bearer ${PROM_TOKEN}"
+[ -n "$PROM_TOKEN" ] || AUTH="Accept: application/json"
+
+# Receivers still carrying an msteams_configs block (the deprecated path).
+curl -s -H "$AUTH" "${AM_URL}/api/v2/status" \
+  | jq -r '.config.original // ""' \
+  | grep -nE 'msteams_configs[[:space:]]*:' \
+  || echo "no msteams_configs receiver found"
+echo "flag: each hit is an ALR-020 finding (medium) — migrate that receiver to msteamsv2_configs; the Office 365 connector msteams_configs relies on is being retired"
 ```

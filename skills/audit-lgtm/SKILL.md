@@ -165,7 +165,7 @@ helm --kube-context "$KUBE_CONTEXT" -n "$MON_NS" list 2>/dev/null \
   || echo "helm not installed; chart inventory skipped"
 ```
 
-Expected: the monitoring namespace lists your telemetry stores (Loki, Tempo, Mimir, Prometheus, VictoriaMetrics components), Grafana, Alertmanager or vmalert, and collectors (Alloy, OTel Collector, Promtail, Fluent Bit, vmagent, exporters). Record what exists, replica counts, and PVC sizes as inventory, not yet as findings. Also inventory the data model as you go: metric names, label keys, log fields, trace attributes, service and environment label values, tenant labels.
+Expected: the monitoring namespace lists your telemetry stores (Loki, Tempo, Mimir, Prometheus, VictoriaMetrics components), Grafana, Alertmanager or vmalert, and collectors (Alloy, OTel Collector, Promtail, Fluent Bit, vmagent, exporters). Record what exists, replica counts, and PVC sizes as inventory, not yet as findings. Also inventory the data model as you go: metric names, label keys, log fields, trace attributes, service and environment label values, tenant labels. Note two collectors that are now end-of-life and superseded by **Grafana Alloy**: **Promtail** (EOL 2026-03-02) and **Grafana Agent** (EOL 2025-11-01). Finding either still running is a migration-debt signal scored under LGTM-025 (the image scan is in [references/backend-checks.md](references/backend-checks.md) section 11); record it and point at an Alloy migration.
 
 ## Phase 3: Tool ownership boundary
 

@@ -199,8 +199,10 @@ doctl apps get "$APP_ID" -o json | jq '(if type=="array" then .[0] else . end) |
   top_level_alert_rules: [.spec.alerts[]?.rule],
   services: [.spec.services[]? | {name, instance_count, instance_size_slug,
     autoscaling: (.autoscaling // null),
+    autoscaling_metric: (.autoscaling.metrics // null),
     alert_rules: [.alerts[]?.rule],
     health_check: (.health_check // null),
+    liveness_health_check: (.liveness_health_check // null),
     log_destinations: [.log_destinations[]?.name],
     envs: [.envs[]? | {key, type: (.type // "GENERAL")}]}],
   domains: [.spec.domains[]?.domain]}'
@@ -214,7 +216,9 @@ Expected shape: lifecycle rules (`DEPLOYMENT_FAILED`, `DEPLOYMENT_LIVE`, `DOMAIN
 
 `DO-030`/`DO-031`: a `health_check` object with an `http_path` exists per service, and that exact path answers `200` live with no auth header, no Origin requirement, no session redirect. Probe it with the section 6 status-code block against the app's public URL plus the path. A path that 404s or redirects to a login page would mark a healthy app unhealthy the moment it ships; that is a finding against the configured path, filed with the captured code.
 
-`DO-032`: `instance_count` of 1 on a production service is a named fact with `high` impact when the service is critical; pair it with the deployment history (frequent restarts make it worse). `DO-033`: record whether autoscaling is configured and on what metric; recommending scaling changes is out of audit scope, and enabling them is traffic-impacting even in the setup lane.
+`DO-030` also reads `liveness_health_check` (a distinct block from the readiness `health_check`, GA June 2025). Readiness withholds traffic from an unhealthy instance; liveness *restarts* a hung one. A component with a `health_check` but `liveness_health_check == null` never auto-restarts on a hang — flag it as a DO-030 gap distinct from having no health check at all. Both blocks share the same sub-fields (`http_path`, `port`, `initial_delay_seconds`, `period_seconds`, `timeout_seconds`, `success_threshold`, `failure_threshold`), with liveness defaults `initial_delay_seconds: 5`, `failure_threshold: 18`.
+
+`DO-032`: `instance_count` of 1 on a production service is a named fact with `high` impact when the service is critical; pair it with the deployment history (frequent restarts make it worse). `DO-033`: record whether autoscaling is configured and on what metric. Recommending scaling *thresholds* is out of audit scope, but a component with an `autoscaling` block whose `metrics` object is set (`metrics.cpu.percent`, or the request-based `metrics.requests_per_second.per_instance` / `metrics.request_duration.p95_milliseconds`, GA May 2026) and **no app-spec alert rule on the metric it scales on** is silently scaling and pages nobody when it pins at `max_instance_count`. Read the alert side from the same spec's per-service `alert_rules` (and the live `apps/<id>/alerts.json`), never from `doctl monitoring alert list` — DO Monitoring policies carry no App Platform metric type, so cross-referencing there is a category error. The finding is autoscaling configured with no corresponding App Platform alert (`CPU_UTILIZATION`, `RESTART_COUNT`, or a request-rate rule) that would surface the pin. Enabling scaling changes is traffic-impacting even in the setup lane.
 
 `DO-062` (hygiene, scored in section 10's category): from the redacted env list, any key matching secret shapes stored as `GENERAL`:
 

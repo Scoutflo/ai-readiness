@@ -195,9 +195,11 @@ If `./scoutflo-audits/topology.md` exists, load it. Its service list is the crit
 
 Build the raw picture with the commands in [references/aws-checks.md](references/aws-checks.md) section 4: CloudWatch alarms with state and dimensions, SNS topics and subscription confirmation status, EC2 instances and status checks, ASGs, ECS clusters and services, EKS clusters and their logging/Container Insights config, Lambda functions, RDS instances, Route53 health checks, ELBv2 target groups and health, CloudWatch log groups with retention, CloudTrail trails, Config recorders, and VPC flow-log configs. Judgment starts in Phase 3; inventory records what exists.
 
-## Phase 3: Alerting coverage and configuration (AWS-001 to AWS-006)
+## Phase 3: Alerting coverage and configuration (AWS-001 to AWS-007)
 
 Commands in [references/aws-checks.md](references/aws-checks.md) section 5. Every critical RDS instance, ALB/NLB, ASG, and Lambda function has at least one CloudWatch alarm attached, the zero-alarms gap rather than just misconfigured existing ones (`AWS-001`, critical when a critical resource has none); alarms use two named tiers or a composite/anomaly-detection alarm where a static threshold is brittle on a variable-load metric (`AWS-002`); alarm descriptions carry environment, resource, severity, threshold, and a capture list a responder could act on (`AWS-003`); no alarm sits in `INSUFFICIENT_DATA` because its dimension filter never matched a live metric, the can-this-ever-fire check (`AWS-004`); minimum dashboard coverage exists per critical service (`AWS-005`); and composite or anomaly-detection alarms in use are reviewed for a sane trigger, not left as decoration (`AWS-006`, info).
+
+**AWS-007 (Application Signals SLO without a burn-rate alarm).** Where the account uses CloudWatch Application Signals, `aws application-signals list-service-level-objectives` and `get-service-level-objective` per SLO give each SLO's `Goal` and `BurnRateConfigurations`. An SLO defined but not alerting is decoration: it reports attainment on a dashboard and pages nobody when the budget burns. Two nuances the API forces, both handled in the reference: an SLO with an empty `BurnRateConfigurations` list has no burn-rate metric at all; and even a populated `BurnRateConfigurations` is *not proof of an alarm* — the SLO object carries no alarm reference, so alarm existence must be cross-referenced against `cloudwatch describe-alarms` for an alarm on that SLO's burn-rate or attainment metric. Flag SLOs with no burn-rate config, and SLOs whose burn-rate metric no alarm watches, as `AWS-007` (medium). When Application Signals is not in use, this check is `not-in-scope`, never a fail.
 
 ## Phase 3 (continued): Alert hygiene (AWS-060 to AWS-065)
 
@@ -239,9 +241,9 @@ Commands in section 8. Per production RDS instance: Multi-AZ enabled (`AWS-030`,
 
 Commands in section 9. Every active public serving endpoint has a Route53 health check (`AWS-040`, high); every ALB/NLB target group has a health check configured and its targets probed live this run (`AWS-041`); CloudWatch Synthetics canaries, where the team runs them, carry an alarm on canary failure rather than existing as an unmonitored dashboard widget (`AWS-042`); and no health check or canary watches a dead, retired, or migrated target (`AWS-043`). Probe every candidate endpoint live and capture the status code as evidence, the same discipline as the DO and GCP uptime checks in this toolkit.
 
-## Phase 8: Log forwarding, retention, and account-level observability (AWS-050 to AWS-055)
+## Phase 8: Log forwarding, retention, and account-level observability (AWS-050 to AWS-056)
 
-Commands in section 10. CloudWatch Logs subscription filters forward critical log groups to a central sink, or the absence is a recorded decision for the environment (`AWS-050`, high for production); log-group retention is set to a finite value rather than left at "Never expire" on critical groups (`AWS-051`); CloudTrail is enabled account-wide with a multi-region trail (`AWS-052`, high, this is an account-level control, not per-service); AWS Config's recorder is on (`AWS-053`); VPC Flow Logs are enabled for VPCs carrying critical workloads (`AWS-054`); and the central-sink and retention decision is complete with an owner, not just a technical setting (`AWS-055`).
+Commands in section 10. CloudWatch Logs subscription filters forward critical log groups to a central sink, or the absence is a recorded decision for the environment (`AWS-050`, high for production); log-group retention is set to a finite value rather than left at "Never expire" on critical groups (`AWS-051`); CloudTrail is enabled account-wide with a multi-region trail (`AWS-052`, high, this is an account-level control, not per-service); AWS Config's recorder is on (`AWS-053`); VPC Flow Logs are enabled for VPCs carrying critical workloads (`AWS-054`); the central-sink and retention decision is complete with an owner, not just a technical setting (`AWS-055`); and no CloudWatch Logs anomaly detector sits in a `FAILED` or `PAUSED` state (`AWS-056`). For AWS-056, `aws logs list-log-anomaly-detectors` returns each detector's `anomalyDetectorStatus` (enum `INITIALIZING | TRAINING | ANALYZING | FAILED | DELETED | PAUSED`); a `FAILED` or `PAUSED` detector on a critical log group is a silent log-signal gap — the detector looks configured but surfaces no anomalies. Absence of any detector is not itself a finding (they are opt-in); a broken one is.
 
 ## Phase 9: Coverage matrix and topology readiness
 
@@ -270,6 +272,7 @@ Full check catalog in [references/aws-cost-checks.md](references/aws-cost-checks
 Source discipline, the same "errors are evidence, never invent" principle applied to cost: prefer AWS's own recommendation engines over hand-rolled heuristics.
 
 - Rightsizing comes from Compute Optimizer's own recommendation (`compute-optimizer:Get*`), never computed from raw CloudWatch CPU percentages against a guessed price table. If the account is not enrolled in Compute Optimizer, the row reports `excluded`, reason: "Compute Optimizer not enrolled for this account", and stops there rather than falling back to a hand-rolled estimate.
+- Cross-service cost recommendations come from **Cost Optimization Hub** (`cost-optimization-hub:ListRecommendations`, `ListRecommendationSummaries`), which aggregates rightsizing, idle-resource, and commitment savings into one place with a native `estimatedMonthlySavings` figure per recommendation. Check enrollment first with `cost-optimization-hub:ListEnrollmentStatuses` — recommendations are empty unless the account has opted in, so on a non-enrolled account report `excluded`, reason: "Cost Optimization Hub not enrolled", never an empty pass. When enrolled, take the dollar figure straight from the recommendation's `estimatedMonthlySavings` field (exact field name, not `estimatedMonthlySavingsAmount`), never recomputed. All three operations are read-only `List*`.
 - Savings Plan and Reserved Instance coverage gaps come from Cost Explorer's coverage APIs (`ce:GetSavingsPlansCoverage`, `ce:GetReservationCoverage`); report the coverage percentage Cost Explorer returns, never an independently estimated saving.
 - Broader cost, security, and fault-tolerance checks come from Trusted Advisor (`support:Describe*`) when the account carries Business or Enterprise support; without that tier, the row reports `excluded`, reason: "Trusted Advisor requires Business or Enterprise support", exactly like any other excluded category in this toolkit, never silently skipped.
 - Unattached EBS volumes, unassociated Elastic IPs, idle load balancers, S3 lifecycle gaps, and snapshot sprawl are presence and absence facts from plain `Describe*`/`Get*` calls; report the finding with no dollar figure, since there is no AWS-sourced number backing one.
@@ -282,12 +285,12 @@ Score per [severity-and-scoring.md](../../report-standard/severity-and-scoring.m
 
 | Category | Weight | ID range |
 | --- | ---: | --- |
-| Alerting coverage and configuration | 20 | AWS-001 to AWS-006, AWS-060 to AWS-065 |
+| Alerting coverage and configuration | 20 | AWS-001 to AWS-007, AWS-060 to AWS-065 |
 | Compute health and coverage | 20 | AWS-020 to AWS-026 |
 | Alert routing and delivery | 15 | AWS-010 to AWS-014 |
 | Managed databases | 15 | AWS-030 to AWS-034 |
 | Uptime and availability | 15 | AWS-040 to AWS-043 |
-| Log forwarding, retention, and account-level observability | 15 | AWS-050 to AWS-055 |
+| Log forwarding, retention, and account-level observability | 15 | AWS-050 to AWS-056 |
 
 Weights are a draft starting point, stated as tune-this, not gospel; adjust them against your team's real priority before treating them as final. The full check catalog and the target profile (what 100 means per category) are at the top of [references/aws-checks.md](references/aws-checks.md). IDs are stable: the same defect gets the same ID every run, one finding per failed check, affected objects enumerated. Compute `points_recoverable` per finding by re-running the scoring model with that check at full credit; `info` findings, excluded categories, and every `AWSOPT-*` finding carry 0. The executive summary states the gap to target and the two or three findings with the highest `points_recoverable` as the biggest levers.
 
