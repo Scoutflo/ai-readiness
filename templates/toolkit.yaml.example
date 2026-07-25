@@ -24,6 +24,13 @@ pagerduty:
   tier: read-only
   # region: us                              # us (api.pagerduty.com) or eu (api.eu.pagerduty.com); default us
 
+datadog:
+  site: datadoghq.com                       # your Datadog site; API host is api.<site>
+  api_key_env: DATADOG_API_KEY              # org-level API key
+  app_key_env: DATADOG_APP_KEY              # user-bound Application key (scoped read-only for audits)
+  tier: read-only
+  # cost_checks: true                       # optional, default true; set false to skip the cost section
+
 prometheus:
   url: https://prometheus.example.com
   alertmanager_url: https://alertmanager.example.com

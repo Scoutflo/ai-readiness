@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.1.45
+
+New integration: **Datadog** (`/scoutflo:audit-datadog`) — Stage 2.3 of the
+new-integrations wave. Scored categories: monitor delivery (monitors with
+no `@handle`, dead Slack/webhook/PagerDuty handles verified against the live
+integration, draft monitors that never notify), monitor noise (recovery
+thresholds, no-data handling, bounded renotification, evaluation delay,
+auto-resolve, plus Datadog's own `quality_issues[]` reconciled with the
+audit's findings), muting and downtime (indefinite mutes, open-ended
+broad-scope downtimes read from the v2 API only — v1 is deprecated including
+reads), and coverage and staleness (stale monitors by intent, broken
+composite references, SLOs with no burn-rate monitor, tag hygiene). Plus a
+separate **non-scored Cost & Resource Optimization** section from Datadog's
+own usage endpoints (estimated cost, top custom-metric contributors),
+modeled on audit-aws — `DDOPT-NNN`, excluded when the app key lacks
+usage/billing scope, never a fabricated savings figure. `connect` gains the
+API+Application key-pair recipe with the 9-site table and the app-keys-die-
+with-their-user warning; `doctor` gains a site-aware `/api/v1/validate` +
+`/api/v1/monitor` scope probe plus a non-failing cost-permission probe the
+audit reads to run or exclude its cost section. Topology Readiness verified
+against the live `monitoring.datadog` schema (required `monitorId`; camelCase
+`serviceName` anchor caveat stated).
+
 ## 0.1.44
 
 New integration: **PagerDuty** (`/scoutflo:audit-pagerduty`) — the first

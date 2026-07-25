@@ -17,6 +17,7 @@ Skim this table to see everything you need before opening any provider UI. Full 
 | [Sentry](#sentry) | Internal integration token | `org:read`, `project:read`, `event:read`, `alerts:read` (+ `team:read`, `member:read` for ownership checks) | Organization Settings > Developer Settings > Custom Integrations |
 | [DigitalOcean](#digitalocean) | Custom-scoped API token | Read on app, database, monitoring, uptime, domain — never a full-access token | API > Tokens > Generate New Token |
 | [PagerDuty](#pagerduty) | General Access REST API key | Read-only key (the "Read-only API Key" checkbox at creation) | Integrations > API Access Keys > Create New API Key |
+| [Datadog](#datadog) | API key + Application key pair | Scoped app key: `monitors_read`, `monitors_downtime`, `events_read`, `slos_read` (+ `usage_read`, `billing_read` for the cost section) | Organization Settings > API Keys, then Application Keys |
 | [GCP](#google-cloud-gcp) | Service account | `roles/monitoring.viewer`, `roles/logging.viewer`, `roles/compute.viewer`, `roles/container.viewer` | IAM & Admin > Service Accounts > Create service account |
 | [Prometheus + Alertmanager](#prometheus-and-alertmanager) | URL reachability, optional bearer token | No scopes to grant unless behind an auth proxy | Just the URL, if reachable without auth |
 | [Loki / Tempo / Mimir / VictoriaMetrics](#loki-tempo-mimir-victoriametrics) | URL, optional tenant + token | No scopes to grant unless behind an auth proxy | Just the URL, plus `tenant_id` for Mimir |
@@ -235,6 +236,76 @@ code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 \
 # Expect: PASS. 401 means the key is wrong, revoked, or the region host is wrong.
 # Note: /users/me returns an error for account-level keys by design; /abilities is
 # the correct cheap identity probe for this credential type.
+```
+
+## Datadog
+
+### Config
+
+```yaml
+datadog:
+  site: datadoghq.com                   # your Datadog site (see the site table below)
+  api_key_env: DATADOG_API_KEY          # env var holding the API key (org-level)
+  app_key_env: DATADOG_APP_KEY          # env var holding the Application key (user-bound)
+  tier: read-only                       # tier of the app key behind app_key_env
+  # cost_checks: true                   # optional, default true; set false to skip the cost section
+```
+
+Datadog authenticates every management API call with **two** credentials sent together: an API key (`DD-API-KEY` header, org-level) and an Application key (`DD-APPLICATION-KEY` header, user-bound). Both are required; neither works alone.
+
+### Pick the right site
+
+Your API host is `api.<site>`. The site is visible in your Datadog URL and under your profile's Organization Settings. A wrong site returns 403 for perfectly valid keys, so set it explicitly:
+
+| Your Datadog URL | `datadog.site` value |
+| --- | --- |
+| app.datadoghq.com | `datadoghq.com` |
+| us3.datadoghq.com | `us3.datadoghq.com` |
+| us5.datadoghq.com | `us5.datadoghq.com` |
+| app.datadoghq.eu | `datadoghq.eu` |
+| ap1.datadoghq.com | `ap1.datadoghq.com` |
+| ap2.datadoghq.com | `ap2.datadoghq.com` |
+| uk1.datadoghq.com | `uk1.datadoghq.com` |
+| gov sites | `ddog-gov.com` (US1-FED) |
+
+### Scopes per tier
+
+Application keys support authorization scopes; an unscoped app key inherits everything its creating user can do, so scope the audit key down.
+
+| Tier | Used by | App key scopes |
+| --- | --- | --- |
+| Read-only | audit-datadog | `monitors_read`, `monitors_downtime` (v2 downtime reads need this, not `monitors_read`), `events_read`, `slos_read`, `dashboards_read`. Add `usage_read` + `billing_read` for the non-scored cost section. |
+| Elevated | (future setup-datadog) | A separate app key with the monitor/downtime write scopes, created only when setup work starts. |
+
+Two things to know at creation time:
+
+- **Application keys die with their user.** An app key is bound to the user who created it and is revoked when that user is disabled. Create the audit key under a service-account user, not a personal login, or the audit breaks on someone's offboarding.
+- Scoped keys can never exceed the creator's own RBAC permissions; if a scope in the table is missing from the picker, the creating user lacks it.
+
+### Where to click
+
+1. Sign in and confirm which site you are on (URL bar).
+2. Organization Settings > API Keys > New Key. Name it `scoutflo-audit`. This is the org-level half.
+3. Organization Settings > Application Keys > New Key (as the service-account user). Name it `scoutflo-audit`, and under Edit > Authorization Scopes restrict it to the read-only scopes from the table.
+4. Copy both values once; they are not shown again.
+5. For future setup work, create a second app key named `scoutflo-setup` with write scopes instead of widening this one.
+
+### Export and verify
+
+```bash
+# YOU run these in your own terminal; an agent never executes these lines.
+printf 'DATADOG_API_KEY: ' && read -rs DATADOG_API_KEY && export DATADOG_API_KEY && printf '\n'
+printf 'DATADOG_APP_KEY: ' && read -rs DATADOG_APP_KEY && export DATADOG_APP_KEY && printf '\n'
+
+DD_SITE="datadoghq.com"   # datadog.site
+code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 \
+  -H "DD-API-KEY: ${DATADOG_API_KEY}" "https://api.${DD_SITE}/api/v1/validate")
+[ "$code" = "200" ] && echo "API key PASS" || echo "API key FAIL: got $code (403 = wrong key or wrong site)"
+
+code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 \
+  -H "DD-API-KEY: ${DATADOG_API_KEY}" -H "DD-APPLICATION-KEY: ${DATADOG_APP_KEY}" \
+  "https://api.${DD_SITE}/api/v1/monitor?page_size=1")
+[ "$code" = "200" ] && echo "app key + monitors_read PASS" || echo "FAIL: got $code (403 = app key invalid, unscoped for monitors_read, or wrong site)"
 ```
 
 ## Google Cloud (GCP)

@@ -1,6 +1,6 @@
 ---
 name: connect
-description: Guided credential setup; creates minimal-scope tokens per tier for Grafana, Sentry, PagerDuty, Prometheus, Loki, Tempo, Mimir, VictoriaMetrics, Kubernetes, and Slack, and writes ~/.scoutflo/toolkit.yaml. Use when the user wants to connect or onboard the toolkit, add an integration, rotate a token, or set up credentials, including the audit-brief Slack webhook. Do not use for alert-delivery webhooks (Grafana contact points, Alertmanager receivers; use setup-grafana or setup-lgtm) or to verify reachability (use doctor).
+description: Guided credential setup; creates minimal-scope tokens per tier for Grafana, Sentry, PagerDuty, Datadog, Prometheus, Loki, Tempo, Mimir, VictoriaMetrics, Kubernetes, and Slack, and writes ~/.scoutflo/toolkit.yaml. Use when the user wants to connect or onboard the toolkit, add an integration, rotate a token, or set up credentials, including the audit-brief Slack webhook. Do not use for alert-delivery webhooks (Grafana contact points, Alertmanager receivers; use setup-grafana or setup-lgtm) or to verify reachability (use doctor).
 ---
 
 # Connect: Credential and Config Setup
@@ -51,13 +51,14 @@ Two conventions are rules, not suggestions:
 
 Configure only what you run. Unconfigured integrations are skipped cleanly by every skill; they are not failures.
 
-Ask which integrations to configure as a plain numbered list in a normal chat message, per the "Asking questions" rule above — this table has up to 10 rows, well past the option ceiling that rule warns about.
+Ask which integrations to configure as a plain numbered list in a normal chat message, per the "Asking questions" rule above — this table has up to 11 rows, well past the option ceiling that rule warns about.
 
 | Integration | Used by | Config block | Suggested env var | Tier summary |
 | --- | --- | --- | --- | --- |
 | Grafana | audit-grafana, setup-grafana, audit-lgtm, audit-alert-routing | `grafana:` | `GRAFANA_TOKEN` | Viewer for audits; Editor or Admin for setup |
 | Sentry | audit-sentry, setup-sentry | `sentry:` | `SENTRY_TOKEN` | read scopes for audits; write scopes for setup |
 | PagerDuty | audit-pagerduty | `pagerduty:` | `PAGERDUTY_TOKEN` | read-only REST key for audits |
+| Datadog | audit-datadog | `datadog:` | `DATADOG_API_KEY` + `DATADOG_APP_KEY` | scoped read-only app key for audits |
 | Prometheus + Alertmanager | audit-lgtm, setup-lgtm, audit-alert-routing | `prometheus:` | `PROM_TOKEN` (only if your endpoints require auth) | URL reachability; optional bearer |
 | Loki | audit-lgtm, setup-lgtm | `loki:` | `LOKI_TOKEN` (optional) | URL; optional tenant and token |
 | Tempo | audit-lgtm, setup-lgtm | `tempo:` | `TEMPO_TOKEN` (optional) | URL; optional tenant and token |
@@ -75,6 +76,7 @@ Judgment step: collect the non-secret facts for every integration you picked bef
 | Grafana | `grafana.url`, `grafana.token_env`, `grafana.tier` | `url: https://grafana.example.com` |
 | Sentry | `sentry.host`, `sentry.org`, `sentry.token_env`, `sentry.tier` | `host: us.sentry.io` |
 | PagerDuty | `pagerduty.token_env`, `pagerduty.tier`; optional `region` | `region: us` |
+| Datadog | `datadog.site`, `datadog.api_key_env`, `datadog.app_key_env`, `datadog.tier` | `site: datadoghq.com` |
 | Prometheus + Alertmanager | `prometheus.url`, `prometheus.alertmanager_url`; add `token_env` and `tier` only behind an auth proxy | `url: https://prometheus.example.com` |
 | Loki | `loki.url`; optional `token_env` and `tier` | `url: https://loki.example.com` |
 | Tempo | `tempo.url`; optional `token_env` and `tier` | `url: https://tempo.example.com` |
@@ -107,7 +109,7 @@ Work through the matching section of [references/providers.md](references/provid
 
 Create read-only credentials now, named `scoutflo-audit` per the naming rule. Create elevated ones later, named `scoutflo-setup`, when a `setup-*` skill asks for them.
 
-**Run each provider's verify command the moment you export that credential — before starting the next integration, not after all of them.** With ten possible integrations, a wrong host, wrong scope, or mistyped org slug is far cheaper to catch and fix one provider at a time than to debug from a single `doctor` run at the very end of Step 7, where several small mistakes can compound into one confusing failure list. Step 7's `doctor` pass is the final confirmation that everything is wired together, not the first time any of it gets checked.
+**Run each provider's verify command the moment you export that credential — before starting the next integration, not after all of them.** With eleven possible integrations, a wrong host, wrong scope, or mistyped org slug is far cheaper to catch and fix one provider at a time than to debug from a single `doctor` run at the very end of Step 7, where several small mistakes can compound into one confusing failure list. Step 7's `doctor` pass is the final confirmation that everything is wired together, not the first time any of it gets checked.
 
 ## Step 4: Export the secrets (you run these, not the agent)
 

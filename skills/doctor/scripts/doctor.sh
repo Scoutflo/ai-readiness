@@ -334,6 +334,97 @@ else
   fi
 fi
 
+# --- datadog ------------------------------------------------------------------------
+# Datadog needs a key PAIR: API key (DD-API-KEY) + Application key (DD-APPLICATION-KEY).
+# Both headers are custom, so this block uses its own curl calls, not http_get.
+# The validate call tests the API key alone; the monitor call tests the app key +
+# monitors_read scope. The cost probe is informational only (like the AWS one): a
+# missing usage/billing scope never fails doctor; audit-datadog reads that row to run
+# or exclude its non-scored cost section.
+
+DD_SITE="$(cfg datadog site)"
+if [ -z "$DD_SITE" ]; then
+  row datadog configured no - skipped - "add a datadog block via /scoutflo:connect if you run Datadog"
+else
+  CONFIGURED_COUNT=$((CONFIGURED_COUNT + 1))
+  DD_API_VAR="$(cfg datadog api_key_env)"
+  DD_APP_VAR="$(cfg datadog app_key_env)"
+  DD_API_KEY=""; DD_APP_KEY=""
+  DD_BLOCKED=0
+  if [ -z "$DD_API_VAR" ] || [ -z "$DD_APP_VAR" ]; then
+    row datadog config yes - fail - "datadog needs both api_key_env and app_key_env in toolkit.yaml; set them per connect references/providers.md"
+    DD_BLOCKED=1
+  else
+    DD_API_KEY="$(printenv "$DD_API_VAR" 2>/dev/null || true)"
+    DD_APP_KEY="$(printenv "$DD_APP_VAR" 2>/dev/null || true)"
+    if [ -z "$DD_API_KEY" ]; then
+      row datadog env yes "$DD_API_VAR" env-missing - "export ${DD_API_VAR} in this shell, then rerun doctor; created per connect references/providers.md"
+      DD_BLOCKED=1
+    elif [ -z "$DD_APP_KEY" ]; then
+      row datadog env yes "$DD_APP_VAR" env-missing - "export ${DD_APP_VAR} in this shell, then rerun doctor; the app key is the second half of the pair"
+      DD_BLOCKED=1
+    else
+      row datadog env yes "${DD_API_VAR}+${DD_APP_VAR}" pass - -
+    fi
+  fi
+  if [ "$DD_BLOCKED" -eq 1 ]; then
+    row datadog validate yes "${DD_API_VAR:-none}" skipped - "blocked: both Datadog keys must be set"
+    row datadog monitors-read yes "${DD_APP_VAR:-none}" skipped - "blocked: both Datadog keys must be set"
+  else
+    DD_HOST="api.${DD_SITE}"
+    note "doctor: checking datadog validate: GET https://${DD_HOST}/api/v1/validate"
+    DDV_RC=0
+    DDV_CODE="$(curl -s -o /dev/null -w '%{http_code}' \
+      --connect-timeout "$CONNECT_TIMEOUT" --max-time "$MAX_TIME" \
+      -H "DD-API-KEY: ${DD_API_KEY}" "https://${DD_HOST}/api/v1/validate")" || DDV_RC=$?
+    if [ "$DDV_RC" -ne 0 ]; then
+      row datadog validate yes "$DD_API_VAR" fail "000" "$(transport_hint "$DDV_RC") (https://${DD_HOST}/api/v1/validate)"
+      DD_BLOCKED=1
+    elif [ "$DDV_CODE" = "200" ]; then
+      row datadog validate yes "$DD_API_VAR" pass "$DDV_CODE" "-"
+    else
+      row datadog validate yes "$DD_API_VAR" fail "$DDV_CODE" "HTTP ${DDV_CODE}: API key invalid or wrong site (datadog.site '${DD_SITE}'); a valid key on the wrong site returns 403"
+      DD_BLOCKED=1
+    fi
+    if [ "$DD_BLOCKED" -eq 0 ]; then
+      note "doctor: checking datadog monitors-read: GET https://${DD_HOST}/api/v1/monitor?page_size=1"
+      DDM_RC=0
+      DDM_CODE="$(curl -s -o /dev/null -w '%{http_code}' \
+        --connect-timeout "$CONNECT_TIMEOUT" --max-time "$MAX_TIME" \
+        -H "DD-API-KEY: ${DD_API_KEY}" -H "DD-APPLICATION-KEY: ${DD_APP_KEY}" \
+        "https://${DD_HOST}/api/v1/monitor?page_size=1")" || DDM_RC=$?
+      if [ "$DDM_RC" -ne 0 ]; then
+        row datadog monitors-read yes "$DD_APP_VAR" fail "000" "$(transport_hint "$DDM_RC")"
+      elif [ "$DDM_CODE" = "200" ]; then
+        row datadog monitors-read yes "$DD_APP_VAR" pass "$DDM_CODE" "-"
+      elif [ "$DDM_CODE" = "403" ]; then
+        row datadog monitors-read yes "$DD_APP_VAR" fail "$DDM_CODE" "HTTP 403: app key invalid, missing the monitors_read scope, or belongs to a disabled user; check the app key scopes per connect references/providers.md"
+      else
+        row datadog monitors-read yes "$DD_APP_VAR" fail "$DDM_CODE" "$(http_hint "$DDM_CODE")"
+      fi
+      # Informational cost probe. A missing usage_read/billing_read scope never fails
+      # doctor; audit-datadog reads this row to run the non-scored cost section or
+      # report it excluded with the reason.
+      DD_COST_CHECKS="$(cfg datadog cost_checks)"
+      if [ "$DD_COST_CHECKS" = "false" ]; then
+        row datadog cost-permissions yes "$DD_APP_VAR" skipped - "datadog.cost_checks is false in toolkit.yaml; cost section will be skipped"
+      else
+        DDC_CODE="$(curl -s -o /dev/null -w '%{http_code}' \
+          --connect-timeout "$CONNECT_TIMEOUT" --max-time "$MAX_TIME" \
+          -H "DD-API-KEY: ${DD_API_KEY}" -H "DD-APPLICATION-KEY: ${DD_APP_KEY}" \
+          "https://${DD_HOST}/api/v1/usage/summary?start_month=$(date -u +%Y-%m-01T00 2>/dev/null)")" || true
+        if [ "$DDC_CODE" = "200" ]; then
+          row datadog cost-permissions yes "$DD_APP_VAR" pass "$DDC_CODE" "-"
+        else
+          row datadog cost-permissions yes "$DD_APP_VAR" skipped "${DDC_CODE:-000}" "usage_read/billing_read not confirmed (HTTP ${DDC_CODE:-000}); audit-datadog will report the cost section excluded with this reason, not fail"
+        fi
+      fi
+    else
+      row datadog monitors-read yes "$DD_APP_VAR" skipped - "blocked: API key validation failed above"
+    fi
+  fi
+fi
+
 # --- prometheus and alertmanager (one block, shared optional token) -----------------
 
 PROM_URL="$(cfg prometheus url)"
