@@ -539,6 +539,46 @@ else
   fi
 fi
 
+# --- zenduty (xurrent imr) ----------------------------------------------------------
+# Zenduty authenticates with "Authorization: Token <key>" (the literal word Token, NOT
+# Bearer), so this block uses its own curl call. GET /api/account/teams/ is the cheapest
+# list read and the doctor probe. Zenduty has no read-only key scope; a Bot Token (Beta)
+# is the least-privilege path (see connect references/providers.md).
+
+ZD_TOKEN_VAR_CHECK="$(cfg zenduty token_env)"
+if [ -z "$ZD_TOKEN_VAR_CHECK" ]; then
+  row zenduty configured no - skipped - "add a zenduty block via /scoutflo:connect if you run Zenduty (Xurrent IMR)"
+else
+  CONFIGURED_COUNT=$((CONFIGURED_COUNT + 1))
+  ZD_TOKEN_VAR="$ZD_TOKEN_VAR_CHECK"
+  ZD_TOKEN=""
+  ZD_TOKEN_STATE="missing"
+  ZD_TOKEN="$(printenv "$ZD_TOKEN_VAR" 2>/dev/null || true)"
+  [ -n "$ZD_TOKEN" ] && ZD_TOKEN_STATE="set"
+  if [ "$ZD_TOKEN_STATE" = "missing" ]; then
+    row zenduty env yes "$ZD_TOKEN_VAR" env-missing - "export ${ZD_TOKEN_VAR} in this shell, then rerun doctor; created per connect references/providers.md"
+    row zenduty teams-read yes "$ZD_TOKEN_VAR" skipped - "blocked: ${ZD_TOKEN_VAR} is not set"
+  else
+    row zenduty env yes "$ZD_TOKEN_VAR" pass - -
+    note "doctor: checking zenduty teams-read: GET https://www.zenduty.com/api/account/teams/"
+    ZD_RC=0
+    ZD_CODE="$(curl -s -o /dev/null -w '%{http_code}' \
+      --connect-timeout "$CONNECT_TIMEOUT" --max-time "$MAX_TIME" \
+      -H "Authorization: Token ${ZD_TOKEN}" "https://www.zenduty.com/api/account/teams/")" || ZD_RC=$?
+    if [ "$ZD_RC" -ne 0 ]; then
+      row zenduty teams-read yes "$ZD_TOKEN_VAR" fail "000" "$(transport_hint "$ZD_RC") (https://www.zenduty.com/api/account/teams/)"
+    elif [ "$ZD_CODE" = "200" ]; then
+      row zenduty teams-read yes "$ZD_TOKEN_VAR" pass "$ZD_CODE" "-"
+    elif [ "$ZD_CODE" = "401" ] || [ "$ZD_CODE" = "403" ]; then
+      row zenduty teams-read yes "$ZD_TOKEN_VAR" fail "$ZD_CODE" "HTTP ${ZD_CODE}: key invalid or not prefixed correctly; the header must be 'Authorization: Token <key>' (the literal word Token, not Bearer); recreate per connect references/providers.md"
+    elif [ "$ZD_CODE" = "429" ]; then
+      row zenduty teams-read yes "$ZD_TOKEN_VAR" fail "$ZD_CODE" "HTTP 429: rate-limited (Zenduty limits are tight and per-endpoint-class); wait about a minute and rerun doctor"
+    else
+      row zenduty teams-read yes "$ZD_TOKEN_VAR" fail "$ZD_CODE" "$(http_hint "$ZD_CODE")"
+    fi
+  fi
+fi
+
 # --- prometheus and alertmanager (one block, shared optional token) -----------------
 
 PROM_URL="$(cfg prometheus url)"

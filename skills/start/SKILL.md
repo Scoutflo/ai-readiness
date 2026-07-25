@@ -19,7 +19,7 @@ This toolkit audits, hardens, and monitors your infrastructure and observability
 1. `/scoutflo:connect` sets up `~/.scoutflo/toolkit.yaml` and walks you through creating credentials per integration: exact scopes, where to click, read-only tokens for audits.
 2. `/scoutflo:doctor` validates everything live: config parses, env vars are set, binaries exist, one cheap call per integration succeeds. Run it whenever something feels off.
 3. `/scoutflo:map-topology` (recommended) writes `./scoutflo-audits/topology.md`, your service map. With it, findings name your actual services instead of generic ones. On large clusters it works in namespace batches and resumes if interrupted.
-4. Run your first audit: `/scoutflo:audit-lgtm`, `/scoutflo:audit-grafana`, `/scoutflo:audit-sentry`, `/scoutflo:audit-pagerduty`, `/scoutflo:audit-datadog`, `/scoutflo:audit-elk`, `/scoutflo:audit-jsm`, `/scoutflo:audit-alert-routing`, `/scoutflo:audit-digitalocean`, `/scoutflo:audit-gcp`, or `/scoutflo:audit-aws`. Or run everything configured at once with `/scoutflo:audit-all`. Every audit sizes your estate first with cheap list calls and says which path it picked: small estates get a single pass, large ones run in bounded, resumable batches.
+4. Run your first audit: `/scoutflo:audit-lgtm`, `/scoutflo:audit-grafana`, `/scoutflo:audit-sentry`, `/scoutflo:audit-pagerduty`, `/scoutflo:audit-datadog`, `/scoutflo:audit-elk`, `/scoutflo:audit-jsm`, `/scoutflo:audit-zenduty`, `/scoutflo:audit-alert-routing`, `/scoutflo:audit-digitalocean`, `/scoutflo:audit-gcp`, or `/scoutflo:audit-aws`. Or run everything configured at once with `/scoutflo:audit-all`. Every audit sizes your estate first with cheap list calls and says which path it picked: small estates get a single pass, large ones run in bounded, resumable batches.
 5. Optional: `/scoutflo:schedule-audits` makes the audits recurring, with a Slack brief per run.
 
 ## The skills
@@ -41,6 +41,7 @@ This toolkit audits, hardens, and monitors your infrastructure and observability
 | `/scoutflo:audit-datadog` | audit | Monitor health: delivery, noise controls, muting/downtimes, SLO coverage, plus non-scored cost |
 | `/scoutflo:audit-elk` | audit | Kibana Alerting: rule delivery, execution health, noise controls, coverage per space |
 | `/scoutflo:audit-jsm` | audit | JSM Operations paging: escalation and routing, on-call schedules, notification-policy noise, heartbeats, unacked aging |
+| `/scoutflo:audit-zenduty` | audit | Zenduty (Xurrent IMR) paging: escalation and on-call, collation dedup and alert-rule noise, routing, and analytics-backed MTTA/MTTR |
 | `/scoutflo:setup-sentry` | setup | Projects, environments, alert taxonomy, integrations |
 | `/scoutflo:audit-alert-routing` | audit | Proves your paging path is live, rule to receiver |
 | `/scoutflo:audit-digitalocean` | audit | App Platform, managed databases, uptime, alert routing |

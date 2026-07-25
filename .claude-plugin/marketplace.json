@@ -9,7 +9,7 @@
     {
       "name": "scoutflo",
       "source": "./",
-      "description": "Read-only, scored audits of your infra and observability stacks (LGTM/VictoriaMetrics, Grafana, Sentry, PagerDuty, Datadog, ELK/Kibana, JSM Operations, Prometheus alerting, DigitalOcean, GCP, AWS) with alert-noise/alert-fatigue scoring, guided hardening, Slack briefs, and scheduled runs. Runs entirely on your side with your credentials.",
+      "description": "Read-only, scored audits of your infra and observability stacks (LGTM/VictoriaMetrics, Grafana, Sentry, PagerDuty, Datadog, ELK/Kibana, JSM Operations, Zenduty, Prometheus alerting, DigitalOcean, GCP, AWS) with alert-noise/alert-fatigue scoring, guided hardening, Slack briefs, and scheduled runs. Runs entirely on your side with your credentials.",
       "category": "devops",
       "keywords": [
         "sre",
@@ -35,7 +35,9 @@
         "elastic",
         "jsm",
         "opsgenie",
-        "atlassian"
+        "atlassian",
+        "zenduty",
+        "xurrent"
       ]
     }
   ]

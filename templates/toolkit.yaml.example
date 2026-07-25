@@ -45,6 +45,11 @@ jsm:
   # cloud_id: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx  # optional UUID; skip site-based discovery if you already know it
   # teams: [team-id-a, team-id-b]           # JSM Operations team IDs to audit (policies/heartbeats are team-scoped); omit to discover from /v1/teams
 
+zenduty:
+  token_env: ZENDUTY_TOKEN                  # env var holding the Zenduty (Xurrent IMR) API key; sent as "Authorization: Token <key>"
+  tier: read-only                           # NOTE: Zenduty has no read-only key scope; read-only is by GET-only use. Prefer a Bot Token (Beta).
+  # teams: [team-unique-id-a]               # Zenduty team unique_ids to audit; omit to discover from /api/account/teams/
+
 prometheus:
   url: https://prometheus.example.com
   alertmanager_url: https://alertmanager.example.com

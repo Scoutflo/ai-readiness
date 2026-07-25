@@ -20,6 +20,7 @@ Skim this table to see everything you need before opening any provider UI. Full 
 | [Datadog](#datadog) | API key + Application key pair | Scoped app key: `monitors_read`, `monitors_downtime`, `events_read`, `slos_read` (+ `usage_read`, `billing_read` for the cost section) | Organization Settings > API Keys, then Application Keys |
 | [ELK / Kibana](#elk--kibana) | Elasticsearch API key | Kibana feature privileges `Read` on Stack Rules, Rules Settings, and Actions and Connectors | Kibana > Stack Management > API keys (or Elasticsearch `POST /_security/api_key`) |
 | [JSM Operations](#jsm-operations) | Atlassian API token (Basic auth) | Read-only enforced by GET-only use; a JSM agent/user account with Operations access | id.atlassian.com > Security > API tokens |
+| [Zenduty](#zenduty-xurrent-imr) | API key (`Authorization: Token`) | No read-only key scope; use a **Bot Token (Beta)** with view-only permissions, GET-only use | Account Settings > API Keys (Bot Tokens for least privilege) |
 | [GCP](#google-cloud-gcp) | Service account | `roles/monitoring.viewer`, `roles/logging.viewer`, `roles/compute.viewer`, `roles/container.viewer` | IAM & Admin > Service Accounts > Create service account |
 | [Prometheus + Alertmanager](#prometheus-and-alertmanager) | URL reachability, optional bearer token | No scopes to grant unless behind an auth proxy | Just the URL, if reachable without auth |
 | [Loki / Tempo / Mimir / VictoriaMetrics](#loki-tempo-mimir-victoriametrics) | URL, optional tenant + token | No scopes to grant unless behind an auth proxy | Just the URL, plus `tenant_id` for Mimir |
@@ -423,6 +424,53 @@ CLOUD_ID="$(curl -fsS --max-time 10 "https://${SITE}/_edge/tenant_info" | jq -r 
 code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 -u "${JSM_EMAIL}:${JSM_API_TOKEN}" \
   "https://api.atlassian.com/jsm/ops/api/${CLOUD_ID}/v1/alerts?size=1")
 [ "$code" = "200" ] && echo "JSM Operations PASS" || echo "FAIL: got $code (401 = bad token/email; 403 = user lacks Operations access; 404 = wrong cloud_id)"
+```
+
+## Zenduty (Xurrent IMR)
+
+### Config
+
+```yaml
+zenduty:
+  token_env: ZENDUTY_TOKEN                 # env var holding the API key; sent as "Authorization: Token <key>"
+  tier: read-only                          # read-only is by GET-only use, not a key scope (see below)
+  # teams: [team-unique-id-a]              # team unique_ids to audit; omit to discover from /api/account/teams/
+```
+
+Zenduty was acquired by Xurrent (Feb 2025) and rebranded **Xurrent IMR** (Nov 2025) — this is a branding change, not a sunset: the API and product are alive, and everything still runs through `https://www.zenduty.com/api/...`. The current help lives at `xurrent.com/imr-help/*` (the old `zenduty.com/docs/*` now redirects there).
+
+### Auth is a Token-prefixed API key, and there is no read-only scope
+
+The credential is an API key sent as `Authorization: Token <key>` — note the literal word `Token`, not `Bearer`. **Zenduty has no read-only or scoped tier for standard API keys**: a standard key inherits full account access, and only an Account Owner or Admin can create one. So read-only for the audit is enforced by this toolkit using **GET only** (plus the two documented read-by-POST calls — incident filter and analytics — which change nothing).
+
+To make that guarantee real, prefer a **Bot Token (Beta)**: a key bound to a bot user with granular, view-only permissions, created under Account Settings > API Keys > Bot Tokens. It is the closest thing to a least-privilege audit credential Zenduty offers today.
+
+| Tier | Used by | How read-only is guaranteed |
+| --- | --- | --- |
+| Read-only | audit-zenduty | GET-only usage (plus read-by-POST for incident filter and analytics), ideally under a **Bot Token** with view-only permissions. Standard keys have no read scope. |
+| Elevated | (future setup-zenduty) | A standard API key or a write-permissioned bot token, created only when setup work starts. |
+
+### Rate limits are tight and per-endpoint-class
+
+Zenduty publishes strict, per-endpoint-class rate limits (for example, Incident GET is 3/second and 30/minute; Alert GET is 1/second and 20/minute; list GETs such as teams and schedules are 5/second and 40/minute). The audit throttles by design and backs off on `429`. This is the defining operational constraint of this integration, so a large account audit is paced, not fast.
+
+### Where to click
+
+1. Sign in as an Account Owner or Admin. Go to Account Settings > API Keys.
+2. For least privilege, open the **Bot Tokens (Beta)** section, create a bot with view-only permissions, and copy its key. Otherwise create a standard API key (full access — the audit stays read-only by GET-only use).
+3. Name it `scoutflo-audit` where the UI allows a label.
+4. For setup work later, create a separate write-permissioned credential rather than widening this one.
+
+### Export and verify
+
+```bash
+# YOU run these in your own terminal; an agent never executes these lines.
+printf 'ZENDUTY_TOKEN: ' && read -rs ZENDUTY_TOKEN && export ZENDUTY_TOKEN && printf '\n'
+
+# Teams is the cheapest list read and the doctor probe. Token, not Bearer.
+code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 \
+  -H "Authorization: Token ${ZENDUTY_TOKEN}" "https://www.zenduty.com/api/account/teams/")
+[ "$code" = "200" ] && echo "Zenduty PASS" || echo "FAIL: got $code (401 = bad or non-Token-prefixed key; 429 = rate-limited, wait a minute)"
 ```
 
 ## Google Cloud (GCP)

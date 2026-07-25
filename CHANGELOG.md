@@ -1,5 +1,61 @@
 # Changelog
 
+## 0.1.48
+
+New integration: **Zenduty (Xurrent IMR)** (`/scoutflo:audit-zenduty`) — Stage
+2.2 of the new-integrations wave, closing all but one of the Phase 2 build set.
+Zenduty was acquired by Xurrent and rebranded Xurrent IMR (a branding change,
+not a sunset); the API and product are alive at `www.zenduty.com/api`. Scored,
+read-only audit across four categories: escalation and on-call (single-point-
+of-failure escalations, empty on-call rotations, disabled ingestion
+integrations), alert noise (per-service `collation` dedup, suppress and
+flapping-guard alert rules, delay, `entity_id` dedup, auto-resolve, open-ended
+recurring maintenance windows), coverage and hygiene (global-routing overlap and
+missing default routes, critical-service paging paths, deprecated
+API-Integration ingestion), and actionability (unacked aging plus MTTA/MTTR from
+Zenduty's own analytics).
+
+Built against the current Zenduty API, verified against the live OpenAPI spec.
+Correctness guards baked into the checks and the pressure scenarios:
+
+- **Auth is `Authorization: Token <key>`** — the literal word `Token`, not
+  `Bearer` (a Bearer call 401s). There is no read-only key scope; a Bot Token
+  (Beta) with view-only permissions is the least-privilege path, and read-only
+  is otherwise enforced by GET-only use.
+- **Tight per-endpoint-class rate limits are the defining constraint** (alert
+  GET 1/second, incident GET 3/second, list GETs 5/second). The audit paces by
+  design, backs off on `429` (no documented `Retry-After`, so a fixed wait plus
+  exponential backoff), and marks throttled checks `blocked` with the reason
+  rather than fabricating a pass; the large path batches by team.
+- **Verified API shapes.** The dedup field is `collation` (0 off, 1 time-based)
+  with `collation_time`, not a `correlation` field; content-based and AI
+  correlation are not exposed in the API, so their absence is reported as "not
+  API-readable", never a fail. Incident listing is `POST /api/incidents/filter/`
+  (a read-by-filter; there is no GET list), with ack state read from the
+  `status` integer. Escalation single-point-of-failure is `repeat_policy: 0`
+  with one target; open-ended maintenance is `repeat_interval` set with
+  `repeat_until: null`; the legacy API-Integration ingestion type stopped
+  working 2025-05-15 and any remaining one is migration debt.
+- **Server-side actionability.** Unlike JSM Operations, Zenduty exposes an
+  analytics API, so MTTA/MTTR come from the vendor's own `mtta_seconds`/
+  `mttr_seconds`, never fabricated. The two read-by-POST calls (incident filter
+  and analytics) are explicitly carved out of the otherwise GET-only rule.
+
+- skills/audit-zenduty: SKILL.md + references/zenduty-checks.md (ZD-001..032).
+  Topology Readiness treats Zenduty as its real platform identity — a
+  `monitoring.zenduty` alerting provider (like PagerDuty, a `MONITORED_BY` edge
+  that can reach full confidence), not a ticketing sink; the camelCase
+  `serviceName` anchor-mirror caveat is carried.
+- connect: Zenduty (Xurrent IMR) section (Token auth, Bot Tokens beta as the
+  least-privilege path, tight rate limits); toolkit.yaml.example zenduty block.
+- doctor: Zenduty block (`Authorization: Token`, `GET /api/account/teams/`
+  probe, 401/403/429 interpretation); doctor SKILL.md documented.
+- Wired into audit-all, start, README, and plugin/marketplace metadata; three
+  pressure scenarios (Bearer-auth trap, rate-limit hammering, collation vs
+  correlation).
+
+Not yet live-tested against a real Zenduty account (deferred, tracked).
+
 ## 0.1.47
 
 New integration: **JSM Operations** (`/scoutflo:audit-jsm`) — Stage 2.4 of the
