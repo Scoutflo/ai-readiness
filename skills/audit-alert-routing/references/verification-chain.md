@@ -667,7 +667,7 @@ AUTH="Authorization: Bearer ${PROM_TOKEN}"
 # Version gate: this trap only bites on Prometheus 3.x. Capture the HTTP code — a 401/403
 # is an auth finding (ALR-019 BLOCKED, scores 0, stays in the denominator), NEVER a silent
 # not-in-scope. Bare `curl -s` here would turn an auth failure into version "0" -> "<3" ->
-# not-in-scope, dropping the customer's headline check with a bogus "Prometheus 0" message.
+# not-in-scope, dropping your headline check with a bogus "Prometheus 0" message.
 BI_CODE="$(curl -s -o /tmp/alr-buildinfo.json -w '%{http_code}' -H "$AUTH" "${PROM_URL}/api/v1/status/buildinfo")"
 if [ "$BI_CODE" = "401" ] || [ "$BI_CODE" = "403" ]; then
   echo "ALR-019 BLOCKED: ${PROM_URL}/api/v1/status/buildinfo returned ${BI_CODE} — Prometheus read token lacks access; cannot determine version. Record as an auth-scope finding, not not-in-scope."

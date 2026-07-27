@@ -387,7 +387,7 @@ RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/aws/${RUN_DATE}/raw"
 jq -r '.[] | "\(.name): \([.logging[] | select(.types[]? == "api" or .types[]? == "controllerManager") | .enabled] | any)"' "${RAW_DIR}/eks.json"
 ```
 
-Container Insights itself is a CloudWatch agent add-on, not a `describe-cluster` field; confirm it via `aws cloudwatch list-metrics --namespace ContainerInsights --dimensions Name=ClusterName,Value=<cluster>` returning at least one metric. An empty result on a serving cluster is the `AWS-023` finding. Depth beyond presence, per-pod or per-container metrics, belongs to `audit-lgtm`/`audit-grafana` when the customer runs that stack on EKS; this check never claims that depth.
+Container Insights itself is a CloudWatch agent add-on, not a `describe-cluster` field; confirm it via `aws cloudwatch list-metrics --namespace ContainerInsights --dimensions Name=ClusterName,Value=<cluster>` returning at least one metric. An empty result on a serving cluster is the `AWS-023` finding. Depth beyond presence, per-pod or per-container metrics, belongs to `audit-lgtm`/`audit-grafana` when you run that stack on EKS; this check never claims that depth.
 
 `AWS-024`/`AWS-025`: cross-reference `lambda.json` function names against alarm dimensions naming `FunctionName` with `Errors`, `Throttles`, `ConcurrentExecutions`, or `Duration` metrics; a critical function with no `Errors` alarm is `AWS-024` fail, and a function with a `ReservedConcurrentExecutions` value set but no `ConcurrentExecutions` alarm is `AWS-025` fail. `AWS-026`: `aws xray get-sampling-rules` returning rules for a latency-sensitive service confirms adoption; absence is `info`, not a fail, since not every team has adopted X-Ray.
 

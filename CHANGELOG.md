@@ -1,5 +1,43 @@
 # Changelog
 
+## 0.1.54
+
+End-to-end verification pass: a formal maintainer-rubric review of every skill
+touched by the recent hardening (v0.1.52) and storage (v0.1.53) work — plus the
+storage substitution touched all skills. Eight skills reviewed against the full
+A1–I5 rubric; five passed clean, and the review surfaced defects in the other
+three (and two docs), each confirmed with a local reproduction before the fix.
+
+- **audit-aws — cross-block state (blocking, E1):** the guided-walkthrough drift
+  check was a separate ```bash fence that read `$TOTAL` from the preceding
+  estate-sizing block. In a fresh shell under `set -eu` it aborted with
+  `TOTAL: unbound variable` on every non-first run (reproduced). Merged the drift
+  check into the estate-sizing block, matching audit-gcp's single-block pattern.
+- **audit-alert-routing — dead drift input (D1):** the drift check read
+  `.estate.objects` from the previous run, but the skill never recorded
+  `estate: {objects, path}` — so the drift line always reported "first run" and
+  `audit-all` had no size to roll up. Added the write instruction that aws/gcp/lgtm
+  already carry.
+- **doctor / schedule-audits — dead `reports_dir` tier resurfaced (v0.1.53
+  follow-through):** the doctor `--out` flag table and the schedule-audits
+  guidance still described a three-tier `SCOUTFLO_AUDIT_DIR → reports_dir →
+  default` resolution that the two-tier shell substitution never implemented, and
+  schedule-audits prescribed "set `reports_dir` to align interactive runs" — which
+  does not work and leaves the divergent histories that section exists to prevent.
+  Corrected all of them (doctor `--out` line, schedule-audits body + failure-mode
+  row, `crontab.example`) to the honest "export `SCOUTFLO_AUDIT_DIR`; `reports_dir`
+  only prints the export line" story.
+- **consultant-voice sweep (H2):** replaced the rubric-banned "the customer"
+  phrasing with self-service "you/your" in audit-aws (×2 + its reference),
+  audit-gcp, audit-digitalocean, and an audit-alert-routing code comment.
+
+All six v0.1.52/v0.1.53 code changes were independently re-verified as landed and
+non-regressed by the reviews (native-sidecar filter, DD-032 SLO logic, ALR-011
+timestamp parse, ALR-019 gate + map-form matcher, receiver/dashboard guards, the
+`${SCOUTFLO_AUDIT_DIR:-…}` substitution across all shell), and topology-readiness
+claims were re-checked against the current platform schema sources. No audit
+logic, checks, IDs, or scoring changed.
+
 ## 0.1.53
 
 Configurable, explicit storage location for reports and runtime data. Until now
