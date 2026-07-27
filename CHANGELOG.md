@@ -19,6 +19,16 @@ CLI. This is docs/convention only; no command block was rewritten.
   read-only MCP servers can stand in for a missing CLI.
 - **FAQ** — added "We use MCP servers instead of CLIs — does this still work?" (yes,
   with the read-only-substitution explanation).
+- **Safety hardening (from adversarial review before ship):** the MCP substitution
+  rule now says **classify by effect, not name** — an MCP tool named
+  `get`/`query`/`describe` that has a side effect (starts a job, syncs/refreshes,
+  rotates a credential) is mutating, and any tool whose description isn't clearly
+  side-effect-free is treated as mutating and skipped in favor of the CLI/HTTP path.
+  It also requires the MCP tool to **prove its target** matches the config, else
+  fall back to the explicitly-targeted CLI/HTTP path (an MCP server bakes its
+  target in and may expose no identity call). Added a pressure scenario
+  (`tests/pressure-scenarios/audit-lgtm/mcp-tool-substitution-safety.md`) covering
+  an ambiguously-named tool and a wrong-target server.
 
 No audit logic, checks, IDs, or scoring changed.
 
