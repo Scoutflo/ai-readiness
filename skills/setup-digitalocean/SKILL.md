@@ -105,11 +105,11 @@ Expected: the final line prints and nothing stops the block. `DO_TEAM` is re-rea
 
 ```bash
 set -eu
-LATEST_RUN="$(ls -d ./scoutflo-audits/digitalocean/*/ 2>/dev/null | sort | tail -1)"
+LATEST_RUN="$(ls -d ${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/digitalocean/*/ 2>/dev/null | sort | tail -1)"
 [ -n "$LATEST_RUN" ] || { echo "no audit run found; run /scoutflo:audit-digitalocean first"; exit 1; }
 jq -r '.findings[] | [.id, .severity, .title, .remediation] | @tsv' "${LATEST_RUN}findings.json"
 RUN_DATE="$(date -u +%Y-%m-%d)"
-WORK_DIR="./scoutflo-audits/digitalocean/setup-${RUN_DATE}"
+WORK_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/digitalocean/setup-${RUN_DATE}"
 BACKUP_DIR="${WORK_DIR}/backups"
 mkdir -p "$BACKUP_DIR"
 ```
@@ -142,7 +142,7 @@ POLICY_VALUE="80"                                    # copy .value from the back
 POLICY_WINDOW="5m"                                   # copy .window from the backup
 ENTITY_IDS="your-database-uuid"                      # copy .entities from the backup, comma-joined
 ALERT_EMAIL="oncall@example.org"                     # the recipient your team actually watches
-BACKUP_DIR="./scoutflo-audits/digitalocean/setup-$(date -u +%Y-%m-%d)/backups"
+BACKUP_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/digitalocean/setup-$(date -u +%Y-%m-%d)/backups"
 mkdir -p "$BACKUP_DIR"
 doctl monitoring alert get "$POLICY_UUID" -o json > "${BACKUP_DIR}/policy-${POLICY_UUID}.json"
 doctl monitoring alert update "$POLICY_UUID" \
@@ -161,7 +161,7 @@ App Platform alert destinations use the destination-only command, which avoids a
 ```bash
 set -eu
 APP_ID="your-app-id"; ALERT_ID="your-app-alert-id"   # from the audit's per-app alerts capture
-DEST_FILE="./scoutflo-audits/digitalocean/setup-$(date -u +%Y-%m-%d)/dest-${ALERT_ID}.json"
+DEST_FILE="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/digitalocean/setup-$(date -u +%Y-%m-%d)/dest-${ALERT_ID}.json"
 doctl apps update-alert-destinations "$APP_ID" "$ALERT_ID" --app-alert-destinations "$DEST_FILE"
 doctl apps list-alerts "$APP_ID" -o json \
   | jq -e --arg a "$ALERT_ID" '[.[] | select(.id == $a)][0] | ((.emails // []) | length) + ((.slack_webhooks // []) | length) >= 1'
@@ -237,7 +237,7 @@ For `DO-020` to `DO-025`. Controlled rollout: this edits the app spec and trigge
 ```bash
 set -eu
 APP_ID="your-app-id"   # from the audit inventory
-BACKUP_DIR="./scoutflo-audits/digitalocean/setup-$(date -u +%Y-%m-%d)/backups"
+BACKUP_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/digitalocean/setup-$(date -u +%Y-%m-%d)/backups"
 mkdir -p "$BACKUP_DIR"
 BACKUP_FILE="${BACKUP_DIR}/app-${APP_ID}-$(date -u +%H%M%S).yaml"
 doctl apps spec get "$APP_ID" > "$BACKUP_FILE"
@@ -253,7 +253,7 @@ The spec contains env values (SECRET-type values appear encrypted and round-trip
 ```bash
 set -eu
 APP_ID="your-app-id"
-NEW_SPEC="./scoutflo-audits/digitalocean/setup-$(date -u +%Y-%m-%d)/app-${APP_ID}-new.yaml"
+NEW_SPEC="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/digitalocean/setup-$(date -u +%Y-%m-%d)/app-${APP_ID}-new.yaml"
 doctl apps propose --spec "$NEW_SPEC" --app "$APP_ID" >/dev/null && echo "spec accepted"
 ```
 
@@ -266,7 +266,7 @@ Expected: `spec accepted`. A rejection names the invalid field or enum; when one
 ```bash
 set -eu
 APP_ID="your-app-id"
-NEW_SPEC="./scoutflo-audits/digitalocean/setup-$(date -u +%Y-%m-%d)/app-${APP_ID}-new.yaml"
+NEW_SPEC="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/digitalocean/setup-$(date -u +%Y-%m-%d)/app-${APP_ID}-new.yaml"
 PUBLIC_URL="https://www.example.com/"   # the app's live URL from the audit inventory
 PREV_DEPLOY="$(doctl apps get "$APP_ID" -o json | jq -r '(if type=="array" then .[0] else . end).active_deployment.id')"
 doctl apps update "$APP_ID" --spec "$NEW_SPEC" --wait
@@ -283,7 +283,7 @@ Expected: `jq -e` exits 0, post-deploy code `200`, and the new rules listed. If 
 ```bash
 set -eu
 APP_ID="your-app-id"
-BACKUP_FILE="./scoutflo-audits/digitalocean/setup-$(date -u +%Y-%m-%d)/backups/app-${APP_ID}-HHMMSS.yaml"  # the snapshot from step 1
+BACKUP_FILE="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/digitalocean/setup-$(date -u +%Y-%m-%d)/backups/app-${APP_ID}-HHMMSS.yaml"  # the snapshot from step 1
 PUBLIC_URL="https://www.example.com/"
 doctl apps update "$APP_ID" --spec "$BACKUP_FILE" --wait
 doctl apps get "$APP_ID" -o json | jq -e '(if type=="array" then .[0] else . end).active_deployment.phase == "ACTIVE"'

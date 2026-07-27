@@ -194,7 +194,7 @@ fi
 Doctor checks every configured block, verifies each `*_env` variable is set (presence only, values are never printed), makes one cheap read-only call per integration, and emits a connection matrix with fix hints:
 
 ```bash
-OUT_DIR="./scoutflo-audits/doctor/$(date -u +%Y-%m-%d)"   # doctor run directory
+OUT_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/doctor/$(date -u +%Y-%m-%d)"   # doctor run directory
 sh "${CLAUDE_PLUGIN_ROOT}/skills/doctor/scripts/doctor.sh" --out "${OUT_DIR}"
 echo "doctor_exit=$?"
 # Expect: doctor_exit=0. 1 = config missing, 2 = an env var is unset, 3 = a live check failed.

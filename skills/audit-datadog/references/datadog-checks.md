@@ -60,7 +60,7 @@ set -euo pipefail   # pipefail is REQUIRED: without it a failing `curl | jq` rep
 DD_SITE="datadoghq.com"   # datadog.site
 DD_HOST="api.${DD_SITE}"
 RUN_DATE="$(date -u +%Y-%m-%d)"
-RAW_DIR="./scoutflo-audits/datadog/${RUN_DATE}/raw"
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/datadog/${RUN_DATE}/raw"
 mkdir -p "$RAW_DIR"
 DD_AUTH="-H DD-API-KEY:${DATADOG_API_KEY} -H DD-APPLICATION-KEY:${DATADOG_APP_KEY}"
 
@@ -116,7 +116,7 @@ Expected: one JSON file per surface. A 403 on any endpoint is an auth/scope find
 ```bash
 set -eu
 RUN_DATE="$(date -u +%Y-%m-%d)"
-RAW_DIR="./scoutflo-audits/datadog/${RUN_DATE}/raw"
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/datadog/${RUN_DATE}/raw"
 
 # DD-001: monitors whose message contains no @handle (notify nobody)
 jq '[.[] | select((.message // "") | test("@") | not) | {id, name}]' "${RAW_DIR}/monitors.json"
@@ -155,7 +155,7 @@ Judgment: not every `@handle` is an integration (some are `@user@email`). Resolv
 ```bash
 set -eu
 RUN_DATE="$(date -u +%Y-%m-%d)"
-RAW_DIR="./scoutflo-audits/datadog/${RUN_DATE}/raw"
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/datadog/${RUN_DATE}/raw"
 
 # DD-010: monitors with a critical threshold but no critical_recovery (flap risk)
 jq '[.[] | select(.options.thresholds.critical != null and (.options.thresholds.critical_recovery == null))
@@ -191,7 +191,7 @@ jq '[.[] | select((.quality_issues | length) > 0) | {id, name, quality_issues}]'
 ```bash
 set -eu
 RUN_DATE="$(date -u +%Y-%m-%d)"
-RAW_DIR="./scoutflo-audits/datadog/${RUN_DATE}/raw"
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/datadog/${RUN_DATE}/raw"
 
 # DD-020: indefinitely muted monitors. options.silenced is a map of scope->until-timestamp;
 # a value of 0 or null means muted with no end.
@@ -212,7 +212,7 @@ jq '[.[] | select(.status == "active" or .status == "scheduled")
 ```bash
 set -eu
 RUN_DATE="$(date -u +%Y-%m-%d)"
-RAW_DIR="./scoutflo-audits/datadog/${RUN_DATE}/raw"
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/datadog/${RUN_DATE}/raw"
 STALE_DAYS="180"   # example, tune to your monitor churn
 
 # DD-031: composite monitors whose constituent IDs no longer resolve.

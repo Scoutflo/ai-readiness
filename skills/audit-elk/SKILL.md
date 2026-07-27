@@ -98,7 +98,7 @@ TOTAL="$(curl -fsS --max-time 30 -H "Authorization: ApiKey ${KIBANA_API_KEY}" \
 echo "rules_in_default_space=${TOTAL} scored_objects=${TOTAL} (sum across elk.spaces in the real run)"
 
 # Guided-walkthrough drift check, per report-standard/README.md.
-TARGET_DIR="./scoutflo-audits/elk"
+TARGET_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/elk"
 PREV_RUN="$(find "$TARGET_DIR" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort | tail -1)"
 DRIFT="first run"
 if [ -n "$PREV_RUN" ] && [ -f "${PREV_RUN}/findings.json" ]; then
@@ -190,7 +190,7 @@ Emit and verify:
 ```bash
 set -eu
 RUN_DATE="$(date -u +%Y-%m-%d)"
-OUT="./scoutflo-audits/elk/${RUN_DATE}"
+OUT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/elk/${RUN_DATE}"
 mkdir -p "$OUT"
 # ... write findings.json and report.md per the report standard, then verify:
 jq -e '.schema == "scoutflo-findings/v1" and .target == "elk" and (.findings | type == "array")' \
@@ -203,7 +203,7 @@ Compute the delta against the previous run's `findings.json` (the latest two dat
 
 ```bash
 set -eu
-TARGET_DIR="./scoutflo-audits/elk"
+TARGET_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/elk"
 RUN_DATE="$(date -u +%Y-%m-%d)"
 OUT="${TARGET_DIR}/${RUN_DATE}"
 RESOLVED="0"   # fixed count from this run's delta; 0 on the first run

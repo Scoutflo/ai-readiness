@@ -17,7 +17,7 @@ aws_cli() {
     aws ${AWS_REGION_CFG:+--region "$AWS_REGION_CFG"} "$@"
   fi
 }
-WORK_DIR="./scoutflo-audits/aws/setup-$(date -u +%Y-%m-%d)"
+WORK_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/aws/setup-$(date -u +%Y-%m-%d)"
 BACKUP_DIR="${WORK_DIR}/backups"
 mkdir -p "$BACKUP_DIR"
 ```
@@ -33,7 +33,7 @@ set -eu
 AWS_PROFILE_CFG=""; AWS_REGION_CFG="us-east-1"
 aws_cli() { if [ -n "$AWS_PROFILE_CFG" ]; then aws --profile "$AWS_PROFILE_CFG" ${AWS_REGION_CFG:+--region "$AWS_REGION_CFG"} "$@"; else aws ${AWS_REGION_CFG:+--region "$AWS_REGION_CFG"} "$@"; fi; }
 ALARM_NAME="prod-db-main-cpu-warning"   # from the audit's alarm inventory, or a new name you are about to create
-BACKUP_DIR="./scoutflo-audits/aws/setup-$(date -u +%Y-%m-%d)/backups"
+BACKUP_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/aws/setup-$(date -u +%Y-%m-%d)/backups"
 mkdir -p "$BACKUP_DIR"
 aws_cli cloudwatch describe-alarms --alarm-names "$ALARM_NAME" --output json > "${BACKUP_DIR}/alarm-${ALARM_NAME}.json"
 test -s "${BACKUP_DIR}/alarm-${ALARM_NAME}.json" && echo "backup: ${BACKUP_DIR}/alarm-${ALARM_NAME}.json"
@@ -94,7 +94,7 @@ set -eu
 AWS_PROFILE_CFG=""; AWS_REGION_CFG="us-east-1"
 aws_cli() { if [ -n "$AWS_PROFILE_CFG" ]; then aws --profile "$AWS_PROFILE_CFG" ${AWS_REGION_CFG:+--region "$AWS_REGION_CFG"} "$@"; else aws ${AWS_REGION_CFG:+--region "$AWS_REGION_CFG"} "$@"; fi; }
 ALARM_NAME="prod-db-main-cpu-warning"
-BACKUP_FILE="./scoutflo-audits/aws/setup-$(date -u +%Y-%m-%d)/backups/alarm-${ALARM_NAME}.json"   # step-1 backup
+BACKUP_FILE="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/aws/setup-$(date -u +%Y-%m-%d)/backups/alarm-${ALARM_NAME}.json"   # step-1 backup
 # Empty backup (alarm did not exist before) restores by deletion:
 if jq -e '.MetricAlarms | length == 0' "$BACKUP_FILE" >/dev/null 2>&1; then
   aws_cli cloudwatch delete-alarms --alarm-names "$ALARM_NAME"
@@ -118,7 +118,7 @@ AWS_PROFILE_CFG=""; AWS_REGION_CFG="us-east-1"
 aws_cli() { if [ -n "$AWS_PROFILE_CFG" ]; then aws --profile "$AWS_PROFILE_CFG" ${AWS_REGION_CFG:+--region "$AWS_REGION_CFG"} "$@"; else aws ${AWS_REGION_CFG:+--region "$AWS_REGION_CFG"} "$@"; fi; }
 TOPIC_NAME="prod-critical-alerts"        # <environment>-<severity>-alerts naming pattern
 ALERT_EMAIL="oncall@example.org"         # the recipient your team actually watches
-BACKUP_DIR="./scoutflo-audits/aws/setup-$(date -u +%Y-%m-%d)/backups"
+BACKUP_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/aws/setup-$(date -u +%Y-%m-%d)/backups"
 mkdir -p "$BACKUP_DIR"
 
 # 1. Backup (GET-before-write): capture existing topics so a restore knows what existed.
@@ -238,7 +238,7 @@ aws_cli() { if [ -n "$AWS_PROFILE_CFG" ]; then aws --profile "$AWS_PROFILE_CFG" 
 DB_ID="db-main"
 BACKUP_RETENTION_DAYS="7"     # example, tune to your recovery-point objective
 MAX_ALLOCATED_STORAGE_GB="500"  # example ceiling for storage autoscaling
-BACKUP_DIR="./scoutflo-audits/aws/setup-$(date -u +%Y-%m-%d)/backups"
+BACKUP_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/aws/setup-$(date -u +%Y-%m-%d)/backups"
 mkdir -p "$BACKUP_DIR"
 
 # 1. Backup (GET-before-write):
@@ -265,7 +265,7 @@ set -eu
 AWS_PROFILE_CFG=""; AWS_REGION_CFG="us-east-1"
 aws_cli() { if [ -n "$AWS_PROFILE_CFG" ]; then aws --profile "$AWS_PROFILE_CFG" ${AWS_REGION_CFG:+--region "$AWS_REGION_CFG"} "$@"; else aws ${AWS_REGION_CFG:+--region "$AWS_REGION_CFG"} "$@"; fi; }
 DB_ID="db-main"
-BACKUP_FILE="./scoutflo-audits/aws/setup-$(date -u +%Y-%m-%d)/backups/rds-${DB_ID}.json"   # step-1 backup
+BACKUP_FILE="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/aws/setup-$(date -u +%Y-%m-%d)/backups/rds-${DB_ID}.json"   # step-1 backup
 PREV_RETENTION="$(jq -r '.DBInstances[0].BackupRetentionPeriod' "$BACKUP_FILE")"
 PREV_MAX_STORAGE="$(jq -r '.DBInstances[0].MaxAllocatedStorage // 0' "$BACKUP_FILE")"
 aws_cli rds modify-db-instance --db-instance-identifier "$DB_ID" \
@@ -321,7 +321,7 @@ aws_cli() { if [ -n "$AWS_PROFILE_CFG" ]; then aws --profile "$AWS_PROFILE_CFG" 
 LOG_GROUP="/ecs/checkout"                   # from the audit's critical-log-group list
 DEST_ARN="arn:aws:logs:us-east-1:123456789012:destination:central-sink"   # the named central sink
 RETENTION_DAYS="365"                        # example, tune to your compliance and cost posture
-BACKUP_DIR="./scoutflo-audits/aws/setup-$(date -u +%Y-%m-%d)/backups"
+BACKUP_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/aws/setup-$(date -u +%Y-%m-%d)/backups"
 mkdir -p "$BACKUP_DIR"
 
 aws_cli logs describe-log-groups --log-group-name-prefix "$LOG_GROUP" --output json > "${BACKUP_DIR}/loggroup-$(basename "$LOG_GROUP").json"

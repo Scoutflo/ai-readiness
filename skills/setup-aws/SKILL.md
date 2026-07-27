@@ -119,11 +119,11 @@ echo "live-safety gate: pass, target confirmed"
 
 ```bash
 set -eu
-LATEST_RUN="$(ls -d ./scoutflo-audits/aws/*/ 2>/dev/null | grep -v '/runs/' | sort | tail -1)"
+LATEST_RUN="$(ls -d ${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/aws/*/ 2>/dev/null | grep -v '/runs/' | sort | tail -1)"
 [ -n "$LATEST_RUN" ] || { echo "no audit run found; run /scoutflo:audit-aws first"; exit 1; }
 jq -r '.findings[] | select(.area != "cost-optimization") | [.id, .severity, .title, .remediation] | @tsv' "${LATEST_RUN}findings.json"
 RUN_DATE="$(date -u +%Y-%m-%d)"
-WORK_DIR="./scoutflo-audits/aws/setup-${RUN_DATE}"
+WORK_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/aws/setup-${RUN_DATE}"
 BACKUP_DIR="${WORK_DIR}/backups"
 mkdir -p "$BACKUP_DIR"
 ```

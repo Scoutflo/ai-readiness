@@ -151,7 +151,7 @@ set -eu
 # Resolved from ~/.scoutflo/toolkit.yaml
 GRAFANA_URL="https://grafana.example.com"   # grafana.url
 [ -n "${GRAFANA_TOKEN:-}" ] || { echo "GRAFANA_TOKEN is not set; run /scoutflo:connect"; exit 1; }
-BACKUP_DIR="./scoutflo-audits/grafana/setup-$(date -u +%F)/backups"
+BACKUP_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/grafana/setup-$(date -u +%F)/backups"
 mkdir -p "$BACKUP_DIR"
 DASH_UID="abcd1234"   # existing UID for a repair, or a new one you choose for a build
 FOLDER_UID="folder-uid"
@@ -289,7 +289,7 @@ set -eu
 # Resolved from ~/.scoutflo/toolkit.yaml
 GRAFANA_URL="https://grafana.example.com"   # grafana.url
 [ -n "${GRAFANA_TOKEN:-}" ] || { echo "GRAFANA_TOKEN is not set; run /scoutflo:connect"; exit 1; }
-BACKUP_DIR="./scoutflo-audits/grafana/setup-$(date -u +%F)/backups"
+BACKUP_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/grafana/setup-$(date -u +%F)/backups"
 mkdir -p "$BACKUP_DIR"
 curl -fsS --max-time 10 -H "Authorization: Bearer ${GRAFANA_TOKEN}" "${GRAFANA_URL}/api/v1/provisioning/policies" \
   > "${BACKUP_DIR}/policies.json"
@@ -311,7 +311,7 @@ set -eu
 # Resolved from ~/.scoutflo/toolkit.yaml
 GRAFANA_URL="https://grafana.example.com"   # grafana.url
 [ -n "${GRAFANA_TOKEN:-}" ] || { echo "GRAFANA_TOKEN is not set; run /scoutflo:connect"; exit 1; }
-BACKUP_DIR="./scoutflo-audits/grafana/setup-$(date -u +%F)/backups"   # the directory holding policies.json from the GET-before-write step
+BACKUP_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/grafana/setup-$(date -u +%F)/backups"   # the directory holding policies.json from the GET-before-write step
 curl -fsS --max-time 10 -H "Authorization: Bearer ${GRAFANA_TOKEN}" "${GRAFANA_URL}/api/v1/provisioning/policies" \
   | diff - <(jq '.routes += [...]' "${BACKUP_DIR}/policies.json")
 ```

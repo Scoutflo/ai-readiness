@@ -70,7 +70,7 @@ Aggregate today's `findings.json` files. Only files matching today's UTC date be
 
 ```bash
 set -eu
-AUDITS_DIR="./scoutflo-audits"   # report-standard output root
+AUDITS_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}"   # report-standard output root
 RUN_DATE="$(date -u +%F)"        # UTC run date; matches each audit's directory name
 
 for f in "$AUDITS_DIR"/*/"$RUN_DATE"/findings.json; do
@@ -85,7 +85,7 @@ Top findings across all targets, highest severity first:
 
 ```bash
 set -eu
-AUDITS_DIR="./scoutflo-audits"   # report-standard output root
+AUDITS_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}"   # report-standard output root
 RUN_DATE="$(date -u +%F)"        # UTC run date; matches each audit's directory name
 
 jq -rs '
@@ -100,7 +100,7 @@ Estate-size roll-up. Each audit's estate-sizing pre-check records its object cou
 
 ```bash
 set -eu
-AUDITS_DIR="./scoutflo-audits"   # report-standard output root
+AUDITS_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}"   # report-standard output root
 RUN_DATE="$(date -u +%F)"        # UTC run date; matches each audit's directory name
 
 for f in "$AUDITS_DIR"/*/"$RUN_DATE"/findings.json; do
@@ -115,7 +115,7 @@ Score trend per target, from each target's `history.jsonl`. The ledger is the on
 
 ```bash
 set -eu
-AUDITS_DIR="./scoutflo-audits"   # report-standard output root
+AUDITS_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}"   # report-standard output root
 
 for h in "$AUDITS_DIR"/*/history.jsonl; do
   [ -e "$h" ] || continue
@@ -140,7 +140,7 @@ Regressions across all targets. `lifecycle` is computed inside each audit's own 
 
 ```bash
 set -eu
-AUDITS_DIR="./scoutflo-audits"   # report-standard output root
+AUDITS_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}"   # report-standard output root
 RUN_DATE="$(date -u +%F)"        # UTC run date; matches each audit's directory name
 
 for f in "$AUDITS_DIR"/*/"$RUN_DATE"/findings.json; do
@@ -155,7 +155,7 @@ Suppressed findings across all targets, from the same `lifecycle` field:
 
 ```bash
 set -eu
-AUDITS_DIR="./scoutflo-audits"   # report-standard output root
+AUDITS_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}"   # report-standard output root
 RUN_DATE="$(date -u +%F)"        # UTC run date; matches each audit's directory name
 
 TOTAL=0
@@ -175,7 +175,7 @@ Topology readiness per target, read from each target's own `report.md` (the head
 
 ```bash
 set -eu
-AUDITS_DIR="./scoutflo-audits"   # report-standard output root
+AUDITS_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}"   # report-standard output root
 RUN_DATE="$(date -u +%F)"        # UTC run date; matches each audit's directory name
 
 for f in "$AUDITS_DIR"/*/"$RUN_DATE"/findings.json; do
@@ -219,7 +219,7 @@ Verify the write with an asserted command, not a glance:
 
 ```bash
 set -eu
-AUDITS_DIR="./scoutflo-audits"   # report-standard output root
+AUDITS_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}"   # report-standard output root
 RUN_DATE="$(date -u +%F)"        # UTC run date
 REPORT="${AUDITS_DIR}/all/${RUN_DATE}/report.md"
 
@@ -254,7 +254,7 @@ Compute the regressions and suppressed lines the brief needs, redeclaring every 
 
 ```bash
 set -eu
-AUDITS_DIR="./scoutflo-audits"   # report-standard output root
+AUDITS_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}"   # report-standard output root
 RUN_DATE="$(date -u +%F)"        # UTC run date
 
 REGRESSIONS="$(for f in "$AUDITS_DIR"/*/"$RUN_DATE"/findings.json; do
@@ -290,7 +290,7 @@ Expected output: `regressions: none` (or the target-prefixed list), followed by 
 ```bash
 set -eu
 RUN_DATE="$(date -u +%F)"        # UTC run date
-BRIEF_FILE="./scoutflo-audits/all/${RUN_DATE}/brief.txt"   # brief assembled per the rules above
+BRIEF_FILE="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/all/${RUN_DATE}/brief.txt"   # brief assembled per the rules above
 # slack.webhook_env in toolkit.yaml names the webhook variable. Never print its value.
 if [ -z "${SCOUTFLO_SLACK_WEBHOOK:-}" ]; then
   echo "Slack webhook variable not set; skipping brief"

@@ -10,13 +10,19 @@
 #      *_env variable named in your toolkit.yaml, plus SCOUTFLO_SLACK_WEBHOOK
 #      if the brief is enabled. Pull values from your secret manager. Never
 #      commit this file anywhere.
+#      RECOMMENDED: also add `export SCOUTFLO_AUDIT_DIR="/abs/path/to/scoutflo-audits"`
+#      here so the scheduled run writes to the SAME reports directory your
+#      interactive runs use — otherwise reports land wherever the `cd` below
+#      points, and interactive/scheduled histories can silently diverge.
 #
 # Notes:
 #   - The machine must be awake at the scheduled time; cron does not run missed jobs.
 #   - Cost: every run is a headless Claude session; usage scales with the number
 #     of configured audits. Weekly is a sane starting cadence.
-#   - Reports accumulate under the project's scoutflo-audits/ directory, so
-#     deltas compute automatically between runs.
+#   - Reports go to SCOUTFLO_AUDIT_DIR if the env file exports it; otherwise to
+#     scoutflo-audits/ under the `cd` directory below. Keep it stable run-to-run
+#     so deltas compute automatically. Interactive runs must resolve to the same
+#     place (set reports_dir in toolkit.yaml or export SCOUTFLO_AUDIT_DIR there too).
 #   - Check ~/.scoutflo/audit-cron.log after the first scheduled run.
 #
 # Fields: minute hour day-of-month month day-of-week

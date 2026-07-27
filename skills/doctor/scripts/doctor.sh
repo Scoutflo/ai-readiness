@@ -7,7 +7,7 @@
 #   --config FILE   Config to read. Default: $HOME/.scoutflo/toolkit.yaml
 #                   (or $SCOUTFLO_CONFIG when set).
 #   --out DIR       Run directory for the matrix file.
-#                   Default: ./scoutflo-audits/doctor/<UTC date>
+#                   Default: ${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/doctor/<UTC date>
 #   --slack-test    Send the Slack webhook test post. Off by default because
 #                   it posts a visible message; pass it only after the user
 #                   has explicitly confirmed in the conversation.
@@ -84,7 +84,7 @@ if [ ! -r "$CONFIG" ]; then
   exit 1
 fi
 
-[ -n "$OUT_DIR" ] || OUT_DIR="./scoutflo-audits/doctor/$(date -u +%Y-%m-%d)"
+[ -n "$OUT_DIR" ] || OUT_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/doctor/$(date -u +%Y-%m-%d)"
 mkdir -p "$OUT_DIR"
 MATRIX="${OUT_DIR}/matrix.tsv"
 if [ ! -f "$MATRIX" ]; then

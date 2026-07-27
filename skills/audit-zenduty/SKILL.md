@@ -119,7 +119,7 @@ TOTAL=$((TEAMS + SERVICES))
 echo "teams=${TEAMS} services=${SERVICES} scored_objects=${TOTAL}"
 
 # Guided-walkthrough drift check, per report-standard/README.md.
-TARGET_DIR="./scoutflo-audits/zenduty"
+TARGET_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/zenduty"
 PREV_RUN="$(find "$TARGET_DIR" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort | tail -1)"
 DRIFT="first run"
 if [ -n "$PREV_RUN" ] && [ -f "${PREV_RUN}/findings.json" ]; then
@@ -214,7 +214,7 @@ Emit and verify:
 ```bash
 set -eu
 RUN_DATE="$(date -u +%Y-%m-%d)"
-OUT="./scoutflo-audits/zenduty/${RUN_DATE}"
+OUT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/zenduty/${RUN_DATE}"
 mkdir -p "$OUT"
 # ... write findings.json and report.md per the report standard, then verify:
 jq -e '.schema == "scoutflo-findings/v1" and .target == "zenduty" and (.findings | type == "array")' \
@@ -227,7 +227,7 @@ Compute the delta against the previous run's `findings.json` (the latest two dat
 
 ```bash
 set -eu
-TARGET_DIR="./scoutflo-audits/zenduty"
+TARGET_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/zenduty"
 RUN_DATE="$(date -u +%Y-%m-%d)"
 OUT="${TARGET_DIR}/${RUN_DATE}"
 RESOLVED="0"   # fixed count from this run's delta; 0 on the first run

@@ -73,7 +73,7 @@ If the pinned context is not the cluster the config names, stop and report the m
 
 ```bash
 set -eu
-LATEST_RUN="$(ls -d ./scoutflo-audits/lgtm/*/ 2>/dev/null | sort | tail -1)"
+LATEST_RUN="$(ls -d ${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/lgtm/*/ 2>/dev/null | sort | tail -1)"
 [ -n "$LATEST_RUN" ] || { echo "no audit run found; run /scoutflo:audit-lgtm first"; exit 1; }
 jq -r '.findings[] | [.id, .severity, .title, .remediation] | @tsv' "${LATEST_RUN}findings.json"
 ```
@@ -100,9 +100,9 @@ Helm-managed objects change through `helm upgrade` on the release. Operator-mana
 ```bash
 set -eu
 RUN_DATE="$(date -u +%F)"
-WORK_DIR="./scoutflo-audits/lgtm/setup-${RUN_DATE}"
+WORK_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/lgtm/setup-${RUN_DATE}"
 BACKUP_DIR="${WORK_DIR}/backups"
-CHANGE_LOG="./scoutflo-audits/lgtm/changes.md"
+CHANGE_LOG="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/lgtm/changes.md"
 mkdir -p "$BACKUP_DIR"
 ```
 
@@ -235,7 +235,7 @@ For correlation findings where the same service carries different names across m
 set -eu
 METRICS_URL="https://prometheus.example.com"   # prometheus.url
 LOKI_URL="https://loki.example.com"            # loki.url
-WORK_DIR="./scoutflo-audits/lgtm/setup-$(date -u +%F)"
+WORK_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/lgtm/setup-$(date -u +%F)"
 mkdir -p "$WORK_DIR"
 curl -fsS --max-time 10 "${METRICS_URL}/api/v1/label/service/values" | jq -r '.data[]' | sort > "${WORK_DIR}/metrics-services.txt"
 curl -fsS --max-time 10 "${LOKI_URL}/loki/api/v1/label/service/values" | jq -r '.data[]' | sort > "${WORK_DIR}/logs-services.txt"

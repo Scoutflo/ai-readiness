@@ -11,10 +11,10 @@ Each audit run writes exactly two files:
 | `findings.json` | Machine-readable result: score, severity counts, every finding with evidence. Contract in [findings-schema.md](findings-schema.md). |
 | `report.md` | Human-readable report built from the same data: executive summary, scorecard, findings, coverage matrix, next safe actions, delta, evidence appendix. Skeleton in [report-template.md](report-template.md). |
 
-Both live under the working directory of the project you audited:
+Both live under one reports directory, `<reports-dir>/`:
 
 ```
-./scoutflo-audits/
+<reports-dir>/
   <target>/
     history.jsonl        # one line per run; see History ledger below
     <YYYY-MM-DD>/
@@ -27,9 +27,10 @@ Both live under the working directory of the project you audited:
 
 Layout rules:
 
+- **`<reports-dir>` resolution.** Every command block runs in a fresh shell, so the only value that threads through all of them is an environment variable. The effective location is therefore `${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}` — the `SCOUTFLO_AUDIT_DIR` env var when exported, otherwise `./scoutflo-audits` relative to the launch directory. `reports_dir` in `~/.scoutflo/toolkit.yaml` is a *convenience, not a second live tier*: `doctor`/`start` read it only to print the exact `export SCOUTFLO_AUDIT_DIR=...` line to add to your shell profile (and flag the gap if it is set but not yet exported). Because the default is launch-directory-relative, all delta/history/topology/exemptions continuity depends on a *stable* location; a customer with one estate should export `SCOUTFLO_AUDIT_DIR` to one absolute path (and set `reports_dir` so doctor keeps surfacing that export line) so moving folders doesn't fork the history.
 - `<target>` is the audit's target slug: the skill name minus its lane prefix. `audit-lgtm` writes to `lgtm/`, `audit-grafana` to `grafana/`.
 - `<YYYY-MM-DD>` is the run date in UTC. A re-run on the same date overwrites that date's directory. The day is the run's identity.
-- Keep `./scoutflo-audits/` out of public version control. Reports contain infrastructure detail about your environment.
+- Keep the reports directory out of public version control. Reports contain infrastructure detail about your environment.
 
 ## Delta rules
 
@@ -71,7 +72,7 @@ This is a pure `jq`/`awk` operation on the two files already on disk: no new inf
 
 ```bash
 set -eu
-TARGET_DIR="./scoutflo-audits/lgtm"        # example; your target's directory
+TARGET_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/lgtm"        # example; your target's directory
 HISTORY="${TARGET_DIR}/history.jsonl"
 SUMMARY="${TARGET_DIR}/history.summary.jsonl"
 HISTORY_MAX_LINES="200"   # example, tune to your run cadence

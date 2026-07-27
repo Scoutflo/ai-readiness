@@ -106,7 +106,7 @@ Load `./scoutflo-audits/topology.md` if it exists; its service list defines whic
 
 ```bash
 set -eu
-LATEST_RUN="$(ls -d ./scoutflo-audits/sentry/[0-9]*/ 2>/dev/null | sort | tail -1)"
+LATEST_RUN="$(ls -d ${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/sentry/[0-9]*/ 2>/dev/null | sort | tail -1)"
 [ -n "$LATEST_RUN" ] || echo "no audit run found; running greenfield setup without a findings baseline"
 [ -z "$LATEST_RUN" ] || jq -r '.findings[] | [.id, .severity, .title, .remediation] | @tsv' "${LATEST_RUN}findings.json"
 ```
@@ -118,9 +118,9 @@ LATEST_RUN="$(ls -d ./scoutflo-audits/sentry/[0-9]*/ 2>/dev/null | sort | tail -
 ```bash
 set -eu
 RUN_DATE="$(date -u +%F)"
-WORK_DIR="./scoutflo-audits/sentry/setup-${RUN_DATE}"
+WORK_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/sentry/setup-${RUN_DATE}"
 BACKUP_DIR="${WORK_DIR}/backups"
-CHANGE_LOG="./scoutflo-audits/sentry/changes.md"
+CHANGE_LOG="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/sentry/changes.md"
 mkdir -p "$BACKUP_DIR"
 echo "backups: ${BACKUP_DIR}"
 ```
@@ -225,7 +225,7 @@ SENTRY_HOST="us.sentry.io"; SENTRY_ORG="your-org-slug"; API="https://${SENTRY_HO
 [ -n "${SENTRY_TOKEN:-}" ] || { echo "SENTRY_TOKEN is not set; run /scoutflo:connect"; exit 1; }
 
 PROJECT="checkout"
-BACKUP_DIR="./scoutflo-audits/sentry/setup-$(date -u +%F)/backups"
+BACKUP_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/sentry/setup-$(date -u +%F)/backups"
 mkdir -p "$BACKUP_DIR"
 BACKUP_FILE="${BACKUP_DIR}/project-${PROJECT}-$(date -u +%H%M%S).json"
 
@@ -265,7 +265,7 @@ set -eu
 SENTRY_HOST="us.sentry.io"; SENTRY_ORG="your-org-slug"; API="https://${SENTRY_HOST}/api/0"
 [ -n "${SENTRY_TOKEN:-}" ] || { echo "SENTRY_TOKEN is not set"; exit 1; }
 PROJECT="checkout"
-BACKUP_FILE="./scoutflo-audits/sentry/setup-$(date -u +%F)/backups/project-checkout-HHMMSS.json"  # the step-1 backup
+BACKUP_FILE="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/sentry/setup-$(date -u +%F)/backups/project-checkout-HHMMSS.json"  # the step-1 backup
 
 # Sentry's project PUT accepts a partial body; restore only the fields this
 # section touched, taken byte-for-byte from the backup.
@@ -291,7 +291,7 @@ PROJECT="checkout"
 KEY_ID="your-key-id"           # from GET /projects/${SENTRY_ORG}/${PROJECT}/keys/
 KEY_RATE_LIMIT="1000"          # example, tune to your expected event volume
 KEY_RATE_WINDOW="60"           # seconds; example
-BACKUP_DIR="./scoutflo-audits/sentry/setup-$(date -u +%F)/backups"
+BACKUP_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/sentry/setup-$(date -u +%F)/backups"
 mkdir -p "$BACKUP_DIR"
 BACKUP_FILE="${BACKUP_DIR}/key-${KEY_ID}-$(date -u +%H%M%S).json"
 
@@ -378,7 +378,7 @@ set -eu
 SENTRY_HOST="us.sentry.io"; SENTRY_ORG="your-org-slug"; API="https://${SENTRY_HOST}/api/0"
 [ -n "${SENTRY_TOKEN:-}" ] || { echo "SENTRY_TOKEN is not set; run /scoutflo:connect"; exit 1; }
 PROJECT="checkout"
-BACKUP_DIR="./scoutflo-audits/sentry/setup-$(date -u +%F)/backups"
+BACKUP_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/sentry/setup-$(date -u +%F)/backups"
 mkdir -p "$BACKUP_DIR"
 
 curl -fsS --max-time 10 "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/" \
@@ -411,7 +411,7 @@ set -eu
 SENTRY_HOST="us.sentry.io"; SENTRY_ORG="your-org-slug"; API="https://${SENTRY_HOST}/api/0"
 [ -n "${SENTRY_TOKEN:-}" ] || { echo "SENTRY_TOKEN is not set"; exit 1; }
 PROJECT="checkout"
-BACKUP_FILE="./scoutflo-audits/sentry/setup-$(date -u +%F)/backups/default-rule-12345678.json"  # the step-1 backup
+BACKUP_FILE="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/sentry/setup-$(date -u +%F)/backups/default-rule-12345678.json"  # the step-1 backup
 
 jq '{name, actionMatch, filterMatch, environment, frequency, conditions, filters, actions}' "$BACKUP_FILE" \
   | curl -fsS --max-time 10 -X POST "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/" \
@@ -443,7 +443,7 @@ RULE_ID="12345678"
 SLACK_INTEGRATION_ID="your-integration-id"   # from GET /organizations/${SENTRY_ORG}/integrations/?provider_key=slack
 SLACK_CHANNEL="your-channel-name"
 SLACK_CHANNEL_ID="your-channel-id"
-BACKUP_DIR="./scoutflo-audits/sentry/setup-$(date -u +%F)/backups"
+BACKUP_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/sentry/setup-$(date -u +%F)/backups"
 mkdir -p "$BACKUP_DIR"
 BACKUP_FILE="${BACKUP_DIR}/rule-${RULE_ID}-$(date -u +%H%M%S).json"
 
@@ -477,7 +477,7 @@ set -eu
 SENTRY_HOST="us.sentry.io"; SENTRY_ORG="your-org-slug"; API="https://${SENTRY_HOST}/api/0"
 [ -n "${SENTRY_TOKEN:-}" ] || { echo "SENTRY_TOKEN is not set"; exit 1; }
 PROJECT="checkout"; RULE_ID="12345678"
-BACKUP_FILE="./scoutflo-audits/sentry/setup-$(date -u +%F)/backups/rule-12345678-HHMMSS.json"  # the step-1 backup
+BACKUP_FILE="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/sentry/setup-$(date -u +%F)/backups/rule-12345678-HHMMSS.json"  # the step-1 backup
 
 jq '{name, actionMatch, filterMatch, environment, frequency, conditions, filters, actions}' "$BACKUP_FILE" \
   | curl -fsS --max-time 10 -X PUT "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/${RULE_ID}/" \

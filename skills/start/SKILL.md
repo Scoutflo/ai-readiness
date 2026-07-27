@@ -56,22 +56,27 @@ More audits are planned, including a dedicated Datadog audit. Installed skills a
 
 ## Where reports land
 
-Every audit run writes two files under the project directory you ran it from:
+Every audit run writes its reports and runtime data under one reports directory:
 
 ```
-./scoutflo-audits/
-  <target>/                # lgtm, grafana, sentry, alert-routing, digitalocean, gcp, aws
+<reports-dir>/
+  <target>/                # lgtm, grafana, sentry, alert-routing, digitalocean, gcp, aws, ...
     history.jsonl          # one line per run; reports render the score trend from it
     <YYYY-MM-DD>/          # run date, UTC
       findings.json        # machine-readable: score, severities, evidence
       report.md            # human-readable: summary, scorecard, findings, actions
   all/                     # combined summaries from /scoutflo:audit-all
   topology.md              # your service map, written by /scoutflo:map-topology
+  exemptions.yaml          # your accepted-risk suppressions (optional, you own it)
 ```
+
+**`<reports-dir>` is `${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}`** — the `SCOUTFLO_AUDIT_DIR` environment variable when you export it, otherwise `./scoutflo-audits` relative to the directory you launched Claude Code from. (Every command runs in a fresh shell, so an exported env var is what carries the location across all of them; `/scoutflo:doctor` prints the exact absolute path it resolves to.) `reports_dir` in `~/.scoutflo/toolkit.yaml` is a convenience: doctor reads it to print the `export` line for you and warns if it's set but not yet exported — setting it alone does not move where reports land until that export is in your environment.
+
+**This matters when you change folders.** On the default, reports live beside the project you launched from, so launching Claude from a *different* folder writes to a *different, empty* `scoutflo-audits/` — that run reports "first run" (no delta), and your `topology.md` and `exemptions.yaml` from the other folder won't be found. Credentials are unaffected (they always live in `~/.scoutflo/`), only this reports/history layer is folder-relative. If you audit one estate and want its history to follow you regardless of launch folder, export `SCOUTFLO_AUDIT_DIR` to one absolute path (and set `reports_dir` so doctor keeps reminding you of the export line) — then every session and scheduled run agree.
 
 - Re-runs on later dates compute a delta automatically: what got fixed, what is new, how the score moved. Each run also appends one line to its target's `history.jsonl`, and reports render the last-five-run score trend from it.
 - Scores run 0 to 100 per target. The end-to-end label needs 85 or better plus full coverage of every critical service; below that the honest phrasing is "good base coverage".
-- Keep `./scoutflo-audits/` out of public version control. Reports contain infrastructure detail about your environment.
+- Keep the reports directory out of public version control. Reports contain infrastructure detail about your environment.
 
 ## Two credential tiers
 

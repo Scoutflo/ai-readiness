@@ -94,7 +94,9 @@ Expect: a short reply, not `Not logged in · Please run /login`. Confirmed live:
 
 ## Where scheduled reports go
 
-Cron runs accumulate reports in the project's `./scoutflo-audits/`, so deltas compute automatically. GitHub Actions runners start clean each run; the template restores the previous `scoutflo-audits/` from the Actions cache so deltas work there too, and optionally uploads each run's reports as an artifact. Artifacts are visible to anyone with read access to the repo, and reports describe your infrastructure: keep the repo private or the retention short.
+Reports go to the resolved reports directory (`SCOUTFLO_AUDIT_DIR` → `reports_dir` in `toolkit.yaml` → `./scoutflo-audits` under the entry's `cd` directory). **The scheduled run and the user's interactive runs must resolve to the same place, or their histories diverge and every scheduled run reports "first run, no delta".** The robust way: export `SCOUTFLO_AUDIT_DIR` (an absolute path) in `$HOME/.scoutflo/env` so it is independent of the `cd` target, and make sure interactive runs resolve there too (set `reports_dir` in `toolkit.yaml` to the same path, or export the same var in the shell profile). Relying on the `cd` alone works only while that exact path never changes.
+
+GitHub Actions runners start clean each run; the template restores the previous reports directory from the Actions cache so deltas work there too, and optionally uploads each run's reports as an artifact. Artifacts are visible to anyone with read access to the repo, and reports describe your infrastructure: keep the repo private or the retention short.
 
 ## Common Failure Modes
 
@@ -105,5 +107,6 @@ Cron runs accumulate reports in the project's `./scoutflo-audits/`, so deltas co
 | CI run fails on a missing `*_env` secret | Mirror every `*_env` name from `toolkit.yaml` into the CI secret store before the first scheduled run |
 | Hosted runner cannot reach in-cluster or VPN-only targets | Use a self-hosted runner or the crontab path for private-network targets |
 | Slack brief works locally but not on the schedule | The webhook is an env var like any other; add it to the CI secrets or the cron env file |
-| Every CI run reports "first run, no delta" | Keep the Actions cache step so the previous `scoutflo-audits/` directory is restored |
+| Every CI run reports "first run, no delta" | Keep the Actions cache step so the previous reports directory is restored |
+| Scheduled cron run reports "first run" though interactive runs have history | The two resolve to different reports dirs. Export `SCOUTFLO_AUDIT_DIR` (absolute) in `$HOME/.scoutflo/env` and set the same path for interactive runs (`reports_dir` in `toolkit.yaml`); don't rely on the `cd` matching the interactive launch dir |
 | Usage costs surprise you | Start weekly, review usage after the first runs, then adjust cadence deliberately |

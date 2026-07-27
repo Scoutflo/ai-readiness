@@ -106,11 +106,11 @@ Expected: the final line prints and nothing stops the block. `GCP_PROJECT` is re
 
 ```bash
 set -eu
-LATEST_RUN="$(ls -d ./scoutflo-audits/gcp/*/ 2>/dev/null | sort | tail -1)"
+LATEST_RUN="$(ls -d ${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/gcp/*/ 2>/dev/null | sort | tail -1)"
 [ -n "$LATEST_RUN" ] || { echo "no audit run found; run /scoutflo:audit-gcp first"; exit 1; }
 jq -r '.findings[] | [.id, .severity, .title, .remediation] | @tsv' "${LATEST_RUN}findings.json"
 RUN_DATE="$(date -u +%Y-%m-%d)"
-WORK_DIR="./scoutflo-audits/gcp/setup-${RUN_DATE}"
+WORK_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/gcp/setup-${RUN_DATE}"
 BACKUP_DIR="${WORK_DIR}/backups"
 mkdir -p "$BACKUP_DIR"
 ```
@@ -139,7 +139,7 @@ MON_API="https://monitoring.googleapis.com/v3"
 if [ -n "${GOOGLE_APPLICATION_CREDENTIALS:-}" ]; then TOKEN="$(gcloud auth application-default print-access-token)"; export CLOUDSDK_AUTH_ACCESS_TOKEN="$TOKEN"; else TOKEN="$(gcloud auth print-access-token)"; fi
 CHANNEL_NAME="payments production alerts"   # <team> <environment> alerts naming pattern
 CHANNEL_EMAIL="oncall@example.org"          # the address your team actually watches
-WORK_DIR="./scoutflo-audits/gcp/setup-$(date -u +%Y-%m-%d)"
+WORK_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/gcp/setup-$(date -u +%Y-%m-%d)"
 mkdir -p "$WORK_DIR"
 jq -n --arg dn "$CHANNEL_NAME" --arg em "$CHANNEL_EMAIL" \
   '{type:"email", displayName:$dn, labels:{email_address:$em}, enabled:true}' > "${WORK_DIR}/channel.json"
@@ -163,7 +163,7 @@ MON_API="https://monitoring.googleapis.com/v3"
 if [ -n "${GOOGLE_APPLICATION_CREDENTIALS:-}" ]; then TOKEN="$(gcloud auth application-default print-access-token)"; export CLOUDSDK_AUTH_ACCESS_TOKEN="$TOKEN"; else TOKEN="$(gcloud auth print-access-token)"; fi
 POLICY_NAME="projects/your-project-id/alertPolicies/1234567890"   # full resource name from the audit capture
 CHANNEL_NAME="projects/your-project-id/notificationChannels/987654321"   # the channel to attach
-BACKUP_DIR="./scoutflo-audits/gcp/setup-$(date -u +%Y-%m-%d)/backups"
+BACKUP_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/gcp/setup-$(date -u +%Y-%m-%d)/backups"
 mkdir -p "$BACKUP_DIR"
 BACKUP_FILE="${BACKUP_DIR}/policy-$(basename "$POLICY_NAME").json"
 # 1. Backup (GET-before-write):
@@ -186,7 +186,7 @@ GCP_PROJECT="your-project-id"   # gcp.project
 MON_API="https://monitoring.googleapis.com/v3"
 if [ -n "${GOOGLE_APPLICATION_CREDENTIALS:-}" ]; then TOKEN="$(gcloud auth application-default print-access-token)"; export CLOUDSDK_AUTH_ACCESS_TOKEN="$TOKEN"; else TOKEN="$(gcloud auth print-access-token)"; fi
 POLICY_NAME="projects/your-project-id/alertPolicies/1234567890"   # same policy
-BACKUP_FILE="./scoutflo-audits/gcp/setup-$(date -u +%Y-%m-%d)/backups/policy-1234567890.json"  # the step-1 backup
+BACKUP_FILE="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/gcp/setup-$(date -u +%Y-%m-%d)/backups/policy-1234567890.json"  # the step-1 backup
 jq '{notificationChannels: (.notificationChannels // [])}' "$BACKUP_FILE" \
   | curl -fsS --max-time 30 -X PATCH -H "Authorization: Bearer ${TOKEN}" -H 'Content-Type: application/json' \
       -d @- "${MON_API}/${POLICY_NAME}?updateMask=notificationChannels" >/dev/null
@@ -256,7 +256,7 @@ if [ -n "${GOOGLE_APPLICATION_CREDENTIALS:-}" ]; then TOKEN="$(gcloud auth appli
 CHANNEL_NAME="projects/your-project-id/notificationChannels/987654321"   # from Fix notification channels
 CPU_WARN_PCT="0.80"     # example warning tier as a ratio, tune to your baseline
 CPU_WINDOW="300s"       # example
-WORK_DIR="./scoutflo-audits/gcp/setup-$(date -u +%Y-%m-%d)"
+WORK_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/gcp/setup-$(date -u +%Y-%m-%d)"
 mkdir -p "$WORK_DIR"
 jq -n --arg ch "$CHANNEL_NAME" --arg thr "$CPU_WARN_PCT" --arg win "$CPU_WINDOW" '{
   displayName: "production vm cpu WARNING",
@@ -344,7 +344,7 @@ For `GCP-070`, `GCP-071`. Dashboards come last, after routing and policies exist
 ```bash
 set -eu
 GCP_PROJECT="your-project-id"   # gcp.project
-DASH_FILE="./scoutflo-audits/gcp/setup-$(date -u +%Y-%m-%d)/checkout-dashboard.json"  # the announced layout
+DASH_FILE="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/gcp/setup-$(date -u +%Y-%m-%d)/checkout-dashboard.json"  # the announced layout
 DASH_NAME="checkout service overview"   # displayName inside the file
 gcloud monitoring dashboards create --project "$GCP_PROJECT" --config-from-file="$DASH_FILE"
 gcloud monitoring dashboards list --project "$GCP_PROJECT" --format=json \

@@ -401,7 +401,7 @@ Before minting a new run, scan for one to resume:
 ```bash
 set -eu
 TARGET="alert-routing"
-AUDIT_ROOT="./scoutflo-audits/${TARGET}"
+AUDIT_ROOT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${TARGET}"
 
 resumable=""
 if [ -d "${AUDIT_ROOT}/runs" ]; then
@@ -425,7 +425,7 @@ If nothing is resumable, mint a run and seed the worklist with one row per selec
 ```bash
 set -eu
 TARGET="alert-routing"
-AUDIT_ROOT="./scoutflo-audits/${TARGET}"
+AUDIT_ROOT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${TARGET}"
 RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)"
 RUN_DIR="${AUDIT_ROOT}/runs/${RUN_ID}"
 mkdir -p "${RUN_DIR}"
@@ -441,7 +441,7 @@ Claim and process one batch, with a lock so two invocations never double-claim:
 
 ```bash
 set -eu
-RUN_DIR="./scoutflo-audits/alert-routing/runs/20260717T140500Z"   # example; the resolved run directory
+RUN_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/alert-routing/runs/20260717T140500Z"   # example; the resolved run directory
 BATCH_SIZE="20"                # matches SKILL.md's Estate sizing default; tune to your environment
 LOCK_STALE_MINUTES="30"        # example, tune to your batch size and expected run length
 LOCK="${RUN_DIR}/worklist.lock"

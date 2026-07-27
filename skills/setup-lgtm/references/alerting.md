@@ -31,7 +31,7 @@ set -eu
 # Resolved from ~/.scoutflo/toolkit.yaml
 KUBE_CONTEXT="your-kube-context"   # kubernetes.context
 MON_NS="monitoring"                # kubernetes.monitoring_namespace
-BACKUP_DIR="./scoutflo-audits/lgtm/setup-$(date -u +%F)/backups"
+BACKUP_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/lgtm/setup-$(date -u +%F)/backups"
 mkdir -p "$BACKUP_DIR"
 AM_SECRET="alertmanager-config"   # the Secret/ConfigMap found above
 kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" get secret "$AM_SECRET" -o yaml > "${BACKUP_DIR}/${AM_SECRET}.yaml"
@@ -44,7 +44,7 @@ set -eu
 # Resolved from ~/.scoutflo/toolkit.yaml
 KUBE_CONTEXT="your-kube-context"   # kubernetes.context
 MON_NS="monitoring"                # kubernetes.monitoring_namespace
-BACKUP_DIR="./scoutflo-audits/lgtm/setup-$(date -u +%F)/backups"
+BACKUP_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/lgtm/setup-$(date -u +%F)/backups"
 mkdir -p "$BACKUP_DIR"
 RELEASE="kube-prometheus-stack"   # from: helm list -A
 helm --kube-context "$KUBE_CONTEXT" -n "$MON_NS" get values "$RELEASE" > "${BACKUP_DIR}/${RELEASE}-values.yaml"
@@ -151,7 +151,7 @@ KUBE_CONTEXT="your-kube-context"   # kubernetes.context
 MON_NS="monitoring"                # kubernetes.monitoring_namespace
 AM_SECRET="alertmanager-config"
 AM_KEY="alertmanager.yml"    # the data key inside the Secret
-WORK_DIR="./scoutflo-audits/lgtm/setup-$(date -u +%F)"
+WORK_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/lgtm/setup-$(date -u +%F)"
 mkdir -p "$WORK_DIR"
 kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" get secret "$AM_SECRET" \
   -o go-template='{{index .data "'"$AM_KEY"'" | base64decode}}' > "${WORK_DIR}/alertmanager.yml"
@@ -202,9 +202,9 @@ set -eu
 # Resolved from ~/.scoutflo/toolkit.yaml
 KUBE_CONTEXT="your-kube-context"   # kubernetes.context
 MON_NS="monitoring"                # kubernetes.monitoring_namespace
-BACKUP_DIR="./scoutflo-audits/lgtm/setup-$(date -u +%F)/backups"
+BACKUP_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/lgtm/setup-$(date -u +%F)/backups"
 RULE_CR="my-app-rules"    # from: kubectl get prometheusrules -n "$MON_NS"
-WORK_DIR="./scoutflo-audits/lgtm/setup-$(date -u +%F)"
+WORK_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/lgtm/setup-$(date -u +%F)"
 mkdir -p "$WORK_DIR" "$BACKUP_DIR"
 kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" get prometheusrule "$RULE_CR" -o yaml > "${BACKUP_DIR}/${RULE_CR}.yaml"
 cp "${BACKUP_DIR}/${RULE_CR}.yaml" "${WORK_DIR}/${RULE_CR}-edit.yaml"

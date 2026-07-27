@@ -531,7 +531,7 @@ curl -fsS --max-time 10 -H "$MAUTH" --get \
 curl -fsS --max-time 10 -H "$MAUTH" "${METRICS_URL}/api/v1/label/namespace/values" | jq -r '.data[]?' | sort > /tmp/lgtm-ns-telemetry.txt
 
 # Side B, primary source: each critical service's declared cluster_id from the export.
-jq -r '.services[] | "\(.name)\t\(.attributes.cluster_id // "MISSING")"' ./scoutflo-audits/topology-export.json
+jq -r '.services[] | "\(.name)\t\(.attributes.cluster_id // "MISSING")"' ${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/topology-export.json
 
 # Side B, fallback only — use ONLY when topology-export.json is absent or a service's
 # cluster_id is null/MISSING (score that service's gate as undetermined otherwise; do not
@@ -608,7 +608,7 @@ LGTM-031, name parity across signals:
 
 ```bash
 set -eu
-OUT="./scoutflo-audits/lgtm/$(date -u +%Y-%m-%d)"; mkdir -p "$OUT"
+OUT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/lgtm/$(date -u +%Y-%m-%d)"; mkdir -p "$OUT"
 SERVICE_LABEL="service"                        # tune to your canonical label
 METRICS_URL="https://prometheus.example.com"   # prometheus.url (adjust prefix per sections 3-4)
 LOKI_URL="https://loki.example.com"            # loki.url

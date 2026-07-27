@@ -32,7 +32,7 @@ Every check here depends on the doctor gate's optional cost-permission probe (`s
 ```bash
 set -eu
 RUN_DATE="$(date -u +%Y-%m-%d)"
-MATRIX="./scoutflo-audits/doctor/${RUN_DATE}/matrix.tsv"   # written by the doctor gate this run, or the most recent doctor run
+MATRIX="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/doctor/${RUN_DATE}/matrix.tsv"   # written by the doctor gate this run, or the most recent doctor run
 [ -f "$MATRIX" ] || { echo "no doctor matrix found; run the doctor gate before Phase 10"; exit 1; }
 awk -F'\t' '$1 == "aws" && $2 == "cost-permissions" {print $5, $7}' "$MATRIX"
 ```

@@ -63,7 +63,7 @@ Capture raw state once per run; later sections re-fetch specific objects before 
 set -eu
 PD_API="https://api.pagerduty.com"   # pagerduty.region: us -> api.pagerduty.com, eu -> api.eu.pagerduty.com
 RUN_DATE="$(date -u +%Y-%m-%d)"
-RAW_DIR="./scoutflo-audits/pagerduty/${RUN_DATE}/raw"
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/pagerduty/${RUN_DATE}/raw"
 mkdir -p "$RAW_DIR"
 
 # pd_get_all <path> <query> <jq-collection-key> -> pages until more=false, emits one JSON array
@@ -136,7 +136,7 @@ Policy shape checks run on the Phase 2 captures; live on-call and schedule cover
 set -eu
 PD_API="https://api.pagerduty.com"   # pagerduty.region
 RUN_DATE="$(date -u +%Y-%m-%d)"
-RAW_DIR="./scoutflo-audits/pagerduty/${RUN_DATE}/raw"
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/pagerduty/${RUN_DATE}/raw"
 
 # PD-001: active services with no escalation policy
 jq '[.[] | select(.status == "active" and .escalation_policy == null) | .name]' "${RAW_DIR}/services.json"
@@ -197,7 +197,7 @@ jq '[.[] | select(.invitation_sent == true) | {name, role}]' "${RAW_DIR}/users.j
 set -eu
 PD_API="https://api.pagerduty.com"   # pagerduty.region
 RUN_DATE="$(date -u +%Y-%m-%d)"
-RAW_DIR="./scoutflo-audits/pagerduty/${RUN_DATE}/raw"
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/pagerduty/${RUN_DATE}/raw"
 STALE_DAYS="90"   # example, tune to your release cadence
 
 # PD-010: active services with zero integrations (nothing can ever page them)
@@ -245,7 +245,7 @@ jq 'length' "${RAW_DIR}/standards-scores.json"
 set -eu
 PD_API="https://api.pagerduty.com"   # pagerduty.region
 RUN_DATE="$(date -u +%Y-%m-%d)"
-RAW_DIR="./scoutflo-audits/pagerduty/${RUN_DATE}/raw"
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/pagerduty/${RUN_DATE}/raw"
 
 # PD-020: grouping per service, from the include[] capture. Four types exist:
 # time, content_based, intelligent, content_based_intelligent (Unified). null = ungrouped.
@@ -329,7 +329,7 @@ curl -fsS --max-time 30 -H "Authorization: Token token=${PAGERDUTY_TOKEN}" \
 
 # PD-031: priorities in real use, not just configured
 RUN_DATE="$(date -u +%Y-%m-%d)"
-RAW_DIR="./scoutflo-audits/pagerduty/${RUN_DATE}/raw"
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/pagerduty/${RUN_DATE}/raw"
 SINCE_30D="$(date -u -v-30d +%Y-%m-%dT00:00:00Z 2>/dev/null || date -u -d '30 days ago' +%Y-%m-%dT00:00:00Z)"
 PRIORITY_COUNT="$(jq 'length' "${RAW_DIR}/priorities.json")"
 curl -fsS --max-time 30 -H "Authorization: Token token=${PAGERDUTY_TOKEN}" \
@@ -375,7 +375,7 @@ POST endpoints, read-only by effect (filter body, no mutation). **Gated**: run o
 set -eu
 PD_API="https://api.pagerduty.com"   # pagerduty.region
 RUN_DATE="$(date -u +%Y-%m-%d)"
-RAW_DIR="./scoutflo-audits/pagerduty/${RUN_DATE}/raw"
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/pagerduty/${RUN_DATE}/raw"
 ANALYTICS_WINDOW_DAYS="30"   # example, tune to your review cadence
 AUTO_RESOLVE_NOISE_PCT="30"  # example: >30% auto-resolved = noise signal, tune it
 MTTA_TARGET_SECONDS="300"    # example: 5 minutes, tune to your on-call SLA

@@ -109,7 +109,7 @@ echo "estate: projects=${PROJECT_COUNT} teams=${TEAM_COUNT} sizing-path=${path}"
 # Guided-walkthrough drift check, per report-standard/README.md#using-topology-and-prior-runs-as-a-guided-walkthrough:
 # compare against the last run rather than a blank slate. State the result in the executive summary;
 # never silently omit it. This never skips a live check - every check in later phases still runs fresh.
-TARGET_DIR="./scoutflo-audits/sentry"
+TARGET_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/sentry"
 PREV_RUN="$(find "$TARGET_DIR" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort | tail -1)"
 DRIFT="first run"
 if [ -n "$PREV_RUN" ] && [ -f "${PREV_RUN}/findings.json" ]; then
@@ -155,7 +155,7 @@ SENTRY_HOST="us.sentry.io"   # sentry.host: us.sentry.io, de.sentry.io, or your 
 SENTRY_ORG="your-org-slug"   # sentry.org
 API="https://${SENTRY_HOST}/api/0"
 [ -n "${SENTRY_TOKEN:-}" ] || { echo "SENTRY_TOKEN is not set; run /scoutflo:connect"; exit 1; }
-RAW_DIR="./scoutflo-audits/sentry/$(date -u +%Y-%m-%d)/raw"
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/sentry/$(date -u +%Y-%m-%d)/raw"
 mkdir -p "${RAW_DIR}/projects"
 
 fetch_all() { # $1: full API URL. Follows cursor pagination, prints one merged JSON array.
@@ -326,7 +326,7 @@ Write both artifacts to `./scoutflo-audits/sentry/<YYYY-MM-DD>/` and verify:
 
 ```bash
 set -eu
-OUT="./scoutflo-audits/sentry/$(date -u +%Y-%m-%d)"
+OUT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/sentry/$(date -u +%Y-%m-%d)"
 mkdir -p "$OUT"
 # ... write findings.json and report.md per the report standard, then verify:
 jq -e '.schema == "scoutflo-findings/v1" and (.findings | type == "array")' \
@@ -343,7 +343,7 @@ If `slack.webhook_env` is configured, send exactly one brief, titles only, never
 
 ```bash
 set -eu
-OUT="./scoutflo-audits/sentry/$(date -u +%Y-%m-%d)"
+OUT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/sentry/$(date -u +%Y-%m-%d)"
 # slack.webhook_env names the webhook variable; skip when unset.
 if [ -n "${SCOUTFLO_SLACK_WEBHOOK:-}" ]; then
   SCORE="$(jq -r '.score.overall' "$OUT/findings.json")"

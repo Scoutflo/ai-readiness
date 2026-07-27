@@ -77,7 +77,7 @@ Capture raw state once per run; later sections re-fetch specific objects before 
 ```bash
 set -eu
 RUN_DATE="$(date -u +%Y-%m-%d)"
-RAW_DIR="./scoutflo-audits/digitalocean/${RUN_DATE}/raw"
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/digitalocean/${RUN_DATE}/raw"
 mkdir -p "$RAW_DIR"
 
 doctl apps list -o json | jq '[.[] | {id, name: .spec.name, live_url,
@@ -113,7 +113,7 @@ Per-database detail (`doctl databases backups` lists backups; the logsink subcom
 ```bash
 set -eu
 RUN_DATE="$(date -u +%Y-%m-%d)"
-RAW_DIR="./scoutflo-audits/digitalocean/${RUN_DATE}/raw"
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/digitalocean/${RUN_DATE}/raw"
 jq -r '.[].id' "${RAW_DIR}/databases.json" | while read -r db_id; do
   d="${RAW_DIR}/databases/${db_id}"; mkdir -p "$d"
   doctl databases firewalls list "$db_id" > "${d}/firewall.txt" || echo "firewall read failed" > "${d}/firewall.txt"
@@ -134,7 +134,7 @@ Any destination at all, and per-alert destinations:
 ```bash
 set -eu
 RUN_DATE="$(date -u +%Y-%m-%d)"
-RAW_DIR="./scoutflo-audits/digitalocean/${RUN_DATE}/raw"
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/digitalocean/${RUN_DATE}/raw"
 # DO-001: total destinations across monitoring policies and app alerts. 0 total is critical.
 jq '[.[] | .emails + (.slack_channels | length)] | add // 0' "${RAW_DIR}/alert-policies.json"
 cat "${RAW_DIR}"/apps/*/alerts.json | jq -s '[.[][] | .emails + (.slack_channels | length)] | add // 0'
@@ -160,7 +160,7 @@ Expected: positive totals and no zero-destination lines. Each line is one affect
 ```bash
 set -eu
 RUN_DATE="$(date -u +%Y-%m-%d)"
-RAW_DIR="./scoutflo-audits/digitalocean/${RUN_DATE}/raw"
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/digitalocean/${RUN_DATE}/raw"
 # DO-010: hostnames served by apps vs hostnames covered by checks.
 jq -r '.[] | .domains[]?, (.live_url | sub("^https?://"; "") | select(. != ""))' "${RAW_DIR}/apps.json" | sort -u
 jq -r '.[] | select(.enabled) | .target | sub("^https?://"; "")' "${RAW_DIR}/uptime-checks.json" | sort -u
@@ -241,7 +241,7 @@ DO Monitoring owns database policies; App Platform alerts have no reach here. Gr
 ```bash
 set -eu
 RUN_DATE="$(date -u +%Y-%m-%d)"
-RAW_DIR="./scoutflo-audits/digitalocean/${RUN_DATE}/raw"
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/digitalocean/${RUN_DATE}/raw"
 jq -r '.[] | select(.type | startswith("v1/dbaas/")) |
   [(.entities | join(",")), .type, (.value | tostring), .window, .enabled, .description] | @tsv' \
   "${RAW_DIR}/alert-policies.json" | sort
@@ -283,7 +283,7 @@ Assemble one row per critical service from the raw captures; re-fetch any cell y
 ```bash
 set -eu
 RUN_DATE="$(date -u +%Y-%m-%d)"
-RAW_DIR="./scoutflo-audits/digitalocean/${RUN_DATE}/raw"
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/digitalocean/${RUN_DATE}/raw"
 SERVICE_NAME="checkout"   # canonical name from topology.md
 APP_ID="$(jq -r --arg s "$SERVICE_NAME" '.[] | select(.name == $s) | .id' "${RAW_DIR}/apps.json")"
 [ -n "$APP_ID" ] || { echo "no app matches ${SERVICE_NAME}; record the mapping gap"; exit 0; }
@@ -327,7 +327,7 @@ Scan for an interrupted run before minting a new `RUN_ID`. Never start fresh whe
 
 ```bash
 set -eu
-AUDIT_ROOT="./scoutflo-audits/digitalocean"
+AUDIT_ROOT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/digitalocean"
 
 resumable=""
 if [ -d "${AUDIT_ROOT}/runs" ]; then
@@ -353,7 +353,7 @@ Only after 13.1 finds nothing resumable. The run ID is a UTC second-precision ti
 
 ```bash
 set -eu
-AUDIT_ROOT="./scoutflo-audits/digitalocean"
+AUDIT_ROOT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/digitalocean"
 RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)"   # first-seen timestamp of this run; stable for its lifetime
 RUN_DIR="${AUDIT_ROOT}/runs/${RUN_ID}"
 mkdir -p "${RUN_DIR}"
@@ -367,7 +367,7 @@ One row per app, tab-separated: `kind` (always `app`), `app_id`, `status` (`pend
 
 ```bash
 set -eu
-RUN_DIR="./scoutflo-audits/digitalocean/runs/20260717T140500Z"   # example; resolved run directory from 13.1 or 13.2
+RUN_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/digitalocean/runs/20260717T140500Z"   # example; resolved run directory from 13.1 or 13.2
 
 WORKLIST="${RUN_DIR}/worklist.tsv"
 if [ -f "${WORKLIST}" ]; then
@@ -389,7 +389,7 @@ Two invocations of this skill running at once would otherwise race on the same w
 
 ```bash
 set -eu
-RUN_DIR="./scoutflo-audits/digitalocean/runs/20260717T140500Z"   # example; resolved run directory
+RUN_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/digitalocean/runs/20260717T140500Z"   # example; resolved run directory
 LOCK="${RUN_DIR}/worklist.lock"
 LOCK_STALE_MINUTES="30"   # example, tune to your batch size and expected run length
 
@@ -415,7 +415,7 @@ Claim happens while the lock (13.4) is held; release happens right after the bat
 
 ```bash
 set -eu
-RUN_DIR="./scoutflo-audits/digitalocean/runs/20260717T140500Z"   # example; resolved run directory
+RUN_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/digitalocean/runs/20260717T140500Z"   # example; resolved run directory
 WORKLIST="${RUN_DIR}/worklist.tsv"
 LOCK="${RUN_DIR}/worklist.lock"
 BATCH_SIZE="10"   # example, tune it; matches the value declared in SKILL.md's Estate sizing
@@ -449,7 +449,7 @@ Phase 10 writes `findings.json` and `report.md` only when this assertion passes.
 
 ```bash
 set -eu
-RUN_DIR="./scoutflo-audits/digitalocean/runs/20260717T140500Z"   # example; resolved run directory
+RUN_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/digitalocean/runs/20260717T140500Z"   # example; resolved run directory
 WORKLIST="${RUN_DIR}/worklist.tsv"
 
 pending=$(awk -F'\t' '$3 == "pending"' "${WORKLIST}" | wc -l | tr -d ' ')
@@ -487,7 +487,7 @@ The duration `window` is DO's only built-in spike/flap damper: the metric must s
 ```bash
 set -eu
 RUN_DATE="$(date -u +%Y-%m-%d)"
-RAW_DIR="./scoutflo-audits/digitalocean/${RUN_DATE}/raw"
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/digitalocean/${RUN_DATE}/raw"
 SHORT_WINDOW="5m"   # example, tune it: DO's window enum is fixed at 5m|10m|30m|1h; 5m is the shortest, noisiest option
 # DO-070: enabled policies pinned at the shortest dwell window, DO's only spike/flap damper.
 jq -r --arg w "$SHORT_WINDOW" '.[] | select(.enabled and .window == $w)
@@ -504,7 +504,7 @@ DO's only mute is all-or-nothing: fully enabled or fully disabled, with no timed
 ```bash
 set -eu
 RUN_DATE="$(date -u +%Y-%m-%d)"
-RAW_DIR="./scoutflo-audits/digitalocean/${RUN_DATE}/raw"
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/digitalocean/${RUN_DATE}/raw"
 # DO-071: disabled policies. The list API carries no created/updated timestamp, so "long-lived"
 # cannot be proven from this read; flag every disabled policy for a mute-state review rather than
 # implying it is fresh or stale.
@@ -522,7 +522,7 @@ Tag scoping (`tags[]`) is DO's closest analog to grouping: one tag-scoped policy
 ```bash
 set -eu
 RUN_DATE="$(date -u +%Y-%m-%d)"
-RAW_DIR="./scoutflo-audits/digitalocean/${RUN_DATE}/raw"
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/digitalocean/${RUN_DATE}/raw"
 # DO-072: enabled policies sharing type/compare/value/window, each scoped to at most one entity and
 # carrying no tags, are duplicate coverage one tag-scoped policy would collapse.
 jq -r '

@@ -76,7 +76,7 @@ set -eu
 SENTRY_HOST="us.sentry.io"; SENTRY_ORG="your-org-slug"; API="https://${SENTRY_HOST}/api/0"
 [ -n "${SENTRY_TOKEN:-}" ] || { echo "SENTRY_TOKEN is not set; run /scoutflo:connect"; exit 1; }
 PROJECT="checkout"
-BACKUP_FILE="./scoutflo-audits/sentry/setup-$(date -u +%F)/backups/project-${PROJECT}-$(date -u +%H%M%S).json"
+BACKUP_FILE="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/sentry/setup-$(date -u +%F)/backups/project-${PROJECT}-$(date -u +%H%M%S).json"
 mkdir -p "$(dirname "$BACKUP_FILE")"
 
 curl -fsS --max-time 10 "${API}/projects/${SENTRY_ORG}/${PROJECT}/" \
@@ -114,7 +114,7 @@ PROJECT="checkout"
 KEY_ID="your-key-id"           # from GET /projects/${SENTRY_ORG}/${PROJECT}/keys/
 KEY_RATE_LIMIT="1000"          # example, tune to your expected event volume
 KEY_RATE_WINDOW="60"           # seconds; example
-BACKUP_FILE="./scoutflo-audits/sentry/setup-$(date -u +%F)/backups/key-${KEY_ID}-$(date -u +%H%M%S).json"
+BACKUP_FILE="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/sentry/setup-$(date -u +%F)/backups/key-${KEY_ID}-$(date -u +%H%M%S).json"
 mkdir -p "$(dirname "$BACKUP_FILE")"
 
 curl -fsS --max-time 10 "${API}/projects/${SENTRY_ORG}/${PROJECT}/keys/${KEY_ID}/" \
@@ -283,7 +283,7 @@ RULE_ID="12345678"
 SLACK_INTEGRATION_ID="your-integration-id"
 SLACK_CHANNEL="your-channel-name"
 SLACK_CHANNEL_ID="your-channel-id"
-BACKUP_FILE="./scoutflo-audits/sentry/setup-$(date -u +%F)/backups/rule-${RULE_ID}-$(date -u +%H%M%S).json"
+BACKUP_FILE="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/sentry/setup-$(date -u +%F)/backups/rule-${RULE_ID}-$(date -u +%H%M%S).json"
 mkdir -p "$(dirname "$BACKUP_FILE")"
 
 # 1. Backup (GET-before-write):
@@ -317,7 +317,7 @@ set -eu
 SENTRY_HOST="us.sentry.io"; SENTRY_ORG="your-org-slug"; API="https://${SENTRY_HOST}/api/0"
 [ -n "${SENTRY_TOKEN:-}" ] || { echo "SENTRY_TOKEN is not set"; exit 1; }
 PROJECT="checkout"; RULE_ID="12345678"
-BACKUP_FILE="./scoutflo-audits/sentry/setup-$(date -u +%F)/backups/rule-12345678-HHMMSS.json"  # the step-1 backup
+BACKUP_FILE="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/sentry/setup-$(date -u +%F)/backups/rule-12345678-HHMMSS.json"  # the step-1 backup
 
 jq '{name, actionMatch, filterMatch, environment, frequency, conditions, filters, actions}' "$BACKUP_FILE" \
   | curl -fsS --max-time 10 -X PUT "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/${RULE_ID}/" \

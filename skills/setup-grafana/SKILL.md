@@ -82,7 +82,7 @@ Load `./scoutflo-audits/topology.md` if it exists; its service list defines whic
 
 ```bash
 set -eu
-LATEST_RUN="$(ls -d ./scoutflo-audits/grafana/[0-9]*/ 2>/dev/null | sort | tail -1)"
+LATEST_RUN="$(ls -d ${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/grafana/[0-9]*/ 2>/dev/null | sort | tail -1)"
 [ -n "$LATEST_RUN" ] || { echo "no audit run found; run /scoutflo:audit-grafana first"; exit 1; }
 jq -r '.findings[] | [.id, .severity, .title, .remediation] | @tsv' "${LATEST_RUN}findings.json"
 ```
@@ -110,9 +110,9 @@ File-provisioned objects reject API writes; change the provisioning file they co
 ```bash
 set -eu
 RUN_DATE="$(date -u +%F)"
-WORK_DIR="./scoutflo-audits/grafana/setup-${RUN_DATE}"
+WORK_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/grafana/setup-${RUN_DATE}"
 BACKUP_DIR="${WORK_DIR}/backups"
-CHANGE_LOG="./scoutflo-audits/grafana/changes.md"
+CHANGE_LOG="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/grafana/changes.md"
 mkdir -p "$BACKUP_DIR"
 ```
 

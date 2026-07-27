@@ -53,7 +53,7 @@ Resolve which spaces to audit, then capture rules and connectors per space.
 set -eu
 KIBANA_URL="https://kibana.example.com"   # elk.kibana_url
 RUN_DATE="$(date -u +%Y-%m-%d)"
-RAW_DIR="./scoutflo-audits/elk/${RUN_DATE}/raw"
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/elk/${RUN_DATE}/raw"
 mkdir -p "$RAW_DIR"
 AUTH="Authorization: ApiKey ${KIBANA_API_KEY}"
 
@@ -111,7 +111,7 @@ Expected: per-space `rules.json`, `connectors.json`, `rule-types.json`, plus the
 ```bash
 set -eu
 RUN_DATE="$(date -u +%Y-%m-%d)"
-RAW_DIR="./scoutflo-audits/elk/${RUN_DATE}/raw"
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/elk/${RUN_DATE}/raw"
 SPACE="default"   # per-space; loop over spaces.txt in the real run
 sdir="${RAW_DIR}/spaces/${SPACE}"
 
@@ -140,7 +140,7 @@ jq '{secure: .is_sufficiently_secure, key: .has_permanent_encryption_key,
 ```bash
 set -eu
 RUN_DATE="$(date -u +%Y-%m-%d)"
-RAW_DIR="./scoutflo-audits/elk/${RUN_DATE}/raw"
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/elk/${RUN_DATE}/raw"
 SPACE="default"; sdir="${RAW_DIR}/spaces/${SPACE}"
 
 # ELK-010: rules in execution error (the rule itself is broken, detecting nothing)
@@ -167,7 +167,7 @@ jq '[.rules[] | select(.enabled == false) | {id, name, rule_type_id}]' "${sdir}/
 ```bash
 set -eu
 RUN_DATE="$(date -u +%Y-%m-%d)"
-RAW_DIR="./scoutflo-audits/elk/${RUN_DATE}/raw"
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/elk/${RUN_DATE}/raw"
 SPACE="default"; sdir="${RAW_DIR}/spaces/${SPACE}"
 
 # ELK-020: flapping — per-rule flapping.enabled=false explicitly disables the space default.
@@ -209,7 +209,7 @@ jq '[.rules[] | select(.mute_all == true
 ```bash
 set -eu
 RUN_DATE="$(date -u +%Y-%m-%d)"
-RAW_DIR="./scoutflo-audits/elk/${RUN_DATE}/raw"
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/elk/${RUN_DATE}/raw"
 KIBANA_URL="https://kibana.example.com"   # elk.kibana_url
 VER="$(cat "${RAW_DIR}/kibana-version.txt")"
 MAJOR="${VER%%.*}"; MINOR="$(printf '%s' "$VER" | cut -d. -f2)"
@@ -230,7 +230,7 @@ fi
 ```bash
 set -eu
 RUN_DATE="$(date -u +%Y-%m-%d)"
-RAW_DIR="./scoutflo-audits/elk/${RUN_DATE}/raw"
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/elk/${RUN_DATE}/raw"
 SPACE="default"; sdir="${RAW_DIR}/spaces/${SPACE}"
 
 # ELK-030: which rule types are actually in use vs available

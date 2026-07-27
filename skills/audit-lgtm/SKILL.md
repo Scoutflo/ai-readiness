@@ -107,12 +107,12 @@ GRAFANA_URL="https://grafana.example.com"   # grafana.url
 GRAFANA_TOKEN="${GRAFANA_TOKEN:-}"          # grafana.token_env, set only if the grafana block is configured
 
 SERVICES=0
-if [ -f "./scoutflo-audits/topology.md" ]; then
+if [ -f "${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/topology.md" ]; then
   # Count ONLY the rows of the `## Services` table. A bare `grep '^| ... |'` also
   # matches the metadata, Traffic-map, Entry-points, and Integration-watchpoints tables
   # (and header/`---` rows), so it double-counts every real service and scores phantom
   # rows named `---`/`Mesh` — inflating estate.objects ~6x and corrupting coverage.
-  SERVICES="$(awk '/^## Services$/{f=1;next} /^## /{f=0} f' ./scoutflo-audits/topology.md \
+  SERVICES="$(awk '/^## Services$/{f=1;next} /^## /{f=0} f' ${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/topology.md \
     | grep -E '^\| ' \
     | grep -vE '^\| *Service *\||^\| *-{2,}' \
     | awk -F'|' '{gsub(/^[ \t]+|[ \t]+$/,"",$2); if($2!="") print $2}' \
@@ -141,7 +141,7 @@ Guided-walkthrough drift check, per [report-standard/README.md](../../report-sta
 
 ```bash
 set -eu
-TARGET_DIR="./scoutflo-audits/lgtm"
+TARGET_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/lgtm"
 # Only date-named dirs are runs. The large path creates a persistent `runs/` sibling here;
 # it sorts after the dates, so an unfiltered `tail -1` would pick `runs/` (no findings.json)
 # and wrongly report "first run" on every repeat run once the large path has been used.
@@ -330,7 +330,7 @@ Emit and verify:
 ```bash
 set -eu
 RUN_DATE="$(date -u +%Y-%m-%d)"
-OUT="./scoutflo-audits/lgtm/${RUN_DATE}"
+OUT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/lgtm/${RUN_DATE}"
 mkdir -p "$OUT"
 # ... write findings.json (with lifecycle set per finding, and the estate
 # object from the sizing pre-check) and report.md per the report standard,
@@ -348,7 +348,7 @@ Compute the delta against the previous run date per the [report standard](../../
 
 ```bash
 set -eu
-TARGET_DIR="./scoutflo-audits/lgtm"
+TARGET_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/lgtm"
 RUN_DATE="$(date -u +%Y-%m-%d)"
 OUT="${TARGET_DIR}/${RUN_DATE}"
 # slack.webhook_env names the webhook variable; skip when unset.

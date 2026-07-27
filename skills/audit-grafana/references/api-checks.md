@@ -76,7 +76,7 @@ The most reliable payload is the panel's own target object, because it carries e
 set -eu
 # Resolved from ~/.scoutflo/toolkit.yaml
 GRAFANA_URL="https://grafana.example.com"          # grafana.url
-RAW_DIR="./scoutflo-audits/grafana/$(date -u +%Y-%m-%d)/raw" # output dir of scripts/grafana-audit.sh
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/grafana/$(date -u +%Y-%m-%d)/raw" # output dir of scripts/grafana-audit.sh
 DASH_UID="abcd1234"                                 # from dashboard-index.json
 PANEL_ID="3"                                        # from panel-targets.json
 [ -n "${GRAFANA_TOKEN:-}" ] || { echo "GRAFANA_TOKEN is not set; run /scoutflo:connect"; exit 1; }
@@ -187,7 +187,7 @@ Expect: both `grep -qx` checks succeed (`${SERVICE}` present under the same name
 Plaintext secret check (GRAF-002). The API masks `secureJsonData`, so any secret-shaped value visible in `jsonData` or in the URL userinfo is stored in the wrong place:
 
 ```bash
-RAW_DIR="./scoutflo-audits/grafana/$(date -u +%Y-%m-%d)/raw"   # output dir of scripts/grafana-audit.sh
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/grafana/$(date -u +%Y-%m-%d)/raw"   # output dir of scripts/grafana-audit.sh
 jq '[ .[] | { name, uid, type,
       secure_fields: ((.secureJsonFields // {}) | keys),
       plaintext_suspects: [ (.jsonData // {}) | to_entries[]
@@ -202,7 +202,7 @@ jq '[ .[] | { name, uid, type,
 Report the key names only, never the values. Duplicate backends (GRAF-005):
 
 ```bash
-RAW_DIR="./scoutflo-audits/grafana/$(date -u +%Y-%m-%d)/raw"   # output dir of scripts/grafana-audit.sh
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/grafana/$(date -u +%Y-%m-%d)/raw"   # output dir of scripts/grafana-audit.sh
 jq '[ group_by(.type + "|" + (.url // ""))[] | select(length > 1)
       | { type: .[0].type, url: .[0].url, names: [ .[].name ] } ]' \
   "${RAW_DIR}/datasources.json"
@@ -211,7 +211,7 @@ jq '[ group_by(.type + "|" + (.url // ""))[] | select(length > 1)
 Dangling datasource references in panels (GRAF-028):
 
 ```bash
-RAW_DIR="./scoutflo-audits/grafana/$(date -u +%Y-%m-%d)/raw"   # output dir of scripts/grafana-audit.sh
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/grafana/$(date -u +%Y-%m-%d)/raw"   # output dir of scripts/grafana-audit.sh
 jq --slurpfile ds "${RAW_DIR}/datasources.json" '
   ([ $ds[0][].uid ]) as $known
   | [ .[] | . as $row | ($row.datasource.uid? // empty)
@@ -275,7 +275,7 @@ Honest ceiling, repeated because it belongs in the evidence: these are **structu
 
 ```bash
 set -eu
-RAW_DIR="./scoutflo-audits/grafana/$(date -u +%Y-%m-%d)/raw"   # this run's raw dir
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/grafana/$(date -u +%Y-%m-%d)/raw"   # this run's raw dir
 # for: 0s -> no pending-period debounce (GRAF-100). keep_firing_for: 0s/absent -> no resolve/flap hold (GRAF-101).
 # no_data_state / exec_err_state == "Alerting" is the noisy choice that pages on a transient gap (folds into GRAF-052).
 jq -r '.[]
@@ -293,7 +293,7 @@ A recovery threshold sets a distinct bound for returning to Normal, separate fro
 
 ```bash
 set -eu
-RAW_DIR="./scoutflo-audits/grafana/$(date -u +%Y-%m-%d)/raw"   # this run's raw dir
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/grafana/$(date -u +%Y-%m-%d)/raw"   # this run's raw dir
 # Surface every threshold condition on paging rules for a judgment read: a single evaluator with no
 # distinct recovery bound is single-threshold (no hysteresis).
 jq -r '.[]
@@ -312,7 +312,7 @@ The Grafana docs describe this as a recovery threshold and an explicit flapping-
 
 ```bash
 set -eu
-RAW_DIR="./scoutflo-audits/grafana/$(date -u +%Y-%m-%d)/raw"   # this run's raw dir
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/grafana/$(date -u +%Y-%m-%d)/raw"   # this run's raw dir
 # group_by semantics (folds into GRAF-056). Empty list [] -> everything collapses into one group.
 # The special value ["..."] -> "group by ALL labels", which DISABLES aggregation (one group per distinct alert).
 jq -r '[.. | objects | select(has("group_by"))
@@ -332,7 +332,7 @@ A `group_by` of `[]` collapses everything into one group; `['...']` disables agg
 ```bash
 set -eu
 GRAFANA_URL="https://grafana.example.com"   # grafana.url
-RAW_DIR="./scoutflo-audits/grafana/$(date -u +%Y-%m-%d)/raw"   # this run's raw dir
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/grafana/$(date -u +%Y-%m-%d)/raw"   # this run's raw dir
 [ -n "${GRAFANA_TOKEN:-}" ] || { echo "GRAFANA_TOKEN is not set; run /scoutflo:connect"; exit 1; }
 
 # Defined mute timings, fetched live (read-only).
@@ -368,7 +368,7 @@ A `401`/`403` on either call blocks GRAF-102; it is never read as "no dangling r
 
 ```bash
 set -eu
-RAW_DIR="./scoutflo-audits/grafana/$(date -u +%Y-%m-%d)/raw"   # this run's raw dir
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/grafana/$(date -u +%Y-%m-%d)/raw"   # this run's raw dir
 # disableResolveMessage true -> resolved notifications suppressed. false/absent -> a fire AND a resolve
 # per incident, roughly doubling a paging integration's volume (GRAF-103).
 jq -r '.[]

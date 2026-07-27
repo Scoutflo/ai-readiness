@@ -56,7 +56,7 @@ Resolve the teams to audit, then capture per team and account-wide. **Pace by th
 set -eu
 ZD_API="https://www.zenduty.com/api"
 RUN_DATE="$(date -u +%Y-%m-%d)"
-RAW_DIR="./scoutflo-audits/zenduty/${RUN_DATE}/raw"
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/zenduty/${RUN_DATE}/raw"
 mkdir -p "$RAW_DIR"
 AUTH="Authorization: Token ${ZENDUTY_TOKEN}"
 # Normalize a list response (bare array or {results:[...]}) to an array.
@@ -102,7 +102,7 @@ Per-service integrations and their alert rules are pulled in section 6 (they are
 ```bash
 set -eu
 RUN_DATE="$(date -u +%Y-%m-%d)"
-RAW_DIR="./scoutflo-audits/zenduty/${RUN_DATE}/raw"
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/zenduty/${RUN_DATE}/raw"
 TID="TEAM"; tdir="${RAW_DIR}/teams/${TID}"   # per-team; loop over teams.tsv in the real run
 
 # ZD-001 + ZD-002: escalation presence and SPOF shape.
@@ -135,7 +135,7 @@ Per-service integrations and alert rules are the tightest-paced reads. Pull them
 set -eu
 ZD_API="https://www.zenduty.com/api"
 RUN_DATE="$(date -u +%Y-%m-%d)"
-RAW_DIR="./scoutflo-audits/zenduty/${RUN_DATE}/raw"
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/zenduty/${RUN_DATE}/raw"
 AUTH="Authorization: Token ${ZENDUTY_TOKEN}"
 norm() { jq 'if type=="array" then . else (.results // []) end'; }
 TID="TEAM"; tdir="${RAW_DIR}/teams/${TID}"
@@ -182,7 +182,7 @@ cat "${tdir}"/svc-*-integrations.json 2>/dev/null | jq -s 'add | [.[] | select((
 ```bash
 set -eu
 RUN_DATE="$(date -u +%Y-%m-%d)"
-RAW_DIR="./scoutflo-audits/zenduty/${RUN_DATE}/raw"
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/zenduty/${RUN_DATE}/raw"
 TID="TEAM"; tdir="${RAW_DIR}/teams/${TID}"
 jq '[.[] | select((.repeat_interval // 0) != 0 and .repeat_until == null)
     | {unique_id, name, repeat_interval, service_count}]' "${tdir}/maintenance.json"
@@ -196,7 +196,7 @@ jq '[.[] | select((.repeat_interval // 0) != 0 and .repeat_until == null)
 set -eu
 ZD_API="https://www.zenduty.com/api"
 RUN_DATE="$(date -u +%Y-%m-%d)"
-RAW_DIR="./scoutflo-audits/zenduty/${RUN_DATE}/raw"
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/zenduty/${RUN_DATE}/raw"
 AUTH="Authorization: Token ${ZENDUTY_TOKEN}"
 norm() { jq 'if type=="array" then . else (.results // []) end'; }
 

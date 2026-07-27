@@ -1,5 +1,44 @@
 # Changelog
 
+## 0.1.53
+
+Configurable, explicit storage location for reports and runtime data. Until now
+every skill wrote to `./scoutflo-audits/` relative to the directory Claude Code
+was launched from, with no override and nothing that surfaced the resolved path —
+so launching from a different folder silently started a fresh, empty history (no
+delta, and `topology.md`/`exemptions.yaml` from the other folder weren't found).
+Credentials were never affected (they live in `~/.scoutflo/`); only this
+reports/history layer was folder-relative.
+
+- **`SCOUTFLO_AUDIT_DIR` override.** Every shell reference to the reports dir
+  (251 sites across the skills and scripts) now resolves as
+  `${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}`: export that env var to write to one
+  fixed absolute path regardless of launch folder, or leave it unset for the
+  unchanged default. Because each skill command runs in a fresh shell, an exported
+  environment variable is the only thing that threads through them all — so this,
+  not a config value, is the real lever. Fully backward-compatible: unset behaves
+  exactly as before.
+- **`reports_dir` convenience in `toolkit.yaml`.** A documented `reports_dir:` key
+  that `doctor`/`start` read to print the exact `export SCOUTFLO_AUDIT_DIR=...`
+  line for your shell profile and `~/.scoutflo/env`. It is explicitly a
+  convenience, not a second live tier: `doctor` **warns loudly** ("ACTION NEEDED")
+  when `reports_dir` is set but not yet exported, showing both the path runs will
+  actually use and the one-liner to fix it — so it can never silently fork history.
+- **`doctor` Step 0 + `start` "Where reports land"** now resolve and print the
+  absolute reports path, its source, the folder-change caveat, and a warning when
+  a stray default `./scoutflo-audits/` coexists with an explicit location.
+- **`schedule-audits` + `crontab.example`** document exporting `SCOUTFLO_AUDIT_DIR`
+  in `~/.scoutflo/env` so scheduled runs (which start in their own directory) share
+  the same history as interactive runs, with a matching Common-Failure-Modes row.
+- Docs (`report-standard/README.md`, `docs/faq.md`, `toolkit.yaml.example`) state
+  the resolution honestly: the env var is the live mechanism, `reports_dir` is the
+  convenience that generates its export line.
+
+No audit logic, checks, IDs, or scoring changed; this is storage-location plumbing
+and its documentation. Reviewed by the maintainer skill (which caught and got a fix
+for an earlier draft where the docs promised a three-tier order the two-tier shell
+substitution didn't implement).
+
 ## 0.1.52
 
 Pre-customer hardening pass across the five skills a first customer's stack

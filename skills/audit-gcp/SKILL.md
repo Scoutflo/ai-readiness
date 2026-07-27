@@ -141,7 +141,7 @@ echo "vms=${VMS} clusters=${CLUSTERS} uptime_checks=${CHECKS} backend_services=$
 # Guided-walkthrough drift check, per report-standard/README.md#using-topology-and-prior-runs-as-a-guided-walkthrough:
 # compare against the last run rather than a blank slate. State the result in the executive summary;
 # never silently omit it. This never skips a live check - every check in later phases still runs fresh.
-TARGET_DIR="./scoutflo-audits/gcp"
+TARGET_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/gcp"
 PREV_RUN="$(find "$TARGET_DIR" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort | tail -1)"
 DRIFT="first run"
 if [ -n "$PREV_RUN" ] && [ -f "${PREV_RUN}/findings.json" ]; then
@@ -275,7 +275,7 @@ Emit and verify:
 ```bash
 set -eu
 RUN_DATE="$(date -u +%Y-%m-%d)"
-OUT="./scoutflo-audits/gcp/${RUN_DATE}"
+OUT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/gcp/${RUN_DATE}"
 mkdir -p "$OUT"
 # ... write findings.json and report.md per the report standard, then verify:
 jq -e '.schema == "scoutflo-findings/v1" and .target == "gcp" and (.findings | type == "array") and (.estate.path != null)' \
@@ -290,7 +290,7 @@ Compute the delta against the previous run's `findings.json` (the latest two dat
 
 ```bash
 set -eu
-TARGET_DIR="./scoutflo-audits/gcp"
+TARGET_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/gcp"
 RUN_DATE="$(date -u +%Y-%m-%d)"
 OUT="${TARGET_DIR}/${RUN_DATE}"
 RESOLVED="0"   # fixed count from this run's delta; 0 on the first run
@@ -310,7 +310,7 @@ The report's trend line renders the last five history.jsonl entries, oldest firs
 
 ```bash
 set -eu
-TARGET_DIR="./scoutflo-audits/gcp"
+TARGET_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/gcp"
 RUN_DATE="$(date -u +%Y-%m-%d)"
 OUT="${TARGET_DIR}/${RUN_DATE}"
 TOPO_LINE="Topology readiness: readiness not recorded"  # replace with "r/n services sync-ready" from Phase 10

@@ -72,7 +72,7 @@ Runs on the large path only (see [SKILL.md#estate-sizing](../SKILL.md#estate-siz
 
 ```bash
 set -eu
-AUDIT_ROOT="./scoutflo-audits/sentry"
+AUDIT_ROOT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/sentry"
 resumable=""
 if [ -d "${AUDIT_ROOT}/runs" ]; then
   for d in "${AUDIT_ROOT}/runs"/*/; do
@@ -104,7 +104,7 @@ SENTRY_HOST="us.sentry.io"   # sentry.host
 SENTRY_ORG="your-org-slug"   # sentry.org
 API="https://${SENTRY_HOST}/api/0"
 [ -n "${SENTRY_TOKEN:-}" ] || { echo "SENTRY_TOKEN is not set; run /scoutflo:connect"; exit 1; }
-RUN_DIR="./scoutflo-audits/sentry/runs/20260717T140500Z"   # example; this run's resolved RUN_DIR from step 0
+RUN_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/sentry/runs/20260717T140500Z"   # example; this run's resolved RUN_DIR from step 0
 WORKLIST="${RUN_DIR}/worklist.tsv"
 
 if [ -f "${WORKLIST}" ]; then
@@ -132,7 +132,7 @@ fi
 
 ```bash
 set -eu
-RUN_DIR="./scoutflo-audits/sentry/runs/20260717T140500Z"   # example; this run's resolved RUN_DIR
+RUN_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/sentry/runs/20260717T140500Z"   # example; this run's resolved RUN_DIR
 WORKLIST="${RUN_DIR}/worklist.tsv"
 LOCK="${RUN_DIR}/worklist.lock"
 LOCK_STALE_MINUTES="30"   # example, tune to your batch size and expected run length
@@ -166,7 +166,7 @@ SENTRY_HOST="us.sentry.io"   # sentry.host
 SENTRY_ORG="your-org-slug"   # sentry.org
 API="https://${SENTRY_HOST}/api/0"
 [ -n "${SENTRY_TOKEN:-}" ] || { echo "SENTRY_TOKEN is not set; run /scoutflo:connect"; exit 1; }
-RUN_DIR="./scoutflo-audits/sentry/runs/20260717T140500Z"   # example; this run's resolved RUN_DIR
+RUN_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/sentry/runs/20260717T140500Z"   # example; this run's resolved RUN_DIR
 WORKLIST="${RUN_DIR}/worklist.tsv"
 BATCH="checkout
 payments"   # example; the batch claimed in step 2, one slug per line
@@ -210,9 +210,9 @@ echo "batch complete; worklist pending=${pending}"
 
 ```bash
 set -eu
-RUN_DIR="./scoutflo-audits/sentry/runs/20260717T140500Z"   # example; this run's resolved RUN_DIR
+RUN_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/sentry/runs/20260717T140500Z"   # example; this run's resolved RUN_DIR
 WORKLIST="${RUN_DIR}/worklist.tsv"
-RAW_DIR="./scoutflo-audits/sentry/$(date -u +%Y-%m-%d)/raw"
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/sentry/$(date -u +%Y-%m-%d)/raw"
 
 pending=$(awk -F'\t' '$2 == "pending"' "${WORKLIST}" | wc -l | tr -d ' ')
 [ "${pending}" -eq 0 ] || { echo "worklist incomplete (pending=${pending}); do not merge yet, resume batching"; exit 1; }
@@ -359,7 +359,7 @@ API="https://${SENTRY_HOST}/api/0"
 [ -n "${SENTRY_TOKEN:-}" ] || { echo "SENTRY_TOKEN is not set; run /scoutflo:connect"; exit 1; }
 # INTEGRATIONS_JSON: re-fetch or point at this run's raw dump, e.g.
 # ./scoutflo-audits/sentry/$(date -u +%Y-%m-%d)/raw/integrations.json
-INTEGRATIONS_JSON="./scoutflo-audits/sentry/$(date -u +%Y-%m-%d)/raw/integrations.json"
+INTEGRATIONS_JSON="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/sentry/$(date -u +%Y-%m-%d)/raw/integrations.json"
 [ -s "${INTEGRATIONS_JSON}" ] || curl -fsS --max-time 30 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
   "${API}/organizations/${SENTRY_ORG}/integrations/" > "${INTEGRATIONS_JSON}"
 

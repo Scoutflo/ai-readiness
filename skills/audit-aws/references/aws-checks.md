@@ -87,7 +87,7 @@ aws_cli() {
   fi
 }
 RUN_DATE="$(date -u +%Y-%m-%d)"
-RAW_DIR="./scoutflo-audits/aws/${RUN_DATE}/raw"
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/aws/${RUN_DATE}/raw"
 mkdir -p "$RAW_DIR"
 
 aws_cli cloudwatch describe-alarms --output json \
@@ -148,7 +148,7 @@ Expected: one JSON file per surface. An empty `ecs-services.json` or `eks.json` 
 ```bash
 set -eu
 RUN_DATE="$(date -u +%Y-%m-%d)"
-RAW_DIR="./scoutflo-audits/aws/${RUN_DATE}/raw"
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/aws/${RUN_DATE}/raw"
 # AWS-001: alarms grouped by the resource id in their dimensions, to find resources with zero alarms.
 jq -r '.[] | .dimensions[]? | select(.name | test("DBInstanceIdentifier|LoadBalancer|AutoScalingGroupName|FunctionName")) | .value' \
   "${RAW_DIR}/alarms.json" | sort -u
@@ -201,7 +201,7 @@ aws_cli() {
   fi
 }
 RUN_DATE="$(date -u +%Y-%m-%d)"
-RAW_DIR="./scoutflo-audits/aws/${RUN_DATE}/raw"
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/aws/${RUN_DATE}/raw"
 mkdir -p "$RAW_DIR"
 
 aws_cli cloudwatch describe-alarms --alarm-types MetricAlarm --output json \
@@ -230,7 +230,7 @@ Expected: two JSON files. `DatapointsToAlarm` is absent on consecutive-periods a
 ```bash
 set -eu
 RUN_DATE="$(date -u +%Y-%m-%d)"
-RAW_DIR="./scoutflo-audits/aws/${RUN_DATE}/raw"
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/aws/${RUN_DATE}/raw"
 SHORT_PERIOD_SECS="60"   # example, tune it: a Period at/below this with single-datapoint evaluation is spike-prone
 jq -r --argjson short "$SHORT_PERIOD_SECS" '
   .[] | select((.alarm_actions | length) > 0)
@@ -246,7 +246,7 @@ Expected: no output. Each line is an AWS-060 candidate, a paging alarm that tran
 ```bash
 set -eu
 RUN_DATE="$(date -u +%Y-%m-%d)"
-RAW_DIR="./scoutflo-audits/aws/${RUN_DATE}/raw"
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/aws/${RUN_DATE}/raw"
 # TreatMissingData=breaching on a paging alarm: a metric gap pages.
 jq -r '.[] | select((.alarm_actions | length) > 0 and .treat_missing_data == "breaching")
   | "\(.name): TreatMissingData=breaching (a metric gap pages)"' "${RAW_DIR}/alarm-hygiene.json"
@@ -300,7 +300,7 @@ Expected: `COUNT` at or below `FLAP_TRANSITIONS` for each paging alarm. `History
 ```bash
 set -eu
 RUN_DATE="$(date -u +%Y-%m-%d)"
-RAW_DIR="./scoutflo-audits/aws/${RUN_DATE}/raw"
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/aws/${RUN_DATE}/raw"
 jq -r '.[] | select((.alarm_actions | length) > 0 and .actions_enabled == false)
   | "\(.name): ActionsEnabled=false (actions muted; CloudWatch has no scheduled un-mute, so this stays silent until toggled back)"' "${RAW_DIR}/alarm-hygiene.json"
 jq -r '.[] | select(.actions_enabled == false) | "\(.name): composite ActionsEnabled=false"' "${RAW_DIR}/composite-hygiene.json"
@@ -313,7 +313,7 @@ Expected: no output. `ActionsEnabled=false` is CloudWatch's only per-alarm mute 
 ```bash
 set -eu
 RUN_DATE="$(date -u +%Y-%m-%d)"
-RAW_DIR="./scoutflo-audits/aws/${RUN_DATE}/raw"
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/aws/${RUN_DATE}/raw"
 # Composite alarms present, and whether they carry correlation logic and/or a suppressor.
 jq -r '.[] | "\(.name): rule=\(.rule) suppressor=\(if .actions_suppressor == "" then "none" else .actions_suppressor end)"' "${RAW_DIR}/composite-hygiene.json"
 # How many metric alarms page directly, with no composite in front.
@@ -327,7 +327,7 @@ Expected: judgment, not a threshold. Many paging metric alarms with zero composi
 ```bash
 set -eu
 RUN_DATE="$(date -u +%Y-%m-%d)"
-RAW_DIR="./scoutflo-audits/aws/${RUN_DATE}/raw"
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/aws/${RUN_DATE}/raw"
 jq -r '.[] | select((.alarm_actions | length) > 0 and (.ok_actions | length) == 0)
   | "\(.name): no OKActions (return to OK sends no resolve; a downstream incident may stay open)"' "${RAW_DIR}/alarm-hygiene.json"
 ```
@@ -339,7 +339,7 @@ Expected: judgment. A paging alarm with empty `OKActions` never signals a return
 ```bash
 set -eu
 RUN_DATE="$(date -u +%Y-%m-%d)"
-RAW_DIR="./scoutflo-audits/aws/${RUN_DATE}/raw"
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/aws/${RUN_DATE}/raw"
 # AWS-010: alarms with zero actions attached.
 jq -r '.[] | select((.actions // []) | length == 0) | .name' "${RAW_DIR}/alarms.json"
 # AWS-011: subscriptions whose SubscriptionArn is literally "PendingConfirmation".
@@ -383,7 +383,7 @@ Expected: at least one past `ALARM` transition your team can confirm reached the
 ```bash
 set -eu
 RUN_DATE="$(date -u +%Y-%m-%d)"
-RAW_DIR="./scoutflo-audits/aws/${RUN_DATE}/raw"
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/aws/${RUN_DATE}/raw"
 jq -r '.[] | "\(.name): \([.logging[] | select(.types[]? == "api" or .types[]? == "controllerManager") | .enabled] | any)"' "${RAW_DIR}/eks.json"
 ```
 
@@ -456,7 +456,7 @@ Assemble one row per critical service from the raw captures; re-fetch any cell y
 ```bash
 set -eu
 RUN_DATE="$(date -u +%Y-%m-%d)"
-RAW_DIR="./scoutflo-audits/aws/${RUN_DATE}/raw"
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/aws/${RUN_DATE}/raw"
 SERVICE_NAME="checkout"   # canonical name from topology.md
 echo "compute matched by tag or name containing ${SERVICE_NAME}:"
 jq -r --arg s "$SERVICE_NAME" '.[] | select([.tags[]?.Value] | any(test($s; "i"))) | .id' "${RAW_DIR}/ec2.json"
@@ -498,7 +498,7 @@ Runnable commands for the large path named in [SKILL.md's Estate sizing](../SKIL
 
 ```bash
 set -eu
-AUDIT_ROOT="./scoutflo-audits/aws"
+AUDIT_ROOT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/aws"
 
 resumable=""
 if [ -d "${AUDIT_ROOT}/runs" ]; then
@@ -522,7 +522,7 @@ fi
 
 ```bash
 set -eu
-AUDIT_ROOT="./scoutflo-audits/aws"
+AUDIT_ROOT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/aws"
 RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)"   # first-seen timestamp of this run; stable for its lifetime
 RUN_DIR="${AUDIT_ROOT}/runs/${RUN_ID}"
 mkdir -p "${RUN_DIR}"
@@ -545,7 +545,7 @@ aws_cli() {
     aws ${AWS_REGION_CFG:+--region "$AWS_REGION_CFG"} "$@"
   fi
 }
-RUN_DIR="./scoutflo-audits/aws/runs/20260717T140500Z"   # example; resolved run directory from 13.1 or 13.2
+RUN_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/aws/runs/20260717T140500Z"   # example; resolved run directory from 13.1 or 13.2
 
 WORKLIST="${RUN_DIR}/worklist.tsv"
 if [ -f "${WORKLIST}" ]; then
@@ -575,7 +575,7 @@ fi
 
 ```bash
 set -eu
-RUN_DIR="./scoutflo-audits/aws/runs/20260717T140500Z"   # example; resolved run directory
+RUN_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/aws/runs/20260717T140500Z"   # example; resolved run directory
 LOCK="${RUN_DIR}/worklist.lock"
 LOCK_STALE_MINUTES="30"   # example, tune to your batch size and expected run length
 
@@ -601,7 +601,7 @@ Claim happens while the lock (13.4) is held; release happens right after the bat
 
 ```bash
 set -eu
-RUN_DIR="./scoutflo-audits/aws/runs/20260717T140500Z"   # example; resolved run directory
+RUN_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/aws/runs/20260717T140500Z"   # example; resolved run directory
 WORKLIST="${RUN_DIR}/worklist.tsv"
 LOCK="${RUN_DIR}/worklist.lock"
 BATCH_SIZE="10"   # example, tune it; matches the value declared in SKILL.md's Estate sizing
@@ -633,7 +633,7 @@ Expected: `pending` drops by the batch size (or less, on the final partial batch
 
 ```bash
 set -eu
-RUN_DIR="./scoutflo-audits/aws/runs/20260717T140500Z"   # example; resolved run directory
+RUN_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/aws/runs/20260717T140500Z"   # example; resolved run directory
 WORKLIST="${RUN_DIR}/worklist.tsv"
 
 pending=$(awk -F'\t' '$3 == "pending"' "${WORKLIST}" | wc -l | tr -d ' ')

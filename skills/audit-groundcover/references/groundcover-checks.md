@@ -51,7 +51,7 @@ List monitors, pull each monitor's config, the workflows, and recurring silences
 set -eu
 GC_API="https://api.groundcover.com"   # groundcover.api_url
 RUN_DATE="$(date -u +%Y-%m-%d)"
-RAW_DIR="./scoutflo-audits/groundcover/${RUN_DATE}/raw"
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/groundcover/${RUN_DATE}/raw"
 mkdir -p "$RAW_DIR"
 # Build the header set once. Add X-Backend-Id only when groundcover.backend_id is set.
 AUTH="Authorization: Bearer ${GROUNDCOVER_API_KEY}"
@@ -131,7 +131,7 @@ Expected: `monitors.json`, per-monitor config files, `workflows.json`, `recurrin
 ```bash
 set -eu
 RUN_DATE="$(date -u +%Y-%m-%d)"
-RAW_DIR="./scoutflo-audits/groundcover/${RUN_DATE}/raw"
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/groundcover/${RUN_DATE}/raw"
 
 # GC-001: pendingFor 0s or empty = fires on the first breach (no debounce).
 jq -s '[.[] | select((.pendingFor // "0s") == "0s" or .pendingFor == "" or .pendingFor == null)
@@ -161,7 +161,7 @@ jq -s '[.[] | select(.executionErrorState == "Alerting") | {uuid, title, executi
 ```bash
 set -eu
 RUN_DATE="$(date -u +%Y-%m-%d)"
-RAW_DIR="./scoutflo-audits/groundcover/${RUN_DATE}/raw"
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/groundcover/${RUN_DATE}/raw"
 
 # GC-010: no renotificationInterval and disableRenotification not true = default re-notify cadence;
 # a very short interval is a repeat-page storm on a long-lived issue.
@@ -191,7 +191,7 @@ jq -s '[.[] | select(.method == "connectedApps" and ((.connectedApps // []) | le
 ```bash
 set -eu
 RUN_DATE="$(date -u +%Y-%m-%d)"
-RAW_DIR="./scoutflo-audits/groundcover/${RUN_DATE}/raw"
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/groundcover/${RUN_DATE}/raw"
 
 # GC-020: paused monitors. A paused monitor is defined but never evaluates.
 jq -s '[.[] | select(.isPaused == true) | {uuid, title}]' "${RAW_DIR}"/monitors/*.json
@@ -226,7 +226,7 @@ fi
 ```bash
 set -eu
 RUN_DATE="$(date -u +%Y-%m-%d)"
-RAW_DIR="./scoutflo-audits/groundcover/${RUN_DATE}/raw"
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/groundcover/${RUN_DATE}/raw"
 
 # GC-030: dead workflow-backed destinations.
 jq '[.[] | select(.invalid == true or .last_execution_status == "error"

@@ -155,7 +155,7 @@ echo "alert_rules=${RULES} receivers=${RECEIVERS} scored_objects=${TOTAL}"
 # Guided-walkthrough drift check, per report-standard/README.md#using-topology-and-prior-runs-as-a-guided-walkthrough:
 # compare against the last run rather than a blank slate. State the result in the executive summary;
 # never silently omit it. This never skips a live check - every check in later phases still runs fresh.
-TARGET_DIR="./scoutflo-audits/alert-routing"
+TARGET_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/alert-routing"
 PREV_RUN="$(find "$TARGET_DIR" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort | tail -1)"
 DRIFT="first run"
 if [ -n "$PREV_RUN" ] && [ -f "${PREV_RUN}/findings.json" ]; then
@@ -293,7 +293,7 @@ Emit and verify:
 ```bash
 set -eu
 RUN_DATE="$(date -u +%Y-%m-%d)"
-OUT="./scoutflo-audits/alert-routing/${RUN_DATE}"
+OUT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/alert-routing/${RUN_DATE}"
 mkdir -p "$OUT"
 # ... write findings.json and report.md per the report standard, then verify:
 jq -e '.schema == "scoutflo-findings/v1" and (.findings | type == "array")' \
@@ -309,7 +309,7 @@ Compute the delta against the previous run date per the [report standard](../../
 
 ```bash
 set -eu
-OUT="./scoutflo-audits/alert-routing/$(date -u +%Y-%m-%d)"
+OUT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/alert-routing/$(date -u +%Y-%m-%d)"
 # slack.webhook_env names the webhook variable; skip when unset.
 if [ -n "${SCOUTFLO_SLACK_WEBHOOK:-}" ]; then
   SCORE="$(jq -r '.score.overall' "$OUT/findings.json")"

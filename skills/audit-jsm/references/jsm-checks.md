@@ -57,7 +57,7 @@ Resolve the teams to audit, then capture per team and account-wide.
 set -eu
 JSM_BASE="https://api.atlassian.com/jsm/ops/api/${JSM_CLOUD_ID}/v1"
 RUN_DATE="$(date -u +%Y-%m-%d)"
-RAW_DIR="./scoutflo-audits/jsm/${RUN_DATE}/raw"
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/jsm/${RUN_DATE}/raw"
 mkdir -p "$RAW_DIR"
 AUTH_USER="${JSM_EMAIL}:${JSM_API_TOKEN}"
 
@@ -112,7 +112,7 @@ Expected: per-team policy/escalation/routing/heartbeat files plus account-wide a
 ```bash
 set -eu
 RUN_DATE="$(date -u +%Y-%m-%d)"
-RAW_DIR="./scoutflo-audits/jsm/${RUN_DATE}/raw"
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/jsm/${RUN_DATE}/raw"
 TEAM_ID="TEAM"   # per-team; loop over teams.tsv in the real run
 tdir="${RAW_DIR}/teams/${TEAM_ID}"
 
@@ -151,7 +151,7 @@ jq '[.[] | select(.enabled == false) | {id, name, type, teamId}]' "${RAW_DIR}/in
 ```bash
 set -eu
 RUN_DATE="$(date -u +%Y-%m-%d)"
-RAW_DIR="./scoutflo-audits/jsm/${RUN_DATE}/raw"
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/jsm/${RUN_DATE}/raw"
 TEAM_ID="TEAM"; tdir="${RAW_DIR}/teams/${TEAM_ID}"
 
 # JSM-010 + JSM-013 + JSM-014: notification-policy action objects.
@@ -208,7 +208,7 @@ curl -fsS --max-time 30 -u "${JSM_EMAIL}:${JSM_API_TOKEN}" \
 ```bash
 set -eu
 RUN_DATE="$(date -u +%Y-%m-%d)"
-RAW_DIR="./scoutflo-audits/jsm/${RUN_DATE}/raw"
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/jsm/${RUN_DATE}/raw"
 TEAM_ID="TEAM"; tdir="${RAW_DIR}/teams/${TEAM_ID}"
 
 # JSM-020: heartbeat liveness. Unresponsive = a source stopped pinging (silent monitoring gap).

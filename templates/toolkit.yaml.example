@@ -8,6 +8,30 @@
 # - Delete the blocks for integrations you do not use.
 # - Multiple targets of the same type: use a YAML list under the key.
 
+# reports_dir: where all reports and runtime data are written (findings.json,
+#   report.md, history.jsonl, topology.md, topology-export.json, exemptions.yaml,
+#   raw dumps, large-path run state).
+#
+#   IMPORTANT — what actually moves the location is the SCOUTFLO_AUDIT_DIR
+#   environment variable, because every skill command runs in a fresh shell and
+#   only an exported env var threads through them all. The effective location is:
+#     SCOUTFLO_AUDIT_DIR if exported, else ./scoutflo-audits (relative to the
+#     directory you launch Claude Code from).
+#
+#   This reports_dir key is a CONVENIENCE, not a second live tier: `doctor` and
+#   `start` read it only to print the exact `export SCOUTFLO_AUDIT_DIR=...` line
+#   for you to add to your shell profile (and to ~/.scoutflo/env for scheduled
+#   runs), and they warn if reports_dir is set but that export is not yet in
+#   effect. Setting reports_dir alone does NOT move where reports land.
+#
+#   Why bother: on the default, a run from a different folder starts a fresh,
+#   empty history (no delta; your topology map / exemptions won't be found).
+#   For one durable estate history regardless of launch folder, export
+#   SCOUTFLO_AUDIT_DIR to a fixed absolute path and set reports_dir to match so
+#   doctor keeps surfacing the export line.
+#
+# reports_dir: ~/scoutflo-estate/audits   # absolute path recommended; a leading ~ is expanded to your home directory
+
 grafana:
   url: https://grafana.example.com          # your Grafana base URL
   token_env: GRAFANA_TOKEN                  # service-account token (read-only for audits)

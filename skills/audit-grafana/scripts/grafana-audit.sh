@@ -5,7 +5,7 @@
 #   GRAFANA_URL          Grafana base URL (toolkit.yaml: grafana.url). Required.
 #   GRAFANA_TOKEN        Service-account token; env var is named by grafana.token_env
 #                        in ~/.scoutflo/toolkit.yaml. Required. Never printed.
-#   OUT_DIR              Output directory. Default: ./scoutflo-audits/grafana/<UTC date>/raw
+#   OUT_DIR              Output directory. Default: ${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/grafana/<UTC date>/raw
 #   CURL_MAX_TIME        Per-request timeout in seconds. Default: 20.
 #   DASHBOARD_UIDS_FILE  Large-path batching only (see SKILL.md "Estate sizing" and
 #                        "Large-path worklist"). One dashboard UID per line. When set,
@@ -57,7 +57,9 @@ command -v jq   >/dev/null 2>&1 || { echo "jq is required" >&2; exit 1; }
 
 GRAFANA_URL="${GRAFANA_URL%/}"
 RUN_DATE="$(date -u +%Y-%m-%d)"
-OUT_DIR="${OUT_DIR:-./scoutflo-audits/grafana/${RUN_DATE}/raw}"
+# Honor SCOUTFLO_AUDIT_DIR when OUT_DIR is not passed explicitly, so a standalone
+# run of this script lands in the same resolved reports directory as the skill.
+OUT_DIR="${OUT_DIR:-${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/grafana/${RUN_DATE}/raw}"
 CURL_MAX_TIME="${CURL_MAX_TIME:-20}"
 PAGE_SIZE=1000
 

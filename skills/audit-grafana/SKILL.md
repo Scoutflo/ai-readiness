@@ -89,7 +89,7 @@ echo "dashboards=${DASHBOARDS} alert_rules=${RULES} datasources=${DATASOURCES} s
 # Guided-walkthrough drift check, per report-standard/README.md#using-topology-and-prior-runs-as-a-guided-walkthrough:
 # compare against the last run rather than a blank slate. State the result in the executive summary;
 # never silently omit it. This never skips a live check - every check in later phases still runs fresh.
-TARGET_DIR="./scoutflo-audits/grafana"
+TARGET_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/grafana"
 PREV_RUN="$(find "$TARGET_DIR" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort | tail -1)"
 DRIFT="first run"
 if [ -n "$PREV_RUN" ] && [ -f "${PREV_RUN}/findings.json" ]; then
@@ -129,7 +129,7 @@ Runs on the large path only. State lives under a run-ID-keyed run directory, `./
 
    ```bash
    set -eu
-   AUDIT_ROOT="./scoutflo-audits/grafana"
+   AUDIT_ROOT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/grafana"
    resumable=""
    if [ -d "${AUDIT_ROOT}/runs" ]; then
      for d in "${AUDIT_ROOT}/runs"/*/; do
@@ -151,7 +151,7 @@ Runs on the large path only. State lives under a run-ID-keyed run directory, `./
 
    ```bash
    set -eu
-   AUDIT_ROOT="./scoutflo-audits/grafana"
+   AUDIT_ROOT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/grafana"
    RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)"   # first-seen timestamp of this run; stable for its lifetime
    RUN_DIR="${AUDIT_ROOT}/runs/${RUN_ID}"
    mkdir -p "${RUN_DIR}/batches"
@@ -166,7 +166,7 @@ Runs on the large path only. State lives under a run-ID-keyed run directory, `./
    # Resolved from ~/.scoutflo/toolkit.yaml
    GRAFANA_URL="https://grafana.example.com"   # grafana.url
    [ -n "${GRAFANA_TOKEN:-}" ] || { echo "GRAFANA_TOKEN is not set; run /scoutflo:connect"; exit 1; }
-   RUN_DIR="./scoutflo-audits/grafana/runs/20260717T140500Z"   # example; this run's resolved RUN_DIR
+   RUN_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/grafana/runs/20260717T140500Z"   # example; this run's resolved RUN_DIR
    WORKLIST="${RUN_DIR}/worklist.tsv"
 
    if [ -s "${WORKLIST}" ]; then
@@ -186,7 +186,7 @@ Runs on the large path only. State lives under a run-ID-keyed run directory, `./
 
    ```bash
    set -eu
-   RUN_DIR="./scoutflo-audits/grafana/runs/20260717T140500Z"   # example; this run's resolved RUN_DIR
+   RUN_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/grafana/runs/20260717T140500Z"   # example; this run's resolved RUN_DIR
    LOCK="${RUN_DIR}/worklist.lock"
    LOCK_STALE_MINUTES="30"   # example, tune to your batch size and expected run length
 
@@ -209,12 +209,12 @@ Runs on the large path only. State lives under a run-ID-keyed run directory, `./
 
    ```bash
    set -eu
-   RUN_DIR="./scoutflo-audits/grafana/runs/20260717T140500Z"   # example; this run's resolved RUN_DIR
+   RUN_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/grafana/runs/20260717T140500Z"   # example; this run's resolved RUN_DIR
    WORKLIST="${RUN_DIR}/worklist.tsv"
    BATCH_SIZE="15"   # dashboards per batch on the large path; example, tune it
    export GRAFANA_URL="https://grafana.example.com"   # grafana.url
    # GRAFANA_TOKEN must already be exported in this shell; see the doctor gate.
-   export OUT_DIR="./scoutflo-audits/grafana/$(date -u +%Y-%m-%d)/raw"   # same raw dir every other phase reads
+   export OUT_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/grafana/$(date -u +%Y-%m-%d)/raw"   # same raw dir every other phase reads
    export SKIP_NON_DASHBOARD="1"   # "0" or unset on this run's first batch only
 
    BATCH_FILE="${RUN_DIR}/batches/$(date -u +%s).uids"
@@ -249,7 +249,7 @@ Before writing `findings.json` and `report.md`, assert the worklist finished:
 
 ```bash
 set -eu
-AUDIT_ROOT="./scoutflo-audits/grafana"
+AUDIT_ROOT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/grafana"
 RUN_DIR="${RUN_DIR:-$(ls -dt "${AUDIT_ROOT}"/runs/*/ 2>/dev/null | head -n 1 | sed 's:/$::')}"
 if [ -n "${RUN_DIR}" ] && [ -f "${RUN_DIR}/worklist.tsv" ]; then
   pending=$(awk -F'\t' '$2 == "pending"' "${RUN_DIR}/worklist.tsv" | wc -l | tr -d ' ')
@@ -274,7 +274,7 @@ set -eu
 export GRAFANA_URL="https://grafana.example.com"   # grafana.url from ~/.scoutflo/toolkit.yaml
 # GRAFANA_TOKEN must already be exported in this shell; see the doctor gate.
 bash scripts/grafana-audit.sh
-RAW_DIR="./scoutflo-audits/grafana/$(date -u +%Y-%m-%d)/raw"
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/grafana/$(date -u +%Y-%m-%d)/raw"
 cat "${RAW_DIR}/summary.txt"
 ```
 
@@ -328,7 +328,7 @@ The checks:
 1. **Receiver wiring (GRAF-050).** Walk the policy tree and list every referenced receiver, then confirm each exists among contact points and is not a placeholder:
 
    ```bash
-   RAW_DIR="./scoutflo-audits/grafana/$(date -u +%Y-%m-%d)/raw"   # this run's raw dir
+   RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/grafana/$(date -u +%Y-%m-%d)/raw"   # this run's raw dir
    jq -r '[.. | objects | select(has("receiver")) | .receiver] | unique[]' \
      "${RAW_DIR}/notification-policies.json"
    jq -r '.[] | "\(.name)\t\(.type)"' "${RAW_DIR}/contact-points.json"
@@ -347,7 +347,7 @@ The checks:
 4. **Labels (GRAF-053).** Every rule carries `severity` and `service` labels; without them routing and the coverage matrix cannot work:
 
    ```bash
-   RAW_DIR="./scoutflo-audits/grafana/$(date -u +%Y-%m-%d)/raw"   # this run's raw dir
+   RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/grafana/$(date -u +%Y-%m-%d)/raw"   # this run's raw dir
    # Exclude recording rules (.record != null): they route nothing and carry no severity/service.
    jq '[ .[] | select((.record // null) == null)
          | select(((.labels.severity // "") == "") or ((.labels.service // "") == ""))
@@ -388,7 +388,7 @@ Every GRAF-100 to GRAF-103 finding points at `setup-grafana`, anchored to the se
 Checks GRAF-070 to GRAF-072. These start from heuristics over `panel-targets.json`; verify each hit before filing.
 
 ```bash
-RAW_DIR="./scoutflo-audits/grafana/$(date -u +%Y-%m-%d)/raw"   # this run's raw dir
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/grafana/$(date -u +%Y-%m-%d)/raw"   # this run's raw dir
 # Counter-style metrics queried without rate/increase (candidates for GRAF-070)
 jq '[ .[] | { dashboard_uid, panel_id, raw_counters:
       [ .targets[]? | (.expr // "") | tostring
@@ -408,7 +408,7 @@ A raw counter on a graph shows a meaningless ever-growing line; an expensive exp
 Checks GRAF-080 to GRAF-082:
 
 ```bash
-RAW_DIR="./scoutflo-audits/grafana/$(date -u +%Y-%m-%d)/raw"   # this run's raw dir
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/grafana/$(date -u +%Y-%m-%d)/raw"   # this run's raw dir
 # Is there any usage / ingestion-health dashboard at all?
 jq '[ .[] | select(.title | test("usage|billing|ingest|monitoring health"; "i"))
       | {uid, title} ]' "${RAW_DIR}/dashboard-index.json"
@@ -455,7 +455,7 @@ Emit, verify, brief:
 
 ```bash
 set -eu
-OUT="./scoutflo-audits/grafana/$(date -u +%Y-%m-%d)"
+OUT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/grafana/$(date -u +%Y-%m-%d)"
 mkdir -p "$OUT"
 # ... write findings.json and report.md per the report standard, then verify:
 jq -e '.schema == "scoutflo-findings/v1" and .target == "grafana"

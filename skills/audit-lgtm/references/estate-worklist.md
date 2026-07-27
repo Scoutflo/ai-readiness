@@ -8,7 +8,7 @@ Scan for an interrupted run before minting a new `RUN_ID`. Never start fresh whe
 
 ```bash
 set -eu
-AUDIT_ROOT="./scoutflo-audits/lgtm"
+AUDIT_ROOT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/lgtm"
 
 resumable=""
 if [ -d "${AUDIT_ROOT}/runs" ]; then
@@ -34,7 +34,7 @@ Only after step 1 finds nothing resumable. The run ID is a UTC second-precision 
 
 ```bash
 set -eu
-AUDIT_ROOT="./scoutflo-audits/lgtm"
+AUDIT_ROOT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/lgtm"
 RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)"   # first-seen timestamp of this run; stable for its lifetime
 RUN_DIR="${AUDIT_ROOT}/runs/${RUN_ID}"
 mkdir -p "${RUN_DIR}"
@@ -48,7 +48,7 @@ One row per critical service (from `./scoutflo-audits/topology.md`) and one row 
 
 ```bash
 set -eu
-RUN_DIR="./scoutflo-audits/lgtm/runs/20260717T140500Z"   # example; the resolved run directory from step 1 or 2
+RUN_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/lgtm/runs/20260717T140500Z"   # example; the resolved run directory from step 1 or 2
 WORKLIST="${RUN_DIR}/worklist.tsv"
 GRAFANA_URL="https://grafana.example.com"   # grafana.url
 GRAFANA_TOKEN="${GRAFANA_TOKEN:-}"          # grafana.token_env, set only if the grafana block is configured
@@ -59,13 +59,13 @@ if [ -f "${WORKLIST}" ]; then
   echo "resuming existing worklist: done=${done} pending=${pending}"
 else
   : > "${WORKLIST}"
-  if [ -f "./scoutflo-audits/topology.md" ]; then
+  if [ -f "${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/topology.md" ]; then
     # Enqueue ONLY the rows of the `## Services` table (deduped). A bare `grep '^| ... |'`
     # also matches the metadata / Traffic-map / Entry-points / Integration-watchpoints
     # tables and header/`---` rows, so it would enqueue phantom "services" named `---`,
     # `Mesh`, `Service`, and double-enqueue every real service (each also appears in the
     # Integration-watchpoints table) — corrupting per-service coverage on the large path.
-    awk '/^## Services$/{f=1;next} /^## /{f=0} f' ./scoutflo-audits/topology.md \
+    awk '/^## Services$/{f=1;next} /^## /{f=0} f' ${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/topology.md \
       | grep -E '^\| ' \
       | grep -vE '^\| *Service *\||^\| *-{2,}' \
       | awk -F'|' '{gsub(/^[ \t]+|[ \t]+$/, "", $2); if($2!="") print $2}' \
@@ -89,7 +89,7 @@ Two invocations of this skill running at once would otherwise race on the same w
 
 ```bash
 set -eu
-RUN_DIR="./scoutflo-audits/lgtm/runs/20260717T140500Z"   # example; the resolved run directory
+RUN_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/lgtm/runs/20260717T140500Z"   # example; the resolved run directory
 LOCK="${RUN_DIR}/worklist.lock"
 LOCK_STALE_MINUTES="30"   # example, tune to your batch size and expected run length
 
@@ -115,7 +115,7 @@ Claim happens while the lock (step 4) is held; release happens right after the b
 
 ```bash
 set -eu
-RUN_DIR="./scoutflo-audits/lgtm/runs/20260717T140500Z"   # example; the resolved run directory
+RUN_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/lgtm/runs/20260717T140500Z"   # example; the resolved run directory
 WORKLIST="${RUN_DIR}/worklist.tsv"
 LOCK="${RUN_DIR}/worklist.lock"
 BATCH_SIZE="15"   # example, tune it; matches the value declared in Estate sizing

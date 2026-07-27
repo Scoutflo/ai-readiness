@@ -320,7 +320,7 @@ Large path only (SKILL.md: "Large clusters: worklist, batches, and resume"). The
 set -eu
 KUBE_CONTEXT="your-kube-context"
 NS_EXCLUDE="^(kube-system|kube-public|kube-node-lease|istio-system)$"
-AUDIT_ROOT="./scoutflo-audits/map-topology"
+AUDIT_ROOT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/map-topology"
 
 resumable=""
 if [ -d "${AUDIT_ROOT}/runs" ]; then
@@ -356,7 +356,7 @@ Acquire this lock before claiming a batch, release it right after. It prevents t
 
 ```bash
 set -eu
-RUN_DIR="./scoutflo-audits/map-topology/runs/20260717T140500Z"   # example; the resolved run directory
+RUN_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/map-topology/runs/20260717T140500Z"   # example; the resolved run directory
 LOCK_STALE_MINUTES="30"   # example, tune to your batch size and expected run length
 LOCK="${RUN_DIR}/worklist.lock"
 
@@ -384,7 +384,7 @@ Pulls raw JSON for the next `BATCH_SIZE` pending namespaces. Run as written, do 
 ```bash
 set -eu
 KUBE_CONTEXT="your-kube-context"
-RUN_DIR="./scoutflo-audits/map-topology/runs/20260717T140500Z"   # example; the resolved run directory
+RUN_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/map-topology/runs/20260717T140500Z"   # example; the resolved run directory
 BATCH_SIZE="10"   # namespaces per batch; example, tune to your environment
 # Kinds pulled per namespace on the fallback path. On the mesh path use instead:
 # KINDS="deployment statefulset daemonset service endpoints ingress pod virtualservice destinationrule serviceentry"
@@ -415,7 +415,7 @@ Merges the per-namespace raw files into the same shape as a cluster-wide `kubect
 
 ```bash
 set -eu
-RUN_DIR="./scoutflo-audits/map-topology/runs/20260717T140500Z"   # example; the resolved run directory from "Worklist build and resume"
+RUN_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/map-topology/runs/20260717T140500Z"   # example; the resolved run directory from "Worklist build and resume"
 for kind in deployment statefulset daemonset service endpoints ingress; do
   jq -s '{items: [.[].items[]]}' "${RUN_DIR}/raw/"*".${kind}.json" > "${RUN_DIR}/merged.${kind}.json"
   echo "${kind}: $(jq -r '.items | length' "${RUN_DIR}/merged.${kind}.json") objects"
@@ -429,7 +429,7 @@ Worked example, the "Workloads and versions" filter fed from the merge. Producer
 ```bash
 set -eu
 NS_EXCLUDE="^(kube-system|kube-public|kube-node-lease|istio-system)$"
-RUN_DIR="./scoutflo-audits/map-topology/runs/20260717T140500Z"   # example; the resolved run directory from "Worklist build and resume"
+RUN_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/map-topology/runs/20260717T140500Z"   # example; the resolved run directory from "Worklist build and resume"
 
 for kind in deployment statefulset daemonset; do
   jq -r --arg kind "${kind}" --arg ex "${NS_EXCLUDE}" '
@@ -449,7 +449,7 @@ For the "Service-to-workload join", build its two inputs from the merge, then ru
 
 ```bash
 set -eu
-RUN_DIR="./scoutflo-audits/map-topology/runs/20260717T140500Z"   # example; the resolved run directory from "Worklist build and resume"
+RUN_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/map-topology/runs/20260717T140500Z"   # example; the resolved run directory from "Worklist build and resume"
 cp "${RUN_DIR}/merged.service.json" "${RUN_DIR}/svc.json"
 for kind in deployment statefulset daemonset; do
   jq --arg kind "${kind}" '.items[] | .kind = $kind' "${RUN_DIR}/merged.${kind}.json"

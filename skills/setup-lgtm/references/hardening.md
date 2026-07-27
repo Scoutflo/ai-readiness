@@ -81,7 +81,7 @@ set -eu
 # Resolved from ~/.scoutflo/toolkit.yaml
 KUBE_CONTEXT="your-kube-context"   # kubernetes.context
 MON_NS="monitoring"                # kubernetes.monitoring_namespace
-BACKUP_DIR="./scoutflo-audits/lgtm/setup-$(date -u +%F)/backups"
+BACKUP_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/lgtm/setup-$(date -u +%F)/backups"
 mkdir -p "$BACKUP_DIR"
 SVC="victoriametrics"
 kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" get svc "$SVC" -o yaml > "${BACKUP_DIR}/svc-${SVC}.yaml"

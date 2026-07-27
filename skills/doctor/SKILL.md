@@ -17,6 +17,68 @@ All checking lives in one bundled script, `scripts/doctor.sh`. It is read-only, 
 - `yq` optional. Without it, the script falls back to a POSIX parser that handles the flat two-level layout of `templates/toolkit.yaml.example`. Anything more nested needs `yq`.
 - `kubectl`, only when the config has a `kubernetes:` block.
 
+## Step 0: Resolve and report the storage location
+
+Before checking connectivity, show the user exactly where reports and runtime
+data will be written. Everything downstream (`history.jsonl` deltas, `topology.md`,
+`exemptions.yaml`) only lines up run-to-run when this path is stable.
+
+**How the location is actually resolved.** Every audit/setup command block runs
+in a *fresh shell*, so the only value that threads through all of them is an
+environment variable (a fresh shell inherits your environment; it cannot read a
+per-run config value). So the effective location is exactly:
+
+- **`SCOUTFLO_AUDIT_DIR`** if it is exported in your environment, else
+- **`./scoutflo-audits`** relative to the directory you launched Claude Code from.
+
+`reports_dir` in `~/.scoutflo/toolkit.yaml` is a **convenience, not a second live
+tier**: this step reads it only to print the exact `export` line you add to your
+shell profile so `SCOUTFLO_AUDIT_DIR` is set for every session and scheduled run.
+Setting `reports_dir` alone does **not** move where reports land until that export
+is in place — this step says so loudly when it sees the gap, so it never silently
+forks your history.
+
+```bash
+set -eu
+CFG="$HOME/.scoutflo/toolkit.yaml"
+
+# What the runs will ACTUALLY write to (only the env var threads through fresh shells).
+if [ -n "${SCOUTFLO_AUDIT_DIR:-}" ]; then EFFECTIVE="$SCOUTFLO_AUDIT_DIR"; EFFSRC="SCOUTFLO_AUDIT_DIR env"
+else EFFECTIVE="./scoutflo-audits"; EFFSRC="default (launch directory)"; fi
+
+# What the config ASKS for (used only to generate the export line / detect a gap).
+RD=""
+[ -f "$CFG" ] && RD="$(sed -n 's/^reports_dir:[[:space:]]*//p' "$CFG" | head -1 | sed 's/[[:space:]]*#.*$//; s/^"//; s/"$//; s/^'\''//; s/'\''$//')"
+
+abspath() { case "$1" in "~"|"~/"*) set -- "$HOME${1#\~}";; esac; case "$1" in /*) printf '%s' "$1";; ./*) printf '%s/%s' "$(pwd)" "${1#./}";; *) printf '%s/%s' "$(pwd)" "$1";; esac; }
+EFF_ABS="$(abspath "$EFFECTIVE")"
+echo "Reports will be written to: ${EFF_ABS}"
+echo "  (source: ${EFFSRC})"
+
+if [ -n "$RD" ]; then
+  RD_ABS="$(abspath "$RD")"
+  if [ "$RD_ABS" != "$EFF_ABS" ]; then
+    echo "  ACTION NEEDED: toolkit.yaml sets reports_dir to ${RD_ABS}, but runs write to"
+    echo "  ${EFF_ABS} until SCOUTFLO_AUDIT_DIR is exported. Add this line to your shell"
+    echo "  profile (~/.zshrc or ~/.bashrc) AND to ~/.scoutflo/env for scheduled runs,"
+    echo "  then relaunch Claude Code:"
+    echo "      export SCOUTFLO_AUDIT_DIR=\"${RD_ABS}\""
+  fi
+elif [ "$EFFSRC" = "default (launch directory)" ]; then
+  echo "  NOTE: this is relative to where you launched Claude Code. Launching from a"
+  echo "  different folder starts a SEPARATE history (no delta; topology.md and"
+  echo "  exemptions.yaml won't be found). For one durable history regardless of launch"
+  echo "  folder, export SCOUTFLO_AUDIT_DIR to a fixed absolute path (and set reports_dir"
+  echo "  in ~/.scoutflo/toolkit.yaml so this step keeps reminding you of the export line)."
+fi
+
+# A stray default tree while an explicit location is in force means unmerged history.
+if [ "$EFFSRC" = "SCOUTFLO_AUDIT_DIR env" ] && [ -d "./scoutflo-audits" ] && [ "$EFF_ABS" != "$(pwd)/scoutflo-audits" ]; then
+  echo "  WARNING: a separate ./scoutflo-audits exists in this folder from an earlier run;"
+  echo "  its history will NOT merge with ${EFF_ABS}. Move it in or ignore it deliberately."
+fi
+```
+
 ## Step 1: Run the script
 
 Fixed step: run as written, do not modify flags, do not re-implement the checks by hand.
@@ -24,7 +86,7 @@ Fixed step: run as written, do not modify flags, do not re-implement the checks 
 ```bash
 # ${CLAUDE_PLUGIN_ROOT} is set by the plugin runtime. Running from a repo
 # checkout instead: export CLAUDE_PLUGIN_ROOT as the repo root first.
-OUT_DIR="./scoutflo-audits/doctor/$(date -u +%Y-%m-%d)"   # run directory for this doctor run
+OUT_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/doctor/$(date -u +%Y-%m-%d)"   # run directory for this doctor run
 sh "${CLAUDE_PLUGIN_ROOT}/skills/doctor/scripts/doctor.sh" --out "${OUT_DIR}"
 echo "doctor_exit=$?"
 # Expect: doctor_exit=0 when every configured integration passes.
@@ -37,7 +99,7 @@ Flags:
 
 | Flag | Meaning |
 | --- | --- |
-| `--out DIR` | Run directory for `matrix.tsv`. Default: `./scoutflo-audits/doctor/<UTC date>` |
+| `--out DIR` | Run directory for `matrix.tsv`. Default: `<reports-dir>/doctor/<UTC date>`, where `<reports-dir>` is the Step 0 resolved location (`SCOUTFLO_AUDIT_DIR` → `reports_dir` → `./scoutflo-audits`) |
 | `--config FILE` | Config to read. Default: `~/.scoutflo/toolkit.yaml` |
 | `--slack-test` | Send the Slack webhook test post. Only after explicit user confirmation; see below |
 
@@ -71,7 +133,7 @@ Exit code precedence: `2` (env var missing) wins over `3` (live check failed), b
 ## Step 3: Render the connection matrix
 
 ```bash
-OUT_DIR="./scoutflo-audits/doctor/$(date -u +%Y-%m-%d)"   # same directory used in Step 1
+OUT_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/doctor/$(date -u +%Y-%m-%d)"   # same directory used in Step 1
 column -t -s "$(printf '\t')" "${OUT_DIR}/matrix.tsv"
 ```
 
@@ -100,7 +162,7 @@ Close with a verdict:
 Verify the verdict mechanically before declaring it:
 
 ```bash
-OUT_DIR="./scoutflo-audits/doctor/$(date -u +%Y-%m-%d)"   # same directory used in Step 1
+OUT_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/doctor/$(date -u +%Y-%m-%d)"   # same directory used in Step 1
 awk -F '\t' 'NR>1 && $3=="yes" && ($5=="fail" || $5=="env-missing")' "${OUT_DIR}/matrix.tsv"
 # Expect: no output. Every printed row is exactly a check still to fix.
 ```
@@ -137,7 +199,7 @@ This is the one check that writes: it posts a visible message to your channel. A
 
 ```bash
 # Only after the user has explicitly confirmed the visible test post.
-OUT_DIR="./scoutflo-audits/doctor/$(date -u +%Y-%m-%d)"   # run directory for this doctor run
+OUT_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/doctor/$(date -u +%Y-%m-%d)"   # run directory for this doctor run
 sh "${CLAUDE_PLUGIN_ROOT}/skills/doctor/scripts/doctor.sh" --out "${OUT_DIR}" --slack-test
 echo "doctor_exit=$?"
 # Expect: doctor_exit=0 and a slack webhook-post row with result pass, http_code 200.

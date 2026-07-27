@@ -96,7 +96,7 @@ GCP_PROJECT="your-project-id"   # gcp.project
 MON_API="https://monitoring.googleapis.com/v3"
 if [ -n "${GOOGLE_APPLICATION_CREDENTIALS:-}" ]; then TOKEN="$(gcloud auth application-default print-access-token)"; export CLOUDSDK_AUTH_ACCESS_TOKEN="$TOKEN"; else TOKEN="$(gcloud auth print-access-token)"; fi
 RUN_DATE="$(date -u +%Y-%m-%d)"
-RAW_DIR="./scoutflo-audits/gcp/${RUN_DATE}/raw"
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/gcp/${RUN_DATE}/raw"
 mkdir -p "$RAW_DIR"
 
 # Alert policies: REST, paginated, one JSON object per line.
@@ -160,7 +160,7 @@ Expected: one file per surface, non-empty JSON. An error naming a disabled API (
 ```bash
 set -eu
 RUN_DATE="$(date -u +%Y-%m-%d)"
-RAW_DIR="./scoutflo-audits/gcp/${RUN_DATE}/raw"
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/gcp/${RUN_DATE}/raw"
 # GCP-001: enabled channels. 0 is critical.
 jq '[.[] | select(.enabled == true)] | length' "${RAW_DIR}/channels.json"
 # GCP-002: enabled policies with zero channels, one line per affected policy.
@@ -173,7 +173,7 @@ jq -r 'select((.enabled // true) == true) | select(((.notificationChannels // []
 ```bash
 set -eu
 RUN_DATE="$(date -u +%Y-%m-%d)"
-RAW_DIR="./scoutflo-audits/gcp/${RUN_DATE}/raw"
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/gcp/${RUN_DATE}/raw"
 REF="$(mktemp)"
 jq -r '.notificationChannels[]?' "${RAW_DIR}/alert-policies.jsonl" | sort -u > "$REF"
 jq -r --rawfile ref "$REF" '
@@ -201,7 +201,7 @@ Expected: a positive channel count, no zero-channel policy lines, no disabled-or
 ```bash
 set -eu
 RUN_DATE="$(date -u +%Y-%m-%d)"
-RAW_DIR="./scoutflo-audits/gcp/${RUN_DATE}/raw"
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/gcp/${RUN_DATE}/raw"
 # GCP-010: hosts served (forwarding rules, VM public IPs, your topology list) vs hosts checked.
 jq -r '.[].host // empty' "${RAW_DIR}/uptime-checks.json" | sort -u
 # GCP-011: check ids that have a check_passed alert policy.
@@ -243,7 +243,7 @@ Expected: `200`. A `401` means the check watches an auth-only endpoint and is a 
 ```bash
 set -eu
 RUN_DATE="$(date -u +%Y-%m-%d)"
-RAW_DIR="./scoutflo-audits/gcp/${RUN_DATE}/raw"
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/gcp/${RUN_DATE}/raw"
 jq -r 'select([.conditions[]?.conditionThreshold.filter // ""] | any(contains("compute.googleapis.com/instance/cpu/utilization")))
   | "\(.displayName): \([.conditions[].conditionThreshold | "\(.comparison // "?") \(.thresholdValue // "?") for \(.duration // "?")"] | join("; "))"' \
   "${RAW_DIR}/alert-policies.jsonl"
@@ -303,7 +303,7 @@ Expected: greater than 0. `GCP-024` is the same probe pointed at filters using `
 ```bash
 set -eu
 RUN_DATE="$(date -u +%Y-%m-%d)"
-RAW_DIR="./scoutflo-audits/gcp/${RUN_DATE}/raw"
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/gcp/${RUN_DATE}/raw"
 for m in "kubernetes.io/container/restart_count" "kubernetes.io/pod" "kubernetes.io/node"; do
   echo "policies touching ${m}:"
   jq -r --arg m "$m" 'select([.conditions[]?.conditionThreshold.filter // "", .conditions[]?.conditionAbsent.filter // ""] | any(contains($m))) | "  \(.displayName)"' \
@@ -320,7 +320,7 @@ Expected: at least restart-count coverage for critical namespaces and some pod o
 ```bash
 set -eu
 RUN_DATE="$(date -u +%Y-%m-%d)"
-RAW_DIR="./scoutflo-audits/gcp/${RUN_DATE}/raw"
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/gcp/${RUN_DATE}/raw"
 jq -r 'select([.conditions[]?.conditionThreshold.filter // ""] | any(contains("loadbalancing.googleapis.com"))) |
   "\(.displayName): \([.conditions[].conditionThreshold.filter] | join(" | "))"' "${RAW_DIR}/alert-policies.jsonl"
 ```
@@ -374,7 +374,7 @@ Expected: every bucket receiving critical-service logs has a retention period th
 ```bash
 set -eu
 RUN_DATE="$(date -u +%Y-%m-%d)"
-RAW_DIR="./scoutflo-audits/gcp/${RUN_DATE}/raw"
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/gcp/${RUN_DATE}/raw"
 jq -r 'select(((.documentation.content // "") | length) < 40) | .displayName' "${RAW_DIR}/alert-policies.jsonl"
 ```
 
@@ -442,7 +442,7 @@ Scan for an interrupted run before minting a new `RUN_ID`. Never start fresh whe
 ```bash
 set -eu
 GCP_PROJECT="your-project-id"   # gcp.project
-AUDIT_ROOT="./scoutflo-audits/gcp"
+AUDIT_ROOT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/gcp"
 
 resumable=""
 if [ -d "${AUDIT_ROOT}/runs" ]; then
@@ -468,7 +468,7 @@ Only after 16.1 finds nothing resumable. The run ID is a UTC second-precision ti
 
 ```bash
 set -eu
-AUDIT_ROOT="./scoutflo-audits/gcp"
+AUDIT_ROOT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/gcp"
 RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)"   # first-seen timestamp of this run; stable for its lifetime
 RUN_DIR="${AUDIT_ROOT}/runs/${RUN_ID}"
 mkdir -p "${RUN_DIR}"
@@ -483,7 +483,7 @@ One row per VM, uptime check, and backend service from the Estate sizing counts,
 ```bash
 set -eu
 GCP_PROJECT="your-project-id"   # gcp.project
-RUN_DIR="./scoutflo-audits/gcp/runs/20260717T140500Z"   # example; the resolved run directory from 16.1 or 16.2
+RUN_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/gcp/runs/20260717T140500Z"   # example; the resolved run directory from 16.1 or 16.2
 WORKLIST="${RUN_DIR}/worklist.tsv"
 
 if [ -f "${WORKLIST}" ]; then
@@ -509,7 +509,7 @@ Two invocations of this skill running at once would otherwise race on the same w
 
 ```bash
 set -eu
-RUN_DIR="./scoutflo-audits/gcp/runs/20260717T140500Z"   # example; the resolved run directory
+RUN_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/gcp/runs/20260717T140500Z"   # example; the resolved run directory
 LOCK="${RUN_DIR}/worklist.lock"
 LOCK_STALE_MINUTES="30"   # example, tune to your batch size and expected run length
 
@@ -535,7 +535,7 @@ Claim happens while the lock (16.4) is held; release happens right after the bat
 
 ```bash
 set -eu
-RUN_DIR="./scoutflo-audits/gcp/runs/20260717T140500Z"   # example; the resolved run directory
+RUN_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/gcp/runs/20260717T140500Z"   # example; the resolved run directory
 WORKLIST="${RUN_DIR}/worklist.tsv"
 LOCK="${RUN_DIR}/worklist.lock"
 BATCH_SIZE="10"   # example, tune it; matches the value declared in Estate sizing
@@ -569,7 +569,7 @@ Expected: `pending` drops by the batch size (or less, on the final partial batch
 
 ```bash
 set -eu
-AUDIT_ROOT="./scoutflo-audits/gcp"
+AUDIT_ROOT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/gcp"
 # RUN_DIR is the run-ID-keyed directory from this run; if this block runs in a
 # fresh shell, fall back to the most recently modified run directory.
 RUN_DIR="${RUN_DIR:-$(ls -dt "${AUDIT_ROOT}"/runs/*/ 2>/dev/null | head -n 1 | sed 's:/$::')}"
@@ -598,7 +598,7 @@ Runs the Phase 9 alert-hygiene subsection. Every block is read-only and reuses t
 ```bash
 set -eu
 RUN_DATE="$(date -u +%Y-%m-%d)"
-RAW_DIR="./scoutflo-audits/gcp/${RUN_DATE}/raw"
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/gcp/${RUN_DATE}/raw"
 DURATION_MIN="60s"   # example, tune it: retest window below which a paging policy is single-sample noisy (multiples of 60s)
 
 # GCP-063: per enabled policy, list every threshold/absence/MQL/PromQL condition's retest window;
@@ -629,7 +629,7 @@ Expected: no output. Each printed line is one member of the `GCP-063` finding's 
 ```bash
 set -eu
 RUN_DATE="$(date -u +%Y-%m-%d)"
-RAW_DIR="./scoutflo-audits/gcp/${RUN_DATE}/raw"
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/gcp/${RUN_DATE}/raw"
 AUTOCLOSE_MAX="86400s"   # example, tune it: auto-close longer than this leaves incidents open too long
 
 # GCP-064: autoClose per enabled policy; unset -> the effective 7-day default.
@@ -647,7 +647,7 @@ Expected: every serving policy carries a deliberate `autoClose` no longer than `
 ```bash
 set -eu
 RUN_DATE="$(date -u +%Y-%m-%d)"
-RAW_DIR="./scoutflo-audits/gcp/${RUN_DATE}/raw"
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/gcp/${RUN_DATE}/raw"
 
 # GCP-065: repeat-notification throttle per enabled policy; unset = a notification per evaluation.
 jq -r 'select((.enabled // true) == true)
@@ -664,7 +664,7 @@ Expected: a throttle on the high-churn policies. Flag `unset (no throttle)` only
 ```bash
 set -eu
 RUN_DATE="$(date -u +%Y-%m-%d)"
-RAW_DIR="./scoutflo-audits/gcp/${RUN_DATE}/raw"
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/gcp/${RUN_DATE}/raw"
 RENOTIFY_MIN="1800s"    # example: documented floor is 30 minutes
 RENOTIFY_MAX="86400s"   # example: documented ceiling is 24 hours
 
@@ -687,7 +687,7 @@ Google Cloud customer support for MQL ended 2025-07-22: existing `conditionMonit
 ```bash
 set -eu
 RUN_DATE="$(date -u +%Y-%m-%d)"
-RAW_DIR="./scoutflo-audits/gcp/${RUN_DATE}/raw"
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/gcp/${RUN_DATE}/raw"
 
 # GCP-067: enabled policies carrying any MQL condition (console-unmaintainable since 2025-07-22).
 jq -r 'select((.enabled // true) == true)

@@ -173,7 +173,7 @@ A calendar-date run directory breaks when a run crosses midnight UTC mid-batch: 
 
 ```bash
 set -eu
-AUDIT_ROOT="./scoutflo-audits/map-topology"
+AUDIT_ROOT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/map-topology"
 RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)"   # first-seen timestamp of this run; stable for its lifetime
 RUN_DIR="${AUDIT_ROOT}/runs/${RUN_ID}"
 mkdir -p "${RUN_DIR}/raw"
@@ -185,7 +185,7 @@ Before running the block above, scan for a resumable run so an interrupted mappi
 
 ```bash
 set -eu
-AUDIT_ROOT="./scoutflo-audits/map-topology"
+AUDIT_ROOT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/map-topology"
 resumable=""
 if [ -d "${AUDIT_ROOT}/runs" ]; then
   for d in "${AUDIT_ROOT}/runs"/*/; do
@@ -279,7 +279,7 @@ If `./scoutflo-audits/topology.md` already exists, copy it aside before writing 
 
 ```bash
 set -eu
-OUT="./scoutflo-audits/topology.md"
+OUT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/topology.md"
 TMP="${TMP:-$(mktemp -d)}"
 [ -f "${OUT}" ] && cp "${OUT}" "${TMP}/topology.prev.md" && echo "previous map saved" || echo "first run"
 ```
@@ -295,8 +295,8 @@ The write is unverified until re-read:
 
 ```bash
 set -eu
-OUT="./scoutflo-audits/topology.md"
-EXPORT="./scoutflo-audits/topology-export.json"
+OUT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/topology.md"
+EXPORT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/topology-export.json"
 [ -f "${OUT}" ] || { echo "topology.md was not written"; exit 1; }
 awk '/^## /' "${OUT}"
 awk -F'|' '/^## Services/{f=1;next} /^## /{f=0} f && /^\|/ {n++} END {print n-2, "service rows"}' "${OUT}"
@@ -310,7 +310,7 @@ On the large path, also prove the worklist finished before trusting the map:
 
 ```bash
 set -eu
-AUDIT_ROOT="./scoutflo-audits/map-topology"
+AUDIT_ROOT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/map-topology"
 # RUN_DIR is the run-ID-keyed directory from this run (see Run-ID keying above); if this
 # block runs in a fresh shell, fall back to the most recently modified run directory.
 RUN_DIR="${RUN_DIR:-$(ls -dt "${AUDIT_ROOT}"/runs/*/ 2>/dev/null | head -n 1 | sed 's:/$::')}"
@@ -331,7 +331,7 @@ This skill is the only place in the toolkit that can check [topology-readiness.m
 
 ```bash
 set -eu
-EXPORT="./scoutflo-audits/topology-export.json"
+EXPORT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/topology-export.json"
 {
   printf 'service\tT1-identity\tT2-workload\n'
   jq -r '
