@@ -268,16 +268,29 @@ PROM_TOKEN="${PROM_TOKEN:-}"                # value of the var named by promethe
 AUTH="Authorization: Bearer ${PROM_TOKEN}"
 [ -n "$PROM_TOKEN" ] || AUTH="Accept: application/json"
 
+# Lifetime total (context only — a cumulative counter's instant value is all-time, so a
+# now-dead receiver keeps a large number long after it stopped delivering).
 TOTAL_CODE=$(curl -s -o /tmp/alr-notif-total.json -w '%{http_code}' --max-time 10 -H "$AUTH" \
   "${PROM_URL}/api/v1/query?query=sum%20by%20(integration%2Creceiver)%20(alertmanager_notifications_total)")
+# Windowed success — this is the series the ALR-006 climb-vs-flat verdict is judged from.
+# Without it, a channel migration N days ago leaves the dead receiver's lifetime total high
+# and the intended receiver's low, inverting which receiver reads as "active right now".
+TOTAL_WIN_CODE=$(curl -s -o /tmp/alr-notif-total-win.json -w '%{http_code}' --max-time 10 -H "$AUTH" \
+  "${PROM_URL}/api/v1/query?query=sum%20by%20(integration%2Creceiver)%20(increase(alertmanager_notifications_total%5B${RECENT_WINDOW}%5D))")
 FAILED_CODE=$(curl -s -o /tmp/alr-notif-failed.json -w '%{http_code}' --max-time 10 -H "$AUTH" \
   "${PROM_URL}/api/v1/query?query=sum%20by%20(integration%2Creceiver)%20(increase(alertmanager_notifications_failed_total%5B${RECENT_WINDOW}%5D))")
-echo "notifications_total: ${TOTAL_CODE}"
-echo "notifications_failed: ${FAILED_CODE}"
-if [ "$TOTAL_CODE" = "401" ] || [ "$TOTAL_CODE" = "403" ] || [ "$FAILED_CODE" = "401" ] || [ "$FAILED_CODE" = "403" ]; then
+echo "notifications_total (lifetime): ${TOTAL_CODE}"
+echo "notifications_total (${RECENT_WINDOW}): ${TOTAL_WIN_CODE}"
+echo "notifications_failed (${RECENT_WINDOW}): ${FAILED_CODE}"
+if [ "$TOTAL_CODE" = "401" ] || [ "$TOTAL_CODE" = "403" ] \
+  || [ "$TOTAL_WIN_CODE" = "401" ] || [ "$TOTAL_WIN_CODE" = "403" ] \
+  || [ "$FAILED_CODE" = "401" ] || [ "$FAILED_CODE" = "403" ]; then
   echo "auth problem reading dispatch counters; ALR-005/ALR-006 are blocked, not failed, until the token works"
 else
+  echo "lifetime totals (context only):"
   jq -r '.data.result[] | "\(.metric.receiver)/\(.metric.integration): \(.value[1])"' /tmp/alr-notif-total.json
+  echo "increase() over ${RECENT_WINDOW} — judge ALR-006 climb/flat from THIS:"
+  jq -r '.data.result[] | "\(.metric.receiver)/\(.metric.integration): \(.value[1])"' /tmp/alr-notif-total-win.json
   jq -r '.data.result[] | "\(.metric.receiver)/\(.metric.integration): \(.value[1])"' /tmp/alr-notif-failed.json
 fi
 ```
@@ -285,7 +298,7 @@ fi
 Verdicts, only once the queries above returned `200` and not an auth code:
 
 - Any failure counter above zero inside `RECENT_WINDOW`: delivery is breaking right now (ALR-005, high). If your Alertmanager version exposes a `reason` label, group by it too.
-- The receiver your routes point at stays flat at zero while a different receiver climbs on the same time window: an integration or route mismatch (ALR-006, high). This is the shape a silent channel migration leaves behind.
+- The receiver your routes point at stays flat at zero in the `increase()`-over-`RECENT_WINDOW` success series (`/tmp/alr-notif-total-win.json`) while a different receiver climbs on that same window: an integration or route mismatch (ALR-006, high). Judge this from the windowed series, not the lifetime instant total — the lifetime count reflects all-time deliveries and lets a now-dead receiver's historical volume masquerade as current traffic. This is the shape a silent channel migration leaves behind.
 - A receiver with zero traffic and zero alerts routed to it in section 6 is unproven, not broken: status `configured`, never `pass`. The controlled test that forces one delivery and upgrades it to proven is a setup-lane action.
 - A `401`/`403` on either query is never read as "flat at zero" or "no failures": an auth-blocked query proves nothing about dispatch, and reporting it as a passing or flat receiver is the exact false-diagnosis this phase exists to prevent.
 

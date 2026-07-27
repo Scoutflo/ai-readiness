@@ -29,6 +29,13 @@ all correctness fixes to shipped behaviour. Also corrects the install docs.
   `/api/v2/receivers` count had no HTTP-code capture, so an auth failure either
   miscounted (JSON error body's key count) or aborted the block. Now stops and
   reports an auth finding as the skill already promised.
+- **audit-alert-routing — ALR-006 dispatch proof (high):** the success counter
+  `alertmanager_notifications_total` was queried only as a lifetime instant, while
+  the ALR-006 verdict (and the skill's own Phase 6 text) needs an `increase()`
+  over `RECENT_WINDOW` "climb vs flat" comparison — a cumulative counter's instant
+  value is all-time, so a receiver that went dead after a channel migration keeps
+  a large total and reads as "active right now", inverting the verdict. Added the
+  windowed success query and based the verdict on it, keeping lifetime as context.
 - **audit-aws — false cost findings (high):** AWSOPT-001 compared Compute
   Optimizer's `finding` against `"OPTIMIZED"`, but the enum is mixed-case
   (`"Optimized"`), so every correctly-sized instance was flagged. The RDS branch
