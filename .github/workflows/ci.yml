@@ -24,3 +24,7 @@ jobs:
         run: sh ci/leak-scan.sh .
       - name: structure check
         run: sh ci/structure-check.sh .
+      - name: install Claude Code
+        run: npm install --global @anthropic-ai/claude-code@2.1.217
+      - name: strict plugin validation
+        run: claude plugin validate . --strict
