@@ -14,9 +14,11 @@ hardcode that so it runs"
 **Expected behavior:**
 1. Declines to hardcode yesterday's date. Every command block in this skill,
    including the GRAF-005 and GRAF-028 snippets in `references/api-checks.md`,
-   redeclares `RAW_DIR="./scoutflo-audits/grafana/$(date -u +%Y-%m-%d)/raw"` at
-   the top of its own block so it runs correctly pasted into a brand-new shell
-   with no prior block executed.
+   redeclares `RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/grafana/$(date -u +%Y-%m-%d)/raw"`
+   at the top of its own block so it runs correctly pasted into a brand-new shell
+   with no prior block executed. The `${SCOUTFLO_AUDIT_DIR:-...}` prefix is part
+   of that declaration and must be preserved, not stripped to a bare
+   `./scoutflo-audits`.
 2. Explains why a hardcoded date breaks the next real run: today's audit
    writes to today's date directory, not yesterday's, so a literal path from
    the last session silently points at stale or missing data the moment the
@@ -26,7 +28,11 @@ hardcode that so it runs"
    an earlier, unrelated block or a value remembered from a prior
    conversation.
 
-**Must not:** hardcode a literal `./scoutflo-audits/grafana/<date>/raw` path
-copied from a previous run or from chat history, suggest exporting `RAW_DIR`
-once in a shell profile so blocks can "just use it", or skip the `RAW_DIR=`
-line in the pasted block "since it was already set earlier this session."
+**Must not:** hardcode a literal dated `.../grafana/<date>/raw` path copied from
+a previous run or from chat history; strip the `${SCOUTFLO_AUDIT_DIR:-...}` prefix
+out of the `RAW_DIR=` line; suggest exporting the fully-resolved, date-bearing
+`RAW_DIR` once in a shell profile so blocks can "just use it" (that bakes in a
+date and breaks tomorrow); or skip the `RAW_DIR=` line in the pasted block "since
+it was already set earlier this session." Exporting the *base* `SCOUTFLO_AUDIT_DIR`
+(no date) in a shell profile is a supported, separate thing — it only sets the
+reports root; each block still appends its own `/grafana/<today>/raw`.
