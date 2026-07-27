@@ -135,6 +135,7 @@ Every `report.md` is validated against a fixed output-conformance standard befor
 - The `claude` terminal CLI (`npm install -g @anthropic-ai/claude-code`) — the simplest way to do the one-time install, and required if you go the individual-terminal route. (You can avoid the terminal entirely via the Team/Enterprise `settings.json` path, or the desktop app's plugin browser once the marketplace has been added — see [docs/install.md](docs/install.md).)
 - Claude Code (latest), with an active subscription
 - `bash`, `curl`, `jq` on your `PATH`
+- **On Windows: install [Git for Windows](https://git-scm.com/downloads/win)** (select "Add to PATH" during setup) so Claude Code has Git Bash. Every skill runs POSIX `bash`; Claude Code auto-detects Git Bash and, if it is absent, falls back to PowerShell, which cannot run these commands. macOS and Linux already have a POSIX shell. See [docs/install.md](docs/install.md#windows) for the details and how to point Claude Code at a non-standard Git Bash path.
 - The CLI for whatever you're auditing (`kubectl`/`istioctl` for Kubernetes, `doctl` for DigitalOcean, `gcloud` for GCP, `aws` for AWS) — `/scoutflo:doctor` tells you if anything's missing
 - Admin access to each integration you connect, just long enough to create a scoped credential
 
@@ -144,6 +145,7 @@ Every `report.md` is validated against a fixed output-conformance standard befor
 - **`/plugin marketplace add` fails or hangs (in the terminal).** The marketplace fetches this **public** repo the same way `git` clones any public repo, so no GitHub login or token is required — but it does go over the network with `git` under the hood. In a locked-down corporate network the usual causes are a firewall/proxy blocking `github.com`, `git` not installed, or a proxy that needs authentication. Pre-flight test: `git clone https://github.com/Scoutflo/ai-readiness.git /tmp/air-test` — if that succeeds from the same machine, `/plugin marketplace add` will too.
 - **After installing, the `/scoutflo:*` commands don't show up.** New plugin installs need a full restart to load — fully quit Claude Code / Claude.app and reopen it, not just a new chat/tab. An in-progress conversation, or even a new tab in an already-running app, won't pick up a plugin installed partway through the session.
 - **A command says "not recognized here" but then answers anyway.** Some Claude Code clients have their own fixed list of built-in slash commands separate from installed-plugin commands; this message just means the client's own list doesn't include it, not that the skill failed. If it responds with real content right after, it worked.
+- **(Windows) skill commands fail with PowerShell parse errors** (on `set -eu`, `[ ... ]`, pipes, etc.). Claude Code didn't find Git Bash and fell back to PowerShell, which can't run these POSIX commands. Install [Git for Windows](https://git-scm.com/downloads/win) with "Add to PATH", restart, and re-run — see [docs/install.md](docs/install.md#windows).
 
 ## Feedback and issues
 

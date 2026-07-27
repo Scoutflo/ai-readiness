@@ -22,7 +22,9 @@
 #   - Reports go to SCOUTFLO_AUDIT_DIR if the env file exports it; otherwise to
 #     scoutflo-audits/ under the `cd` directory below. Keep it stable run-to-run
 #     so deltas compute automatically. Interactive runs must resolve to the same
-#     place (set reports_dir in toolkit.yaml or export SCOUTFLO_AUDIT_DIR there too).
+#     place: export the SAME SCOUTFLO_AUDIT_DIR in your shell profile too. (Setting
+#     reports_dir in toolkit.yaml does NOT move where runs write — it only makes
+#     doctor/start print this export line.)
 #   - Check ~/.scoutflo/audit-cron.log after the first scheduled run.
 #
 # Fields: minute hour day-of-month month day-of-week

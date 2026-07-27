@@ -179,7 +179,7 @@ echo "drift: ${DRIFT}"
 - **Medium** (`TOTAL <= MEDIUM_MAX_OBJECTS`): per-category passes (rule presence, config drift, route matching, dispatch proof, triage metadata), completed in one run.
 - **Large**: work alert rules in batches of `BATCH_SIZE` against a run-ID-keyed worklist with a lock, so an interrupted run resumes instead of restarting, and the report is assembled incrementally as batches complete. Commands, resume scan, and lock mechanics are in [references/verification-chain.md section 12](references/verification-chain.md#12-large-path-worklist-alert-rule-batches).
 
-Never silently truncate: if the run judged a subset, the report names what was skipped and the coverage denominators reflect it. A `401`/`403` on either count call is an auth problem, not a zero-object estate; stop and report it per the auth-header discipline above rather than declaring a small path from an empty count.
+Record the chosen path and counts in `findings.json` as `estate: {objects, path}` (per the [findings schema](../../report-standard/findings-schema.md)); the guided-walkthrough drift check above reads `.estate.objects` from the previous run, and `audit-all` reads them to roll up this target's size. Never silently truncate: if the run judged a subset, the report names what was skipped and the coverage denominators reflect it. A `401`/`403` on either count call is an auth problem, not a zero-object estate; stop and report it per the auth-header discipline above rather than declaring a small path from an empty count.
 
 ## Phase 1: Service context and alert-to-service mapping
 

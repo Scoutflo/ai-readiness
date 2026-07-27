@@ -99,7 +99,7 @@ Flags:
 
 | Flag | Meaning |
 | --- | --- |
-| `--out DIR` | Run directory for `matrix.tsv`. Default: `<reports-dir>/doctor/<UTC date>`, where `<reports-dir>` is the Step 0 resolved location (`SCOUTFLO_AUDIT_DIR` → `reports_dir` → `./scoutflo-audits`) |
+| `--out DIR` | Run directory for `matrix.tsv`. Default: `${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/doctor/<UTC date>` — the `SCOUTFLO_AUDIT_DIR` env var if exported, else `./scoutflo-audits` (same as Step 0; `reports_dir` is not read here) |
 | `--config FILE` | Config to read. Default: `~/.scoutflo/toolkit.yaml` |
 | `--slack-test` | Send the Slack webhook test post. Only after explicit user confirmation; see below |
 

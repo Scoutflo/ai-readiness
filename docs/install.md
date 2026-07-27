@@ -55,6 +55,20 @@ claude plugin marketplace remove scoutflo
 
 Your credentials (`~/.scoutflo/toolkit.yaml`, token env variables) and generated reports (`./scoutflo-audits/`) are yours and are not removed; delete them yourself if you want a full cleanup.
 
+## Windows
+
+Every skill in this plugin runs POSIX shell (`bash`/`sh`: `set -eu`, pipes, `curl`, `jq`, `date`, `mktemp`). Claude Code on Windows runs shell commands through **Git Bash** when it is present and **falls back to PowerShell** when it is not — and PowerShell cannot run these commands. So on Windows:
+
+1. **Install [Git for Windows](https://git-scm.com/downloads/win)** and select **"Add to PATH"** during setup. This provides `bash.exe`, which Claude Code auto-detects. Restart your terminal (and Claude Code) afterward.
+2. Install `jq` (e.g. `winget install jqlang.jq`) and the CLIs for whatever you audit (`kubectl`, `aws`, `gcloud`, `doctl`) so they are on `PATH` inside Git Bash. `/scoutflo:doctor` reports anything missing.
+3. If Git Bash is installed somewhere non-standard, point Claude Code at it in `settings.json`:
+   ```json
+   { "env": { "CLAUDE_CODE_GIT_BASH_PATH": "C:\\Program Files\\Git\\bin\\bash.exe" } }
+   ```
+   (Claude Code only accepts a file named `bash.exe`/`sh.exe` here; `git-bash.exe` is ignored.)
+
+Symptom of a missing POSIX shell: skill commands fail immediately with PowerShell parse errors (e.g. on `set -eu` or `[ ... ]`). The fix is always step 1 above. Everything else — the skills, `${CLAUDE_PLUGIN_ROOT}` path handling, the report layout — is identical to macOS/Linux once Git Bash is present; the plugin's date math uses a BSD-first/GNU-fallback form that works on both.
+
 ## Team
 
 Commit this to `.claude/settings.json` in the repository your team works from. Everyone who opens the repo in Claude Code gets the marketplace and the plugin automatically, kept up to date:

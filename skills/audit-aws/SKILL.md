@@ -153,14 +153,12 @@ EKS="$(aws_cli eks list-clusters --query 'clusters' --output json | jq 'length')
 LAMBDA="$(aws_cli lambda list-functions --query 'Functions[].FunctionName' --output json | jq 'length')"
 TOTAL=$((EC2 + RDS + ECS_SERVICES + EKS + LAMBDA))
 echo "ec2=${EC2} rds=${RDS} ecs_services=${ECS_SERVICES} eks_clusters=${EKS} lambda=${LAMBDA} scored_objects=${TOTAL}"
-```
 
-### Guided-walkthrough drift check
-
-Per [report-standard/README.md](../../report-standard/README.md#using-topology-and-prior-runs-as-a-guided-walkthrough): compare this count against the target's own history, not a blank slate. Most AWS `describe-*`/`list-*` calls already return live state in the same response as the object list, so there is little enumeration cost left to skip here — the real value of this step is telling the reader whether their estate actually changed, not silently re-scanning the same ground every time.
-
-```bash
-set -eu
+# Guided-walkthrough drift check, per report-standard/README.md#using-topology-and-prior-runs-as-a-guided-walkthrough:
+# compare this count against the target's own history, not a blank slate. This stays in the
+# SAME block as the TOTAL computed above; a separate fence would run in a fresh shell where
+# $TOTAL is unbound and, under set -eu, abort. The value of the step is telling the reader
+# whether their estate actually changed, not silently re-scanning the same ground every run.
 TARGET_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/aws"
 PREV_RUN="$(find "$TARGET_DIR" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort | tail -1)"
 DRIFT="first run"
@@ -178,6 +176,10 @@ if [ -n "$PREV_RUN" ] && [ -f "${PREV_RUN}/findings.json" ]; then
 fi
 echo "drift: ${DRIFT}"
 ```
+
+### Guided-walkthrough drift check
+
+The drift comparison runs at the end of the estate-sizing block above (it needs the `$TOTAL` computed there). Most AWS `describe-*`/`list-*` calls already return live state in the same response as the object list, so there is little enumeration cost left to skip here; the point is to state whether the estate changed since the last run in the executive summary, per [report-standard/README.md](../../report-standard/README.md#using-topology-and-prior-runs-as-a-guided-walkthrough).
 
 State the `drift` line in the executive summary verbatim (or "first run" on the first run) — never silently omit it. This does not change which live checks run; every check in Phases 3-8 still executes fresh regardless of drift status, per the guided-walkthrough rule that reuse applies to discovery scope, never to whether a result is still true.
 
@@ -228,7 +230,7 @@ Commands in section 6. Judge whether an alarm that fires reaches a human: every 
 
 ## Phase 5: Compute health and coverage (AWS-020 to AWS-026)
 
-Commands in section 7. Per serving EC2 instance: a `StatusCheckFailed` (system or instance) alarm (`AWS-020`). Per ASG: health-check type and grace period configured so a slow-starting instance is not killed before it is ready (`AWS-021`). Per ECS service: an alarm or documented view on desired-versus-running task count (`AWS-022`). Per EKS cluster: Container Insights enabled, presence only, not full metrics depth, since deep in-cluster metrics are `audit-lgtm`'s or `audit-grafana`'s job when the customer runs that stack (`AWS-023`). Per critical Lambda function: error-rate and throttle alarms (`AWS-024`); concurrent-execution or duration alarms where the function is latency-sensitive or has a reserved-concurrency ceiling (`AWS-025`). X-Ray tracing enabled on latency-sensitive services where the team has adopted it (`AWS-026`, info; absence is not a finding when the team never adopted X-Ray).
+Commands in section 7. Per serving EC2 instance: a `StatusCheckFailed` (system or instance) alarm (`AWS-020`). Per ASG: health-check type and grace period configured so a slow-starting instance is not killed before it is ready (`AWS-021`). Per ECS service: an alarm or documented view on desired-versus-running task count (`AWS-022`). Per EKS cluster: Container Insights enabled, presence only, not full metrics depth, since deep in-cluster metrics are `audit-lgtm`'s or `audit-grafana`'s job when you run that stack (`AWS-023`). Per critical Lambda function: error-rate and throttle alarms (`AWS-024`); concurrent-execution or duration alarms where the function is latency-sensitive or has a reserved-concurrency ceiling (`AWS-025`). X-Ray tracing enabled on latency-sensitive services where the team has adopted it (`AWS-026`, info; absence is not a finding when the team never adopted X-Ray).
 
 ## Phase 6: Managed databases (AWS-030 to AWS-034)
 
@@ -404,6 +406,6 @@ All thresholds and windows named in the checks are example values; tune them to 
 | Wrong AWS account audited | Every command passes `--profile`/`--region` explicitly from `toolkit.yaml`; the live-safety gate compares `sts get-caller-identity` against `aws.account_id` and stops on mismatch |
 | Missing Compute Optimizer enrollment read as zero findings | The doctor gate's cost-permission probe and Phase 10 both report `excluded, reason: ...` for the affected rows, never a silent empty result |
 | CloudTrail/Config/Flow Logs judged per-service | These are account- or VPC-level controls; judge them once for the account or VPC, not per critical service |
-| EKS in-cluster metrics judged by this audit | `AWS-023` checks Container Insights presence only; depth belongs to `audit-lgtm`/`audit-grafana` when the customer runs that stack on EKS |
+| EKS in-cluster metrics judged by this audit | `AWS-023` checks Container Insights presence only; depth belongs to `audit-lgtm`/`audit-grafana` when you run that stack on EKS |
 | Access key or role ARN external ID printed into evidence | Never print AWS credential material anywhere; account IDs and resource ARNs may appear locally but never in the Slack brief |
 | `logging.cloudwatch_logs` schema assumed to exist | No such attribute schema is defined yet; T4 for log-forwarding edges checks presence only and the report states the gap plainly |
