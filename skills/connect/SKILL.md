@@ -28,6 +28,10 @@ Two hard rules for this whole flow:
 - Admin access to each provider you connect (you create the tokens in their UIs).
 - Write access to `~/.scoutflo/`.
 
+Most integrations (Grafana, Prometheus, Loki, Tempo, Mimir, VictoriaMetrics, Sentry, Datadog, PagerDuty, ELK, JSM, Zenduty, Groundcover) are reached over HTTPS with a token, so they need only `curl` + `jq` — no vendor CLI. Only Kubernetes and AWS/GCP/DigitalOcean lean on a CLI (`kubectl`, `aws`, `gcloud`, `doctl`).
+
+**Already have MCP servers for these providers?** You still record hosts/tokens here the same way, and `doctor` still validates reachability. When a provider's read-only MCP tools are connected, the audit skills may use them in place of the equivalent `curl`/CLI call to gather the same evidence (read-only tools only, same discipline) — so a provider reachable only through its MCP server is still auditable without installing its CLI. MCP is an optional substitution, never a requirement; the CLI/HTTP path is always the baseline. See [docs/skill-authoring-conventions.md](../../docs/skill-authoring-conventions.md#integration-access-clihttp-first-mcp-equivalent-allowed).
+
 ## The two credential tiers
 
 Every integration that supports scoped tokens gets one of two tiers. Exact scopes per provider are in [references/providers.md](references/providers.md).

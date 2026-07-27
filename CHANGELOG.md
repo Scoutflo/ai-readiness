@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.1.56
+
+MCP-server awareness. Skills stay CLI/HTTP-first (the portable default, unchanged),
+but now explicitly permit using a provider's connected **read-only MCP tools** in
+place of the equivalent `curl`/CLI call to gather the same evidence — so a system
+reachable only through its MCP server is auditable without installing its vendor
+CLI. This is docs/convention only; no command block was rewritten.
+
+- **`docs/skill-authoring-conventions.md`** — new "Integration access: CLI/HTTP
+  first, MCP-equivalent allowed" section: MCP substitution is allowed only when it
+  returns the same data, read-only discipline and lane rules are unchanged (audits
+  call read-only MCP tools only, never mutating ones), the tool call + output is
+  the evidence, live-safety and secrets rules still apply, and no skill may ever
+  hard-depend on MCP — the CLI/HTTP path is always the baseline.
+- **`connect`** — prerequisites now note that most integrations need only
+  `curl`+`jq` (HTTPS+token), only K8s/AWS/GCP/DO use a CLI, and that connected
+  read-only MCP servers can stand in for a missing CLI.
+- **FAQ** — added "We use MCP servers instead of CLIs — does this still work?" (yes,
+  with the read-only-substitution explanation).
+
+No audit logic, checks, IDs, or scoring changed.
+
 ## 0.1.55
 
 Two things: a permanent CI gate for the cross-block-state bug class (so it can
