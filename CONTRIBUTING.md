@@ -7,6 +7,7 @@ Start with [AGENTS.md](AGENTS.md) and [docs/skill-authoring-conventions.md](docs
 `main` is release-only. The plugin marketplace serves from the default branch, and directory listings re-pin on new commits to it, so anything merged to `main` is immediately installable by users.
 
 - All work happens on branches; merge to `main` only when the change is release-ready.
+- Protect `main` by requiring a pull request, the `gates` status check, and one approving review from Atharva. Do not allow direct pushes.
 - Every user-visible change bumps `version` in `.claude-plugin/plugin.json` and gets a CHANGELOG entry. Users receive updates only on version bumps.
 - Tag releases: `claude plugin tag . --push -m "Release %s"`.
 
