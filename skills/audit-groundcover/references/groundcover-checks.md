@@ -99,9 +99,32 @@ RS_CODE="$(curl -s -o "${RAW_DIR}/monitor-state.json" -w '%{http_code}' --max-ti
   -H "Content-Type: application/json" -X POST "${GC_API}/api/monitors/summary/query" --data '{}' || echo 000)"
 echo "runtime-state probe: HTTP ${RS_CODE} (200 = available; anything else = GC-022/GC-023 not-in-scope)"
 echo "$RS_CODE" > "${RAW_DIR}/monitor-state.http"
+
+# Self-hosted detection + Alertmanager fallback. When GC_API is a non-cloud host (self-hosted),
+# the /api/monitors/* paths can 404 even after the base authenticates (verified live 2026-07-26):
+# the self-hosted monitors component does not always expose the cloud monitors API. In that case
+# the firing-state signal comes from the Alertmanager-compatible endpoint instead (the same path
+# the platform uses for self-hosted Groundcover). This does NOT apply on api.groundcover.com.
+case "$GC_API" in
+  *api.groundcover.com*) echo "mode: SaaS (cloud monitors API)";;
+  *)
+    ML_CODE="$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 -H "$AUTH" \
+      -H "Content-Type: application/json" -X POST "${GC_API}/api/monitors/list" --data '{"sources":[]}' || echo 000)"
+    if [ "$ML_CODE" = "404" ]; then
+      echo "mode: SELF-HOSTED, monitors API not exposed (HTTP 404) -> GC-001..023 not-in-scope; using Alertmanager fallback for firing state"
+      curl -s --max-time 20 -H "$AUTH" "${GC_API}/api/alertmanager/grafana/api/v2/alerts" \
+        | jq '[.[]? | select(.status.state=="active" or .status.state=="firing")
+            | {fingerprint, labels: (.labels // {}), startsAt}]' > "${RAW_DIR}/am-firing.json" 2>/dev/null \
+        || echo '[]' > "${RAW_DIR}/am-firing.json"
+      echo "alertmanager firing alerts: $(jq 'length' "${RAW_DIR}/am-firing.json" 2>/dev/null || echo 0)"
+    else
+      echo "mode: SELF-HOSTED, monitors API responded (HTTP ${ML_CODE}) -> cloud-shape checks apply"
+    fi
+    ;;
+esac
 ```
 
-Expected: `monitors.json`, per-monitor config files, `workflows.json`, `recurring-silences.json`, and the runtime-state probe result. A 401 is a bad key; a 403 is missing Viewer access or a missing `backend_id`.
+Expected: `monitors.json`, per-monitor config files, `workflows.json`, `recurring-silences.json`, and the runtime-state probe result. A 401 is a bad key; a 403 is missing Viewer access or a missing `backend_id`. On a self-hosted host where the monitors API 404s, the config-level monitor checks (GC-001 to GC-023) are `not-in-scope` with that reason and the firing-state signal comes from `am-firing.json` (the Alertmanager fallback) rather than a fabricated "no monitors" result.
 
 ## 5. Monitor firing hygiene (GC-001 to GC-005)
 

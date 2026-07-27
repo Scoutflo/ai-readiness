@@ -88,7 +88,7 @@ The key pair and the site together select the account; there is no ambient defau
 - Never score from object counts.
   - ❌ `Scored monitor coverage 90: two hundred monitors exist.`
   - ✅ `Scored monitor coverage 45: two hundred monitors exist, but eleven are drafts, six target a deleted Slack channel, and thirty have no service tag; credit stops at partial.`
-- Trust Datadog's own signals, and reconcile them. `GET /api/v1/monitor/search` returns a `quality_issues[]` array per monitor (muted >60 days, missing recipients, stuck in alert, composite missing constituents). Report the vendor's flags alongside this audit's findings; where they disagree about a monitor, the disagreement is itself the finding (DD-015).
+- Trust Datadog's own signals, and reconcile them. `GET /api/v1/monitor/search` returns a `quality_issues[]` array on each monitor object (top-level on the monitor, not under `.metadata`; verified live), flagging muted >60 days, missing recipients, stuck in alert, composite missing constituents. Report the vendor's flags alongside this audit's findings; where they disagree about a monitor, the disagreement is itself the finding (DD-015).
 - Downtimes are v2 only. Every v1 downtime endpoint is deprecated including its reads; this audit reads `/api/v2/downtime` and never `/api/v1/downtime`.
 - Never write a monitor message body verbatim if it embeds a secret-shaped value, and never write API/app keys anywhere. Captures keep IDs, names, options, and tags.
 

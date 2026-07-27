@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.1.51
+
+Two fixes from the first live QA run of the Phase 2 skills (found against real
+provider instances, not desk review):
+
+- **audit-datadog:** the `quality_issues[]` corroboration (DD-015) read the array
+  at `.monitors[].metadata.quality_issues`, but it is a top-level field on each
+  monitor (`.monitors[].quality_issues`) — verified live against a Datadog US5
+  org (22 issues present at the top level, 0 under `.metadata`). The endpoint and
+  paging (`monitor/search?per_page=1000`, `metadata.total_count`) were already
+  correct. jq path fixed in the reference and the DD-015 description.
+- **audit-groundcover:** made the skill self-hosted-aware. On SaaS
+  (`api.groundcover.com`) the `/api/monitors/*` paths are correct; on a
+  self-hosted host they can `404` even after the base authenticates (verified
+  live), because the self-hosted monitors component does not expose the cloud
+  monitors API at that base. The skill now detects mode, marks the config-level
+  monitor checks `not-in-scope` on a self-hosted 404 (never a fabricated "no
+  monitors"), and falls back to the Alertmanager-compatible firing surface
+  (`/api/alertmanager/grafana/api/v2/alerts`) for firing state — matching how the
+  platform itself routes self-hosted Groundcover.
+
+No new checks or IDs; both are correctness fixes to shipped checks.
+
 ## 0.1.50
 
 Freshness and correctness pass across the seven pre-Phase-2 audit skills (the

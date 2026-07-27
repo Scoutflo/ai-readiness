@@ -75,8 +75,11 @@ curl -fsS --max-time 60 -H "DD-API-KEY: ${DATADOG_API_KEY}" -H "DD-APPLICATION-K
 # Datadog's OWN monitor quality signals (native corroboration anchor).
 curl -fsS --max-time 60 -H "DD-API-KEY: ${DATADOG_API_KEY}" -H "DD-APPLICATION-KEY: ${DATADOG_APP_KEY}" \
   "https://${DD_HOST}/api/v1/monitor/search?per_page=1000" \
-  | jq '[.monitors[]? | {id, name, quality_issues: (.metadata.quality_issues // [])}]' \
+  | jq '[.monitors[]? | {id, name, quality_issues: (.quality_issues // [])}]' \
   > "${RAW_DIR}/monitor-quality.json" || echo '[]' > "${RAW_DIR}/monitor-quality.json"
+# NOTE: quality_issues is a top-level field on each monitor object (verified live against US5,
+# 2026-07-26), NOT under .metadata. The paging total is at .metadata.total_count (see the
+# estate-sizing call), but the per-monitor quality_issues[] array sits directly on the monitor.
 
 # Downtimes: v2 ONLY. v1 is deprecated including its reads.
 curl -fsS --max-time 30 -H "DD-API-KEY: ${DATADOG_API_KEY}" -H "DD-APPLICATION-KEY: ${DATADOG_APP_KEY}" \
