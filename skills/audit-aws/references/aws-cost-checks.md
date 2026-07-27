@@ -60,21 +60,30 @@ aws_cli compute-optimizer get-enrollment-status --output json | jq -r '.status'
 ```bash
 set -eu
 AWS_PROFILE_CFG=""            # aws.profile
-AWS_REGION_CFG="us-east-1"    # aws.region
-aws_cli() {
+# Cost Optimization Hub is a SINGLE-ENDPOINT service in the aws partition: it exists ONLY
+# in us-east-1. Do NOT map this from aws.region — for a customer whose account region is not
+# us-east-1, targeting cost-optimization-hub.<their-region>... hits a non-existent endpoint and
+# fails. Pin us-east-1 here (like the Trusted Advisor block), regardless of the audit region.
+COH_REGION="us-east-1"
+coh_cli() {
   if [ -n "$AWS_PROFILE_CFG" ]; then
-    aws --profile "$AWS_PROFILE_CFG" ${AWS_REGION_CFG:+--region "$AWS_REGION_CFG"} "$@"
+    aws --profile "$AWS_PROFILE_CFG" --region "$COH_REGION" "$@"
   else
-    aws ${AWS_REGION_CFG:+--region "$AWS_REGION_CFG"} "$@"
+    aws --region "$COH_REGION" "$@"
   fi
 }
-# Enrollment first: recommendations are empty unless the account has opted in.
-aws_cli cost-optimization-hub list-enrollment-statuses --output json 2>/dev/null \
-  | jq -r '.items[]?.status // "NOT_ENROLLED"'
-# When enrolled, pull the aggregated recommendations; the savings field is exactly
-# estimatedMonthlySavings (not estimatedMonthlySavingsAmount) — take it verbatim, never recompute.
-aws_cli cost-optimization-hub list-recommendations --output json 2>/dev/null \
-  | jq -r '.items[]? | "\(.recommendationId)\t\(.currentResourceType)\t\(.estimatedMonthlySavings)"'
+# Enrollment first: recommendations are empty unless the account has opted in. Capture the
+# exit status — an endpoint/permission error must be reported as BLOCKED, not silently
+# reinterpreted as "not enrolled" (which is what `2>/dev/null | ... // "NOT_ENROLLED"` did).
+if COH_ENROLL="$(coh_cli cost-optimization-hub list-enrollment-statuses --output json 2>/tmp/coh-err)"; then
+  echo "$COH_ENROLL" | jq -r '.items[]?.status // "NOT_ENROLLED"'
+  # When enrolled, pull the aggregated recommendations; the savings field is exactly
+  # estimatedMonthlySavings (not estimatedMonthlySavingsAmount) — take it verbatim, never recompute.
+  coh_cli cost-optimization-hub list-recommendations --output json \
+    | jq -r '.items[]? | "\(.recommendationId)\t\(.currentResourceType)\t\(.estimatedMonthlySavings)"'
+else
+  echo "AWSOPT-011 BLOCKED: cost-optimization-hub (us-east-1) call failed — $(cat /tmp/coh-err). Report as blocked (endpoint/permission), NOT as 'not enrolled'."
+fi
 ```
 
 Expected: an `Active` enrollment status, then one line per recommendation with the Hub's own `estimatedMonthlySavings`. Anything other than an active enrollment means AWSOPT-011 reports `excluded, reason: "Cost Optimization Hub not enrolled"` and stops. The dollar figure is reported verbatim from `estimatedMonthlySavings`, never recomputed.
@@ -92,16 +101,24 @@ aws_cli() {
     aws ${AWS_REGION_CFG:+--region "$AWS_REGION_CFG"} "$@"
   fi
 }
+# NOTE: Compute Optimizer's `finding` enum is mixed-case ("Optimized",
+# "Underprovisioned", "Overprovisioned", "NotOptimized") — NOT uppercase. Comparing
+# against "OPTIMIZED" never matches, so every optimized instance would be falsely flagged.
 aws_cli compute-optimizer get-ec2-instance-recommendations --output json \
-  | jq '[.instanceRecommendations[]? | select(.finding != "OPTIMIZED") | {
+  | jq '[.instanceRecommendations[]? | select(.finding != "Optimized") | {
       instance: .instanceArn, finding: .finding,
       current_type: .currentInstanceType,
       recommended_type: (.recommendationOptions[0].instanceType // null),
       estimated_monthly_savings_usd: (.recommendationOptions[0].savingsOpportunity.estimatedMonthlySavings.value // null)}]'
+# RDS recommendations: the per-resource classification field is `instanceFinding`
+# (mixed-case enum "Optimized"/"Underprovisioned"/"Overprovisioned"), NOT `finding`, and
+# savings come verbatim from instanceRecommendationOptions[0].savingsOpportunity.estimatedMonthlySavings.value
+# — never a boolean. Emit the recommended class from instanceRecommendationOptions[0].dbInstanceClass.
 aws_cli compute-optimizer get-rds-database-recommendations --output json \
-  | jq '[.rdsDBRecommendations[]? | select(.finding != "OPTIMIZED") | {
-      instance: .resourceArn, finding: .finding,
-      estimated_monthly_savings_usd: (.instanceFindingReasonCodes // [] | length > 0)}]' 2>/dev/null || true
+  | jq '[.rdsDBRecommendations[]? | select(.instanceFinding != "Optimized") | {
+      instance: .resourceArn, finding: .instanceFinding,
+      recommended_class: (.instanceRecommendationOptions[0].dbInstanceClass // null),
+      estimated_monthly_savings_usd: (.instanceRecommendationOptions[0].savingsOpportunity.estimatedMonthlySavings.value // null)}]' 2>/dev/null || true
 ```
 
 Expected: zero or more entries, each carrying Compute Optimizer's own `finding` classification and, when present, its own `estimatedMonthlySavings.value`. Copy that number verbatim into `estimated_monthly_savings_usd`; when the field is absent from the API response, omit it from the finding entirely rather than estimating one.

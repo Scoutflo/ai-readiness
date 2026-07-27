@@ -244,10 +244,14 @@ VM_TOKEN="${VM_TOKEN:-}"
 AUTH="Authorization: Bearer ${VM_TOKEN}"
 [ -n "$VM_TOKEN" ] || AUTH="Accept: application/json"
 
-# Bucket rules by type so a vlogs (VictoriaLogs/LogsQL) rule is not judged as PromQL.
-# Default per-element (inside the iteration), not over the whole stream, or untyped rules vanish.
+# Bucket GROUPS by datasource type so a vlogs (VictoriaLogs/LogsQL) group is not judged as
+# PromQL. The datasource type lives at the GROUP level (.data.groups[].type = prometheus /
+# graphite / vlogs); the RULE-level .type is alerting/recording (see the alerting filters
+# below), so bucketing rules by .type would only ever show alerting/recording counts and a
+# vlogs group would silently read as PromQL — the exact mis-judgement this check prevents.
+# Default per-group so an untyped group counts as prometheus rather than vanishing.
 curl -fsS --max-time 10 -H "$AUTH" "${VMALERT_URL}/api/v1/rules" \
-  | jq -r '[.data.groups[].rules[] | (.type // "prometheus")] | group_by(.) | map("\(.[0]): \(length)") | .[]'
+  | jq -r '[.data.groups[].type // "prometheus"] | group_by(.) | map("\(.[0]): \(length)") | .[]'
 # VictoriaLogs rules only, via the datasource_type filter:
 curl -fsS --max-time 10 -H "$AUTH" "${VMALERT_URL}/api/v1/rules?datasource_type=vlogs" \
   | jq -r '[.data.groups[].rules[]?] | "\(length) vlogs rules"' || echo "no vlogs rules or filter unsupported on this version"

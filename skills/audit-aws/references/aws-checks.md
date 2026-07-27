@@ -155,7 +155,7 @@ jq -r '.[] | .dimensions[]? | select(.name | test("DBInstanceIdentifier|LoadBala
 # AWS-004: alarms currently stuck in INSUFFICIENT_DATA; each is a candidate dead-filter finding.
 jq -r '.[] | select(.state == "INSUFFICIENT_DATA") | "\(.name): namespace=\(.namespace) metric=\(.metric)"' "${RAW_DIR}/alarms.json"
 # AWS-003: alarms whose description is too short to be responder-ready (screen, not the judgment).
-jq -r 'select((.description | length) < 40) | .name' "${RAW_DIR}/alarms.json"
+jq -r '.[] | select((.description | length) < 40) | .name' "${RAW_DIR}/alarms.json"
 ```
 
 Expected: cross-reference the first list's resource IDs against the section 4 inventories (`rds.json`, `target-groups.json`, `asgs.json`, `lambda.json`); any critical resource id absent from the list is the `AWS-001` finding, named exactly. `AWS-004` is not automatically a fail: an alarm in `INSUFFICIENT_DATA` because the resource is genuinely new or paused is a note, not a defect; an alarm in `INSUFFICIENT_DATA` for a live, serving resource because its dimension filter names the wrong resource id is the real finding. `AWS-002`, `AWS-005`, and `AWS-006` are judgment steps: read the alarm's `Threshold`/`ComparisonOperator` pair (or the composite alarm's `AlarmRule`) against the resource's known load pattern, and check `cloudwatch list-dashboards`/`get-dashboard` for a view naming this service.

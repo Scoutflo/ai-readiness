@@ -94,7 +94,12 @@ Count before judging, and declare the path in the terminal output. This count si
 The objects that actually drive this audit's cost are the ones Phases 6, 9, and 12 iterate per item: critical services (each gets a coverage-matrix row and a set of per-service queries) and Grafana dashboards (each gets a broken-panel and datasource check). Backend-level checks (Phases 2, 4, 5, 7, 8) run once per configured backend regardless of estate size and are never batched.
 
 ```bash
-set -eu
+set -euo pipefail   # pipefail matters here: the DASHBOARDS fetch is a `curl | jq` pipe and
+                    # /api/search needs dashboards:read (which the doctor gate does NOT prove
+                    # — it only checks /api/health and /api/org). Without pipefail a 403 makes
+                    # the pipe succeed with empty output, DASHBOARDS becomes empty, and
+                    # $((SERVICES + )) silently sizes the estate as if there were zero
+                    # dashboards (possibly picking small/medium when it is really large).
 SMALL_MAX_OBJECTS="15"    # example, tune to your environment
 MEDIUM_MAX_OBJECTS="60"   # example, tune to your environment
 BATCH_SIZE="15"           # services per batch on the large path; example, tune it
@@ -103,13 +108,26 @@ GRAFANA_TOKEN="${GRAFANA_TOKEN:-}"          # grafana.token_env, set only if the
 
 SERVICES=0
 if [ -f "./scoutflo-audits/topology.md" ]; then
-  SERVICES="$(grep -cE '^\| [A-Za-z0-9_.-]+ \|' ./scoutflo-audits/topology.md || true)"
+  # Count ONLY the rows of the `## Services` table. A bare `grep '^| ... |'` also
+  # matches the metadata, Traffic-map, Entry-points, and Integration-watchpoints tables
+  # (and header/`---` rows), so it double-counts every real service and scores phantom
+  # rows named `---`/`Mesh` — inflating estate.objects ~6x and corrupting coverage.
+  SERVICES="$(awk '/^## Services$/{f=1;next} /^## /{f=0} f' ./scoutflo-audits/topology.md \
+    | grep -E '^\| ' \
+    | grep -vE '^\| *Service *\||^\| *-{2,}' \
+    | awk -F'|' '{gsub(/^[ \t]+|[ \t]+$/,"",$2); if($2!="") print $2}' \
+    | sort -u | grep -c . || true)"
 fi
 
 DASHBOARDS=0
 if [ -n "${GRAFANA_TOKEN:-}" ]; then
-  DASHBOARDS="$(curl -fsS --max-time 10 -H "Authorization: Bearer ${GRAFANA_TOKEN}" \
-    "${GRAFANA_URL}/api/search?type=dash-db&limit=500" | jq 'length')"
+  # Guard the fetch: a dashboards:read 403 (doctor doesn't prove that scope) must surface,
+  # not silently count as zero dashboards and mis-size the estate. On failure, say so.
+  if ! DASHBOARDS="$(curl -fsS --max-time 10 -H "Authorization: Bearer ${GRAFANA_TOKEN}" \
+      "${GRAFANA_URL}/api/search?type=dash-db&limit=500" | jq 'length')"; then
+    echo "WARN: /api/search failed (likely missing dashboards:read) — dashboard count unknown; estate sizing is a floor, not the truth. Grant dashboards:read for an accurate size."
+    DASHBOARDS=0
+  fi
 fi
 
 TOTAL=$((SERVICES + DASHBOARDS))
@@ -124,7 +142,10 @@ Guided-walkthrough drift check, per [report-standard/README.md](../../report-sta
 ```bash
 set -eu
 TARGET_DIR="./scoutflo-audits/lgtm"
-PREV_RUN="$(find "$TARGET_DIR" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort | tail -1)"
+# Only date-named dirs are runs. The large path creates a persistent `runs/` sibling here;
+# it sorts after the dates, so an unfiltered `tail -1` would pick `runs/` (no findings.json)
+# and wrongly report "first run" on every repeat run once the large path has been used.
+PREV_RUN="$(find "$TARGET_DIR" -mindepth 1 -maxdepth 1 -type d -name '[0-9]*-[0-9]*-[0-9]*' 2>/dev/null | sort | tail -1)"
 DRIFT="first run"
 if [ -n "$PREV_RUN" ] && [ -f "${PREV_RUN}/findings.json" ]; then
   PREV_TOTAL="$(jq -r '.estate.objects // empty' "${PREV_RUN}/findings.json")"
@@ -336,7 +357,10 @@ if [ -n "${SCOUTFLO_SLACK_WEBHOOK:-}" ]; then
   E2E="$(jq -r 'if .score.end_to_end then "end-to-end" else "not end-to-end" end' "$OUT/findings.json")"
   COUNTS="$(jq -r '.severity_counts | "\(.critical) critical, \(.high) high, \(.medium) medium, \(.low) low"' "$OUT/findings.json")"
   TOP="$(jq -r '[.findings[] | "\(.id) \(.title)"] | .[0:5] | join("\n")' "$OUT/findings.json")"
-  PREV="$(find "$TARGET_DIR" -mindepth 1 -maxdepth 1 -type d | sort | tail -2 | head -1)"
+  # Date-named run dirs only — exclude the persistent large-path `runs/` sibling, which
+  # sorts after the dates and would otherwise be picked as today's OUT's predecessor,
+  # falsely tripping "first run"/no-movement in the Slack brief.
+  PREV="$(find "$TARGET_DIR" -mindepth 1 -maxdepth 1 -type d -name '[0-9]*-[0-9]*-[0-9]*' | sort | tail -2 | head -1)"
   MOVE=""; DELTA="first run"
   if [ -n "$PREV" ] && [ "$PREV" != "$OUT" ]; then
     MOVE="$(jq -rn --argjson prev "$(jq '.score.overall' "$PREV/findings.json")" --argjson cur "$SCORE" \

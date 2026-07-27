@@ -53,7 +53,10 @@ What 100/100 means per category; the checks above are this profile made executab
 Capture raw state once per run; later sections re-fetch specific objects before filing findings.
 
 ```bash
-set -eu
+set -euo pipefail   # pipefail is REQUIRED: without it a failing `curl | jq` reports jq's
+                    # exit (0), so a 403/404 on a mandatory capture silently writes an empty
+                    # file and passes. With pipefail the mandatory captures abort under set -e,
+                    # and the `|| echo '[]'` fallbacks on the optional captures still fire.
 DD_SITE="datadoghq.com"   # datadog.site
 DD_HOST="api.${DD_SITE}"
 RUN_DATE="$(date -u +%Y-%m-%d)"
@@ -65,12 +68,15 @@ DD_AUTH="-H DD-API-KEY:${DATADOG_API_KEY} -H DD-APPLICATION-KEY:${DATADOG_APP_KE
 # @handles; options carries the noise controls. No secret is in this payload.
 curl -fsS --max-time 60 -H "DD-API-KEY: ${DATADOG_API_KEY}" -H "DD-APPLICATION-KEY: ${DATADOG_APP_KEY}" \
   "https://${DD_HOST}/api/v1/monitor?page_size=1000" \
-  | jq '[.[] | {id, name, type, message, draft_status: (.draft_status // "published"),
+  | jq '[.[] | {id, name, type, message, query, draft_status: (.draft_status // "published"),
       overall_state, last_triggered_ts: (.overall_state_modified // null),
       tags,
       options: (.options // {} | {silenced, notify_no_data, no_data_timeframe, on_missing_data,
         renotify_interval, renotify_occurrences, evaluation_delay, new_group_delay,
         timeout_h, thresholds})}]' > "${RAW_DIR}/monitors.json"
+# NOTE: `query` is captured because DD-031 scans a composite monitor's constituent
+# ids out of its top-level query string (e.g. "12345 && 67890"); dropping it made
+# DD-031 silently never fire.
 
 # Datadog's OWN monitor quality signals (native corroboration anchor).
 curl -fsS --max-time 60 -H "DD-API-KEY: ${DATADOG_API_KEY}" -H "DD-APPLICATION-KEY: ${DATADOG_APP_KEY}" \
@@ -82,7 +88,11 @@ curl -fsS --max-time 60 -H "DD-API-KEY: ${DATADOG_API_KEY}" -H "DD-APPLICATION-K
 # estate-sizing call), but the per-monitor quality_issues[] array sits directly on the monitor.
 
 # Downtimes: v2 ONLY. v1 is deprecated including its reads.
-curl -fsS --max-time 30 -H "DD-API-KEY: ${DATADOG_API_KEY}" -H "DD-APPLICATION-KEY: ${DATADOG_APP_KEY}" \
+# -g / --globoff is REQUIRED: the v2 param name is literally `page[limit]`, and without
+# globoff curl treats the `[...]` as a glob range and aborts with "curl: (3) bad range in
+# URL" before any request — which, piped into jq without pipefail, silently yields an empty
+# downtimes.json and a false pass on the whole downtime half of Muting-and-downtime.
+curl -gfsS --max-time 30 -H "DD-API-KEY: ${DATADOG_API_KEY}" -H "DD-APPLICATION-KEY: ${DATADOG_APP_KEY}" \
   "https://${DD_HOST}/api/v2/downtime?page[limit]=100" \
   | jq '[.data[]? | {id, scope: .attributes.scope,
       status: .attributes.status,
@@ -214,9 +224,23 @@ jq --argjson all "$ALL_IDS" '[.[] | select(.type == "composite")
     | select((.missing | length) > 0)]' "${RAW_DIR}/monitors.json"
 # Expect: []. A composite referencing a deleted monitor silently never fires correctly.
 
-# DD-032: SLOs with no monitor attached (no burn-rate/error-budget alerting)
-jq '[.[] | select((.monitor_ids | length) == 0) | {id, name, type}]' "${RAW_DIR}/slos.json"
-# Expect: []. An SLO nobody pages on is a dashboard decoration, not an alert.
+# DD-032: SLOs with no burn-rate/error-budget alerting.
+# CAUTION: empty monitor_ids does NOT mean "no alerting" for every SLO type.
+#   - monitor-type SLOs are DEFINED by their monitors, so monitor_ids==[] is a real gap.
+#   - metric-type and time_slice-type SLOs always have monitor_ids==[] by design; their
+#     burn-rate alerting is a SEPARATE monitor of type "slo alert" whose query references
+#     the SLO id (e.g. error_budget("<slo_id>")...) and never appears in the SLO's monitor_ids.
+# So we only flag a non-monitor SLO when NO "slo alert" monitor references its id.
+SLO_ALERT_QUERIES="$(jq '[.[] | select(.type == "slo alert") | .query // ""]' "${RAW_DIR}/monitors.json")"
+jq --argjson sloAlerts "$SLO_ALERT_QUERIES" '[.[]
+    | . as $slo
+    | ($sloAlerts | map(select(contains($slo.id))) | length) as $alertCount
+    | select(if $slo.type == "monitor"
+             then ($slo.monitor_ids | length) == 0
+             else (($slo.monitor_ids | length) == 0) and ($alertCount == 0) end)
+    | {id: $slo.id, name: $slo.name, type: $slo.type}]' "${RAW_DIR}/slos.json"
+# Expect: []. An SLO nobody pages on is a dashboard decoration, not an alert. A metric SLO
+# that IS covered by an "slo alert" burn-rate monitor is correct and must not be flagged.
 
 # DD-034: monitor tag hygiene — service/team tags for routing
 jq '[.[] | select((.tags // []) | (any(startswith("service:")) or any(startswith("team:"))) | not)

@@ -1,5 +1,100 @@
 # Changelog
 
+## 0.1.52
+
+Pre-customer hardening pass across the five skills a first customer's stack
+exercises most (AWS/EKS, Kubernetes+Istio, Prometheus alerting, Datadog, and the
+LGTM/VictoriaMetrics family). Each defect below was found by adversarial review
+and confirmed with a local reproduction before the fix; no new checks or IDs,
+all correctness fixes to shipped behaviour. Also corrects the install docs.
+
+- **audit-alert-routing — secret leak (high):** the layer-1 receiver extraction
+  pulled `webhookConfigs[].url` into a field named `channels` and printed it
+  verbatim. A webhook URL is credential-bearing, and once relabelled as
+  `channels` the redaction filter could no longer catch it — a direct violation
+  of the skill's own no-secrets rule. Now emits only non-secret routing
+  identifiers (Slack channels, email targets) plus the *count* of webhook /
+  PagerDuty / Opsgenie targets.
+- **audit-alert-routing — ALR-011 false pass (high):** the long-firing filter
+  used `.startsAt | fromdateiso8601`, which rejects the millisecond timestamps
+  Alertmanager's API v2 always emits, so the check errored and silently reported
+  "no long-firing alerts". Now strips the fractional/offset part before parsing.
+- **audit-alert-routing — ALR-019 auth gate (high):** the Prometheus-version
+  gate used a bare `curl` with no HTTP-code capture, so a 401/403 collapsed the
+  headline check to `not-in-scope` (removed from the denominator) instead of
+  `blocked`. Now captures the code, treats 401/403/non-200 as blocked, tolerates
+  a leading `v`, and also scans the `match:`/`match_re:` map form of a pinned
+  `le`/`quantile` matcher (the previous grep saw only the inline `le="1"` form).
+- **audit-alert-routing — receiver-count auth gate (medium):** the estate-sizing
+  `/api/v2/receivers` count had no HTTP-code capture, so an auth failure either
+  miscounted (JSON error body's key count) or aborted the block. Now stops and
+  reports an auth finding as the skill already promised.
+- **audit-aws — false cost findings (high):** AWSOPT-001 compared Compute
+  Optimizer's `finding` against `"OPTIMIZED"`, but the enum is mixed-case
+  (`"Optimized"`), so every correctly-sized instance was flagged. The RDS branch
+  additionally read the wrong field (`finding` instead of `instanceFinding`) and
+  set `estimated_monthly_savings_usd` to a **boolean** rather than the API's
+  `estimatedMonthlySavings.value` — violating the skill's copy-verbatim rule.
+  Both fixed to the real enum, field, and savings value.
+- **audit-aws — AWS-003 broken run (medium):** the short-description screen ran
+  `jq 'select(...)'` on `alarms.json` (a JSON array) with no `.[]` iterator, so
+  it errored `Cannot index array with string` on every run. Added the iterator.
+- **audit-aws — Cost Optimization Hub region (medium):** AWSOPT-011 could target
+  a per-region Hub endpoint, but the service exists only in `us-east-1`; for a
+  non-us-east-1 account the call failed and, wrapped in `2>/dev/null`, was
+  silently reinterpreted as "not enrolled". Now pinned to `us-east-1` and reports
+  a genuine failure as blocked.
+- **audit-datadog — downtime false pass (high):** the v2 downtime capture used
+  `?page[limit]=100` without `curl -g`, so curl aborted with "bad range in URL"
+  before the request; piped into jq with no `pipefail`, that wrote an empty
+  `downtimes.json` and passed the whole downtime half of Muting-and-downtime.
+  Added `-g`, and `pipefail` to the capture block so a mandatory-capture failure
+  aborts loudly instead of writing an empty file.
+- **audit-datadog — DD-032 metric-SLO false positive (high):** flagged every SLO
+  with empty `monitor_ids` as unalerted, but metric- and time_slice-type SLOs
+  always have empty `monitor_ids` and are alerted by separate `slo alert`
+  monitors. Now only flags monitor-type SLOs with no monitors, or non-monitor
+  SLOs that no `slo alert` monitor references.
+- **audit-datadog — DD-031 dead check (medium):** the composite-monitor
+  deleted-constituent scan read `.query`, but the inventory projection never
+  captured `query`, so the check always returned empty. Added `query` to the
+  projection.
+- **audit-lgtm — service miscount (high):** the critical-service count and the
+  large-path worklist matched every `^| ... |` row in `topology.md`, not just the
+  `## Services` table — double-counting real services (they recur in Integration
+  watchpoints) and enqueuing phantom rows named `---`/`Mesh`. This inflated
+  `estate.objects` ~6x and produced false LGTM-030 "service blind in every
+  signal" rows on the large path. Both now scope to the Services table and dedup.
+- **audit-lgtm — drift/delta false "first run" (medium):** the drift and Slack
+  baseline selection took the last date-sorted dir under the target, but the
+  large path leaves a persistent `runs/` sibling that sorts last, so a repeat run
+  reported "first run" / no movement. Both now select date-named dirs only.
+- **audit-lgtm — vmalert type bucket (medium):** the rule-type histogram bucketed
+  by the rule-level `.type` (`alerting`/`recording`) instead of the group-level
+  `.type` (the datasource: `prometheus`/`vlogs`), so a VictoriaLogs rule group
+  never surfaced as `vlogs`. Now buckets by group type.
+- **audit-lgtm — dashboard sizing (low):** the estate-sizing block lacked
+  `pipefail`, so a `dashboards:read` 403 on `/api/search` silently counted zero
+  dashboards and could mis-size the run. Added `pipefail` and a guarded fallback.
+- **map-topology — native sidecars missed (medium):** the Istio sidecar-coverage
+  filter scanned only `.spec.containers` for `istio-proxy`, so a cluster using
+  native (init-container) sidecars read as 100% unadopted. Now scans both
+  `.spec.containers` and `.spec.initContainers`.
+- **map-topology (low):** fixed a dangling cookbook reference (step 0 pointed at
+  a section title that does not exist) and documented that VirtualService
+  delegation is not followed by the route classifier.
+- **topology-readiness / audit-{lgtm,aws,sentry} (low):** the T4-vs-T6 camelCase
+  caveat linked to `topology-readiness.md#t6s-category-mapping-is-stricter-...`,
+  an anchor no heading produced. Renamed the target heading so all three
+  references resolve. (The anchor gate only checks skill-to-skill links, so a
+  dead link into `report-standard/` slipped past it.)
+- **docs:** corrected the install guidance — a public repo needs no GitHub
+  credentials to install (it clones anonymously over HTTPS; the real failure
+  modes are a firewall/proxy or missing `git`), the Claude desktop app *can*
+  install from an already-added marketplace via its plugin browser (only adding a
+  new marketplace needs the CLI or a `settings.json` entry), and `/plugin`
+  requires Claude Code ~v2.1.140+.
+
 ## 0.1.51
 
 Two fixes from the first live QA run of the Phase 2 skills (found against real

@@ -136,7 +136,19 @@ AUTH="Authorization: Bearer ${PROM_TOKEN}"
 
 RULES="$(kubectl --context "$KUBE_CONTEXT" get prometheusrule -A -o json 2>/dev/null \
   | jq '[.items[]?.spec.groups[]?.rules[]?] | length' 2>/dev/null || echo 0)"
-RECEIVERS="$(curl -s -H "$AUTH" --max-time 10 "${AM_URL}/api/v2/receivers" | jq 'length')"
+# Capture the HTTP code — a 401/403 on /api/v2/receivers is an auth finding, not a zero
+# estate. Bare `curl -s | jq length` would return the key-count of a JSON error body
+# (e.g. 2 for {"error":...,"code":401}) or, on a plain-text 401 body, make jq error and
+# abort the whole sizing block under set -eu. Neither is the "stop and report auth" behavior.
+REC_CODE="$(curl -s -o /tmp/alr-receivers.json -w '%{http_code}' -H "$AUTH" --max-time 10 "${AM_URL}/api/v2/receivers")"
+if [ "$REC_CODE" = "401" ] || [ "$REC_CODE" = "403" ]; then
+  echo "BLOCKED: ${AM_URL}/api/v2/receivers returned ${REC_CODE} — Alertmanager read token lacks access. Stop and report an auth-scope finding; do NOT size the estate from an empty count."
+  exit 1
+elif [ "$REC_CODE" != "200" ]; then
+  echo "BLOCKED: /api/v2/receivers returned HTTP ${REC_CODE}; cannot size the estate. Record as blocked."
+  exit 1
+fi
+RECEIVERS="$(jq 'if type=="array" then length else 0 end' /tmp/alr-receivers.json)"
 TOTAL=$((RULES + RECEIVERS))
 echo "alert_rules=${RULES} receivers=${RECEIVERS} scored_objects=${TOTAL}"
 

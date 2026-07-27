@@ -60,8 +60,16 @@ if [ -f "${WORKLIST}" ]; then
 else
   : > "${WORKLIST}"
   if [ -f "./scoutflo-audits/topology.md" ]; then
-    grep -E '^\| [A-Za-z0-9_.-]+ \|' ./scoutflo-audits/topology.md \
-      | awk -F'|' '{gsub(/^ +| +$/, "", $2); print $2}' \
+    # Enqueue ONLY the rows of the `## Services` table (deduped). A bare `grep '^| ... |'`
+    # also matches the metadata / Traffic-map / Entry-points / Integration-watchpoints
+    # tables and header/`---` rows, so it would enqueue phantom "services" named `---`,
+    # `Mesh`, `Service`, and double-enqueue every real service (each also appears in the
+    # Integration-watchpoints table) — corrupting per-service coverage on the large path.
+    awk '/^## Services$/{f=1;next} /^## /{f=0} f' ./scoutflo-audits/topology.md \
+      | grep -E '^\| ' \
+      | grep -vE '^\| *Service *\||^\| *-{2,}' \
+      | awk -F'|' '{gsub(/^[ \t]+|[ \t]+$/, "", $2); if($2!="") print $2}' \
+      | sort -u \
       | while read -r svc; do printf 'service\t%s\tpending\n' "${svc}" >> "${WORKLIST}"; done
   fi
   if [ -n "${GRAFANA_TOKEN}" ]; then

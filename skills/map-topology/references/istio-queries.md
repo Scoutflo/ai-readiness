@@ -45,6 +45,12 @@ Expected: one line per namespace, `name  injection  rev  dataplane-mode`. `enabl
 ## Sidecar coverage
 
 Primary (no `istioctl` needed): pods carrying an `istio-proxy` container.
+Check BOTH `.spec.containers` and `.spec.initContainers`: with native sidecars
+(`ENABLE_NATIVE_SIDECARS`, the Kubernetes native-sidecar init-container mode that
+is increasingly the default on modern clusters) `istio-proxy` is injected as an
+init container with `restartPolicy: Always`, not a regular container — scanning
+only `.spec.containers` would read a fully-meshed native-sidecar cluster as 100%
+unadopted and flag every workload as a coverage gap.
 
 ```bash
 set -eu
@@ -56,7 +62,7 @@ kubectl --context "${KUBE_CONTEXT}" get pods -A -o json \
 | jq -r --arg ex "${NS_EXCLUDE}" '
     .items[]
     | select(.metadata.namespace | test($ex) | not)
-    | select(any(.spec.containers[]; .name == "istio-proxy"))
+    | select(any(((.spec.containers // []) + (.spec.initContainers // []))[]; .name == "istio-proxy"))
     | [ .metadata.namespace,
         (.metadata.labels.app // .metadata.labels["app.kubernetes.io/name"] // .metadata.name),
         (.metadata.labels.version // "-") ]
@@ -205,6 +211,8 @@ kubectl --context "${KUBE_CONTEXT}" get virtualservices -A -o json \
 ```
 
 Expected: `namespace  virtualservice  hosts  gateways  dest-host  subset  weight`. `gateways` of `mesh` means in-mesh service-to-service routing; anything else is an entry-point binding. Gateway references may be cross-namespace (`other-ns/gw-name`); resolve them against the Gateways table, not against the VirtualService's own namespace. Destination hosts may be short names (same namespace), fully qualified (`svc.ns.svc.cluster.local`), or external hosts declared by a ServiceEntry; normalize to the Service name when composing the map.
+
+Limitation — VirtualService **delegation** is not followed. A parent VS that uses `.http[].delegate` (instead of `.route`) carries the hosts and gateways but no destinations, so it produces no row here; the delegated child VS carries the `.route` destinations but conventionally has empty `hosts`/`gateways`, so its destinations default to `mesh` and read as in-mesh rather than inheriting the parent's entry-point binding. If a cluster uses delegation, treat a `mesh`-classified route whose child VS has empty hosts as "gateway binding unresolved," and confirm the entry point against the parent VS by hand. Standard gateway + VirtualService setups (no `delegate`) are unaffected.
 
 ## DestinationRule subsets
 

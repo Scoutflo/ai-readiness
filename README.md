@@ -26,7 +26,9 @@ claude plugin marketplace add Scoutflo/ai-readiness
 claude plugin install scoutflo@scoutflo
 ```
 
-`/plugin marketplace add` and `/plugin install` only work as commands inside the standalone `claude` terminal CLI. They are **not** available as slash commands inside Claude.app's chat window — typing `/plugin ...` there will fail with "isn't available in this environment," which just means you're in the wrong surface for this one step, not that anything is broken.
+`/plugin marketplace add` and `/plugin install` only work as commands inside the standalone `claude` terminal CLI. They are **not** available as slash commands inside Claude.app's chat window — typing `/plugin ...` there will fail with "isn't available in this environment," which just means you're in the wrong surface for this one step, not that anything is broken. (The `/plugin` commands need a reasonably recent Claude Code — roughly v2.1.140 or newer; run `claude --version` and update if it's older.)
+
+**Prefer not to touch a terminal at all?** Two options skip it: the **Team / Enterprise** paths in [docs/install.md](docs/install.md) add the marketplace and enable the plugin through a `settings.json` file (no `/plugin` command anywhere), and once the marketplace has been added by *any* of these paths, the Claude desktop app's built-in **plugin browser** (in the app's UI, not the chat box) can install and manage plugins from it. The one thing the desktop app can't do on its own is add a brand-new marketplace — that first step needs either the terminal command above or the `settings.json` entry.
 
 **Step 2 — restart Claude Code / Claude.app** (fully quit and reopen, not just a new chat tab) so it picks up the plugin from the shared config the terminal command just wrote.
 
@@ -130,7 +132,7 @@ Every `report.md` is validated against a fixed output-conformance standard befor
 
 ## Requirements
 
-- The `claude` terminal CLI (`npm install -g @anthropic-ai/claude-code`) — needed once, for the install step in a terminal. Claude.app alone (without ever having run the CLI) can't install a plugin.
+- The `claude` terminal CLI (`npm install -g @anthropic-ai/claude-code`) — the simplest way to do the one-time install, and required if you go the individual-terminal route. (You can avoid the terminal entirely via the Team/Enterprise `settings.json` path, or the desktop app's plugin browser once the marketplace has been added — see [docs/install.md](docs/install.md).)
 - Claude Code (latest), with an active subscription
 - `bash`, `curl`, `jq` on your `PATH`
 - The CLI for whatever you're auditing (`kubectl`/`istioctl` for Kubernetes, `doctl` for DigitalOcean, `gcloud` for GCP, `aws` for AWS) — `/scoutflo:doctor` tells you if anything's missing
@@ -139,7 +141,7 @@ Every `report.md` is validated against a fixed output-conformance standard befor
 ## Troubleshooting
 
 - **`/plugin isn't available in this environment.`** You typed a `/plugin ...` command inside Claude.app's chat window. `/plugin marketplace add` and `/plugin install` only run in the standalone `claude` terminal CLI — open a real terminal, run `claude`, and run the commands there (see Install above). Once installed, you go back to using Claude.app normally — only this one setup step needs a terminal.
-- **`/plugin marketplace add` fails or hangs (in the terminal).** Check your network and that your GitHub credentials are set up (an SSH key, or `gh auth login`) — the marketplace uses your existing GitHub credentials to fetch the repo. Then try again.
+- **`/plugin marketplace add` fails or hangs (in the terminal).** The marketplace fetches this **public** repo the same way `git` clones any public repo, so no GitHub login or token is required — but it does go over the network with `git` under the hood. In a locked-down corporate network the usual causes are a firewall/proxy blocking `github.com`, `git` not installed, or a proxy that needs authentication. Pre-flight test: `git clone https://github.com/Scoutflo/ai-readiness.git /tmp/air-test` — if that succeeds from the same machine, `/plugin marketplace add` will too.
 - **After installing, the `/scoutflo:*` commands don't show up.** New plugin installs need a full restart to load — fully quit Claude Code / Claude.app and reopen it, not just a new chat/tab. An in-progress conversation, or even a new tab in an already-running app, won't pick up a plugin installed partway through the session.
 - **A command says "not recognized here" but then answers anyway.** Some Claude Code clients have their own fixed list of built-in slash commands separate from installed-plugin commands; this message just means the client's own list doesn't include it, not that the skill failed. If it responds with real content right after, it worked.
 
@@ -163,4 +165,4 @@ Small friction is worth reporting too, not just crashes — confusing wording, a
 
 ## License
 
-Licensed under **Apache-2.0** — see the [LICENSE](LICENSE) file. Install uses your existing GitHub credentials (an SSH key, or `gh auth login`) to fetch the plugin from `Scoutflo/ai-readiness`, the same way `git` clones any repo.
+Licensed under **Apache-2.0** — see the [LICENSE](LICENSE) file. This repository is public, so install fetches the plugin from `Scoutflo/ai-readiness` anonymously over HTTPS the same way `git` clones any public repo — no GitHub login or token required.

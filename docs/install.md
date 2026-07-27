@@ -2,7 +2,11 @@
 
 Three paths: install it yourself, roll it out to a team through a shared repository, or force-enable it across an organization with managed settings. All three end at the same place: run `/scoutflo:start` and follow it.
 
-**Every path below that uses a `/plugin ...` command means the standalone `claude` terminal CLI, not Claude.app's chat window.** `/plugin marketplace add`, `/plugin install`, `/plugin` (list/update), `/plugin uninstall`, and `/plugin marketplace remove` are all terminal-CLI-only commands — typing them into Claude.app's chat box fails with "isn't available in this environment." This is a one-time distinction: once a plugin is installed via the terminal, it's available inside Claude.app automatically (the terminal and the app read the same shared `~/.claude/` config), and every `/scoutflo:...` skill command works directly in Claude.app's chat with no terminal involved. The "Team" and "Enterprise" paths below skip the terminal step entirely — they install via a settings file instead.
+**Every path below that uses a `/plugin ...` command means the standalone `claude` terminal CLI, not Claude.app's chat window.** `/plugin marketplace add`, `/plugin install`, `/plugin` (list/update), `/plugin uninstall`, and `/plugin marketplace remove` are all terminal-CLI-only commands — typing them into Claude.app's chat box fails with "isn't available in this environment." This is a one-time distinction: once a plugin is installed, it's available inside Claude.app automatically (the terminal and the app read the same shared `~/.claude/` config), and every `/scoutflo:...` skill command works directly in Claude.app's chat with no terminal involved. The "Team" and "Enterprise" paths below skip the terminal step entirely — they install via a settings file instead.
+
+**Two ways to avoid the terminal for the install itself.** (1) The **Team / Enterprise** paths below add the marketplace and enable the plugin through a `settings.json` file — no `/plugin` command anywhere. (2) The **Claude desktop app** has a built-in plugin browser (in the app's UI, not the chat box: the **+** next to the prompt → **Plugins**) that can install and manage plugins — but only from a marketplace that has *already been added*. The desktop app cannot add a brand-new marketplace on its own, so the very first step (`/plugin marketplace add Scoutflo/ai-readiness`, or the `settings.json` entry) still comes from the terminal or a settings file. After that, browsing and installing from the app's UI works.
+
+**Version note.** The `/plugin` commands need a reasonably recent Claude Code (roughly **v2.1.140 or newer**). Check with `claude --version` and update (`npm install -g @anthropic-ai/claude-code`) if it's older, or the commands may not exist yet.
 
 ## Individual
 
@@ -91,4 +95,12 @@ The toolkit runs entirely inside your own Claude Code session, on your machine o
 
 ## How the marketplace fetches the plugin
 
-The plugin marketplace clones `Scoutflo/ai-readiness` with your own git credentials — SSH keys in your agent, or HTTPS via `gh auth login`. No separate access grant is needed.
+`Scoutflo/ai-readiness` is a **public** repository, so the marketplace clones it anonymously over HTTPS the same way `git` clones any public repo — **no GitHub login or token is required.** (If you happen to have git credentials configured, git will use them, but they are not needed.)
+
+It does use `git` over the network, so the failure modes in a locked-down environment are git's, not GitHub's: a firewall/proxy blocking `github.com`, `git` not installed, or a proxy that needs authentication. Pre-flight check from the target machine:
+
+```bash
+git clone https://github.com/Scoutflo/ai-readiness.git /tmp/air-test && rm -rf /tmp/air-test
+```
+
+If that succeeds, `/plugin marketplace add Scoutflo/ai-readiness` will work too.

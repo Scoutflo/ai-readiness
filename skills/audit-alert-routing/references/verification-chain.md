@@ -137,8 +137,17 @@ AUTH="Authorization: Bearer ${PROM_TOKEN}"
 [ -n "$PROM_TOKEN" ] || AUTH="Accept: application/json"
 
 # Layer 1: the declared object.
+# NEVER pull .webhookConfigs[].url (or any *_url) into output — a webhook URL is
+# credential-bearing (Slack/PagerDuty/generic tokens are embedded in the path), and
+# once it lands in a field not named *url/key/token the section-5 redaction filter
+# can no longer catch it. Emit only non-secret routing identifiers: slack channel
+# names, email targets, and the PRESENCE/COUNT of webhook and PagerDuty targets.
 kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" get alertmanagerconfig "$AM_CONFIG_NAME" -o json \
-  | jq '.spec.receivers[] | {name, channels: [.slackConfigs[]?.channel, .webhookConfigs[]?.url, .emailConfigs[]?.to] | flatten | map(select(. != null))}'
+  | jq '.spec.receivers[] | {name,
+      channels: [.slackConfigs[]?.channel, .emailConfigs[]?.to] | flatten | map(select(. != null)),
+      webhook_targets: ([.webhookConfigs[]?] | length),
+      pagerduty_targets: ([.pagerdutyConfigs[]?] | length),
+      opsgenie_targets: ([.opsgenieConfigs[]?] | length)}'
 
 # Layer 2: the rendered file the running process actually loaded.
 kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" exec "$AM_POD" -c alertmanager -- \
@@ -232,7 +241,13 @@ AUTH="Authorization: Bearer ${PROM_TOKEN}"
 
 curl -fsS --max-time 10 -H "$AUTH" "${AM_URL}/api/v2/alerts" \
   | jq --arg hrs "$LONG_FIRING_HOURS" -r '
-      .[] | select((now - (.startsAt | fromdateiso8601)) > (($hrs | tonumber) * 3600)) |
+      # startsAt from AM API v2 is an RFC3339 strfmt.DateTime and ALWAYS carries a
+      # fractional-second part (e.g. 2020-01-01T00:00:00.000Z), which jq'"'"'s
+      # fromdateiso8601 (strptime %Y-%m-%dT%H:%M:%SZ) refuses. Strip the fraction and
+      # any numeric offset first, else this errors on every real Alertmanager and
+      # ALR-011 silently reports "no long-firing alerts".
+      def ts: sub("\\.[0-9]+";"") | sub("[+-][0-9:]+$";"Z") | fromdateiso8601;
+      .[] | select((now - (.startsAt | ts)) > (($hrs | tonumber) * 3600)) |
       "\(.labels.alertname) ns=\(.labels.namespace // "-") receivers=\([.receivers[]?.name] | join(","))"
     '
 ```
@@ -636,20 +651,36 @@ PROM_TOKEN="${PROM_TOKEN:-}"
 AUTH="Authorization: Bearer ${PROM_TOKEN}"
 [ -n "$PROM_TOKEN" ] || AUTH="Accept: application/json"
 
-# Version gate: this trap only bites on Prometheus 3.x.
-PVER="$(curl -s -H "$AUTH" "${PROM_URL}/api/v1/status/buildinfo" | jq -r '.data.version // "0"')"
-PMAJOR="${PVER%%.*}"
-echo "prometheus version: ${PVER}"
-if [ "${PMAJOR:-0}" -lt 3 ]; then
-  echo "ALR-019 not-in-scope: Prometheus ${PVER} keeps the integer le/quantile form; no normalization trap"
+# Version gate: this trap only bites on Prometheus 3.x. Capture the HTTP code — a 401/403
+# is an auth finding (ALR-019 BLOCKED, scores 0, stays in the denominator), NEVER a silent
+# not-in-scope. Bare `curl -s` here would turn an auth failure into version "0" -> "<3" ->
+# not-in-scope, dropping the customer's headline check with a bogus "Prometheus 0" message.
+BI_CODE="$(curl -s -o /tmp/alr-buildinfo.json -w '%{http_code}' -H "$AUTH" "${PROM_URL}/api/v1/status/buildinfo")"
+if [ "$BI_CODE" = "401" ] || [ "$BI_CODE" = "403" ]; then
+  echo "ALR-019 BLOCKED: ${PROM_URL}/api/v1/status/buildinfo returned ${BI_CODE} — Prometheus read token lacks access; cannot determine version. Record as an auth-scope finding, not not-in-scope."
+elif [ "$BI_CODE" != "200" ]; then
+  echo "ALR-019 BLOCKED: buildinfo returned HTTP ${BI_CODE}; cannot determine Prometheus version. Record as blocked."
 else
+  PVER="$(jq -r '.data.version // "0"' /tmp/alr-buildinfo.json)"
+  PVER="${PVER#v}"          # tolerate a leading v (v3.0.1 -> 3.0.1) before the integer compare
+  PMAJOR="${PVER%%.*}"
+  case "$PMAJOR" in ''|*[!0-9]*) PMAJOR=0 ;; esac   # non-numeric major -> treat as pre-3, never error under set -e
+  echo "prometheus version: ${PVER}"
+  if [ "$PMAJOR" -lt 3 ]; then
+    echo "ALR-019 not-in-scope: Prometheus ${PVER} keeps the integer le/quantile form; no normalization trap"
+  else
   # Scan the rendered route tree and inhibit rules for le/quantile pinned to a bare integer.
-  # Read config.original from api/v2/status; grep every le=/quantile= matcher without a decimal point.
+  # Read config.original from api/v2/status; catch BOTH matcher forms:
+  #   inline matchers list:  le="1"  /  le=~"1"      (operator = or =~)
+  #   classic map form:      match:/match_re:/source_match:/target_match: with  le: "1"
+  # A grep for only the `=` form silently misses the map form, which is common in
+  # hand-authored and Helm base configs — a false ALR-019 pass.
   curl -s -H "$AUTH" "${AM_URL}/api/v2/status" \
     | jq -r '.config.original // ""' \
-    | grep -nE '\b(le|quantile)\b[[:space:]]*=~?[[:space:]]*"?[0-9]+"?([^.0-9]|$)' \
+    | grep -nE '\b(le|quantile)\b[[:space:]]*(=~?|:)[[:space:]]*"?[0-9]+"?([^.0-9]|$)' \
     || echo "no integer-pinned le/quantile matcher found"
-  echo "flag (Prometheus 3.x): each hit is an ALR-019 finding — the series now carries the float form (le=\"1.0\"); rewrite the matcher to the normalized value or a decimal-tolerant regex. A regex matcher with a literal '.' (le=~\"1.0\") is under-anchored; escape it (le=~\"1\\.0\")."
+    echo "flag (Prometheus 3.x): each hit is an ALR-019 finding — the series now carries the float form (le=\"1.0\"); rewrite the matcher to the normalized value or a decimal-tolerant regex. A regex matcher with a literal '.' (le=~\"1.0\") is under-anchored; escape it (le=~\"1\\.0\")."
+  fi
 fi
 ```
 
