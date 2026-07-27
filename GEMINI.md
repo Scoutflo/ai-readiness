@@ -1,3 +1,3 @@
-# Gemini Adapter
+Use AGENTS.md as the shared project guidance for this repository.
 
-Follow the contributor instructions in @AGENTS.md.
+@AGENTS.md
