@@ -38,7 +38,7 @@ Ask first:
 
 Never:
 
-- Put credentials, hostnames, account identifiers, machine paths, or customer-specific values in any tracked file, example, fixture, or commit message.
+- Put credentials, hostnames, account identifiers, machine paths, or customer-specific values in any tracked file, example, fixture, or commit message, except the approved reviewer identity in `.github/CODEOWNERS`.
 - Let an audit create, modify, or delete live resources, including seemingly harmless test notifications or annotations.
 - Bypass a failing leak scan, structure/anchor check, report self-validation, or plugin validation gate.
 
