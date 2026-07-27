@@ -1,3 +1,5 @@
 # Claude Adapter
 
-Follow the contributor instructions in @AGENTS.md.
+Use AGENTS.md as the shared project guidance for this repository.
+
+@AGENTS.md
