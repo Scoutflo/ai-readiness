@@ -25,6 +25,7 @@ jobs:
       - name: structure check
         run: sh ci/structure-check.sh .
       - name: install Claude Code
-        run: npm install --global @anthropic-ai/claude-code@2.1.217
+        # Earliest version whose plugin validator supports --strict.
+        run: npm install --global @anthropic-ai/claude-code@2.1.145
       - name: strict plugin validation
         run: claude plugin validate . --strict
