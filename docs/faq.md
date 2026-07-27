@@ -6,6 +6,9 @@ Both — for different steps. The `/plugin ...` commands (`marketplace add`, `in
 **Can I install without a terminal at all?**
 Yes, two ways. For a team, add the marketplace and enable the plugin through a `.claude/settings.json` file (the Team/Enterprise path in [docs/install.md](install.md)) — no `/plugin` command anywhere. And the Claude desktop app has a built-in plugin browser (the **+** next to the prompt → **Plugins**) that installs from a marketplace once it's been added. The one thing the desktop app can't do by itself is add a brand-new marketplace — that first step needs the terminal command or the settings file. Also note `/plugin` needs a fairly recent Claude Code (roughly v2.1.140+); run `claude --version` if the commands seem missing.
 
+**Does this work on Windows?**
+Yes, with Git Bash. Every skill runs POSIX shell, and Claude Code on Windows runs shell through Git Bash when present, falling back to PowerShell (which can't run these commands) when it isn't. Install [Git for Windows](https://git-scm.com/downloads/win) with "Add to PATH", plus `jq` and your provider CLIs, and everything behaves exactly as on macOS/Linux. If skill commands fail with PowerShell parse errors, Git Bash is missing — see [docs/install.md](install.md#windows). macOS and Linux need no extra shell setup.
+
 **Do I need a GitHub account or token to install?**
 No. This repository is public, so the marketplace fetches it anonymously over HTTPS exactly like a public `git clone` — no login, token, or SSH key required. If `/plugin marketplace add` hangs on a corporate network, the cause is usually a firewall/proxy blocking `github.com` or `git` not being installed, not credentials; test with `git clone https://github.com/Scoutflo/ai-readiness.git /tmp/air-test`.
 

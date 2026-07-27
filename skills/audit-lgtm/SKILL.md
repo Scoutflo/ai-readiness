@@ -135,12 +135,12 @@ path="large"
 [ "${TOTAL}" -le "${MEDIUM_MAX_OBJECTS}" ] && path="medium"
 [ "${TOTAL}" -le "${SMALL_MAX_OBJECTS}" ] && path="small"
 echo "estate: services=${SERVICES} dashboards=${DASHBOARDS} scored_objects=${TOTAL} sizing-path=${path}"
-```
 
-Guided-walkthrough drift check, per [report-standard/README.md](../../report-standard/README.md#using-topology-and-prior-runs-as-a-guided-walkthrough): compare against the last run rather than treating every run as a blank slate. State the result in the executive summary; never silently omit it. This never skips a live check — every check in later phases still runs fresh regardless of drift status.
-
-```bash
-set -eu
+# Guided-walkthrough drift check, per report-standard/README.md#using-topology-and-prior-runs-as-a-guided-walkthrough:
+# compare against the last run rather than a blank slate. This stays in the SAME block as the
+# TOTAL computed above; a separate fence would run in a fresh shell where $TOTAL is unbound and,
+# under set -eu, abort. State the result in the executive summary; never silently omit it. This
+# never skips a live check — every later-phase check still runs fresh regardless of drift status.
 TARGET_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/lgtm"
 # Only date-named dirs are runs. The large path creates a persistent `runs/` sibling here;
 # it sorts after the dates, so an unfiltered `tail -1` would pick `runs/` (no findings.json)

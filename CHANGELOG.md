@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.1.55
+
+Two things: a permanent CI gate for the cross-block-state bug class (so it can
+never be missed by review again), and Windows support.
+
+- **New gate `ci/crossblock-check.sh` (wired into `structure-check.sh`).** After
+  the v0.1.54 review found the audit-aws `$TOTAL`-unbound crash, this gate scans
+  every ```bash block and `.sh` script for the whole class: a `set -u` block that
+  references an UPPER_SNAKE variable it never assigns but another block in the same
+  file does — the exact "fresh shell → unbound variable → abort" pattern. It is
+  POSIX-awk-only (runs under dash/BSD/Git Bash), skips `${VAR:-}`-guarded uses,
+  `read`/`for`/comment cases, and known environment vars, so it is false-positive
+  free while still catching the real shape.
+- **Fixed `audit-lgtm` — the same `$TOTAL` bug (blocking).** The gate immediately
+  found that the guided-walkthrough drift check was a separate ```bash block
+  reading `$TOTAL` from the estate-sizing block; under `set -eu` it aborted with
+  `TOTAL: unbound variable` on every non-first run (reproduced). Merged the drift
+  check into the estate-sizing block, matching audit-gcp and the audit-aws fix.
+  (The fleet-wide sweep confirmed these two were the only occurrences.)
+- **Windows support.** Every skill runs POSIX shell, and Claude Code on Windows
+  uses Git Bash when present but falls back to PowerShell (which cannot run these
+  commands) when it is not. Documented Git Bash as the Windows prerequisite in the
+  README requirements + troubleshooting, a new `docs/install.md` **Windows**
+  section (including the `CLAUDE_CODE_GIT_BASH_PATH` setting), and the FAQ. No
+  script changes were needed: an audit confirmed the date math already uses a
+  BSD-first/GNU-fallback form that works on both macOS and Git Bash/Linux, and
+  there are no `readlink -f` / `grep -P` / `stat` / `base64 -w` / bash-only `[[ ]]`
+  portability hazards. macOS and Linux are unaffected.
+
+No audit logic, checks, IDs, or scoring changed.
+
 ## 0.1.54
 
 End-to-end verification pass: a formal maintainer-rubric review of every skill
