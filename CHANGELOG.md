@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.1.60
+
+Better `doctor` guidance on transport (proxy/firewall) failures — the class a
+locked-down corporate network hits, which is NOT an auth error.
+
+- `doctor.sh` `transport_hint()` now has a specific message for **curl exit 52/55/56**
+  (connection dropped mid-transfer, no HTTP response): "usually a proxy or corporate
+  firewall between you and the host, not the token; retry with proxy vars cleared and
+  confirm the host is reachable". Previously these fell into the generic catch-all,
+  which a user could misread as a credential problem. The catch-all itself now also
+  states plainly it is a transport failure, not an auth error. Doctor SKILL.md
+  transport-exit table updated to match.
+
+Context: a fresh-session doctor run showed `curl exit 56` on Sentry after the token
+was correctly persisted to ~/.scoutflo/env — the token was fine (verified 200 from a
+reachable network); the exit 56 was that machine's proxy/network to sentry.io. This
+makes doctor say that clearly instead of leaving the user guessing.
+
+No audit logic, checks, IDs, or scoring changed.
+
 ## 0.1.59
 
 Coverage sanity: `connect` was missing three cloud providers from its picker, and

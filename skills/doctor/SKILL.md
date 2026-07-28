@@ -215,6 +215,7 @@ The script's hints quote the observed failure shape. This table is the deeper re
 | `http_code` 000, curl exit 7 | Connection refused | Wrong port, service not exposed, or the port-forward is not running |
 | `http_code` 000, curl exit 28 | Timeout | Firewall or network path; confirm you can reach the host at all before raising `CURL_MAX_TIME` |
 | `http_code` 000, curl exit 35 or 60 | TLS failure | Internal CA not trusted by your system; install the CA properly, never disable verification |
+| `http_code` 000, curl exit 52, 55, or 56 | Connection dropped mid-transfer (no HTTP response) | A proxy or corporate firewall between you and the host, not the token; retry once with proxy vars cleared (`env -u HTTPS_PROXY -u https_proxy ...`) and confirm the host is reachable from this network. It is never an auth (401/403) error |
 | HTTP 401 | Token missing, invalid, or expired | Recreate per the provider section in `connect`; confirm the variable is exported in this shell |
 | HTTP 403 | Token valid, scope or role too low | Raise to the tier scopes in `connect` `references/providers.md` |
 | HTTP 404 | Wrong path, wrong region host, or a path prefix | Sentry: run the region probe. Gateways: verify the health path against your deployment |
