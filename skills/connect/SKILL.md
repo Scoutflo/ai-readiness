@@ -18,7 +18,8 @@ Every question in this flow (which integrations, host, org slug, tier, tenant ID
 Two hard rules for this whole flow:
 
 - Never paste a token, webhook URL, or any secret into this conversation. `toolkit.yaml` never contains a secret either: every `*_env` key names an environment variable, and the value lives only in your environment.
-- Any command that reads, exports, or prompts for a secret value is shown for you to run in your own terminal. An agent driving this skill displays those commands and never executes them; the agent's own commands are limited to non-secret work (creating directories, copying the template, parsing the config, running doctor).
+- Any command that reads, exports, or prompts for a secret value is shown for you to run in your own terminal. An agent driving this skill displays those commands and never executes them; the agent's own commands are limited to non-secret work (creating directories, copying the template, parsing the config, running the presence-only env scan in Step 4a, running doctor).
+- For every credential a chosen integration needs, the agent must hand you an exact, copy-pasteable command to **set** the variable (the placeholder `export`/`$Env:` form for your OS in Step 4), not merely a command to read or display an existing token. First it runs the Step 4a presence scan and, for anything already set, asks whether to reuse it before asking you to set a new one.
 - If a secret does get pasted into a conversation, treat it as exposed: revoke it in the provider UI, mint a fresh credential under the same name, and re-export. A rotated token costs a minute; an exposed one is permanent.
 
 ## Prerequisites
@@ -30,7 +31,7 @@ Two hard rules for this whole flow:
 
 Most integrations (Grafana, Prometheus, Loki, Tempo, Mimir, VictoriaMetrics, Sentry, Datadog, PagerDuty, ELK, JSM, Zenduty, Groundcover) are reached over HTTPS with a token, so they need only `curl` + `jq` — no vendor CLI. Only Kubernetes and AWS/GCP/DigitalOcean lean on a CLI (`kubectl`, `aws`, `gcloud`, `doctl`).
 
-**Already have MCP servers for these providers?** You still record hosts/tokens here the same way, and `doctor` still validates reachability. When a provider's read-only MCP tools are connected, the audit skills may use them in place of the equivalent `curl`/CLI call to gather the same evidence (read-only tools only, same discipline) — so a provider reachable only through its MCP server is still auditable without installing its CLI. MCP is an optional substitution, never a requirement; the CLI/HTTP path is always the baseline. See [docs/skill-authoring-conventions.md](../../docs/skill-authoring-conventions.md#integration-access-clihttp-first-mcp-equivalent-allowed).
+**Already have MCP servers for these providers?** You still record hosts/tokens here the same way, and `doctor` still validates reachability. The toolkit uses **both** CLI/HTTP and MCP and picks per operation — reads go over the fast direct path, and a connected MCP tool is used when it is the equivalent read route (or the only reachable one), or for a write whose typed MCP tool is the safer path. You are never asked to choose, and a stack with only CLIs or only MCP servers both work. Read-only discipline and every safety rule are unchanged. See [docs/skill-authoring-conventions.md](../../docs/skill-authoring-conventions.md#integration-access-per-operation-transport-selection-clihttp-and-mcp).
 
 ## The two credential tiers
 
@@ -123,33 +124,95 @@ Create read-only credentials now, named `scoutflo-audit` per the naming rule. Cr
 
 **Run each provider's verify command the moment you export that credential — before starting the next integration, not after all of them.** With twelve possible integrations, a wrong host, wrong scope, or mistyped org slug is far cheaper to catch and fix one provider at a time than to debug from a single `doctor` run at the very end of Step 7, where several small mistakes can compound into one confusing failure list. Step 7's `doctor` pass is the final confirmation that everything is wired together, not the first time any of it gets checked.
 
-## Step 4: Export the secrets (you run these, not the agent)
+## Step 4: Set the secrets (you run these, not the agent)
 
-The commands in this step read secret values, so they are yours to run in your own terminal. An agent shows them and never executes them; the value never enters the conversation. Export each secret without echoing it and without leaving it in shell history:
+The commands in this step read secret values, so they are yours to run in your own terminal. An agent shows them and never executes them; the value never enters the conversation. **The agent's job here is to hand you an exact, copy-pasteable command for every variable you need to set — never just a "show the token" command.**
+
+### 4a. First, reuse what's already there
+
+Before asking you to create or paste anything, the agent runs this **presence-only scan** (it prints variable names and whether they are set, never any value) to find credentials you may already have exported for these systems:
 
 ```bash
-# YOU run this in your own terminal; an agent never executes this command.
-# Prompts silently, exports for this shell session only. Repeat per variable.
+# Safe for the agent to run: prints names + set/unset only, never a value.
+# Load the global store first so a credential set in a PRIOR session/terminal counts as set.
+[ -f ~/.scoutflo/env ] && . ~/.scoutflo/env
+for V in GRAFANA_TOKEN PROM_TOKEN LOKI_TOKEN TEMPO_TOKEN MIMIR_TOKEN VM_TOKEN \
+         DATADOG_API_KEY DATADOG_APP_KEY SENTRY_TOKEN PAGERDUTY_TOKEN \
+         KIBANA_API_KEY JSM_EMAIL JSM_API_TOKEN ZENDUTY_TOKEN GROUNDCOVER_API_KEY \
+         SCOUTFLO_SLACK_WEBHOOK; do
+  if [ -n "$(printenv "$V" 2>/dev/null || true)" ]; then echo "$V = already set"; else echo "$V = not set"; fi
+done
+```
+
+For each variable that comes back **already set**, the agent asks you plainly: *"`GRAFANA_TOKEN` is already set in your environment — reuse it for this audit, or set a fresh read-only one?"* Reusing an existing read-only token is fine; the only reason to set a new one is if the existing token has more scope than an audit needs (see the tier rule above — audits want read-only) or belongs to a different account than the one you are auditing. The agent never reads the value to decide; it asks you.
+
+### 4b. For anything not already set (or that you chose to replace), set it now
+
+Pick the block for your OS. Replace the placeholder with the token you created in Step 3; the value never goes into the chat.
+
+**macOS / Linux (bash/zsh) — this shell session:**
+
+```bash
+# YOU run this in your own terminal. One line per variable you need.
+export GRAFANA_TOKEN="<paste-your-grafana-token-here>"
+```
+
+**Windows — PowerShell (this session):**
+
+```powershell
+# YOU run this in PowerShell. One line per variable.
+$Env:GRAFANA_TOKEN = "<paste-your-grafana-token-here>"
+```
+
+**Windows — Git Bash** (the shell the plugin's skills actually run in on Windows): use the macOS/Linux `export` form above, in the Git Bash window.
+
+Prefer not to have the token sit in your shell history? Use the silent-prompt form instead — it reads the value without echoing it and without a history entry:
+
+```bash
+# macOS/Linux/Git Bash: prompts silently, exports for this shell session.
 printf 'GRAFANA_TOKEN: ' && read -rs GRAFANA_TOKEN && export GRAFANA_TOKEN && printf '\n'
 ```
 
-Environment variables are per-shell: export them in the same shell where you run the toolkit's skills. For persistence, load them in your shell profile from a secret manager rather than hardcoding values:
+Swap `GRAFANA_TOKEN` for the exact `*_env` name of whatever you are setting (`DATADOG_API_KEY`, `PROM_TOKEN`, `PAGERDUTY_TOKEN`, …). Datadog needs two (`DATADOG_API_KEY` and `DATADOG_APP_KEY`); JSM needs `JSM_EMAIL` plus `JSM_API_TOKEN`.
+
+### 4c. Set it ONCE, globally — so you are never asked again
+
+A plain `export` lives only in the current shell, so it vanishes when you open a new terminal, start a new session, or `cd` elsewhere — and then `connect`/`doctor` would ask for the token again. **The fix is a single home-anchored secret file, `~/.scoutflo/env`, that your shell loads at startup.** Set a credential there once and every future session, terminal, and directory already has it. This is the recommended path; do it once and you are done.
+
+**macOS / Linux / Git Bash — one-time setup, then one line per credential:**
 
 ```bash
-# In ~/.zshrc or ~/.bashrc: pull from your secret manager at shell start.
-# Substitute your own secret manager's CLI.
-export GRAFANA_TOKEN="$(your-secret-manager get sre-toolkit/grafana-audit)"
+# 1) Create the file (once), locked to you:
+mkdir -p ~/.scoutflo && touch ~/.scoutflo/env && chmod 600 ~/.scoutflo/env
+
+# 2) Load it from your shell profile (once). Adds a source line if not already there:
+grep -q 'scoutflo/env' ~/.zshrc 2>/dev/null || echo '[ -f ~/.scoutflo/env ] && . ~/.scoutflo/env' >> ~/.zshrc
+# bash users: same line into ~/.bashrc instead of ~/.zshrc.
+
+# 3) Add each credential to ~/.scoutflo/env (one line per variable). Best: pull from a
+#    secret manager so no secret is written to disk; simpler: a literal value (the file is
+#    already chmod 600). Then run: source ~/.scoutflo/env  (or open a new terminal).
+echo 'export GRAFANA_TOKEN="<paste-your-grafana-token-here>"' >> ~/.scoutflo/env
 ```
 
-If you must skip a secret manager, a plain `export` line in your profile works but leaves the value readable in that file; restrict its permissions and know the tradeoff.
+**Windows — PowerShell — one-time, persists for your user across all new terminals:**
 
-A presence check is safe for anyone, including an agent, to run; it never prints the value:
+```powershell
+setx GRAFANA_TOKEN "<paste-your-grafana-token-here>"
+# setx writes to the user environment; it affects NEW terminals, so reopen PowerShell after.
+```
+
+Because `~/.scoutflo/env` is in your home directory (not tied to any project folder), it is the same store the scheduled-runs path uses — so interactive runs, new terminals, and cron all read one place. `doctor` sources `~/.scoutflo/env` before checking, so once a credential is in it, no skill asks you to set it again.
+
+### 4d. Confirm it's set (safe for anyone, prints no value)
 
 ```bash
 VAR_NAME="GRAFANA_TOKEN"   # the *_env name from your config block
 if [ -n "$(printenv "$VAR_NAME" || true)" ]; then echo "${VAR_NAME} set"; else echo "${VAR_NAME} NOT SET"; fi
 # Expect: "GRAFANA_TOKEN set"
 ```
+
+Run each provider's verify command (Step 3 / `references/providers.md`) right after you set its variable, so a wrong scope or host is caught one provider at a time rather than piling up for the Step 7 `doctor` run.
 
 ## Step 5: Propose the config blocks, then wait
 
@@ -213,7 +276,10 @@ When doctor exits 0:
 
 | Failure | Prevention |
 | --- | --- |
-| Token pasted into `toolkit.yaml` or into the chat | Only `*_env` names go in the file; secrets are exported in your terminal via the silent-read prompt |
+| Token pasted into `toolkit.yaml` or into the chat | Only `*_env` names go in the file; secrets are set in your terminal via the Step 4 `export`/`$Env:` command |
+| Agent shows only a "read/show token" command, not how to set one | Step 4 requires an exact copy-pasteable **set** command (placeholder `export`/`$Env:` for the user's OS) for every needed variable — never just a display command |
+| User on Windows given only a bash `export` | Step 4 gives PowerShell (`$Env:`/`setx`) and Git Bash forms alongside macOS/Linux |
+| A credential the user already has gets asked for again | Step 4a runs the presence-only scan first and offers to reuse any matching var that is already set |
 | An agent executes the secret-export prompt itself | Step 4 commands are user-run only; agents display them and run nothing that touches a secret value |
 | Config written before the blocks were approved | Step 5 is a gate: propose the exact blocks, wait for an explicit yes in the conversation, then write |
 | Sentry commands hit the wrong region and every call 404s | Set `sentry.host` explicitly; run the region probe in [references/providers.md](references/providers.md) before writing the config |

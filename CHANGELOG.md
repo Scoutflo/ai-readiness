@@ -1,5 +1,95 @@
 # Changelog
 
+## 0.1.57
+
+Report-output UX: make the final report easier to read and act on, and settle the
+CLI-vs-MCP question.
+
+- **Cost/savings sections now lead with a totals line.** The report standard's
+  parallel-section rule (and `audit-aws` §9) now require a one-line savings summary
+  before the table: `~$<sum>/month (~$<sum×12>/year) across N opportunities`, plus
+  the single largest lever — built only from provider-sourced figures (Compute
+  Optimizer / Cost Explorer / Cost Optimization Hub), never recomputed. It counts
+  opportunities *with* a figure separately from those *without*, and says
+  "no dollar figure available" instead of `$0` when nothing is provider-sourced.
+  The per-row table gained `Current → recommended` and an annualized column.
+  Pressure scenario `cost-savings-summary-honest-totals.md`.
+- **Report comprehension aids** (report-template.md): every headline score/count is
+  paired with a plain-language clause (`72/100 — good base coverage, below the 85
+  gate`), and each report leads the reader to the single highest-value action
+  ("Start here: …") so they can act without reading the whole thing.
+- **CLI vs MCP: explicit per-operation transport selection.** The authoring
+  conventions now frame this as deliberate routing, not MCP-as-fallback: reads
+  (every audit call, doctor, map-topology) default to the **fast direct CLI/HTTP
+  path**; a connected MCP tool is used when it is the equivalent read route or the
+  only reachable one; and **writes** (setup mutations) prefer a provider's typed
+  MCP tool when one exists, since it is often the safer mutation path than a
+  hand-built `curl -X POST`/CLI flag — falling back to CLI/HTTP otherwise. A
+  decision table makes the read→direct / write→typed-tool split explicit. Skills
+  must NOT ask the user to choose; a stack with only CLIs, only MCP servers, or a
+  mix all work with no configuration. All existing MCP safety rules
+  (read-only-by-effect in audits, equivalence-or-fallback, prove-the-target,
+  never-required, secrets) are unchanged; connect + FAQ reworded to match.
+
+Docs/guidance only; no audit logic, checks, IDs, or scoring changed.
+
+`connect` now guides credential setup properly — the fix for a real onboarding
+gap where the skill would tell you how to *read* a token but not give a
+copy-pasteable command to *set* one.
+
+- **Reuse-first (Step 4a).** Before asking you to create or paste anything,
+  `connect` runs a presence-only env scan (prints variable names + set/unset,
+  never a value) across all provider `*_env` names and, for any already set,
+  asks whether to reuse it or set a fresh read-only one.
+- **Exact set commands, per OS.** For anything not set, `connect` hands over the
+  copy-pasteable command with a placeholder — `export VAR="<paste…>"` for
+  macOS/Linux/Git Bash and `$Env:VAR = "<paste…>"` for Windows PowerShell — plus
+  `setx`/profile persistence and the silent-prompt (`read -rs`) form for anyone
+  avoiding shell history. The skill must give a **set** command for every needed
+  variable, never just a "show the token" command.
+- **Boundary + failure-mode rules** updated to require the set command and the
+  reuse scan; added a pressure scenario
+  (`tests/pressure-scenarios/connect/set-token-command-not-just-read.md`).
+- **Set once, globally (fixes "asked again every session").** `connect` now makes
+  the home-anchored `~/.scoutflo/env` the canonical secret store: add a credential
+  there once (`echo 'export VAR="…"' >> ~/.scoutflo/env`, or `setx` on Windows) and
+  source it from your shell profile once, and every new terminal/session/directory
+  has it. **`doctor.sh` now sources `~/.scoutflo/env`** before its checks, and its
+  env-missing hint points there (with the Windows `setx` form) instead of a
+  throwaway per-shell `export`; connect's reuse scan sources it too. `start` step 1
+  states the set-once behavior. Pressure scenario
+  `set-once-global-not-per-shell.md`.
+- **map-topology clarity:** the intro now says explicitly that Istio topology is
+  read **directly from the Istio CRDs** (VirtualServices, DestinationRules,
+  Gateways, ServiceEntries, sidecar coverage) via `kubectl`/`istioctl` — **not**
+  Kiali, a mesh dashboard, or Prometheus — so a customer without Kiali knows
+  nothing changes for them.
+
+Docs/guidance only (plus doctor.sh now sources the global env file); no audit
+logic, checks, IDs, or scoring changed.
+
+**Run-completion message.** Added a shared convention for what a skill says in chat
+when a run finishes (report-standard/report-template.md → "Run-completion message"):
+a one-line score headline, the top fixes by points_recoverable, the **absolute**
+report path, an OS-specific open command (`open`/`xdg-open`/`Invoke-Item`), and a
+leak-safe share pointer (the full report names hosts/routes → share in-team; the
+Slack brief is the safe summary). `audit-all` gets a matching Phase 6 for the
+combined run; representative audits point at the convention from their closing
+phase. Pressure scenario
+`tests/pressure-scenarios/audit-all/completion-message-guides-to-report.md`. This
+replaces the previous bare "done" close so users are always guided to open/share
+the report.
+
+**Reports-location guidance reframed default-first.** `doctor` Step 0 and `start`
+"Where reports land" now lead with "you don't have to choose — the default
+`./scoutflo-audits/` just works, and doctor prints the exact absolute path," and
+demote the `SCOUTFLO_AUDIT_DIR`/`reports_dir` mechanics to an explicitly optional
+"pin it so it follows you across folders" note; the default first run no longer
+reads as a required decision. Verified this pass that both auth tokens
+(`~/.scoutflo/env`, sourced by `doctor.sh` and the shell profile) and host/org
+config (`~/.scoutflo/toolkit.yaml`, read from `$HOME` by every skill) are already
+home-global and reused across sessions, terminals, and directories.
+
 ## 0.1.56
 
 MCP-server awareness. Skills stay CLI/HTTP-first (the portable default, unchanged),

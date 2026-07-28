@@ -5,7 +5,7 @@ description: Builds a read-only service topology map from Istio or plain Kuberne
 
 # map-topology
 
-Maps how traffic moves through your cluster and writes the result to `./scoutflo-audits/topology.md`. When Istio is installed, the map comes from the mesh: sidecar coverage, VirtualServices, DestinationRules, Gateways, ServiceEntries. Without a mesh, it comes from Services, Ingresses, workloads, and Endpoints. Every cluster operation is read-only (`get` and `list` only); the only write is the local `topology.md` file.
+Maps how traffic moves through your cluster and writes the result to `./scoutflo-audits/topology.md`. When Istio is installed, the map is read **directly from the Istio CRDs in your cluster** — `VirtualServices`, `DestinationRules`, `Gateways`, `ServiceEntries`, and sidecar coverage on pods — via `kubectl get`/`list` (and `istioctl proxy-status` where available). It does **not** use Kiali, a service-mesh dashboard, Prometheus, or any external topology source; if you don't run Kiali, that changes nothing here. Without a mesh, the map comes from plain Kubernetes: Services, Ingresses, workloads, and Endpoints. Every cluster operation is read-only (`get` and `list` only); the only write is the local `topology.md` file.
 
 Full command recipes live in [references/istio-queries.md](references/istio-queries.md). This file holds the workflow; go to the cookbook for the exact `kubectl`, `istioctl`, and `jq` blocks each phase names.
 
