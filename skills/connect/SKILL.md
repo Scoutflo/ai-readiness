@@ -1,6 +1,6 @@
 ---
 name: connect
-description: Guided credential setup; creates minimal-scope tokens per tier for Grafana, Sentry, PagerDuty, Datadog, ELK/Kibana, JSM Operations, Zenduty, Groundcover, Prometheus, Loki, Tempo, Mimir, VictoriaMetrics, Kubernetes, and Slack, and writes ~/.scoutflo/toolkit.yaml. Use when the user wants to connect or onboard the toolkit, add an integration, rotate a token, or set up credentials, including the audit-brief Slack webhook. Do not use for alert-delivery webhooks (Grafana contact points, Alertmanager receivers; use setup-grafana or setup-lgtm) or to verify reachability (use doctor).
+description: Guided credential setup; creates minimal-scope tokens per tier for Grafana, Sentry, PagerDuty, Datadog, ELK/Kibana, JSM Operations, Zenduty, Groundcover, Prometheus, Loki, Tempo, Mimir, VictoriaMetrics, DigitalOcean, GCP, AWS, Kubernetes, and Slack, and writes ~/.scoutflo/toolkit.yaml. Use when the user wants to connect or onboard the toolkit, add an integration, rotate a token, or set up credentials, including the audit-brief Slack webhook. Do not use for alert-delivery webhooks (Grafana contact points, Alertmanager receivers; use setup-grafana or setup-lgtm) or to verify reachability (use doctor).
 ---
 
 # Connect: Credential and Config Setup
@@ -56,7 +56,7 @@ Two conventions are rules, not suggestions:
 
 Configure only what you run. Unconfigured integrations are skipped cleanly by every skill; they are not failures.
 
-Ask which integrations to configure as a plain numbered list in a normal chat message, per the "Asking questions" rule above — this table has up to 15 rows, well past the option ceiling that rule warns about.
+Ask which integrations to configure as a plain numbered list in a normal chat message, per the "Asking questions" rule above — this table has 18 rows, well past the option ceiling that rule warns about.
 
 | Integration | Used by | Config block | Suggested env var | Tier summary |
 | --- | --- | --- | --- | --- |
@@ -274,6 +274,8 @@ When doctor exits 0:
 
 1. Run `/scoutflo:map-topology` to build your service map.
 2. Run `/scoutflo:audit-all` (or a single audit such as `/scoutflo:audit-grafana`) for your first scored report.
+
+On any other exit: fix the failing rows using the hint column (exit 1: config missing — rerun this skill; exit 2: export the named variable per Step 4; exit 3: recheck that provider's host and token per Step 3), then rerun `/scoutflo:doctor`.
 
 ## Common Failure Modes
 

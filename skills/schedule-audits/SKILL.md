@@ -38,6 +38,8 @@ Ask, with defaults:
 | Local crontab | An always-on machine can reach every target | Machine asleep at the scheduled time means a missed run; cron does not catch up |
 | Claude cloud schedule | Every target is a SaaS endpoint on the public internet (managed Grafana, sentry.io) | Your credentials must be stored with the cloud environment; see below |
 
+The cloud path has no fill-in walk-through here yet: set the schedule up in the Claude web/app scheduling UI with the audit prompt from Phase 3, then do the same first-run validation as any runner. The GitHub Actions and crontab paths below are the ones this skill walks end to end.
+
 **Cloud schedule caveat.** Claude's own scheduled runs need no runner of yours, but the run executes outside your network: it can only reach public SaaS endpoints, and every token it uses must be stored with the cloud environment. Use dedicated read-only tokens you are comfortable holding there, and never use this path for private-network targets. When in doubt, prefer the two self-hosted paths below, where secrets stay in your CI store or on your machine.
 
 **Cost note for every path.** Each scheduled run is a headless Claude session; usage scales with the number of configured audits and the size of your stack. Start weekly, check actual usage after the first runs, then tighten the cadence if the reports earn it.

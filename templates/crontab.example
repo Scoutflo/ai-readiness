@@ -1,4 +1,4 @@
-# Scoutflo SRE Toolkit: crontab entry for recurring audits.
+# Scoutflo AI Readiness: crontab entry for recurring audits.
 # Filled in by /scoutflo:schedule-audits. Install via `crontab -e`, verify with `crontab -l`.
 #
 # Prerequisites on this machine:

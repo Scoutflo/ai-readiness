@@ -83,6 +83,18 @@ if [ -f "$SCOUTFLO_ENV" ]; then
   . "$SCOUTFLO_ENV" || note "doctor: warning: could not source ${SCOUTFLO_ENV} (continuing with current environment)"
 fi
 
+# --- version stamp ------------------------------------------------------------
+# Print which toolkit version is answering, so any pasted output/screenshot is
+# self-diagnosing (a stale install is the #1 cause of "my picker looks different").
+# Plugins do not auto-update: refresh with `claude plugin update scoutflo@scoutflo`.
+PLUGIN_MANIFEST="${CLAUDE_PLUGIN_ROOT:-.}/.claude-plugin/plugin.json"
+if [ -f "$PLUGIN_MANIFEST" ]; then
+  TOOLKIT_VERSION=$(sed -n 's/^[[:space:]]*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$PLUGIN_MANIFEST" | head -1)
+  note "doctor: Scoutflo AI Readiness toolkit v${TOOLKIT_VERSION:-unknown} (update: claude plugin update scoutflo@scoutflo)"
+else
+  note "doctor: Scoutflo AI Readiness toolkit (version manifest not found; running from a partial install?)"
+fi
+
 # --- hard stop: config must exist --------------------------------------------
 
 if [ ! -f "$CONFIG" ]; then
@@ -684,6 +696,9 @@ else
 fi
 
 # --- loki, tempo, mimir (same shape: /ready, optional token) -------------------------
+# A loki/tempo URL often fronts VictoriaLogs/VictoriaTraces instead (drop-in for the
+# same role) — those answer /health, not /ready. Probe /ready first, fall back to
+# /health, and say which shape answered. audit-lgtm detects the engine either way.
 
 for STORE in loki tempo mimir; do
   STORE_URL="$(cfg "$STORE" url)"
@@ -695,7 +710,20 @@ for STORE in loki tempo mimir; do
   STORE_URL="${STORE_URL%/}"
   resolve_token "$STORE"
   if token_gate "$STORE" ready; then
-    live_check "$STORE" ready "${STORE_URL}/ready" "${TOKEN_VAR:-none}" "$TOKEN"
+    note "doctor: checking ${STORE} ready: GET ${STORE_URL}/ready"
+    http_get "${STORE_URL}/ready" "$TOKEN"
+    if [ "$CURL_RC" -eq 0 ] && [ "$HTTP_CODE" = "200" ]; then
+      row "$STORE" ready yes "${TOKEN_VAR:-none}" pass "$HTTP_CODE" "-"
+    else
+      note "doctor: ${STORE} /ready did not answer 200; trying /health (VictoriaLogs/VictoriaTraces shape)"
+      http_get "${STORE_URL}/health" "$TOKEN"
+      if [ "$CURL_RC" -eq 0 ] && [ "$HTTP_CODE" = "200" ]; then
+        row "$STORE" ready yes "${TOKEN_VAR:-none}" pass "$HTTP_CODE" "answers /health not /ready: VictoriaLogs/VictoriaTraces-style backend; audit-lgtm handles this automatically"
+      else
+        # both probes failed: report against the canonical /ready with full hints
+        live_check "$STORE" ready "${STORE_URL}/ready" "${TOKEN_VAR:-none}" "$TOKEN"
+      fi
+    fi
   fi
 done
 

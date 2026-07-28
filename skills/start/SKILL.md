@@ -7,6 +7,8 @@ description: 'Orientation for the Scoutflo AI Readiness: the local-only guarante
 
 This toolkit audits, hardens, and monitors your infrastructure and observability stacks from Claude Code. Audit skills produce a scored report with command-level evidence. Setup skills fix what an audit found, one confirmed change at a time. Harness skills, this one included, wire everything together.
 
+State your installed toolkit version in this orientation (read `version` from `${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json`). Plugins do not auto-update: if a teammate's skill list or picker looks different, compare versions first and update with `claude plugin update scoutflo@scoutflo`.
+
 ## Everything runs on your side
 
 - Every API call originates from your machine or your CI. Nothing is sent to Scoutflo: no telemetry, no report upload, no callbacks.
@@ -31,7 +33,7 @@ This toolkit audits, hardens, and monitors your infrastructure and observability
 | `/scoutflo:doctor` | harness | Preflight: config, env vars, one live check per integration |
 | `/scoutflo:map-topology` | harness | Service map into `./scoutflo-audits/topology.md` |
 | `/scoutflo:audit-all` | harness | Run every configured audit, one combined report and brief |
-| `/scoutflo:schedule-audits` | harness | Recurring audits via GitHub Actions or cron |
+| `/scoutflo:schedule-audits` | harness | Recurring audits via GitHub Actions, cron, or a Claude cloud schedule |
 | `/scoutflo:audit-lgtm` | audit | Scored audit of LGTM and VictoriaMetrics observability stacks |
 | `/scoutflo:setup-lgtm` | setup | Guided hardening for findings from `audit-lgtm` |
 | `/scoutflo:audit-grafana` | audit | Dashboard truthfulness, alert semantics, query hygiene |
@@ -52,7 +54,7 @@ This toolkit audits, hardens, and monitors your infrastructure and observability
 | `/scoutflo:audit-aws` | audit | CloudWatch alarms, SNS routing, compute/DB/uptime health, plus a separate Cost & Resource Optimization report |
 | `/scoutflo:setup-aws` | setup | CloudWatch alarms, SNS routing, log forwarding, account observability |
 
-More audits are planned, including a dedicated Datadog audit. Installed skills always appear in this table.
+More audits are planned. Installed skills always appear in this table.
 
 ## Where reports land
 

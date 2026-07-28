@@ -1,5 +1,42 @@
 # Changelog
 
+## 0.1.62
+
+UX sweep: version self-diagnosis, VictoriaLogs/Traces doctor support, the
+run-completion message everywhere, and a batch of confirmed doc-consistency fixes.
+No audit logic, checks, finding IDs, or scoring changed.
+
+- **Version stamp**: `doctor` prints `Scoutflo AI Readiness toolkit vX.Y.Z`
+  (with the update command) at the top of every run, and `start` states the
+  installed version in its orientation. Plugins do not auto-update — a stale
+  install was the root cause of "my picker shows fewer integrations" reports;
+  now any pasted output is self-diagnosing.
+- **doctor: loki/tempo probe handles VictoriaLogs/VictoriaTraces.** A `loki:` or
+  `tempo:` URL often fronts VictoriaLogs/VictoriaTraces (drop-in role), which
+  answer `/health`, not Loki/Tempo's `/ready`. Doctor now falls back to `/health`
+  and labels the backend instead of reporting a false fail. `audit-lgtm` already
+  detected the engine; now preflight matches.
+- **Run-completion message in all 14 audits**: the 10 audits missing the
+  report-standard close (score headline, top fixes, **absolute** report path,
+  OS open command, leak-safe share pointer) now reference it at their final
+  phase — same sentence audit-lgtm/aws/alert-routing/audit-all already had.
+  map-topology's close-out now requires absolute artifact paths + open command.
+- **Slack briefs post absolute report paths** (7 scripted brief blocks resolved
+  `$OUT` relative to the launch dir; now `OUT_ABS` via `cd/pwd`).
+- **Setup change logs honor `SCOUTFLO_AUDIT_DIR`** (6 setup skills wrote
+  `./scoutflo-audits/<target>/changes.md` literally — the rollback record could
+  land in a different tree than the audits).
+- **Guidance completeness**: doctor verdict now covers exit 1 (no config yet →
+  run connect); connect's ending covers non-zero doctor exits; schedule-audits
+  states plainly that the Claude-cloud runner has no fill-in walk-through yet.
+- **Doc consistency batch**: FAQ platform list now includes PagerDuty, Datadog,
+  ELK/Kibana, JSM Operations, Zenduty, groundcover; connect's description adds
+  DigitalOcean/GCP/AWS; README's connect example names all paging integrations;
+  start no longer claims a Datadog audit is "planned" (it shipped in 0.1.45) and
+  lists all three schedule runners; connect's row count corrected to 18;
+  plugin.json keywords aligned with marketplace.json (loki, alert-fatigue,
+  alert-noise); templates rebranded from the pre-rename "SRE Toolkit" name.
+
 ## 0.1.61
 
 Disambiguate the plugin's health check from Claude Code's built-in `/doctor`.
