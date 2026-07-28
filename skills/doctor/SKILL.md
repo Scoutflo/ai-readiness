@@ -15,7 +15,7 @@ All checking lives in one bundled script, `scripts/doctor.sh`. It is read-only, 
 
 - `curl` required; `jq` checked because every other skill needs it.
 - `yq` optional. Without it, the script falls back to a POSIX parser that handles the flat two-level layout of `templates/toolkit.yaml.example`. Anything more nested needs `yq`.
-- `kubectl`, only when the config has a `kubernetes:` block.
+- A vendor CLI **only when its provider is configured**, and doctor emits a `binary-<cli>` row (pass/fail) for each so a missing one is a clear, named failure rather than a downstream crash: `kubectl` (a `kubernetes:` block), `aws` (`aws:`), `gcloud` (`gcp:`), `doctl` (`digitalocean:`). Every other provider is HTTPS+token and needs no CLI.
 
 ## Step 0: Report the storage location (no choice required)
 
@@ -184,7 +184,7 @@ One cheap read-only call per configured integration. Unconfigured integrations a
 | loki, tempo, mimir | GET `/ready` | 200 | Behind a multi-tenant gateway or path prefix, `/ready` may 404 while queries work; verify the health path against your deployment before concluding the store is down |
 | victoriametrics | GET `/health` | 200 | Cluster editions may serve health per component; verify the path against your deployment |
 | vmalert | GET `/health` | 200 | If `/health` is not exposed in your setup, `GET /api/v1/rules` returning JSON is an equivalent read-only proof |
-| digitalocean | GET `/v2/account` | 200 | 401: token missing, invalid, or expired. 403: token valid but scoped too low for account read |
+| digitalocean | `doctl` installed (binary check), then GET `/v2/account` | doctl present, then 200 | `binary-doctl fail`: `doctl` not installed but a `digitalocean:` block is configured (audit-digitalocean is doctl-based) — install doctl. 401: token missing, invalid, or expired. 403: token valid but scoped too low for account read |
 | gcp | `gcloud auth print-access-token` (or `application-default` when `credentials_env` is set), then GET the Monitoring API `notificationChannels` | non-empty token, then 200 | No token at all: not logged in, or the key file `credentials_env` names is missing or invalid; run `gcloud auth login` or fix the key file. 403 on the API call: identity lacks `monitoring.viewer`. 404: `gcp.project` is wrong |
 | kubernetes | `kubectl --context <ctx> auth can-i get pods` | `yes` | `no`: the context reaches the cluster but lacks read RBAC; bind the `view` ClusterRole. A context error: the config value does not exist in your kubeconfig; run `kubectl config get-contexts` |
 | slack | POST test message (only with `--slack-test`) | 200 and the message appears | 404 or `no_service`: the webhook was revoked; create a new one via `/scoutflo:connect` |

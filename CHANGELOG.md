@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.1.58
+
+`doctor` now flags a missing DigitalOcean CLI, closing the last gap in CLI-presence
+highlighting.
+
+- **`binary-doctl` check in `doctor.sh`.** `audit-digitalocean` is doctl-based (88
+  doctl calls), and connect lists `doctl` as its required CLI, but doctor checked
+  the DO token and never whether `doctl` was installed — so a DO user without it hit
+  a confusing downstream "command not found" instead of a clean doctor row. Doctor
+  now emits `binary-doctl fail` (with an install pointer) when a `digitalocean:`
+  block is configured and `doctl` is absent, matching the existing `binary-aws` /
+  `binary-gcloud` / `binary-kubectl` checks. Conditional on the provider being
+  configured; HTTPS+token providers still need no CLI.
+- Doctor SKILL.md prerequisites + the DigitalOcean gate row document the check;
+  pressure scenario `tests/pressure-scenarios/doctor/missing-cli-binary-flagged.md`.
+
+Net: doctor's CLI-presence highlighting is now consistent across all four
+CLI-backed providers (kubectl, aws, gcloud, doctl). No audit logic, checks, IDs, or
+scoring changed.
+
 ## 0.1.57
 
 Report-output UX: make the final report easier to read and act on, and settle the
