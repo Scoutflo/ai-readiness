@@ -61,20 +61,29 @@ Rules:
 - Never put a secret in a URL or query string; secrets travel in headers.
 - If a required key or variable is missing, name it, point at `/scoutflo:connect`, and stop.
 
-## Integration access: CLI/HTTP first, MCP-equivalent allowed
+## Integration access: per-operation transport selection (CLI/HTTP and MCP)
 
-Every command block in every skill is written CLI/HTTP-first: `curl` against the provider's API, or a vendor CLI (`kubectl`, `aws`, `gcloud`, `doctl`). That is the portable default and the form to author in; keep writing skills this way.
+The toolkit uses **both** CLI/HTTP and MCP, and chooses per operation for the best result — it never asks the user to pick, and never binds a whole skill to one transport. Author every command block CLI/HTTP-first (`curl` against the provider API, or a vendor CLI: `kubectl`, `aws`, `gcloud`, `doctl`) — that is the portable baseline and the form skills are written in — then let the per-operation rule below pick the actual path at run time.
 
-**Do not ask the user to pick CLI vs MCP.** The toolkit handles both automatically and chooses per operation for the best result — read-only fetches go over the fast CLI/HTTP path, and where a connected MCP server is the equivalent read-only route (or the only reachable one) it is used instead, under the rules below. A preference prompt would add a decision the user does not need to make and cannot answer better than the per-operation logic already does; skills must not add one.
+**Do not ask the user to pick CLI vs MCP.** A preference prompt adds a decision the user does not need to make and cannot answer better than the per-operation logic; skills must not add one. Both are handled automatically.
 
-If the user has a **connected MCP server** for a provider (an `mcp__<server>__<tool>`-style toolset for Prometheus, Grafana, Datadog, AWS, Kubernetes, PagerDuty, etc.), you MAY use that MCP server's read-only tools in place of the equivalent `curl`/CLI command, when doing so obtains the same evidence. This makes the plugin work for a customer who has MCP servers but not the vendor CLI, without changing what any check verifies. Rules, non-negotiable:
+**How the transport is chosen, per operation:**
+
+| Operation | Default transport | Why |
+| --- | --- | --- |
+| **Read** (list/get/describe/query — every `audit-*` call, `doctor`, `map-topology`) | **Direct CLI/HTTP** | Fastest, lowest-overhead, most predictable response; the evidence is the raw command output. Use the connected read-only MCP tool instead only when it returns the *same* data and the direct path is unavailable (no vendor CLI installed, or the endpoint is reachable only through the MCP server). |
+| **Write** (`setup-*` mutations — create/update/silence/apply/delete) | **The provider's typed tool where one exists — often an MCP tool** | A provider MCP tool that encapsulates the write (validates input, returns a structured result) is frequently the safer, cleaner mutation path than hand-built `curl -X POST`/CLI mutate flags. When a connected MCP server exposes the write you need, prefer it; fall back to the CLI/HTTP mutation when it does not. Either way the `setup-*` announce → confirm → execute → verify loop is unchanged, and the verify read follows the read rule above. |
+
+So the customer's own mix works with no configuration: reads stay fast on the direct path, writes take the typed MCP route when it is the better tool, and a stack that has only CLIs — or only MCP servers — is fully handled either way. Choose by *fit for that operation*, not by a global setting.
+
+When the user has a **connected MCP server** for a provider (an `mcp__<server>__<tool>`-style toolset for Prometheus, Grafana, Datadog, AWS, Kubernetes, PagerDuty, etc.), the rules below govern every MCP call, read or write:
 
 - **Equivalence only.** The MCP tool must return the same underlying data the command would (the same list/get/query). If it cannot, fall back to the CLI/HTTP command; do not weaken or skip the check.
 - **Read-only discipline is unchanged and lane-bound.** In an `audit-*` skill, call only read-only MCP tools. Never call an MCP tool that creates, mutates, silences, acknowledges, resolves, updates, or deletes, however small; if a server only exposes a mutating tool for what you need, use the read-only CLI/HTTP path instead. `setup-*` skills follow their announce/confirm/execute/verify loop for an MCP write exactly as for a CLI write. **Classify by effect, not by name** — the same rule the live-safety gate applies to HTTP verbs. An MCP tool named `get`/`list`/`query`/`describe` that still starts a job, refreshes or syncs state, rotates a credential, or has any other side effect is mutating. MCP tools are opaque, model-selected black boxes, so the burden is on you: **if the tool's own description does not make clear it is side-effect-free, treat it as mutating and use the CLI/HTTP path instead.**
 - **Evidence rule is unchanged.** The finding's evidence is the exact tool call and its returned output, the same way a `curl` command and its output are evidence. Record which path was used (MCP tool name, or the command) so a reader can reproduce it. Never fabricate output.
 - **Live-safety is unchanged.** Confirm the MCP tool is pointed at the same target the config names (same cluster, account, org, host) before trusting it, the same identity check the CLI path does. An MCP server bakes its target into its own config, which you cannot override per call and may not be able to read at all: **if the tool cannot prove which target it is pointed at (no identity/self call, or a resolved target that differs from the config), do not trust it — fall back to the CLI/HTTP path, which names its target explicitly. Never proceed on "probably the right server".**
 - **Secrets discipline is unchanged.** Do not print tokens the MCP server holds; do not echo credentials into output or reports.
-- **MCP is never required.** No skill may hard-depend on an MCP server. The CLI/HTTP block is always the baseline that works; MCP is an optional substitution the runtime may make when the tools are present and read-only-equivalent.
+- **MCP is never required.** No skill may hard-depend on an MCP server. The CLI/HTTP block is always the authored baseline that works on its own; MCP is the runtime's per-operation choice when a connected tool is the better fit (a read that is equivalent and the direct path is unavailable, or a write whose typed MCP tool is safer than hand-built mutation) — never a prerequisite for the skill to run.
 
 `/scoutflo:doctor` and each skill's doctor gate still validate reachability the same way; when a provider is reachable only via its MCP server (no CLI, no direct HTTP), treat a working read-only MCP call to that provider as satisfying the gate for that integration, and say so in the doctor output.
 

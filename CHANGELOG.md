@@ -18,11 +18,18 @@ CLI-vs-MCP question.
   paired with a plain-language clause (`72/100 — good base coverage, below the 85
   gate`), and each report leads the reader to the single highest-value action
   ("Start here: …") so they can act without reading the whole thing.
-- **CLI vs MCP: no preference prompt.** Codified in the authoring conventions that
-  skills must NOT ask the user to choose — the toolkit already picks per operation
-  (fast CLI/HTTP for reads; read-only MCP where it's the equivalent or only route),
-  so a preference question adds a decision the user can't answer better than the
-  existing logic.
+- **CLI vs MCP: explicit per-operation transport selection.** The authoring
+  conventions now frame this as deliberate routing, not MCP-as-fallback: reads
+  (every audit call, doctor, map-topology) default to the **fast direct CLI/HTTP
+  path**; a connected MCP tool is used when it is the equivalent read route or the
+  only reachable one; and **writes** (setup mutations) prefer a provider's typed
+  MCP tool when one exists, since it is often the safer mutation path than a
+  hand-built `curl -X POST`/CLI flag — falling back to CLI/HTTP otherwise. A
+  decision table makes the read→direct / write→typed-tool split explicit. Skills
+  must NOT ask the user to choose; a stack with only CLIs, only MCP servers, or a
+  mix all work with no configuration. All existing MCP safety rules
+  (read-only-by-effect in audits, equivalence-or-fallback, prove-the-target,
+  never-required, secrets) are unchanged; connect + FAQ reworded to match.
 
 Docs/guidance only; no audit logic, checks, IDs, or scoring changed.
 

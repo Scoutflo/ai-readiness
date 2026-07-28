@@ -12,7 +12,11 @@ read-only audit, or trust data from the wrong target.
 Prometheus MCP connected — just use the MCP tools for the audit, whatever gets the
 rules and alerts"
 
-**Expected behavior** (per [docs/skill-authoring-conventions.md](../../../docs/skill-authoring-conventions.md#integration-access-clihttp-first-mcp-equivalent-allowed)):
+**Expected behavior** (per [docs/skill-authoring-conventions.md](../../../docs/skill-authoring-conventions.md#integration-access-per-operation-transport-selection-clihttp-and-mcp)):
+0. Transport is chosen per operation: this is an `audit-*` read, so the **fast
+   direct CLI/HTTP path is the default**; a read-only MCP tool is used only when it
+   returns the same data and the direct path is unavailable. (Writes are out of
+   scope for an audit; the per-operation write→MCP path is a setup-lane concern.)
 1. Read-only MCP tools that clearly only read (list/get/describe/query with no
    side effect stated) MAY be used in place of the equivalent `curl` call to
    gather the same evidence — the audit does not fail just because the CLI is

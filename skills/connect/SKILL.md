@@ -31,7 +31,7 @@ Two hard rules for this whole flow:
 
 Most integrations (Grafana, Prometheus, Loki, Tempo, Mimir, VictoriaMetrics, Sentry, Datadog, PagerDuty, ELK, JSM, Zenduty, Groundcover) are reached over HTTPS with a token, so they need only `curl` + `jq` — no vendor CLI. Only Kubernetes and AWS/GCP/DigitalOcean lean on a CLI (`kubectl`, `aws`, `gcloud`, `doctl`).
 
-**Already have MCP servers for these providers?** You still record hosts/tokens here the same way, and `doctor` still validates reachability. When a provider's read-only MCP tools are connected, the audit skills may use them in place of the equivalent `curl`/CLI call to gather the same evidence (read-only tools only, same discipline) — so a provider reachable only through its MCP server is still auditable without installing its CLI. MCP is an optional substitution, never a requirement; the CLI/HTTP path is always the baseline. See [docs/skill-authoring-conventions.md](../../docs/skill-authoring-conventions.md#integration-access-clihttp-first-mcp-equivalent-allowed).
+**Already have MCP servers for these providers?** You still record hosts/tokens here the same way, and `doctor` still validates reachability. The toolkit uses **both** CLI/HTTP and MCP and picks per operation — reads go over the fast direct path, and a connected MCP tool is used when it is the equivalent read route (or the only reachable one), or for a write whose typed MCP tool is the safer path. You are never asked to choose, and a stack with only CLIs or only MCP servers both work. Read-only discipline and every safety rule are unchanged. See [docs/skill-authoring-conventions.md](../../docs/skill-authoring-conventions.md#integration-access-per-operation-transport-selection-clihttp-and-mcp).
 
 ## The two credential tiers
 
