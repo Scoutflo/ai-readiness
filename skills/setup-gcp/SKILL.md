@@ -359,7 +359,7 @@ For `GCP-030`, `GCP-040`, `GCP-043`, `GCP-053`, and every Ops Agent install from
 
 ## Record and wrap up
 
-Append one entry per executed change to `./scoutflo-audits/gcp/changes.md`:
+Append one entry per executed change to `${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/gcp/changes.md`:
 
 ```markdown
 ## <UTC timestamp> | <finding IDs>

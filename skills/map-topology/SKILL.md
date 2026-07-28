@@ -360,7 +360,7 @@ State the count in the terminal close-out ("N of M services pass T1/T2 structura
 
 Close by telling the user, in the terminal:
 
-- Path written, mesh or fallback path taken, namespaces scanned and excluded.
+- The resolved **absolute** paths of `topology.md` and `topology-export.json` (resolve `${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}` first) with the OS open command (macOS `open`, Linux `xdg-open`, Windows `start`), plus mesh or fallback path taken, namespaces scanned and excluded.
 - Sizing path taken (small, medium, or large) with the namespace and workload counts that drove it.
 - Service, entry-point, and external-dependency counts.
 - The T1/T2 pre-check summary above.

@@ -244,7 +244,7 @@ Per critical service from topology.md:
 
 ## Record and wrap up
 
-Append one entry per executed change to `./scoutflo-audits/grafana/changes.md`:
+Append one entry per executed change to `${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/grafana/changes.md`:
 
 ```markdown
 ## <UTC timestamp> | <finding IDs>

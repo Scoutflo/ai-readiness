@@ -339,6 +339,8 @@ sh "${CLAUDE_PLUGIN_ROOT}/report-standard/check-report.sh" "$OUT/report.md"
 
 `findings.json` uses prefix `SNTRY`, IDs from the [check catalog](references/api-checks.md#check-catalog), evidence quoting re-fetched API responses, and a `remediation` pointer into `setup-sentry` on every finding. `report.md` follows the [template](../../report-standard/report-template.md): executive summary, scorecard, findings table, the Phase 8 coverage matrix, next safe actions ordered severity-then-safety, delta against the previous run (or "first run, no delta"), evidence appendix. The end-to-end gate is 85 with zero exclusions and every critical service passing every coverage row; below it, write "good base coverage", never "end to end". Keep `./scoutflo-audits/` out of public version control.
 
+After the report is written, close with the run-completion message per the report standard ([report-template.md](../../report-standard/report-template.md#run-completion-message-what-the-skill-says-in-chat-when-the-run-finishes)): the one-line score headline, the top fixes by points_recoverable, the **absolute** report path, the OS-specific open command, and the leak-safe share pointer (Slack brief).
+
 If `slack.webhook_env` is configured, send exactly one brief, titles only, never evidence values:
 
 ```bash
@@ -346,11 +348,12 @@ set -eu
 OUT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/sentry/$(date -u +%Y-%m-%d)"
 # slack.webhook_env names the webhook variable; skip when unset.
 if [ -n "${SCOUTFLO_SLACK_WEBHOOK:-}" ]; then
+  OUT_ABS="$(cd "$OUT" && pwd)"   # absolute path: the brief must be openable from anywhere
   SCORE="$(jq -r '.score.overall' "$OUT/findings.json")"
   COUNTS="$(jq -r '.severity_counts | "\(.critical) critical, \(.high) high, \(.medium) medium, \(.low) low"' "$OUT/findings.json")"
   TOP="$(jq -r '[.findings[] | "\(.id) \(.title)"] | .[0:3] | join("\n")' "$OUT/findings.json")"
   jq -n --arg head "audit-sentry $(date -u +%Y-%m-%d): ${SCORE}/100. ${COUNTS}." \
-        --arg top "$TOP" --arg path "$OUT/report.md" \
+        --arg top "$TOP" --arg path "$OUT_ABS/report.md" \
         '{text: ($head + "\nTop findings:\n" + $top + "\nReport: " + $path)}' \
     | curl -fsS --max-time 10 -H 'Content-Type: application/json' -d @- "$SCOUTFLO_SLACK_WEBHOOK" \
     || echo "Slack brief failed to send; audit result unaffected"

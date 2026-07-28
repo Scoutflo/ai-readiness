@@ -155,6 +155,7 @@ slack            webhook-post  yes         SCOUTFLO_SLACK_WEBHOOK  skipped  -  t
 Close with a verdict:
 
 - Exit 0: "Ready. Run /scoutflo:map-topology, then /scoutflo:audit-all."
+- Exit 1: no `~/.scoutflo/toolkit.yaml` yet — run `/scoutflo:connect` first, then rerun doctor.
 - Exit 2 or 3: name the affected skills, fix, then rerun doctor. Exit 2 wording names the env var ("audit-sentry will not run until SENTRY_TOKEN is set"); exit 3 wording quotes the live evidence ("grafana failed its live check: http_code 000, curl exit 7 - host unreachable"), never the env var. Never advise starting an audit over a failed row, and never downgrade a doctor failure into a finding.
 
 Verify the verdict mechanically before declaring it:

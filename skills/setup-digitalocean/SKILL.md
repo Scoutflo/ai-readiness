@@ -375,7 +375,7 @@ For `DO-032`, `DO-033`, `DO-044`, `DO-045`, `DO-046`. No command in this section
 
 ## Record and wrap up
 
-Append one entry per executed change to `./scoutflo-audits/digitalocean/changes.md`:
+Append one entry per executed change to `${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/digitalocean/changes.md`:
 
 ```markdown
 ## <UTC timestamp> | <finding IDs>
