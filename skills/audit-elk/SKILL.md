@@ -29,7 +29,7 @@ Outputs, per the [report standard](../../report-standard/README.md):
 
 ```bash
 set -eu
-CFG="$HOME/.scoutflo/toolkit.yaml"
+CFG="${SCOUTFLO_CONFIG:-$HOME/.scoutflo/toolkit.yaml}"
 [ -f "$CFG" ] || { echo "missing $CFG; run /scoutflo:connect"; exit 1; }
 for bin in curl jq; do
   command -v "$bin" >/dev/null || { echo "missing binary: $bin"; exit 1; }

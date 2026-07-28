@@ -229,7 +229,7 @@ Confirmation gate, no exceptions: before anything is written to `~/.scoutflo/too
 Back up any existing config, then seed from the template shipped with this plugin. Fixed step: run as written.
 
 ```bash
-CONFIG="$HOME/.scoutflo/toolkit.yaml"                             # toolkit config location
+CONFIG="${SCOUTFLO_CONFIG:-$HOME/.scoutflo/toolkit.yaml}"                             # toolkit config location
 TEMPLATE="${CLAUDE_PLUGIN_ROOT}/templates/toolkit.yaml.example"   # template shipped with this plugin
 mkdir -p "$HOME/.scoutflo"
 if [ -f "$CONFIG" ]; then cp "$CONFIG" "${CONFIG}.bak.$(date -u +%Y%m%d%H%M%S)"; fi
@@ -241,6 +241,8 @@ ls -l "$CONFIG"
 
 `${CLAUDE_PLUGIN_ROOT}` is set by the plugin runtime; running from a repo checkout instead, export it as the repo root first.
 
+If the user asks to keep the config inside their project folder instead of `~/.scoutflo/`, explain the trade-off rather than refusing: home-anchoring is what makes credentials work from every folder and session without re-entry, and reports already live in their project folder (`./scoutflo-audits/`). If they still want it relocated (isolated estates, shared-machine policy), set it up with `export SCOUTFLO_CONFIG="<their-path>/toolkit.yaml"` persisted the same way as Step 4c — every skill honors that override.
+
 Then apply the approved blocks from Step 5:
 
 - Fill in the approved values for every integration you set up. The per-provider blocks are shown in [references/providers.md](references/providers.md).
@@ -250,7 +252,7 @@ Then apply the approved blocks from Step 5:
 Confirm the file parses:
 
 ```bash
-CONFIG="$HOME/.scoutflo/toolkit.yaml"   # toolkit config location
+CONFIG="${SCOUTFLO_CONFIG:-$HOME/.scoutflo/toolkit.yaml}"   # toolkit config location
 if command -v yq >/dev/null 2>&1; then
   yq '. | keys | length' "$CONFIG" >/dev/null && echo "toolkit.yaml parses"
 else

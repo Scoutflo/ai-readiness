@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.1.63
+
+Config-location flexibility: every skill now honors `SCOUTFLO_CONFIG`.
+No audit logic, checks, finding IDs, or scoring changed.
+
+- **All 19 hardcoded `~/.scoutflo/toolkit.yaml` references in skill command
+  blocks** became `${SCOUTFLO_CONFIG:-$HOME/.scoutflo/toolkit.yaml}` — the same
+  override `doctor.sh` already supported, now honored toolkit-wide and
+  live-verified end to end (doctor read a relocated config and checked exactly
+  its blocks).
+- **FAQ: "Can I keep everything in one dedicated project folder?"** Reports
+  already follow the launch folder (or `SCOUTFLO_AUDIT_DIR`); credentials are
+  home-anchored on purpose (per-machine, works from every session, never lands
+  in a zipped/committed project tree). For real relocation needs (isolated
+  estates, shared-machine policy), `SCOUTFLO_CONFIG` is the documented lever.
+- **connect** now explains the trade-off and sets up the override when a user
+  asks to keep config in their project folder (instead of just refusing), and
+  **doctor**'s config-not-found row mentions the override.
+
+Context: a teammate ran the toolkit from a dedicated project folder and read the
+fixed `~/.scoutflo/` answer as "the plugin forces root" — the home anchor is the
+right default (it's exactly why tokens survive folder changes), but the escape
+hatch existed only in doctor.sh and was undocumented. Now it's toolkit-wide, and
+the docs say when to use it and when not to.
+
+
 ## 0.1.62
 
 UX sweep: version self-diagnosis, VictoriaLogs/Traces doctor support, the
