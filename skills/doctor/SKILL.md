@@ -17,26 +17,25 @@ All checking lives in one bundled script, `scripts/doctor.sh`. It is read-only, 
 - `yq` optional. Without it, the script falls back to a POSIX parser that handles the flat two-level layout of `templates/toolkit.yaml.example`. Anything more nested needs `yq`.
 - `kubectl`, only when the config has a `kubernetes:` block.
 
-## Step 0: Resolve and report the storage location
+## Step 0: Report the storage location (no choice required)
 
-Before checking connectivity, show the user exactly where reports and runtime
-data will be written. Everything downstream (`history.jsonl` deltas, `topology.md`,
-`exemptions.yaml`) only lines up run-to-run when this path is stable.
+**You do not have to decide where reports go.** By default they land in
+`./scoutflo-audits/` next to wherever you run — zero configuration, and it just
+works. This step simply *prints* the resolved location so you know where to look;
+it never asks you to pick a directory. Setting a custom location is optional and
+only matters if you want one durable history that follows you across folders.
 
-**How the location is actually resolved.** Every audit/setup command block runs
-in a *fresh shell*, so the only value that threads through all of them is an
-environment variable (a fresh shell inherits your environment; it cannot read a
-per-run config value). So the effective location is exactly:
+The resolved location is:
 
-- **`SCOUTFLO_AUDIT_DIR`** if it is exported in your environment, else
-- **`./scoutflo-audits`** relative to the directory you launched Claude Code from.
+- **`SCOUTFLO_AUDIT_DIR`** if you have exported it (opt-in, for a fixed location), else
+- **`./scoutflo-audits`** — the default, next to where you launched Claude Code.
 
-`reports_dir` in `~/.scoutflo/toolkit.yaml` is a **convenience, not a second live
-tier**: this step reads it only to print the exact `export` line you add to your
-shell profile so `SCOUTFLO_AUDIT_DIR` is set for every session and scheduled run.
-Setting `reports_dir` alone does **not** move where reports land until that export
-is in place — this step says so loudly when it sees the gap, so it never silently
-forks your history.
+Why an env var and not a config value: every command runs in a *fresh shell*, which
+inherits your environment but cannot read a per-run config file, so `SCOUTFLO_AUDIT_DIR`
+is the only thing that reliably carries the location across all of them. `reports_dir`
+in `~/.scoutflo/toolkit.yaml` is just a convenience — this step reads it to print the
+one `export` line that pins the location, and flags it if set but not yet exported.
+None of this is required to start; the default is fine for a first run.
 
 ```bash
 set -eu
@@ -65,11 +64,10 @@ if [ -n "$RD" ]; then
     echo "      export SCOUTFLO_AUDIT_DIR=\"${RD_ABS}\""
   fi
 elif [ "$EFFSRC" = "default (launch directory)" ]; then
-  echo "  NOTE: this is relative to where you launched Claude Code. Launching from a"
-  echo "  different folder starts a SEPARATE history (no delta; topology.md and"
-  echo "  exemptions.yaml won't be found). For one durable history regardless of launch"
-  echo "  folder, export SCOUTFLO_AUDIT_DIR to a fixed absolute path (and set reports_dir"
-  echo "  in ~/.scoutflo/toolkit.yaml so this step keeps reminding you of the export line)."
+  echo "  This is the default and is fine to start. Optional: if you want one durable"
+  echo "  history that follows you across folders, export SCOUTFLO_AUDIT_DIR to a fixed"
+  echo "  absolute path once (see connect Step 4c). Otherwise, just run from the same"
+  echo "  folder each time and reports accumulate here with full run-to-run history."
 fi
 
 # A stray default tree while an explicit location is in force means unmerged history.

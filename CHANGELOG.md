@@ -49,6 +49,16 @@ phase. Pressure scenario
 replaces the previous bare "done" close so users are always guided to open/share
 the report.
 
+**Reports-location guidance reframed default-first.** `doctor` Step 0 and `start`
+"Where reports land" now lead with "you don't have to choose — the default
+`./scoutflo-audits/` just works, and doctor prints the exact absolute path," and
+demote the `SCOUTFLO_AUDIT_DIR`/`reports_dir` mechanics to an explicitly optional
+"pin it so it follows you across folders" note; the default first run no longer
+reads as a required decision. Verified this pass that both auth tokens
+(`~/.scoutflo/env`, sourced by `doctor.sh` and the shell profile) and host/org
+config (`~/.scoutflo/toolkit.yaml`, read from `$HOME` by every skill) are already
+home-global and reused across sessions, terminals, and directories.
+
 ## 0.1.56
 
 MCP-server awareness. Skills stay CLI/HTTP-first (the portable default, unchanged),
