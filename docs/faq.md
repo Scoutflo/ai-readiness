@@ -51,5 +51,8 @@ An optional parallel verdict: whether each critical service's topology data is c
 **Why is schedule-audits marked experimental?**
 The crontab path has been validated end to end against a real scheduled run; the GitHub Actions and Claude cloud schedule paths have not yet. Whichever runner you pick, always validate your first scheduled run manually before trusting the cadence — the skill itself walks you through that proof step.
 
+**I ran `/doctor` and it started analyzing my whole Claude Code install, plugins, and MCP servers — is that this plugin?**
+No. Bare `/doctor` is **Claude Code's own built-in** health command; it inspects your entire install (plugins, sessions, MCP servers, permission mode, native install) and has nothing to do with this toolkit. The plugin's health check is the namespaced **`/scoutflo:doctor`** — it does one thing: reads `~/.scoutflo/toolkit.yaml` and makes one cheap read-only call per configured integration to tell you what's connected. Always type the full `/scoutflo:doctor`; the two commands are unrelated despite the similar name. Every plugin command is namespaced this way (`/scoutflo:start`, `/scoutflo:connect`, `/scoutflo:audit-*`).
+
 **Something is broken. Where do I report it?**
 GitHub issues on this repository. Include the skill name and the terminal output around the failure; never paste credentials or full reports.

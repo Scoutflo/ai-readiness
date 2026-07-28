@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.1.61
+
+Disambiguate the plugin's health check from Claude Code's built-in `/doctor`.
+Docs only — no skill logic, checks, IDs, or scoring changed.
+
+- **New FAQ entry** for the common confusion: someone types bare `/doctor` and
+  Claude Code's own built-in install-diagnostic runs (it analyzes the whole
+  install — plugins, sessions, MCP servers, permission mode), which is unrelated
+  to this toolkit. The plugin's health check is always the namespaced
+  `/scoutflo:doctor` (reads `~/.scoutflo/toolkit.yaml`, one cheap read-only call
+  per configured integration). Every plugin command is namespaced this way.
+- **`start` first-steps** now notes at the point of use that bare `/doctor` is a
+  different, built-in command — type the full `/scoutflo:doctor`.
+
+Context: a teammate ran bare `/doctor` and saw Claude Code's built-in diagnostic
+(plugin decluttering, auto-mode proposals, MCP analysis) and thought the plugin
+had gone out of scope. Our `/scoutflo:doctor` was correct all along and does none
+of that; this closes the naming-collision confusion in the docs.
+
 ## 0.1.60
 
 Better `doctor` guidance on transport (proxy/firewall) failures — the class a
