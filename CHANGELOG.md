@@ -19,8 +19,23 @@ copy-pasteable command to *set* one.
 - **Boundary + failure-mode rules** updated to require the set command and the
   reuse scan; added a pressure scenario
   (`tests/pressure-scenarios/connect/set-token-command-not-just-read.md`).
+- **Set once, globally (fixes "asked again every session").** `connect` now makes
+  the home-anchored `~/.scoutflo/env` the canonical secret store: add a credential
+  there once (`echo 'export VAR="…"' >> ~/.scoutflo/env`, or `setx` on Windows) and
+  source it from your shell profile once, and every new terminal/session/directory
+  has it. **`doctor.sh` now sources `~/.scoutflo/env`** before its checks, and its
+  env-missing hint points there (with the Windows `setx` form) instead of a
+  throwaway per-shell `export`; connect's reuse scan sources it too. `start` step 1
+  states the set-once behavior. Pressure scenario
+  `set-once-global-not-per-shell.md`.
+- **map-topology clarity:** the intro now says explicitly that Istio topology is
+  read **directly from the Istio CRDs** (VirtualServices, DestinationRules,
+  Gateways, ServiceEntries, sidecar coverage) via `kubectl`/`istioctl` — **not**
+  Kiali, a mesh dashboard, or Prometheus — so a customer without Kiali knows
+  nothing changes for them.
 
-Docs/guidance only; no audit logic, checks, IDs, or scoring changed.
+Docs/guidance only (plus doctor.sh now sources the global env file); no audit
+logic, checks, IDs, or scoring changed.
 
 ## 0.1.56
 

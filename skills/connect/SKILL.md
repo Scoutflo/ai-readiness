@@ -134,6 +134,8 @@ Before asking you to create or paste anything, the agent runs this **presence-on
 
 ```bash
 # Safe for the agent to run: prints names + set/unset only, never a value.
+# Load the global store first so a credential set in a PRIOR session/terminal counts as set.
+[ -f ~/.scoutflo/env ] && . ~/.scoutflo/env
 for V in GRAFANA_TOKEN PROM_TOKEN LOKI_TOKEN TEMPO_TOKEN MIMIR_TOKEN VM_TOKEN \
          DATADOG_API_KEY DATADOG_APP_KEY SENTRY_TOKEN PAGERDUTY_TOKEN \
          KIBANA_API_KEY JSM_EMAIL JSM_API_TOKEN ZENDUTY_TOKEN GROUNDCOVER_API_KEY \
@@ -173,22 +175,34 @@ printf 'GRAFANA_TOKEN: ' && read -rs GRAFANA_TOKEN && export GRAFANA_TOKEN && pr
 
 Swap `GRAFANA_TOKEN` for the exact `*_env` name of whatever you are setting (`DATADOG_API_KEY`, `PROM_TOKEN`, `PAGERDUTY_TOKEN`, …). Datadog needs two (`DATADOG_API_KEY` and `DATADOG_APP_KEY`); JSM needs `JSM_EMAIL` plus `JSM_API_TOKEN`.
 
-### 4c. Make it persist across terminals (optional but recommended)
+### 4c. Set it ONCE, globally — so you are never asked again
 
-Environment variables set as above live only in the current shell. To have them every session — including the one where you later run `doctor` and the audits — add them to your shell profile:
+A plain `export` lives only in the current shell, so it vanishes when you open a new terminal, start a new session, or `cd` elsewhere — and then `connect`/`doctor` would ask for the token again. **The fix is a single home-anchored secret file, `~/.scoutflo/env`, that your shell loads at startup.** Set a credential there once and every future session, terminal, and directory already has it. This is the recommended path; do it once and you are done.
+
+**macOS / Linux / Git Bash — one-time setup, then one line per credential:**
 
 ```bash
-# macOS/Linux: append to ~/.zshrc (zsh) or ~/.bashrc (bash), then: source that file.
-# Best: pull from a secret manager so no secret is written to the file.
-export GRAFANA_TOKEN="$(your-secret-manager get sre-toolkit/grafana-audit)"
-# Simpler, less safe: a literal value in the profile. If you do this, chmod 600 the file.
+# 1) Create the file (once), locked to you:
+mkdir -p ~/.scoutflo && touch ~/.scoutflo/env && chmod 600 ~/.scoutflo/env
+
+# 2) Load it from your shell profile (once). Adds a source line if not already there:
+grep -q 'scoutflo/env' ~/.zshrc 2>/dev/null || echo '[ -f ~/.scoutflo/env ] && . ~/.scoutflo/env' >> ~/.zshrc
+# bash users: same line into ~/.bashrc instead of ~/.zshrc.
+
+# 3) Add each credential to ~/.scoutflo/env (one line per variable). Best: pull from a
+#    secret manager so no secret is written to disk; simpler: a literal value (the file is
+#    already chmod 600). Then run: source ~/.scoutflo/env  (or open a new terminal).
+echo 'export GRAFANA_TOKEN="<paste-your-grafana-token-here>"' >> ~/.scoutflo/env
 ```
 
+**Windows — PowerShell — one-time, persists for your user across all new terminals:**
+
 ```powershell
-# Windows PowerShell: persist for your user across sessions (stored in the user environment).
 setx GRAFANA_TOKEN "<paste-your-grafana-token-here>"
-# Note: setx affects NEW terminals; reopen PowerShell after running it.
+# setx writes to the user environment; it affects NEW terminals, so reopen PowerShell after.
 ```
+
+Because `~/.scoutflo/env` is in your home directory (not tied to any project folder), it is the same store the scheduled-runs path uses — so interactive runs, new terminals, and cron all read one place. `doctor` sources `~/.scoutflo/env` before checking, so once a credential is in it, no skill asks you to set it again.
 
 ### 4d. Confirm it's set (safe for anyone, prints no value)
 

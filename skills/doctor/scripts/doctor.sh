@@ -71,6 +71,18 @@ done
 
 note() { printf '%s\n' "$*" >&2; }
 
+# --- load the global secret store, if present --------------------------------
+# ~/.scoutflo/env is the canonical, home-anchored place connect puts credential
+# exports so they are available in every session/terminal/dir. Source it (if it
+# exists and is ours) so a token set once is seen here without re-exporting. It
+# only sets *_env variables; no secret value is printed. A profile that already
+# sources it makes this a no-op.
+SCOUTFLO_ENV="${HOME}/.scoutflo/env"
+if [ -f "$SCOUTFLO_ENV" ]; then
+  # shellcheck disable=SC1090
+  . "$SCOUTFLO_ENV" || note "doctor: warning: could not source ${SCOUTFLO_ENV} (continuing with current environment)"
+fi
+
 # --- hard stop: config must exist --------------------------------------------
 
 if [ ! -f "$CONFIG" ]; then
@@ -217,7 +229,7 @@ live_check() {
 token_gate() {
   tg_int="$1"; shift
   if [ "$TOKEN_STATE" = "missing" ]; then
-    row "$tg_int" env yes "$TOKEN_VAR" env-missing - "export ${TOKEN_VAR} in this shell, then rerun doctor; created per connect references/providers.md"
+    row "$tg_int" env yes "$TOKEN_VAR" env-missing - "add it once to ~/.scoutflo/env: echo 'export ${TOKEN_VAR}=\"<paste>\"' >> ~/.scoutflo/env (Windows PowerShell: setx ${TOKEN_VAR} \"<paste>\"), then rerun doctor; created per connect references/providers.md"
     for tg_chk in "$@"; do
       row "$tg_int" "$tg_chk" yes "$TOKEN_VAR" skipped - "blocked: ${TOKEN_VAR} is not set"
     done
@@ -358,10 +370,10 @@ else
     DD_API_KEY="$(printenv "$DD_API_VAR" 2>/dev/null || true)"
     DD_APP_KEY="$(printenv "$DD_APP_VAR" 2>/dev/null || true)"
     if [ -z "$DD_API_KEY" ]; then
-      row datadog env yes "$DD_API_VAR" env-missing - "export ${DD_API_VAR} in this shell, then rerun doctor; created per connect references/providers.md"
+      row datadog env yes "$DD_API_VAR" env-missing - "add it once to ~/.scoutflo/env: echo 'export ${DD_API_VAR}=\"<paste>\"' >> ~/.scoutflo/env (Windows PowerShell: setx ${DD_API_VAR} \"<paste>\"), then rerun doctor; created per connect references/providers.md"
       DD_BLOCKED=1
     elif [ -z "$DD_APP_KEY" ]; then
-      row datadog env yes "$DD_APP_VAR" env-missing - "export ${DD_APP_VAR} in this shell, then rerun doctor; the app key is the second half of the pair"
+      row datadog env yes "$DD_APP_VAR" env-missing - "add it once to ~/.scoutflo/env: echo 'export ${DD_APP_VAR}=\"<paste>\"' >> ~/.scoutflo/env (Windows PowerShell: setx ${DD_APP_VAR} \"<paste>\"), then rerun doctor; the app key is the second half of the pair"
       DD_BLOCKED=1
     else
       row datadog env yes "${DD_API_VAR}+${DD_APP_VAR}" pass - -
