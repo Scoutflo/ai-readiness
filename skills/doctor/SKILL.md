@@ -39,7 +39,7 @@ None of this is required to start; the default is fine for a first run.
 
 ```bash
 set -eu
-CFG="$HOME/.scoutflo/toolkit.yaml"
+CFG="${SCOUTFLO_CONFIG:-$HOME/.scoutflo/toolkit.yaml}"
 
 # What the runs will ACTUALLY write to (only the env var threads through fresh shells).
 if [ -n "${SCOUTFLO_AUDIT_DIR:-}" ]; then EFFECTIVE="$SCOUTFLO_AUDIT_DIR"; EFFSRC="SCOUTFLO_AUDIT_DIR env"
@@ -210,7 +210,7 @@ The script's hints quote the observed failure shape. This table is the deeper re
 
 | Failure class | Likely cause | Fix |
 | --- | --- | --- |
-| exit 1, config not found | No `~/.scoutflo/toolkit.yaml` | Run `/scoutflo:connect`; it seeds the file from `templates/toolkit.yaml.example` |
+| exit 1, config not found | No `~/.scoutflo/toolkit.yaml` | Run `/scoutflo:connect` (or export `SCOUTFLO_CONFIG` if yours lives elsewhere); it seeds the file from `templates/toolkit.yaml.example` |
 | `env-missing` | The `*_env` variable is not exported in this shell | Export it here (env vars are per-shell), or load it from your profile; created per `connect` `references/providers.md` |
 | `http_code` 000, curl exit 6 | DNS lookup failed | Typo in the URL, or the host resolves only on VPN or internal DNS |
 | `http_code` 000, curl exit 7 | Connection refused | Wrong port, service not exposed, or the port-forward is not running |

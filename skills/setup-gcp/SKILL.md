@@ -49,7 +49,7 @@ Elevated tier: this skill mutates Cloud Monitoring and Cloud Logging metric stat
 
 ```bash
 set -eu
-CFG="$HOME/.scoutflo/toolkit.yaml"
+CFG="${SCOUTFLO_CONFIG:-$HOME/.scoutflo/toolkit.yaml}"
 [ -f "$CFG" ] || { echo "missing $CFG; run /scoutflo:connect"; exit 1; }
 for bin in gcloud curl jq; do
   command -v "$bin" >/dev/null || { echo "missing binary: $bin"; exit 1; }
@@ -76,7 +76,7 @@ Resolve the target project from `toolkit.yaml` itself, not from a value typed in
 
 ```bash
 set -eu
-CONFIG="$HOME/.scoutflo/toolkit.yaml"
+CONFIG="${SCOUTFLO_CONFIG:-$HOME/.scoutflo/toolkit.yaml}"
 [ -f "$CONFIG" ] || { echo "missing $CONFIG; run /scoutflo:connect"; exit 1; }
 # Resolve gcp.project the same way doctor.sh's cfg() reads two-level keys:
 # yq when present, a sed fallback otherwise. Never hand-typed.

@@ -35,7 +35,7 @@ Preflight. A failed check stops the audit with the exact failure and the fix (us
 
 ```bash
 set -eu
-CFG="$HOME/.scoutflo/toolkit.yaml"
+CFG="${SCOUTFLO_CONFIG:-$HOME/.scoutflo/toolkit.yaml}"
 [ -f "$CFG" ] || { echo "missing $CFG; run /scoutflo:connect"; exit 1; }
 command -v curl >/dev/null || { echo "curl not installed"; exit 1; }
 command -v jq   >/dev/null || { echo "jq not installed"; exit 1; }
