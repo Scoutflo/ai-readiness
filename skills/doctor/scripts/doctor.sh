@@ -196,7 +196,8 @@ transport_hint() {
     7)     echo "curl exit 7: connection refused; wrong port, service not exposed, or the port-forward is not running" ;;
     28)    echo "curl exit 28: timeout after ${MAX_TIME}s; check the network path before raising CURL_MAX_TIME" ;;
     35|60) echo "curl exit $1: TLS failure; trust the internal CA properly, never disable verification" ;;
-    *)     echo "curl exit $1: transport failure before any HTTP response" ;;
+    52|55|56) echo "curl exit $1: the connection was dropped mid-transfer with no HTTP response, usually a proxy or corporate firewall between you and the host, not the token; retry once with proxy vars cleared (env -u HTTPS_PROXY -u https_proxy ...) and confirm the host is reachable from this network (curl -I the base URL)" ;;
+    *)     echo "curl exit $1: transport failure before any HTTP response (not an auth error); the host was unreachable from this network, check proxy/VPN/firewall" ;;
   esac
 }
 
