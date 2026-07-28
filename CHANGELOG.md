@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.1.57
+
+`connect` now guides credential setup properly — the fix for a real onboarding
+gap where the skill would tell you how to *read* a token but not give a
+copy-pasteable command to *set* one.
+
+- **Reuse-first (Step 4a).** Before asking you to create or paste anything,
+  `connect` runs a presence-only env scan (prints variable names + set/unset,
+  never a value) across all provider `*_env` names and, for any already set,
+  asks whether to reuse it or set a fresh read-only one.
+- **Exact set commands, per OS.** For anything not set, `connect` hands over the
+  copy-pasteable command with a placeholder — `export VAR="<paste…>"` for
+  macOS/Linux/Git Bash and `$Env:VAR = "<paste…>"` for Windows PowerShell — plus
+  `setx`/profile persistence and the silent-prompt (`read -rs`) form for anyone
+  avoiding shell history. The skill must give a **set** command for every needed
+  variable, never just a "show the token" command.
+- **Boundary + failure-mode rules** updated to require the set command and the
+  reuse scan; added a pressure scenario
+  (`tests/pressure-scenarios/connect/set-token-command-not-just-read.md`).
+
+Docs/guidance only; no audit logic, checks, IDs, or scoring changed.
+
 ## 0.1.56
 
 MCP-server awareness. Skills stay CLI/HTTP-first (the portable default, unchanged),
