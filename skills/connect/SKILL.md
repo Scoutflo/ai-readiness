@@ -73,6 +73,9 @@ Ask which integrations to configure as a plain numbered list in a normal chat me
 | Tempo | audit-lgtm, setup-lgtm | `tempo:` | `TEMPO_TOKEN` (optional) | URL; optional tenant and token |
 | Mimir | audit-lgtm, setup-lgtm | `mimir:` | `MIMIR_TOKEN` (optional) | URL; `tenant_id` when multi-tenant |
 | VictoriaMetrics | audit-lgtm, setup-lgtm | `victoriametrics:` | `VM_TOKEN` (optional) | URL; `vmalert_url` when you run vmalert |
+| DigitalOcean | audit-digitalocean, setup-digitalocean | `digitalocean:` | `DIGITALOCEAN_ACCESS_TOKEN` | read-only token; `doctl` honors it natively |
+| GCP | audit-gcp, setup-gcp | `gcp:` | none (gcloud login) or `GOOGLE_APPLICATION_CREDENTIALS` | `project` in config; `gcloud` identity or a service-account key file, `monitoring.viewer` for audits |
+| AWS | audit-aws, setup-aws | `aws:` | none (credential chain) or `AWS_ROLE_ARN` | `account_id`+`region` in config; active credential chain or assumed role, read-only policy for audits |
 | Kubernetes | map-topology, audit-lgtm, setup-lgtm | `kubernetes:` | none (kubeconfig context) | read-only context for audits |
 | Slack | the per-run brief from every audit skill | `slack:` | `SCOUTFLO_SLACK_WEBHOOK` | the webhook URL is itself the secret |
 

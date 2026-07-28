@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.1.59
+
+Coverage sanity: `connect` was missing three cloud providers from its picker, and
+nothing caught it. Fixed + gated so it can't recur.
+
+- **Added DigitalOcean, GCP, and AWS to `connect` Step 1 "Pick your integrations".**
+  All three have audit + setup skills, toolkit-template blocks, and doctor coverage,
+  but were absent from connect's picker table — so a user connecting through that
+  list was never offered the three cloud providers. (The plugin was never limited to
+  9 integrations; the picker is now the full set. A "9 shown" symptom is the model
+  abbreviating the list at display time, not a plugin limit.)
+- **New CI gate `ci/coverage-check.sh` (wired into `structure-check.sh`).** Asserts
+  every `audit-<x>` skill (except the `audit-all` orchestrator) is surfaced in both
+  connect Step 1 and the `/scoutflo:start` catalog — so an audit can never again be
+  runnable but undiscoverable. Verified it fails (naming the provider) when a picker
+  row is removed.
+
+No audit logic, checks, IDs, or scoring changed.
+
 ## 0.1.58
 
 `doctor` now flags a missing DigitalOcean CLI, closing the last gap in CLI-presence

@@ -13,4 +13,5 @@ for f in "$DIR"/skills/*/SKILL.md; do
 done
 sh "$SELF_DIR/anchor-check.sh" "$DIR" || FAIL=1
 sh "$SELF_DIR/crossblock-check.sh" "$DIR" || FAIL=1
+sh "$SELF_DIR/coverage-check.sh" "$DIR" || FAIL=1
 [ "$FAIL" -eq 0 ] && echo STRUCTURE-OK || exit 1
