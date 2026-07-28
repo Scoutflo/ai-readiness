@@ -65,6 +65,8 @@ Rules:
 
 Every command block in every skill is written CLI/HTTP-first: `curl` against the provider's API, or a vendor CLI (`kubectl`, `aws`, `gcloud`, `doctl`). That is the portable default and the form to author in; keep writing skills this way.
 
+**Do not ask the user to pick CLI vs MCP.** The toolkit handles both automatically and chooses per operation for the best result — read-only fetches go over the fast CLI/HTTP path, and where a connected MCP server is the equivalent read-only route (or the only reachable one) it is used instead, under the rules below. A preference prompt would add a decision the user does not need to make and cannot answer better than the per-operation logic already does; skills must not add one.
+
 If the user has a **connected MCP server** for a provider (an `mcp__<server>__<tool>`-style toolset for Prometheus, Grafana, Datadog, AWS, Kubernetes, PagerDuty, etc.), you MAY use that MCP server's read-only tools in place of the equivalent `curl`/CLI command, when doing so obtains the same evidence. This makes the plugin work for a customer who has MCP servers but not the vendor CLI, without changing what any check verifies. Rules, non-negotiable:
 
 - **Equivalence only.** The MCP tool must return the same underlying data the command would (the same list/get/query). If it cannot, fall back to the CLI/HTTP command; do not weaken or skip the check.

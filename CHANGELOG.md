@@ -2,6 +2,30 @@
 
 ## 0.1.57
 
+Report-output UX: make the final report easier to read and act on, and settle the
+CLI-vs-MCP question.
+
+- **Cost/savings sections now lead with a totals line.** The report standard's
+  parallel-section rule (and `audit-aws` §9) now require a one-line savings summary
+  before the table: `~$<sum>/month (~$<sum×12>/year) across N opportunities`, plus
+  the single largest lever — built only from provider-sourced figures (Compute
+  Optimizer / Cost Explorer / Cost Optimization Hub), never recomputed. It counts
+  opportunities *with* a figure separately from those *without*, and says
+  "no dollar figure available" instead of `$0` when nothing is provider-sourced.
+  The per-row table gained `Current → recommended` and an annualized column.
+  Pressure scenario `cost-savings-summary-honest-totals.md`.
+- **Report comprehension aids** (report-template.md): every headline score/count is
+  paired with a plain-language clause (`72/100 — good base coverage, below the 85
+  gate`), and each report leads the reader to the single highest-value action
+  ("Start here: …") so they can act without reading the whole thing.
+- **CLI vs MCP: no preference prompt.** Codified in the authoring conventions that
+  skills must NOT ask the user to choose — the toolkit already picks per operation
+  (fast CLI/HTTP for reads; read-only MCP where it's the equivalent or only route),
+  so a preference question adds a decision the user can't answer better than the
+  existing logic.
+
+Docs/guidance only; no audit logic, checks, IDs, or scoring changed.
+
 `connect` now guides credential setup properly — the fix for a real onboarding
 gap where the skill would tell you how to *read* a token but not give a
 copy-pasteable command to *set* one.
