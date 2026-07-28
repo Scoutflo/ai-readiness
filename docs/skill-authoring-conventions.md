@@ -61,6 +61,21 @@ Rules:
 - Never put a secret in a URL or query string; secrets travel in headers.
 - If a required key or variable is missing, name it, point at `/scoutflo:connect`, and stop.
 
+## Integration access: CLI/HTTP first, MCP-equivalent allowed
+
+Every command block in every skill is written CLI/HTTP-first: `curl` against the provider's API, or a vendor CLI (`kubectl`, `aws`, `gcloud`, `doctl`). That is the portable default and the form to author in; keep writing skills this way.
+
+If the user has a **connected MCP server** for a provider (an `mcp__<server>__<tool>`-style toolset for Prometheus, Grafana, Datadog, AWS, Kubernetes, PagerDuty, etc.), you MAY use that MCP server's read-only tools in place of the equivalent `curl`/CLI command, when doing so obtains the same evidence. This makes the plugin work for a customer who has MCP servers but not the vendor CLI, without changing what any check verifies. Rules, non-negotiable:
+
+- **Equivalence only.** The MCP tool must return the same underlying data the command would (the same list/get/query). If it cannot, fall back to the CLI/HTTP command; do not weaken or skip the check.
+- **Read-only discipline is unchanged and lane-bound.** In an `audit-*` skill, call only read-only MCP tools. Never call an MCP tool that creates, mutates, silences, acknowledges, resolves, updates, or deletes, however small; if a server only exposes a mutating tool for what you need, use the read-only CLI/HTTP path instead. `setup-*` skills follow their announce/confirm/execute/verify loop for an MCP write exactly as for a CLI write. **Classify by effect, not by name** — the same rule the live-safety gate applies to HTTP verbs. An MCP tool named `get`/`list`/`query`/`describe` that still starts a job, refreshes or syncs state, rotates a credential, or has any other side effect is mutating. MCP tools are opaque, model-selected black boxes, so the burden is on you: **if the tool's own description does not make clear it is side-effect-free, treat it as mutating and use the CLI/HTTP path instead.**
+- **Evidence rule is unchanged.** The finding's evidence is the exact tool call and its returned output, the same way a `curl` command and its output are evidence. Record which path was used (MCP tool name, or the command) so a reader can reproduce it. Never fabricate output.
+- **Live-safety is unchanged.** Confirm the MCP tool is pointed at the same target the config names (same cluster, account, org, host) before trusting it, the same identity check the CLI path does. An MCP server bakes its target into its own config, which you cannot override per call and may not be able to read at all: **if the tool cannot prove which target it is pointed at (no identity/self call, or a resolved target that differs from the config), do not trust it — fall back to the CLI/HTTP path, which names its target explicitly. Never proceed on "probably the right server".**
+- **Secrets discipline is unchanged.** Do not print tokens the MCP server holds; do not echo credentials into output or reports.
+- **MCP is never required.** No skill may hard-depend on an MCP server. The CLI/HTTP block is always the baseline that works; MCP is an optional substitution the runtime may make when the tools are present and read-only-equivalent.
+
+`/scoutflo:doctor` and each skill's doctor gate still validate reachability the same way; when a provider is reachable only via its MCP server (no CLI, no direct HTTP), treat a working read-only MCP call to that provider as satisfying the gate for that integration, and say so in the doctor output.
+
 ## The doctor gate
 
 Every `audit-*` and `setup-*` skill begins by running the doctor checks for the integrations it needs, before any real work:

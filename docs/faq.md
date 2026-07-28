@@ -21,6 +21,9 @@ No. The toolkit runs inside your Claude Code. Your credentials stay in your envi
 **Can an audit change anything in my systems?**
 No. Audit skills are read-only by design and doctor-gated; the only writes are local report files. Setup skills are separate, state every change up front, and do nothing until you explicitly confirm.
 
+**We use MCP servers for our integrations instead of CLIs — does this still work?**
+Yes. Most integrations (Grafana, Prometheus, Loki, Tempo, VictoriaMetrics/Logs, Sentry, Datadog, PagerDuty, ELK, JSM, Zenduty, Groundcover) are reached over HTTPS with a token, so they need only `curl` + `jq` — no vendor CLI. Only Kubernetes and AWS/GCP/DigitalOcean use a CLI. On top of that, if you have a provider's **read-only MCP server connected**, the audits may use its tools in place of the equivalent `curl`/CLI call to gather the same evidence — so a system reachable only through its MCP server is still auditable without its CLI. MCP is an optional substitution, never required; the CLI/HTTP path is always the baseline. Read-only discipline is unchanged: in an audit, only read-only MCP tools are used, never anything that mutates state.
+
 **What does the 0–100 score mean?**
 It measures your setup against a stated best-practice target for that audit's domain, weighted by category (the scorecard shows each category's weight and its passed/total checks). 85 is the end-to-end gate: at or above it — with every critical service covered and no category excluded — the report may claim end-to-end coverage. Below it, the executive summary states your gap in points and the two or three findings that recover the most. Scoring is conservative: a check only earns full credit when it was verified live this run, so a low first score usually means "unproven", not "broken". Full mechanics are in `report-standard/severity-and-scoring.md`.
 
