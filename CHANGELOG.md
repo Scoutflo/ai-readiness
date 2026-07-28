@@ -37,6 +37,18 @@ copy-pasteable command to *set* one.
 Docs/guidance only (plus doctor.sh now sources the global env file); no audit
 logic, checks, IDs, or scoring changed.
 
+**Run-completion message.** Added a shared convention for what a skill says in chat
+when a run finishes (report-standard/report-template.md → "Run-completion message"):
+a one-line score headline, the top fixes by points_recoverable, the **absolute**
+report path, an OS-specific open command (`open`/`xdg-open`/`Invoke-Item`), and a
+leak-safe share pointer (the full report names hosts/routes → share in-team; the
+Slack brief is the safe summary). `audit-all` gets a matching Phase 6 for the
+combined run; representative audits point at the convention from their closing
+phase. Pressure scenario
+`tests/pressure-scenarios/audit-all/completion-message-guides-to-report.md`. This
+replaces the previous bare "done" close so users are always guided to open/share
+the report.
+
 ## 0.1.56
 
 MCP-server awareness. Skills stay CLI/HTTP-first (the portable default, unchanged),

@@ -211,3 +211,30 @@ Hard rules:
 - **Titles only, never evidence values.** No command output, no hostnames, no endpoints, no counts extracted from evidence. The webhook posts to a chat system you do not fully control; the brief must be safe to leak.
 - One message per run. A combined run (`audit-all`) sends exactly one message covering all its audits, with one score line per target.
 - The webhook comes from `slack.webhook_env` in `~/.scoutflo/toolkit.yaml`. If it is unset or the send fails, say so in the terminal output and continue. A failed brief never fails the audit.
+
+## Run-completion message (what the skill says in chat when the run finishes)
+
+After the artifacts are written and verified, every audit closes with a short, consistent chat message — not a bare "done". Its job is to give the headline and make it obvious how to open and share the report. Keep it to the shape below; it is guidance for the closing message, not another file.
+
+1. **One-line headline:** target, score with movement, and the end-to-end label state. Example: `Grafana audit complete — 72/100 (+9), good base coverage (not end-to-end).`
+2. **The two or three biggest levers**, by `points_recoverable` — the same top findings the executive summary leads with, as plain titles. Example: `Top fixes: add a real default receiver, route paging alerts to PagerDuty, set for: on the flapping CPU rule.`
+3. **Where the report is — the resolved ABSOLUTE path**, so it is clickable/openable with no guessing. Print the real path the run used (resolve `${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}` to an absolute path), e.g. `Report: $HOME/scoutflo-audits/grafana/2026-07-28/report.md` (with `$HOME` expanded to the actual path).
+4. **How to open it**, with the command for the user's OS:
+
+   ```bash
+   # macOS
+   open "<abs-path>/report.md"
+   # Linux
+   xdg-open "<abs-path>/report.md"
+   # Windows (PowerShell)
+   Invoke-Item "<abs-path>\report.md"
+   ```
+
+   Also mention it is plain Markdown, so it renders in any editor, VS Code preview, or by pasting into a Markdown viewer.
+5. **How to share it (with the privacy caveat):** the full `report.md` names hosts, namespaces, and routes, so share it inside the team, not publicly. For a safe-to-post summary, point at the Slack brief (titles + scores only) — already sent if `slack.webhook_env` is configured, or offer to send it. Say plainly: *"the full report contains infrastructure detail; the Slack brief is the leak-safe version."*
+6. **The obvious next step:** re-run after fixes to see the delta, or run another audit / `audit-all`. One line.
+
+Hard rules for this message:
+- Never print a secret, an evidence value, a token, or a raw finding body in the chat close — the headline, top titles, the path, and the open/share commands only. The detail lives in `report.md`.
+- Always give the **absolute** report path, never a bare `./scoutflo-audits/...` the user then has to resolve against an unknown working directory.
+- If the run was blocked at a gate (no `report.md` written), there is no completion message — the gate's stop-and-fix guidance stands instead.

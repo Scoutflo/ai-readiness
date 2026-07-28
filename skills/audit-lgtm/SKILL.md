@@ -344,7 +344,7 @@ sh "${CLAUDE_PLUGIN_ROOT}/report-standard/check-report.sh" "$OUT/report.md"
 ls -l "$OUT"
 ```
 
-Compute the delta against the previous run date per the [report standard](../../report-standard/README.md); on the first run state "first run, no delta". Then send the Slack brief, titles only, never evidence values:
+Compute the delta against the previous run date per the [report standard](../../report-standard/README.md); on the first run state "first run, no delta". After the report is written, close with the run-completion message per the report standard ([report-template.md](../../report-standard/report-template.md#run-completion-message-what-the-skill-says-in-chat-when-the-run-finishes)): the one-line score headline, the top fixes by points_recoverable, the **absolute** report path, the OS-specific open command, and the leak-safe share pointer (Slack brief). Then send the Slack brief, titles only, never evidence values:
 
 ```bash
 set -eu

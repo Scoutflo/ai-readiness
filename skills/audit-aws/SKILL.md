@@ -320,7 +320,7 @@ grep -q '^# ' "$OUT/report.md" && echo "report.md present"
 sh "${CLAUDE_PLUGIN_ROOT}/report-standard/check-report.sh" "$OUT/report.md"
 ```
 
-Compute the delta against the previous run's `findings.json` (the latest two date directories; first run states "first run, no delta"), then append one line to the history ledger, replacing any line for the same date. History and its rotation follow [README.md](../../report-standard/README.md) exactly, including monthly compaction past `HISTORY_MAX_LINES`; the ledger records the reliability `score.overall` only, never a cost figure:
+Compute the delta against the previous run's `findings.json` (the latest two date directories; first run states "first run, no delta"), then append one line to the history ledger, replacing any line for the same date. After the report is written, close with the run-completion message per the report standard ([report-template.md](../../report-standard/report-template.md#run-completion-message-what-the-skill-says-in-chat-when-the-run-finishes)): the one-line score headline, the top fixes by points_recoverable, the **absolute** report path, the OS-specific open command, and the leak-safe share pointer (Slack brief). History and its rotation follow [README.md](../../report-standard/README.md) exactly, including monthly compaction past `HISTORY_MAX_LINES`; the ledger records the reliability `score.overall` only, never a cost figure:
 
 ```bash
 set -eu

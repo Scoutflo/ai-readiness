@@ -303,6 +303,19 @@ fi
 
 Expected output: Slack webhooks return `ok` on success. A failed send is noted in the terminal and never fails the run.
 
+## Phase 6: Run-completion message
+
+Close the run with the standard completion message (per [report-template.md](../../report-standard/report-template.md#run-completion-message-what-the-skill-says-in-chat-when-the-run-finishes)), adapted to a combined run:
+
+1. **One-line headline per target:** each target's score with movement and label state, e.g. `grafana 72/100 (+9), lgtm 64/100 (first run), aws 81/100 (-2)` — plus any blocked audits named with their one-line reason.
+2. **The biggest levers across the estate:** the two or three highest-`points_recoverable` finding titles, and regressions first if any.
+3. **Where the combined report is — the resolved ABSOLUTE path:** `<abs>/all/<YYYY-MM-DD>/report.md`, plus a note that each target's own `report.md` sits under `<abs>/<target>/<YYYY-MM-DD>/`.
+4. **How to open it** (OS-specific `open`/`xdg-open`/`Invoke-Item`, as in the report standard), noting it is plain Markdown.
+5. **How to share it:** the full reports name hosts/namespaces/routes — share inside the team; the Slack brief (already sent if `slack.webhook_env` is set, else offer it) is the leak-safe summary.
+6. **Next step:** re-run after fixes for the delta, or open the target report with the most recoverable points first.
+
+Same hard rules as the per-audit close: absolute paths only, no evidence values or secrets in the chat message, and no completion message for a run that never wrote a combined report.
+
 ## Common Failure Modes
 
 | Failure | Prevention |
