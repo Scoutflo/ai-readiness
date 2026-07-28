@@ -726,6 +726,11 @@ if [ -z "$DO_TOKEN_VAR_CHECK" ]; then
   row digitalocean configured no - skipped - "add a digitalocean block via /scoutflo:connect if you run DigitalOcean"
 else
   CONFIGURED_COUNT=$((CONFIGURED_COUNT + 1))
+  # audit-digitalocean runs almost entirely on doctl; surface a missing CLI as its
+  # own row (matching aws/gcloud/kubectl) instead of letting the audit fail downstream.
+  if ! command -v doctl >/dev/null 2>&1; then
+    row digitalocean binary-doctl yes - fail - "digitalocean is configured but doctl is not installed; install it (https://docs.digitalocean.com/reference/doctl/how-to/install/) — audit-digitalocean uses doctl for most checks"
+  fi
   resolve_token digitalocean
   if token_gate digitalocean account; then
     live_check digitalocean account "https://api.digitalocean.com/v2/account" "${TOKEN_VAR:-none}" "$TOKEN"
