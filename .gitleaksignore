@@ -7,3 +7,4 @@
 42d75b86bf87560ff2f0d44d2e48feaeb0b2d949:skills/audit-all/tests/test-v0165-integration-end-to-end.sh:stripe-access-token:137
 42d75b86bf87560ff2f0d44d2e48feaeb0b2d949:skills/audit-all/tests/test-v0165-integration-end-to-end.sh:stripe-access-token:237
 42d75b86bf87560ff2f0d44d2e48feaeb0b2d949:skills/audit-all/tests/test-v0165-integration-end-to-end.sh:stripe-access-token:253
+42d75b86bf87560ff2f0d44d2e48feaeb0b2d949:skills/redaction/tests/test-redaction-integration.sh:stripe-access-token:64
