@@ -40,7 +40,7 @@ By default `./scoutflo-audits/` in the directory you launched Claude Code from. 
 Mostly yes — that's the default for everything except credentials. Reports, history, topology, and exemptions already land in the folder you run from (`./scoutflo-audits/`), so a dedicated "readiness" folder works with zero setup; export `SCOUTFLO_AUDIT_DIR` if you want that path pinned regardless of where you launch. Credentials (`~/.scoutflo/toolkit.yaml` + `~/.scoutflo/env`) default to your home directory **on purpose**: they're per-machine secrets-adjacent files that shouldn't live next to reports you might zip up or commit, and home-anchoring is what makes every new terminal, session, and folder pick them up without re-asking. If you have a real reason to relocate the config (e.g. two isolated estates on one machine), export `SCOUTFLO_CONFIG=/path/to/toolkit.yaml` — every skill honors it. Moving the *reports* folder never requires moving the config.
 
 **What does running this cost?**
-The toolkit is free. Runs consume your own Claude subscription or API usage like any other Claude Code session; scheduled runs consume it on each execution.
+The toolkit is free. Runs consume your own Claude subscription or API usage like any other Claude Code session; scheduled runs consume it on each execution. A full 12-audit suite consumes ~700K tokens (~$0.56 at Haiku pricing). See [docs/token-costs.md](token-costs.md) for detailed per-audit breakdowns, cost factors, and ways to control spending.
 
 **We are in the EU. Does Sentry / our region work?**
 Yes. Hosts and regions come from your `~/.scoutflo/toolkit.yaml`; nothing assumes a US region. `/scoutflo:connect` covers region selection per provider.

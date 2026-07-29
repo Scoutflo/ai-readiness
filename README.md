@@ -161,6 +161,7 @@ Small friction is worth reporting too, not just crashes — confusing wording, a
 
 - Full install options — individual, team, enterprise-managed rollout: [docs/install.md](docs/install.md)
 - Common questions: [docs/faq.md](docs/faq.md)
+- Token costs and usage examples: [docs/token-costs.md](docs/token-costs.md)
 - Contributing and release rules: [CONTRIBUTING.md](CONTRIBUTING.md)
 - Skill-authoring conventions (for anyone extending this): [docs/skill-authoring-conventions.md](docs/skill-authoring-conventions.md)
 - Full changelog: [CHANGELOG.md](CHANGELOG.md)

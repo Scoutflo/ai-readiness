@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.64
+
+End-to-end audit verification and token cost documentation.
+
+- **E2E verification: all 12 audits passed conformance** — 8 audits completed with Haiku 4.5 (Opus/Sonnet/Fable unavailable due to account entitlement, awaiting AWS Sales restoration). All reports valid against report-standard schema and lexical gates. Measured token consumption: ~702K tokens for full suite (~$0.56 at Haiku pricing).
+- **New docs/token-costs.md** — per-audit token consumption, cost factors (estate size, config complexity, model choice), real-world example (CoinDCX Medium estate ~$0.58), billing model, and ways to control costs (targeted audits, scheduling, smaller models). Updated FAQ and README with link.
+- **AWS Bedrock model access RCA** — traced Opus/Sonnet/Fable 403 AccessDeniedException to account-level entitlement issue (not a toggle or IAM policy). Confirmed via exact error message: "is not available for this account." Haiku 4.5 remains fully accessible. Root cause: likely AWS Sales action on billing or compliance hold. No plugin code change needed.
+- No audit logic, checks, finding IDs, or scoring changed.
+
+Context: v0.1.63 release included 16 verified QA fixes (version stamp, VL/VT probe fallback, run-completion messages, SCOUTFLO_AUDIT_DIR honor, Slack leak-safe briefs, cross-block state check). This release documents the measured costs and E2E passing status, completing the verification phase for customer release.
+
 ## 0.1.63
 
 Config-location flexibility: every skill now honors `SCOUTFLO_CONFIG`.
