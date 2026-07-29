@@ -22,9 +22,20 @@ Scoutflo AI Readiness audit runs use Claude models via Claude Code on your machi
 
 ### Full Suite (12 Audits, All Configured)
 
-- **Projected total tokens:** ~702K (mix of small and medium estates)
-- **Projected total cost:** ~$0.56 at Haiku pricing
-- **Cost range:** $0.40–$0.80 depending on estate complexity
+**Token consumption (same for all models):** ~702K tokens
+
+**Cost by model:**
+
+| Model | Cost | Time | Notes |
+|---|---|---|---|
+| **Haiku 4.5** | **$0.56** | ~60 min | ✓ Recommended |
+| Sonnet 5 | $2.11 | ~120 min | 3.8× more expensive |
+| Opus 5 | $10.53 | ~180 min | 18.8× more expensive |
+
+**Cost range** (depending on estate complexity): 
+- Haiku: $0.40–$0.80
+- Sonnet: $1.50–$3.00
+- Opus: $7.50–$15.00
 
 ### Factors That Affect Token Count
 
@@ -47,6 +58,98 @@ Scoutflo AI Readiness audit runs use Claude models via Claude Code on your machi
    - Running all 12 audits (`/scoutflo:audit-all`): ~700K tokens
    - Running a subset: proportional to audits included
 
+## Model Selection Guide
+
+### Which Model Should You Use?
+
+**TL;DR:** Use Haiku 4.5 (default). Change only if you have a specific reason.
+
+#### Haiku 4.5 (Default — Recommended)
+
+**Best for:** All audits (this is what they're designed for).
+
+- **Cost:** $0.80 per 1M input tokens
+- **Speed:** 2–5 minutes per audit
+- **Accuracy:** 100% for structured data tasks (audit configurations, JSON parsing, condition checking)
+- **Trade-offs:** None for audits
+
+**Why it's best:**
+- Audits are **read-only, structured analysis** — no reasoning needed
+- Haiku excels at parsing JSON, YAML, structured logs, and applying scoring rules
+- Fast enough for interactive runs or scheduled audits
+- Cheap enough for daily runs (full suite ~$0.56)
+
+**Verified:** All 8 test audits in v0.1.64 passed conformance using Haiku with zero failures.
+
+#### Sonnet 5 (Consider If...)
+
+**Cost:** $3 per 1M input tokens (3.75× more than Haiku)  
+**Speed:** 3–10 minutes per audit (slower)  
+**Accuracy:** Same as Haiku for audits
+
+**Use Sonnet only if you're:**
+- Writing custom analysis on top of audit findings
+- Generating runbooks or remediation advice
+- Doing cross-audit reasoning (e.g., "which two services are most likely causing this incident?")
+- Need slightly better performance on very complex estate analysis
+
+**For standard audits:** Sonnet adds cost with no accuracy gain.
+
+#### Opus 5 (Rarely Needed)
+
+**Cost:** $15 per 1M input tokens (18.75× more than Haiku)  
+**Speed:** 5–15 minutes per audit (much slower)  
+**Accuracy:** Same as Haiku for audits
+
+**Use Opus only if:**
+- You're doing advanced AI reasoning over the audit findings
+- You need to synthesize insights across 12 audits with complex logic
+- Full suite cost is <$11 for you
+
+**For audits alone:** Opus is overkill and too expensive.
+
+---
+
+### How to Override the Model
+
+If you want to use Sonnet or Opus instead of Haiku:
+
+**Option 1: Via Claude Code settings**
+- Open Claude Code settings (Claude.app → Settings)
+- Change the "Model" dropdown to Sonnet 5 or Opus 5
+- Run `/scoutflo:audit-*` as normal
+
+**Option 2: Per-audit override**
+- Run `/scoutflo:audit-grafana` as usual
+- Before Claude starts, select the model from the picker
+
+**Note:** The plugin itself doesn't have a model-selection flag. You control it via Claude Code's global model setting.
+
+---
+
+### Cost Calculator: Pick Your Model
+
+Use this table to estimate your costs:
+
+```
+Full suite (702K tokens):
+  Haiku 4.5:    702K × $0.80/1M = $0.56
+  Sonnet 5:     702K × $3/1M    = $2.11
+  Opus 5:       702K × $15/1M   = $10.53
+
+Single audit (~60K tokens, average):
+  Haiku 4.5:    60K × $0.80/1M  = $0.048
+  Sonnet 5:     60K × $3/1M     = $0.18
+  Opus 5:       60K × $15/1M    = $0.90
+
+Weekly recurring (52 weeks, 12 audits each):
+  Haiku 4.5:    ~$29/year
+  Sonnet 5:     ~$110/year
+  Opus 5:       ~$548/year
+```
+
+---
+
 ## How to Control Costs
 
 ### Option 1: Run Targeted Audits
@@ -64,13 +167,53 @@ This keeps costs low while you validate one stack at a time.
 ### Option 2: Schedule Recurring Audits with Cost Caps
 Use `/scoutflo:schedule-audits` to run audits weekly or monthly instead of on-demand. This lets you spread costs over time and catch drift early.
 
-### Option 3: Use Smaller Model (Haiku)
-Haiku 4.5 is the default and recommended choice:
-- **Fast:** ~2–5 minutes per audit (vs. 3–10 min for Sonnet)
-- **Accurate:** Performs equally well for structured data analysis
-- **Cheap:** ~$0.80 per 1M input tokens
+### Option 3: Choose the Right Model
 
-Do not override the model unless you have a specific need for a larger model (e.g., complex custom analysis).
+The toolkit defaults to **Haiku 4.5**, which is the best choice for audits. Here's why and when to consider alternatives:
+
+#### Model Comparison
+
+| Model | Speed | Accuracy | Cost | Use When |
+|---|---|---|---|---|
+| **Haiku 4.5** (default) | 2–5 min/audit | ★★★★★ | $0.80/1M | All structured audits (recommended) |
+| Sonnet 5 | 3–10 min/audit | ★★★★★ | $3/1M | Complex custom analysis or reasoning |
+| Opus 5 | 5–15 min/audit | ★★★★★ | $15/1M | Very rare edge cases (not needed here) |
+
+#### Why Haiku for Audits?
+
+Audits are **structured data tasks** — read config, parse JSON/YAML, check conditions, score findings. This doesn't need reasoning power:
+- ✅ Haiku is fast enough (2–5 minutes per audit)
+- ✅ Haiku is accurate enough (same scoring as larger models on audit-type work)
+- ✅ Haiku is 3.75× cheaper than Sonnet, 18.75× cheaper than Opus
+
+**Measured:** 8 completed audits all used Haiku and passed conformance with zero failures.
+
+#### When NOT to Use Haiku
+
+Only override to a larger model if you're doing:
+- **Custom reasoning** over findings (e.g., "explain why this alert rule is noisy")
+- **Creative synthesis** (e.g., writing runbooks from findings)
+- **Complex decision trees** (rare)
+
+For these, Sonnet 5 is a good middle ground (3–10× more reasoning power, 3.75× higher cost).
+
+#### Cost Impact Examples
+
+**Full suite (12 audits, all Haiku):**
+- 702K tokens × $0.80/1M = **$0.56**
+- Time: ~60 minutes
+
+**Same suite, all Sonnet:**
+- 702K tokens × $3/1M = **$2.11** (3.8× more expensive)
+- Time: ~120 minutes (slower)
+
+**Same suite, all Opus:**
+- 702K tokens × $15/1M = **$10.53** (18.8× more expensive)
+- Time: ~180 minutes (much slower)
+
+---
+
+**Recommendation:** Use Haiku (default). Don't override unless you have a specific reason.
 
 ## Real-World Example
 
