@@ -1237,7 +1237,6 @@ git commit -m "progress: v0.1.65 checkpoint 60% complete
 - Batching handles 1000+ objects
 - Testing on real estate next
 
-Co-Authored-By: Claude Haiku 4.5 <noreply@anthropic.com>"
 
 # After phase complete + retrospective
 git add sre-toolkit/docs/EXECUTION-ROADMAP.md sre-toolkit/CHANGELOG.md
@@ -1248,7 +1247,6 @@ git commit -m "docs: v0.1.65 retrospective + v0.1.66 adjustments
 - Redaction patterns need whitelist (minor hotfix)
 - v0.1.66 estimate increased to 7 days (correlation complexity)
 
-Co-Authored-By: Claude Haiku 4.5 <noreply@anthropic.com>"
 ```
 
 ### Escalation Contacts

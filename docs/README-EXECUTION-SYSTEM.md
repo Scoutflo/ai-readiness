@@ -46,7 +46,6 @@ git commit -m "feat: checkpoint interactive prompts
 
 All verification items checked.
 
-Co-Authored-By: Claude <noreply@anthropic.com>"
 
 # 6. Update the Live SSOT live events log (in same commit)
 #    [2026-07-30 14:30 IST] Eng A: Checkpoint prompts working

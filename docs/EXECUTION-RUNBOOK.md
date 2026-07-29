@@ -51,7 +51,6 @@ git commit -m "feat: checkpoint UX improvements
 - Tests pass on 1000 object estate
 - Token counting working correctly
 
-Co-Authored-By: Claude <noreply@anthropic.com>"
 ```
 
 ---
@@ -146,7 +145,6 @@ git commit -m "feat: redaction guardrail complete
 
 All verification items passed.
 
-Co-Authored-By: Claude <noreply@anthropic.com>"
 ```
 
 ---
@@ -188,7 +186,6 @@ git commit -m "docs: doctor-state save blocker, escalating
 - Impact: Blocks doctor-state persistence feature
 - Owner: Eng B, escalating to Kalpesh
 
-Co-Authored-By: Claude <noreply@anthropic.com>"
 
 # 4. Message Kalpesh/team with link to commit
 #    "Blocker on doctor-state save — see commit abc123 for details"
@@ -236,7 +233,6 @@ First audit run with inventory checkpoint shows 50% token savings:
 
 Updated EXECUTION-ROADMAP-LIVE.md with measurement.
 
-Co-Authored-By: Claude <noreply@anthropic.com>"
 ```
 
 ---
@@ -295,7 +291,6 @@ Decision: Adjust v0.1.65 from 8 days to 10 days. Non-critical path item (batchin
 
 Remaining features still on track. v0.1.66 start adjusted from 2026-08-08 to 2026-08-10.
 
-Co-Authored-By: Claude <noreply@anthropic.com>"
 
 # 7. Inform team immediately (don't wait for sync)
 #    Slack: "Checkpoint timeline adjusted +2 days (see commit abc123). v0.1.66 starts Aug 10 instead of Aug 8."
@@ -354,7 +349,6 @@ Go/No-Go Decision: [✓] GO
 
 Ready for v0.1.66 (Correlation). Unblocks next phase.
 
-Co-Authored-By: Claude <noreply@anthropic.com>"
 
 # 6. Tag release
 git tag -a v0.1.65 -m "v0.1.65 Foundation: Checkpoint + Doctor + Context
@@ -397,7 +391,6 @@ git commit -m "feat: checkpoint interactive prompts
 - Tests passing: 50 unit tests
 - Verified: Batching works on 1000 object estate
 
-Co-Authored-By: Claude <noreply@anthropic.com>"
 
 # Drift/blocker commit (when things don't match plan)
 git add sre-toolkit/docs/EXECUTION-ROADMAP-LIVE.md
@@ -411,7 +404,6 @@ git commit -m "docs: checkpoint performance drift (+2 days)
 Updated timeline: v0.1.65 now 10 days (was 8).
 Non-critical features (batching) deferred 1 day.
 
-Co-Authored-By: Claude <noreply@anthropic.com>"
 
 # Token measurement commit
 git add sre-toolkit/docs/EXECUTION-ROADMAP-LIVE.md
@@ -424,7 +416,6 @@ Measured on CoinDCX staging (1180 EC2 estate):
 
 Updated EXECUTION-ROADMAP-LIVE.md north star metrics.
 
-Co-Authored-By: Claude <noreply@anthropic.com>"
 
 # Phase completion commit
 git add sre-toolkit/docs/EXECUTION-ROADMAP-LIVE.md [version bump files]
@@ -438,7 +429,6 @@ git commit -m "release: v0.1.65 complete, go/no-go gate PASSED
 
 Commit to production v0.1.66.
 
-Co-Authored-By: Claude <noreply@anthropic.com>"
 ```
 
 ---

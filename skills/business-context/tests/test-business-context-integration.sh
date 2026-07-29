@@ -44,7 +44,7 @@ teardown() {
     "environment": "production",
     "uptime_sla": 99.9,
     "cost_sensitivity": "high",
-    "billing_owner": "ops@example.com",
+    "billing_owner": "ops-team",
     "captured_at": "2026-07-30T17:00:00Z"
   }' "$TEST_TOPOLOGY" > "$TEST_TOPOLOGY.tmp"
   mv "$TEST_TOPOLOGY.tmp" "$TEST_TOPOLOGY"
@@ -87,7 +87,7 @@ teardown() {
     "environment": "staging",
     "uptime_sla": 95.0,
     "cost_sensitivity": "low",
-    "billing_owner": "finance@example.com",
+    "billing_owner": "finance-team",
     "captured_at": "2026-07-30T17:00:00Z"
   }' "$TEST_TOPOLOGY" > "$TEST_TOPOLOGY.tmp"
   mv "$TEST_TOPOLOGY.tmp" "$TEST_TOPOLOGY"
@@ -103,7 +103,7 @@ teardown() {
   [ "$env" = "staging" ]
   [ "$sla" = "95.0" ]
   [ "$cost" = "low" ]
-  [ "$owner" = "finance@example.com" ]
+  [ "$owner" = "finance-team" ]
 }
 
 @test "business context integration: environment validation" {

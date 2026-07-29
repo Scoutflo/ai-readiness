@@ -4,7 +4,7 @@
 
 set -eu
 
-SKILLS_LIB_DIR="/Users/admin/ScoutfloWork/ScoutPlug/sre-toolkit/skills"
+SKILLS_LIB_DIR="${SCOUTFLO_ROOT}/sre-toolkit/skills"
 TEST_AUDIT_DIR="/tmp/scoutflo-audits-e2e-test"
 TEST_TOPOLOGY="/tmp/.scoutflo/topology-e2e-test.json"
 TEST_DOCTOR_STATE="/tmp/.scoutflo/doctor-state-e2e-test.json"
@@ -52,7 +52,7 @@ teardown() {
     "environment": "production",
     "uptime_sla": 99.9,
     "cost_sensitivity": "high",
-    "billing_owner": "ops@example.com",
+    "billing_owner": "ops-team",
     "captured_at": "2026-07-30T17:00:00Z"
   }' "$TEST_TOPOLOGY" > "$TEST_TOPOLOGY.tmp"
   mv "$TEST_TOPOLOGY.tmp" "$TEST_TOPOLOGY"

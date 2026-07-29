@@ -28,7 +28,7 @@ cat > "$TEST_DIR/context.json" << 'EOF'
     "error_rate_percent": 0.001
   },
   "cost_sensitivity": "high",
-  "billing_owner": "payments-lead@company.com",
+  "billing_owner": "payments-lead",
   "critical_dependencies": ["api-gateway", "checkout-svc"],
   "updated_at": "2026-07-29T16:45:00Z",
   "notes": "PCI-DSS compliance required"

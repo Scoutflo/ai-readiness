@@ -37,7 +37,7 @@ Context is saved to `~/.scoutflo/topology.json`:
     "environment": "production",
     "uptime_sla": 99.9,
     "cost_sensitivity": "high",
-    "billing_owner": "jane@example.com",
+    "billing_owner": "jane-team",
     "captured_at": "2026-07-30T17:15:30Z"
   }
 }

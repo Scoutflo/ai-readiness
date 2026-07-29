@@ -34,7 +34,7 @@ Stored in `topology.json:business_context` and persisted across sessions.
   User: "high"
 
 → "Billing Owner Email?"
-  User: "payments-team-lead@company.com"
+  User: "payments-team-lead"
 
 → "Critical Dependencies (comma-separated service names)?"
   User: "api-gateway, checkout-svc"
@@ -60,7 +60,7 @@ Stored in `topology.json:business_context` and persisted across sessions.
       "error_rate_percent": 0.01
     },
     "cost_sensitivity": "high",
-    "billing_owner": "payments-team-lead@company.com",
+    "billing_owner": "payments-team-lead",
     "critical_dependencies": [
       "api-gateway",
       "checkout-svc"
@@ -243,7 +243,7 @@ log: "[saved] Business context updated for payments-team"
     "error_rate_percent": 0.001
   },
   "cost_sensitivity": "high",
-  "billing_owner": "payments-lead@company.com",
+  "billing_owner": "payments-lead@company",
   "critical_dependencies": [
     "api-gateway",
     "checkout-svc",
@@ -273,7 +273,7 @@ log: "[saved] Business context updated for payments-team"
     "error_rate_percent": 0.1
   },
   "cost_sensitivity": "low",
-  "billing_owner": "data-lead@company.com",
+  "billing_owner": "data-lead@company",
   "critical_dependencies": [],
   "updated_at": "2026-07-30T14:30:00Z",
   "notes": "Non-production. Can be experimental."
@@ -299,7 +299,7 @@ log: "[saved] Business context updated for payments-team"
     "error_rate_percent": 0.05
   },
   "cost_sensitivity": "medium",
-  "billing_owner": "sre-oncall@company.com",
+  "billing_owner": "sre-oncall@company",
   "critical_dependencies": [
     "api-gateway",
     "auth-svc",
@@ -324,7 +324,7 @@ log: "[saved] Business context updated for payments-team"
 ```bash
 test_business_context_save:
   - Run /scoutflo:business-context
-  - Enter: payments-team, production, 99.99, high, email@company.com
+  - Enter: payments-team, production, 99.99, high, email@company
   - Assert topology.json:business_context contains all fields
   - Assert updated_at timestamp set
 

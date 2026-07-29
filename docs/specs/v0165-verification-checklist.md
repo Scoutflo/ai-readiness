@@ -277,7 +277,7 @@ Expected output:
       "error_rate_percent": 0.001
     },
     "cost_sensitivity": "high",
-    "billing_owner": "payments-lead@company.com",
+    "billing_owner": "payments-lead@company",
     "updated_at": "2026-07-30T14:30:00Z"
   }
 

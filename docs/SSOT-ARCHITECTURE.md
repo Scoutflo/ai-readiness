@@ -144,7 +144,6 @@ git commit -m "feat: [feature name]
 - Status: X/Y days done
 - Next: [what comes next]
 
-Co-Authored-By: Claude <noreply@anthropic.com>"
 ```
 
 ### End of Week (Friday or Phase End)
@@ -204,7 +203,6 @@ git commit -m "feat: checkpoint skill structure and tests
 
 Status: 10% complete, on track.
 
-Co-Authored-By: Claude <noreply@anthropic.com>"
 ```
 
 **Live SSOT Updated:**
@@ -254,7 +252,6 @@ git commit -m "fix: checkpoint batching performance + progress indicator
 
 Status: 50% complete, on track (drift mitigated).
 
-Co-Authored-By: Claude <noreply@anthropic.com>"
 ```
 
 **Live SSOT Updated:**
@@ -294,7 +291,6 @@ git commit -m "feat: checkpoint feature complete
 Status: 100% complete, ready for integration.
 Next: Wiring into audit-all.
 
-Co-Authored-By: Claude <noreply@anthropic.com>"
 ```
 
 **Live SSOT Updated:**
@@ -382,7 +378,6 @@ CoinDCX ready to advance to v0.1.66.
 Lessons learned added to EXECUTION-ROADMAP.md.
 Next phase: Correlation Engine (v0.1.66).
 
-Co-Authored-By: Claude <noreply@anthropic.com>"
 
 git tag -a v0.1.65 -m "v0.1.65 Foundation: Checkpoint + Doctor + Context"
 ```

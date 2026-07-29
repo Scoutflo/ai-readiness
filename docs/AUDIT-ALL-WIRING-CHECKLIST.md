@@ -11,7 +11,7 @@
 Run all 35 new tests to confirm baseline:
 
 ```bash
-cd /Users/admin/ScoutfloWork/ScoutPlug/sre-toolkit
+cd sre-toolkit
 
 # If bats installed:
 bats skills/doctor/tests/test-doctor-integration.sh
@@ -293,7 +293,7 @@ After each task, run the corresponding test:
 After all tasks complete:
 
 ```bash
-cd /Users/admin/ScoutfloWork/ScoutPlug/sre-toolkit
+cd sre-toolkit
 bats skills/audit-all/tests/test-v0165-integration-end-to-end.sh
 
 # Should pass all checks:
@@ -392,7 +392,7 @@ Plus 30 min for testing + bugfixes = **~4 hours total**
 After wiring complete + all tests passing:
 
 ```bash
-cd /Users/admin/ScoutfloWork/ScoutPlug/sre-toolkit
+cd sre-toolkit
 
 # Run gates
 sh ci/leak-scan.sh .
