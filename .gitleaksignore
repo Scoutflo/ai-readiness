@@ -1,0 +1,9 @@
+# v0.1.65 test data - safe patterns
+# These are intentionally non-functional test keys for testing redaction logic
+42d75b86bf87560ff2f0d44d2e48feaeb0b2d949:skills/redaction/tests/test-redaction.sh:stripe-access-token:16
+42d75b86bf87560ff2f0d44d2e48feaeb0b2d949:skills/redaction/tests/test-redaction.sh:stripe-access-token:22
+42d75b86bf87560ff2f0d44d2e48feaeb0b2d949:docs/specs/v0165-verification-checklist.md:generic-api-key:389
+42d75b86bf87560ff2f0d44d2e48feaeb0b2d949:skills/audit-all/tests/test-v0165-integration-end-to-end.sh:stripe-access-token:129
+42d75b86bf87560ff2f0d44d2e48feaeb0b2d949:skills/audit-all/tests/test-v0165-integration-end-to-end.sh:stripe-access-token:137
+42d75b86bf87560ff2f0d44d2e48feaeb0b2d949:skills/audit-all/tests/test-v0165-integration-end-to-end.sh:stripe-access-token:237
+42d75b86bf87560ff2f0d44d2e48feaeb0b2d949:skills/audit-all/tests/test-v0165-integration-end-to-end.sh:stripe-access-token:253
