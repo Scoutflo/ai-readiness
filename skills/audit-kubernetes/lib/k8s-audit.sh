@@ -4,6 +4,23 @@
 
 set -eu
 
+# --- Load shared state from Phase 0 (v0.1.69 smart auto pipeline) ---
+k8s_load_shared_state() {
+  # Optional: only populated when running via /scoutflo:audit-all
+  EXEMPTIONS="${SCOUTFLO_EXEMPTIONS:-}"
+  BUSINESS_CTX="${SCOUTFLO_BUSINESS_CONTEXT:-}"
+  METADATA="${SCOUTFLO_METADATA:-}"
+  TOPOLOGY="${SCOUTFLO_TOPOLOGY:-}"
+  SESSION_ID="${SCOUTFLO_SESSION_ID:-$(date +%s)}"
+  FINDINGS_LOG="${SCOUTFLO_FINDINGS_LOG:-}"
+  HISTORY_LOG="${SCOUTFLO_HISTORY_LOG:-}"
+
+  # Debug: log shared state availability
+  if [ -n "$SESSION_ID" ] && [ "$SESSION_ID" != "$(date +%s)" ]; then
+    : # Running as part of audit-all (Phase 1-12)
+  fi
+}
+
 # --- Get kubeconfig and cluster info ---
 k8s_get_cluster_info() {
   kubeconfig="${KUBECONFIG:-.kube/config}"
@@ -57,6 +74,26 @@ k8s_audit_findings() {
   ]
 }
 EOF
+}
+
+# --- Apply v0.1.69 integration logic (runs when part of audit-all pipeline) ---
+k8s_apply_integration_logic() {
+  findings_file="$1"
+
+  # Skip if running standalone (not part of audit-all)
+  if [ -z "$FINDINGS_LOG" ]; then
+    return 0
+  fi
+
+  # Source integration helpers (shared by all audits in Phase 1-12)
+  INTEGRATION_HELPERS="${AUDIT_ALL_LIB_DIR:-/opt/scoutflo/lib}/integration-helpers.sh"
+  if [ -f "$INTEGRATION_HELPERS" ]; then
+    # shellcheck disable=SC1090
+    . "$INTEGRATION_HELPERS"
+
+    # Apply all integration logic: exemptions → lifecycle → severity escalation → remediation
+    apply_all_integration_logic "$findings_file" "audit-kubernetes"
+  fi
 }
 
 # --- Generate K8s audit report ---

@@ -1,6 +1,6 @@
 ---
 name: audit-lgtm
-description: Read-only scored audit of LGTM and VictoriaMetrics observability stacks; writes findings.json and report.md. Use when the user mentions auditing or scoring Loki, Tempo, Mimir, VictoriaMetrics, VictoriaLogs, VictoriaTraces, vmalert, or Alertmanager, or asks whether metrics, logs, traces, or alerting are healthy or production-ready. Do not use for the Grafana application layer (use audit-grafana), for proving alerts reach a human (use audit-alert-routing), for application error tracking (use audit-sentry), for DigitalOcean-managed infrastructure (use audit-digitalocean), for GCP-managed infrastructure (use audit-gcp), or to change anything (use setup-lgtm).
+description: Read-only scored audit of LGTM and VictoriaMetrics observability stacks; writes findings.json and report.md; integrates with v0.1.69 smart auto pipeline when run under audit-all (exemptions, lifecycle, severity escalation, remediation links). Use when the user mentions auditing or scoring Loki, Tempo, Mimir, VictoriaMetrics, VictoriaLogs, VictoriaTraces, vmalert, or Alertmanager, or asks whether metrics, logs, traces, or alerting are healthy or production-ready. Do not use for the Grafana application layer (use audit-grafana), for proving alerts reach a human (use audit-alert-routing), for application error tracking (use audit-sentry), for DigitalOcean-managed infrastructure (use audit-digitalocean), for GCP-managed infrastructure (use audit-gcp), or to change anything (use setup-lgtm).
 ---
 
 # audit-lgtm
@@ -343,6 +343,60 @@ grep -q '^# ' "$OUT/report.md" && echo "report.md present"
 sh "${CLAUDE_PLUGIN_ROOT}/report-standard/check-report.sh" "$OUT/report.md"
 ls -l "$OUT"
 ```
+
+## Shared Environment Variables (v0.1.69+)
+
+When running under the `audit-all` orchestrator, these environment variables are pre-populated once and shared across all audit skills:
+
+| Variable | Source | Used for | Example |
+| --- | --- | --- | --- |
+| `SCOUTFLO_EXEMPTIONS` | `./scoutflo-audits/exemptions.yaml` | C4 phase: filter suppressed findings | `[{"id":"LGTM-001","reason":"known issue","expires":"2026-08-01"}]` |
+| `SCOUTFLO_BUSINESS_CONTEXT` | `~/.scoutflo/business_context.md` (parsed) | B phase: escalate severity for critical services | `{"critical_services":["api","database"]}` |
+| `SCOUTFLO_TOPOLOGY` | `./scoutflo-audits/topology.md` (if exists) | Phase 1: canonical service names | `{"services":[{"name":"api","owner":"platform"}]}` |
+| `SCOUTFLO_METADATA` | `~/.scoutflo/computed_metadata.jsonl` | Metadata-driven resource discovery | Auto-discovered K8s labels, AWS tags, CODEOWNERS |
+| `SCOUTFLO_SESSION_ID` | Generated once per `audit-all` run | Session tracking and correlation | `1722361222` |
+| `SCOUTFLO_FINDINGS_LOG` | Shared findings log (created by orchestrator) | Append findings for correlation and cost-analysis | `./scoutflo-audits/.session/findings.jsonl` |
+| `SCOUTFLO_HISTORY_LOG` | Session history ledger | Track audit completion and status | `./scoutflo-audits/.session/audit-session.log` |
+| `SKILLS_LIB` | Plugin lib directory | Locate shared integration helper | `./sre-toolkit/skills/audit-all/lib` |
+
+When running standalone (not under `audit-all`): all `SCOUTFLO_*` vars are empty or unset. The skill applies defaults (no exemptions, no escalation, no shared log writes) and works normally.
+
+---
+
+## Phase 13: Apply Integration Logic (v0.1.69+)
+
+After `findings.json` is written and verified, apply automatic integration logic via the shared helper. This phase is conditional: it runs automatically when invoked by `audit-all`, and runs as a no-op (graceful passthrough) when invoked standalone. The shared state is populated once per orchestrated run by the `audit-all` orchestrator; individual skill runs have empty env vars and skip gracefully.
+
+**When running standalone:** env vars are empty; integration logic applies defaults (no exemptions, no business context escalation, no correlation). The audit's own report and brief send normally.
+
+**When running under audit-all:** env vars are pre-populated by the orchestrator; this phase applies exemptions, lifecycle classification, severity escalation, and appends findings to the shared log automatically.
+
+```bash
+set -eu
+RUN_DATE="$(date -u +%Y-%m-%d)"
+OUT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/lgtm/${RUN_DATE}"
+
+# Source the shared integration helper (if available; skip gracefully if v0.1.68 or earlier)
+INTEGRATION_LIB="${SKILLS_LIB}/audit-all/lib/integration-helpers.sh"
+if [ -f "$INTEGRATION_LIB" ]; then
+  . "$INTEGRATION_LIB"
+  # Apply all integration logic in sequence:
+  # - C4: filter by exemptions
+  # - C3: classify lifecycle (new/unchanged/regressed)
+  # - B: escalate severity for critical services
+  # - G3: add remediation links to setup skills
+  # - Append to shared log (when running under audit-all)
+  apply_all_integration_logic "$OUT/findings.json" "audit-lgtm"
+  echo "[audit-lgtm] Integration logic applied (v0.1.69+)"
+else
+  echo "[audit-lgtm] Integration helper not found (v0.1.68 or earlier); skipping Phase 13"
+fi
+```
+
+**Expected behavior:**
+- If `audit-all` orchestrator is running: findings are filtered, classified, and appended to the shared log at `${SCOUTFLO_FINDINGS_LOG}`. The audit's own `findings.json` is unchanged for backward compatibility.
+- If running standalone: findings remain in the audit's own `findings.json` with all lifecycle/remediation fields already set. No shared log is written.
+- Graceful degradation: older installs (v0.1.68) have no integration helper; the skill logs a notice and continues.
 
 Compute the delta against the previous run date per the [report standard](../../report-standard/README.md); on the first run state "first run, no delta". After the report is written, close with the run-completion message per the report standard ([report-template.md](../../report-standard/report-template.md#run-completion-message-what-the-skill-says-in-chat-when-the-run-finishes)): the one-line score headline, the top fixes by points_recoverable, the **absolute** report path, the OS-specific open command, and the leak-safe share pointer (Slack brief). Then send the Slack brief, titles only, never evidence values:
 

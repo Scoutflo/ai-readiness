@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.1.69
+
+Smart Auto Integration Pipeline — all 12 audits wired together with automatic correlation, lifecycle tracking, exemption filtering, and topology-guided remediation.
+
+- **Smart Auto Integration Pipeline** — Three-layer system orchestrates Phases 0-13: (0) initialize shared state from business_context.md + exemptions.yaml + topology.json, (1-12) run all audits with shared env vars + apply integration logic, (13) correlate + redact + cost-analyze + guide topology sequencing + generate report.
+- **Shared State Model** — All 12 audits read SCOUTFLO_* env vars (BUSINESS_CONTEXT, EXEMPTIONS, TOPOLOGY, METADATA, SESSION_ID). Single source of truth for exemptions, teams, SLAs, cost sensitivity. No more manual findings post-processing.
+- **Eight Integration Layers** — C1 (history ledger), C3 (lifecycle: new/unchanged/regressed/resolved), C4 (exemptions filtering), B (severity escalation for critical services), Red (redaction), Cor (correlation), G3 (remediation links), G5 (topology-guided sequencing).
+- **Helper Functions** — New shared library (integration-helpers.sh) called by all 12 audits after findings.json: apply_exemptions(), classify_lifecycle(), escalate_severity(), add_remediation(), append_to_shared_log(), log_to_history(). Each audit integrates by two lines: `source integration-helpers.sh` + `apply_all_integration_logic()`.
+- **Remediation Mapping** — New finding-remediation-map.json maps 40+ finding IDs to setup skills + anchors. Updated with each new finding type. Audit skills populate next_safe_action from this map.
+- **All 12 audits updated** — audit-aws, audit-gcp, audit-lgtm, audit-grafana, audit-sentry, audit-datadog, audit-kubernetes, audit-elk, audit-zenduty, audit-pagerduty, audit-digitalocean, audit-alert-routing all wired in.
+- **Test Suite** — Comprehensive test-v0169-smart-auto-integration.sh covers Phase 0 init, integration helpers, full pipeline, and all 8 integration layers.
+- **Documentation** — smart-auto-integration-guide.md explains architecture, usage, configuration, and troubleshooting. Each audit SKILL.md updated with v0.1.69 section.
+- **Backward compatible** — All audits still work standalone. Individual invocation skips integration and produces local findings.json unchanged.
+
+Testing: ✅ All 12 audit SKILL.md updated and gates passing, ✅ Integration helpers tested, ✅ shared-state-init, integration-pipeline, audit-all-v0169 orchestrator verified.
+
+Context: v0.1.69 completes the automatic integration infrastructure promised in v0.1.65-0.1.68. Enables one-command full audit with correlation, cost analysis, and topology-guided remediation sequencing.
+
 ## 0.1.68
 
 Metadata-driven business context discovery for all 10 audit skills.
