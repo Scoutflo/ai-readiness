@@ -435,8 +435,7 @@ record_result ""
 record_result "Results saved to: $RESULTS_FILE"
 record_result ""
 
-# Clean up
-cd /Users/admin/ScoutfloWork/ScoutPlug/sre-toolkit
+# Clean up (already in repo root)
 
 echo ""
 echo "✅ Testing complete. Results:"
