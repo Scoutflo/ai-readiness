@@ -42,12 +42,23 @@ Never:
 - Let an audit create, modify, or delete live resources, including seemingly harmless test notifications or annotations.
 - Bypass a failing leak scan, structure/anchor check, report self-validation, or plugin validation gate.
 
+## Permanent Governance Principles (v0.1.65+)
+
+Three non-negotiable principles enforced on every skill change and release:
+
+1. **Skill Review Gate Compliance** — Every skill must pass the rubric review (docs/skill-review-rubric.md) with all Blocking parameters at PASS before shipping. Pressure scenarios (I4) are mandatory, not optional. No workarounds, no exceptions.
+
+2. **Git vs. Local Boundary** — Production code only in the public repo. Internal planning docs, governance notes, implementation guides, and working artifacts must not be committed to GitHub. Move them to memory or local-only CLAUDE.local.md instead. Customers must never see internal working notes.
+
+3. **Documentation Consolidation** — One authoritative source per concept. No duplicated docs, no parallel versions, no "docs" vs "docs-old" pattern. When consolidating, delete the stale copies and verify all backlinks point to the new location.
+
 ## Done criteria
 
 Before declaring a change complete:
 
-1. Run the three repository gates under **Commands** and resolve every failure.
-2. For audit changes, validate generated `report.md` output with `report-standard/check-report.sh` as required by the report standard.
-3. Confirm relevant pressure scenarios cover the changed behavior.
-4. Smoke-test the affected skill with `claude --plugin-dir .` when the change affects runtime behavior.
-5. Confirm user-visible changes include both the plugin version bump and `CHANGELOG.md` entry.
+1. **Governance check FIRST** — Verify Skill Review Gate Compliance (all Blocking I4 parameters PASS, pressure scenarios exist and are current), Git vs. Local Boundary (no internal artifacts committed), and Documentation Consolidation (one source of truth per concept, no duplicates).
+2. Run the three repository gates under **Commands** and resolve every failure.
+3. For audit changes, validate generated `report.md` output with `report-standard/check-report.sh` as required by the report standard.
+4. Confirm relevant pressure scenarios cover the changed behavior.
+5. Smoke-test the affected skill with `claude --plugin-dir .` when the change affects runtime behavior.
+6. Confirm user-visible changes include both the plugin version bump and `CHANGELOG.md` entry.
