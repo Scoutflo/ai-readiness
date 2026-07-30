@@ -238,6 +238,7 @@ The report's trend line renders the last five history.jsonl entries, oldest firs
 
 This section is reported and never scored, the same pattern `audit-aws` uses. It runs only when the doctor `datadog cost-permissions` row is `pass`; on `skipped` (the app key lacks `usage_read`/`billing_read`, or `datadog.cost_checks` is `false`), the section reports `excluded, reason: <the doctor reason>` and runs no partial checks. Commands in [references/datadog-checks.md](references/datadog-checks.md) section 11. Findings use the `DDOPT-NNN` prefix, always carry `points_recoverable: 0`, never appear in `score.categories` or `score.excluded`, and render under their own heading after Topology Readiness. An `estimated_monthly_cost_usd` field appears only on a finding whose number came straight from Datadog's own usage endpoint; presence facts (a top custom-metric contributor, an unused dashboard) carry no invented dollar figure.
 
+
 ## Remediation pointers
 
 No `setup-datadog` ships yet, so every finding's `remediation` field names the concrete manual fix location. When a setup skill lands, these become anchors without the finding IDs changing:

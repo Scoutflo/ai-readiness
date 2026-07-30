@@ -1,0 +1,1 @@
+$(cat /tmp/biz_context_template.md)

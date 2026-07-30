@@ -1,0 +1,1 @@
+$(cat /tmp/lib_resolver.sh)

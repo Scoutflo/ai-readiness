@@ -1,0 +1,1 @@
+$(cat /tmp/v0168_TEMPLATE.md)

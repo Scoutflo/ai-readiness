@@ -1,0 +1,1 @@
+$(cat /tmp/ci_validate-metadata-discovery.sh)

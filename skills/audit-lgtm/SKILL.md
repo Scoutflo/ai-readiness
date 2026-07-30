@@ -383,6 +383,7 @@ sends exactly one combined message.
 
 Keep `./scoutflo-audits/` out of public version control; reports describe your infrastructure.
 
+
 ## Remediation pointers
 
 Every finding's `remediation` field points at the fix, so "Next safe actions" in the report starts at row 1 with no preparation:

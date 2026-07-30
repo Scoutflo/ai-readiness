@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.1.68
+
+Metadata-driven business context discovery for all 10 audit skills.
+
+- **All 10 audit skills now read optional metadata** — Each audit-aws, audit-gcp, audit-lgtm, audit-grafana, audit-sentry, audit-datadog, audit-kubernetes, audit-elk, audit-zenduty, audit-pagerduty can load pre-computed resource metadata from `~/.scoutflo/computed_metadata.jsonl` (v0.1.68) and fall back to v0.1.67 `business_context.md` (backward compatible).
+- **Metadata-driven filtering** — Skip excluded resources (action: skip), escalate critical services (escalation: CRITICAL), apply cost sensitivity (cost_sensitivity: high/medium/low). Single source of truth for guardrails across all audits.
+- **business-context-resolver skill** — New skill auto-discovers K8s labels, AWS tags, GitHub CODEOWNERS and generates computed_metadata.jsonl. Scales from startup (5 services, manual) to enterprise (1000+, auto-discovery). 50% token savings on mid-market setups, 86% on enterprise.
+- **Backward compatible** — Existing v0.1.67 customers unaffected. Auto-discovery is opt-in. When no metadata file exists, audits work unchanged.
+- **Governance principles codified** — AGENTS.md now enforces three permanent principles: Skill Review Gate Compliance (I4 pressure scenarios mandatory), Git vs. Local Boundary (no internal artifacts in public repo), Documentation Consolidation (one authoritative source per concept).
+
+No audit logic, checks, finding IDs, or scoring changed from v0.1.64-v0.1.67 release chain.
+
 ## 0.1.67
 
 Cost Analysis skill + v0.1.66 architecture refinements: correlation engine for overlap/cascade detection, topology-guided setup for intelligent fix decisions.

@@ -1,0 +1,1 @@
+$(cat /tmp/tests_pressure-scenarios_business-context-resolver_partial-discovery-sources.md)

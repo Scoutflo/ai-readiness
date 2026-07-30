@@ -1,0 +1,1 @@
+$(cat /tmp/spec_integration.md)

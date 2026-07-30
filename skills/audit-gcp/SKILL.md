@@ -341,6 +341,7 @@ fi
 
 When invoked by `audit-all`, skip the Slack brief; the orchestrator sends exactly one combined message per run. Keep `./scoutflo-audits/` out of public version control; reports describe your infrastructure.
 
+
 ## Remediation pointers
 
 Every finding's `remediation` field points at the fix, so "Next safe actions" starts at row 1 with no preparation:

@@ -1,0 +1,1 @@
+$(cat /tmp/tests_test-v0168-metadata-discovery.sh)
