@@ -29,9 +29,6 @@ teardown() {
   yesterday=$(date -d "23 hours ago" +%Y-%m-%d)
   echo "{\"date\":\"$yesterday\",\"overall\":40,\"monthly_waste\":500}" > "$TEST_COST_HISTORY"
 
-  # No new findings (no findings.json newer than history)
-  touch -t 202607300000 "$TEST_COST_HISTORY"
-
   should_skip=$(cost_analysis_should_skip && echo "1" || echo "0")
   [ "$should_skip" = "1" ] || { echo "FAIL: Expected to skip (23h old, no new findings)"; exit 1; }
 }
