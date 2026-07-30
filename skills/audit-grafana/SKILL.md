@@ -46,6 +46,26 @@ Expected: health passes silently, then the org name and id print. A 401 means th
 
 Also run the least-privilege probe from [references/api-checks.md](references/api-checks.md#minimum-permissions). A 403 on org administration is the healthy result; a 200 becomes finding GRAF-006.
 
+## Metadata Load (v0.1.68+)
+
+This skill reads optional business context metadata to apply intelligent filtering:
+
+```bash
+METADATA="${HOME}/.scoutflo/computed_metadata.jsonl"
+CONTEXT="${HOME}/.scoutflo/business_context.md"
+LOAD_METADATA_MODE="none"
+
+if [ -f "$METADATA" ] && jq -e . "$METADATA" >/dev/null 2>&1; then
+  LOAD_METADATA_MODE="v0168"
+elif [ -f "$CONTEXT" ]; then
+  LOAD_METADATA_MODE="v0167"
+fi
+```
+
+When metadata is available: skip excluded resources, escalate critical services, apply cost sensitivity.
+See [BUSINESS-CONTEXT-INTEGRATION-v0168.md](../../docs/BUSINESS-CONTEXT-INTEGRATION-v0168.md) for patterns.
+
+
 ## Live-safety gate
 
 Before any real check, confirm what you are pointed at:

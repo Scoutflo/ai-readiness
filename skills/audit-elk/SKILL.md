@@ -49,6 +49,26 @@ Never proceed past a failed doctor check and never downgrade one into a finding.
 
 The tier is enforced by Kibana feature privileges on the key's role and cannot be introspected from the key itself; if a broader key is used the audit still runs, but record in the report that the audit credential can do more than read.
 
+## Metadata Load (v0.1.68+)
+
+This skill reads optional business context metadata to apply intelligent filtering:
+
+```bash
+METADATA="${HOME}/.scoutflo/computed_metadata.jsonl"
+CONTEXT="${HOME}/.scoutflo/business_context.md"
+LOAD_METADATA_MODE="none"
+
+if [ -f "$METADATA" ] && jq -e . "$METADATA" >/dev/null 2>&1; then
+  LOAD_METADATA_MODE="v0168"
+elif [ -f "$CONTEXT" ]; then
+  LOAD_METADATA_MODE="v0167"
+fi
+```
+
+When metadata is available: skip excluded resources, escalate critical services, apply cost sensitivity.
+See [BUSINESS-CONTEXT-INTEGRATION-v0168.md](../../docs/BUSINESS-CONTEXT-INTEGRATION-v0168.md) for patterns.
+
+
 ## Live-safety gate
 
 Print what you are pointed at and compare it to the config before the first real check:

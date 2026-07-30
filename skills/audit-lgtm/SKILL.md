@@ -68,6 +68,25 @@ kubectl --context "$KUBE_CONTEXT" auth whoami 2>/dev/null || kubectl --context "
 
 If the resolved context or API identity differs from what `toolkit.yaml` names, stop and report the mismatch. Never proceed on "probably the right cluster". Every command in this skill names its target explicitly: `kubectl --context "$KUBE_CONTEXT"`, `curl` against a URL resolved from the config.
 
+## Metadata Load (v0.1.68+)
+
+This skill reads optional business context metadata to apply intelligent filtering:
+
+```bash
+METADATA="${HOME}/.scoutflo/computed_metadata.jsonl"
+CONTEXT="${HOME}/.scoutflo/business_context.md"
+LOAD_METADATA_MODE="none"
+
+if [ -f "$METADATA" ] && jq -e '.' "$METADATA" >/dev/null 2>&1; then
+  LOAD_METADATA_MODE="v0168"
+elif [ -f "$CONTEXT" ]; then
+  LOAD_METADATA_MODE="v0167"
+fi
+```
+
+When metadata is available: skip excluded resources, escalate critical services, apply cost sensitivity.
+See [BUSINESS-CONTEXT-INTEGRATION-v0168.md](../../docs/BUSINESS-CONTEXT-INTEGRATION-v0168.md) for patterns.
+
 ## Ground rules
 
 - Config and inventory records are discovery metadata; live validation is proof. Credit nothing you did not query live this run.

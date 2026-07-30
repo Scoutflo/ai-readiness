@@ -52,6 +52,26 @@ Expect: `code` is `200` and the assertion prints `true`, followed by your org's 
 
 If the token also carries write scopes, the audit still runs, but note it in the report: the read-only tier exists so an audit can never mutate, and a scoped-down token is itself part of good posture.
 
+## Metadata Load (v0.1.68+)
+
+This skill reads optional business context metadata to apply intelligent filtering:
+
+```bash
+METADATA="${HOME}/.scoutflo/computed_metadata.jsonl"
+CONTEXT="${HOME}/.scoutflo/business_context.md"
+LOAD_METADATA_MODE="none"
+
+if [ -f "$METADATA" ] && jq -e . "$METADATA" >/dev/null 2>&1; then
+  LOAD_METADATA_MODE="v0168"
+elif [ -f "$CONTEXT" ]; then
+  LOAD_METADATA_MODE="v0167"
+fi
+```
+
+When metadata is available: skip excluded resources, escalate critical services, apply cost sensitivity.
+See [BUSINESS-CONTEXT-INTEGRATION-v0168.md](../../docs/BUSINESS-CONTEXT-INTEGRATION-v0168.md) for patterns.
+
+
 ## Live-safety gate
 
 Confirm what you are pointed at before the first real check. Compare the slug printed by the doctor gate against `sentry.org` in `~/.scoutflo/toolkit.yaml`, and confirm the org is the one you intend to audit (not a sandbox org with a similar name, not a personal org). Print the target once: `echo "target: ${API} org: ${SENTRY_ORG}"`. On any mismatch, stop and report it. Never proceed on "probably the right org".

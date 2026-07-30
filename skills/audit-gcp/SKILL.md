@@ -67,6 +67,26 @@ Two notes that live here because they bite at the gate:
 - If the audit identity holds `editor` or `owner`, the audit still runs, but record in the report that the audit credential can write; a viewer-tier identity is itself part of good posture.
 - Command surfaces move between gcloud release tracks. This skill pins REST for alert policies, notification channels, and snoozes, and GA gcloud for the rest; verify the named gcloud groups exist in your installed version before the first run (details in [references/gcp-checks.md](references/gcp-checks.md) section 1).
 
+## Metadata Load (v0.1.68+)
+
+This skill reads optional business context metadata to apply intelligent filtering:
+
+```bash
+METADATA="${HOME}/.scoutflo/computed_metadata.jsonl"
+CONTEXT="${HOME}/.scoutflo/business_context.md"
+LOAD_METADATA_MODE="none"
+
+if [ -f "$METADATA" ] && jq -e . "$METADATA" >/dev/null 2>&1; then
+  LOAD_METADATA_MODE="v0168"
+elif [ -f "$CONTEXT" ]; then
+  LOAD_METADATA_MODE="v0167"
+fi
+```
+
+When metadata is available: skip excluded resources, escalate critical services, apply cost sensitivity.
+See [BUSINESS-CONTEXT-INTEGRATION-v0168.md](../../docs/BUSINESS-CONTEXT-INTEGRATION-v0168.md) for patterns.
+
+
 ## Live-safety gate
 
 Print what you are pointed at and compare it to the config before the first real check:
