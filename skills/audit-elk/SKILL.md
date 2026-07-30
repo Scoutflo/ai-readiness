@@ -222,6 +222,24 @@ tail -1 "${TARGET_DIR}/history.jsonl" | jq -e '.run_date and (.overall >= 0)' >/
 The report's trend line renders the last five history.jsonl entries, oldest first. After the report is written, close with the run-completion message per the report standard ([report-template.md](../../report-standard/report-template.md#run-completion-message-what-the-skill-says-in-chat-when-the-run-finishes)): the one-line score headline, the top fixes by points_recoverable, the **absolute** report path, the OS-specific open command, and the leak-safe share pointer (Slack brief). Then send the Slack brief exactly as [report-template.md](../../report-standard/report-template.md) specifies: score, severity counts, top finding titles, delta line, topology readiness line, report path — titles only, never evidence values. When invoked by `audit-all`, skip the brief; the orchestrator sends exactly one combined message per run. Keep `./scoutflo-audits/` out of public version control; reports describe your alerting setup.
 
 
+## Metadata Load (v0.1.68+)
+
+This skill reads optional business context metadata to apply intelligent filtering:
+
+```bash
+METADATA="${HOME}/.scoutflo/computed_metadata.jsonl"
+CONTEXT="${HOME}/.scoutflo/business_context.md"
+LOAD_METADATA_MODE="none"
+
+if [ -f "$METADATA" ] && jq -e '.' "$METADATA" >/dev/null 2>&1; then
+  LOAD_METADATA_MODE="v0168"
+elif [ -f "$CONTEXT" ]; then
+  LOAD_METADATA_MODE="v0167"
+fi
+```
+
+When metadata is available: skip excluded resources, escalate critical services, apply cost sensitivity. See [BUSINESS-CONTEXT-INTEGRATION-v0168.md](../../docs/BUSINESS-CONTEXT-INTEGRATION-v0168.md) for patterns.
+
 ## Remediation pointers
 
 No `setup-elk` ships yet, so every finding's `remediation` field names the concrete manual fix location. When a setup skill lands, these become anchors without the finding IDs changing:

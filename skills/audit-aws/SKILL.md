@@ -379,6 +379,24 @@ fi
 When invoked by `audit-all`, skip the Slack brief; the orchestrator sends exactly one combined message per run. Keep `./scoutflo-audits/` out of public version control; reports describe your infrastructure.
 
 
+## Metadata Load (v0.1.68+)
+
+This skill reads optional business context metadata to apply intelligent filtering:
+
+```bash
+METADATA="${HOME}/.scoutflo/computed_metadata.jsonl"
+CONTEXT="${HOME}/.scoutflo/business_context.md"
+LOAD_METADATA_MODE="none"
+
+if [ -f "$METADATA" ] && jq -e '.' "$METADATA" >/dev/null 2>&1; then
+  LOAD_METADATA_MODE="v0168"
+elif [ -f "$CONTEXT" ]; then
+  LOAD_METADATA_MODE="v0167"
+fi
+```
+
+When metadata is available: skip excluded resources, escalate critical services, apply cost sensitivity. See [BUSINESS-CONTEXT-INTEGRATION-v0168.md](../../docs/BUSINESS-CONTEXT-INTEGRATION-v0168.md) for patterns.
+
 ## Remediation pointers
 
 Every reliability finding's `remediation` field points at the fix, so "Next safe actions" starts at row 1 with no preparation. Cost & Resource Optimization findings carry a remediation pointer too, but it always names a plan-only anchor: v1 never automates a resize or a deletion off a savings recommendation.
