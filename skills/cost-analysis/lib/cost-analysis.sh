@@ -326,11 +326,11 @@ cost_analysis_run() {
   mkdir -p "$report_dir"
   echo "$report" > "$report_dir/findings.json"
 
-  # Append to history (cost-analysis.jsonl)
+  # Append to history (cost-analysis.jsonl) — ONE LINE per entry
   score=$(echo "$report" | jq '.overall_score')
   waste=$(echo "$report" | jq '.summary.total_monthly_waste')
 
-  history_entry=$(jq -n \
+  history_entry=$(jq -c -n \
     --arg date "$audit_date" \
     --arg score "$score" \
     --arg waste "$waste" \
