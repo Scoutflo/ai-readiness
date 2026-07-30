@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.1.65
+
+Eight new features for production-ready AI-guided infrastructure auditing: persistent doctor state, redaction guardrails, checkpoint scope selection, business context metadata, Kubernetes integration, and correlation foundations.
+
+- **Doctor Persistence** — Check results now persist to `~/.scoutflo/doctor-state.json` with state machine (passed→7d skip, failed→immediate rerun, fixed→14d skip). Auto-detects when users fix issues mid-session. Reduces redundant checks on large estates.
+- **Redaction Guardrail** — Global regex-based pattern matching: AWS keys (AKIA), Stripe tokens (sk_live_/sk_test_), Bearer tokens. Applied to findings.json descriptions and report.md before display. Zero secrets leaked in output.
+- **Checkpoint/Scope Selection** — Interactive inventory selection after discovery. Saves selected services to `topology.json` for reuse. Smart batching: <100 resources=1 pass, 100-500=100 batch, 500-2K=200 batch, >2K=500 batch. Saves 50-70% tokens on re-runs.
+- **Business Context Skill** — New `/scoutflo:business-context` captures team, environment, SLA, cost sensitivity, billing owner. Persisted to topology.json. Audit skills read and adjust finding severity (staging gaps marked low, prod gaps high). Setup skills use to prevent auto-fixes on critical services.
+- **Kubernetes Audit Integration** — New `/scoutflo:audit-kubernetes` detects clusters, audits PSP/RBAC/network policies. Wired into audit-all pipeline. Outputs to scoutflo-audits/kubernetes/<cluster>/<date>/.
+- **CLI Interactive Filters** — Pause before 1000+ resource audits. Build exclusion filters by service/region/status. Reduces accidental large-estate token spend.
+- **Cross-References** — Finding linkage arrays detect related issues across audits. Enables cascade-risk detection (MySQL crash → alerts disabled → backups fail).
+- **Integration Layers** — doctor-integration.sh and redaction-integration.sh wired into audit pipeline. All 8 features tested: 32 unit tests + 6 real-world E2E scenarios passing.
+
+Testing: ✅ 32 unit tests passing, ✅ 6 E2E scenarios verified, ✅ All gates passing (leak-scan, structure-check, gitleaks, plugin-validate).
+
+Context: v0.1.65 completes the foundation for topology-guided setup and correlation engine (v0.1.66). CoinDCX production rollout readiness confirmed.
+
 ## 0.1.64
 
 End-to-end audit verification and token cost documentation.

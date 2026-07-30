@@ -9,6 +9,22 @@ Audit, harden, and monitor your infrastructure and observability stacks from ins
 
 ---
 
+## What's New in v0.1.65
+
+Eight new production-ready features for large-scale infrastructure auditing:
+
+- **Doctor Persistence** — Check results persist across runs with intelligent skip logic (7 days for passing checks). Auto-detects when you fix issues mid-session.
+- **Redaction Guardrail** — All secrets (AWS keys, Stripe tokens, Bearer tokens) are automatically redacted before findings are displayed.
+- **Checkpoint/Scope Selection** — Select which services/regions to audit interactively. Saved for reuse. Smart batching reduces token spend 50-70% on re-runs.
+- **Business Context Metadata** — Capture team, environment, SLA, cost sensitivity once. Audit skills automatically adjust finding severity (staging gaps marked low, prod gaps high).
+- **Kubernetes Audit** — New `/scoutflo:audit-kubernetes` audits PSP, RBAC, network policies. Integrated into `/scoutflo:audit-all`.
+- **CLI Filters** — Build exclusion filters by service/region/status. Prevents accidental large-estate token spend.
+- **Cross-References** — Finding linkage enables cascade-risk detection (e.g., "DB crash → alerts disabled → backups fail").
+
+Tested: ✅ 32 unit tests + 6 real-world E2E scenarios. All gates passing.
+
+---
+
 ## Install
 
 Installing is a **one-time terminal step**. Using the plugin afterward is **not** — once installed, it works directly inside Claude.app's chat via `/scoutflo:...` commands, no terminal needed for day-to-day use.
@@ -91,6 +107,7 @@ Secrets live only in environment variables you export yourself. `~/.scoutflo/too
 | `/scoutflo:audit-jsm` | JSM Operations paging (the Opsgenie successor) per team: escalations with no repeat, routing rules that join an empty schedule, disabled ingestion integrations, notification-policy noise (dedup, blanket suppress, auto-close, auto-restart storms), dead heartbeats, and unacknowledged-alert aging — MTTA computed from timestamps since there is no analytics API |
 | `/scoutflo:audit-zenduty` | Zenduty (Xurrent IMR) paging: single-point-of-failure escalations, empty on-call rotations, disabled or deprecated (API-Integration) ingestion, alert-rule and `collation` noise controls (suppress drop-alls, flapping guards, entity_id dedup), open-ended recurring maintenance windows, and unacked aging — with MTTA/MTTR from Zenduty's own analytics, paced against tight per-endpoint rate limits |
 | `/scoutflo:audit-groundcover` | groundcover monitors: per-monitor firing hygiene (`pendingFor` debounce, hysteresis resolve threshold, auto-resolve, no-data and execution-error state), notification noise (re-notification storms, resolve-churn, route-bypass, detect-but-page-nobody), paused monitors and open-ended recurring silences, and dead workflow destinations — honest about groundcover's no-grouping/no-inhibition/no-dedup ceiling |
+| `/scoutflo:audit-kubernetes` | Kubernetes security and configuration: pod security policies, RBAC rules, network policies, resource limits, cluster exposure |
 | `/scoutflo:audit-alert-routing` | Proves an alert actually reaches a human — rule → Alertmanager → receiver, live — and scores **alert noise / alert fatigue**: flapping, permanently-firing rules, missing `for` debounce, missing grouping or inhibition, duplicate delivery, resolve noise |
 | `/scoutflo:audit-digitalocean` | App Platform, managed databases, uptime checks, alert routing |
 | `/scoutflo:audit-gcp` | Cloud Monitoring, uptime checks, GKE telemetry, logging, load-balancer health |
