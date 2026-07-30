@@ -37,7 +37,7 @@ This file contains:
 - **Stage:** prod
 - **Region Strategy:** Multi-region (us-west-2 primary, eu-central-1 secondary)
 - **Risk Level:** High (customer-facing services)
-- **Approval Gate:** All changes require ops@company.com approval
+- **Approval Gate:** All changes require ops team approval
 
 ## SLAs / SLOs
 
@@ -86,17 +86,17 @@ Staging equivalents (`payment-svc-staging`, etc) require team notification only.
 
 These operations REQUIRE escalation to ops team:
 
-1. **Terminate EC2 instances in production** → Approval from ops-manager@company.com
+1. **Terminate EC2 instances in production** → Approval from ops manager
 2. **Delete RDS snapshots** → Requires 7-day audit trail check first
-3. **Remove Security Group ingress rules** → Requires network-team@company.com approval
-4. **Modify IAM roles on prod services** → Requires security-team@company.com approval
+3. **Remove Security Group ingress rules** → Requires network team approval
+4. **Modify IAM roles on prod services** → Requires security team approval
 5. **Auto-fix alerts without dry-run** → Requires dry-run output review + approval
 
 ## Token Consumption Rules
 
 - **Max per audit cycle:** 50K tokens/week for unchanged estates
 - **Threshold:** If approaching 50K, audit skips non-critical services and focuses on critical-services-only
-- **Escalation:** Runs >75K tokens/week require explanation email to data-eng@company.com
+- **Escalation:** Runs >75K tokens/week require escalation
 
 ## Audit Strategy
 
@@ -121,7 +121,7 @@ These operations REQUIRE escalation to ops team:
 
 - **Success:** Silent (no notification)
 - **Skip (unchanged):** Silent
-- **New findings in prod:** Slack #infrastructure + email ops@company.com
+- **New findings in prod:** Slack notification + team email
 - **Critical service findings:** PagerDuty alert + ops approval gate
 - **Deprecated service findings:** Log only (no notification)
 
@@ -129,7 +129,7 @@ These operations REQUIRE escalation to ops team:
 
 ### Payment Service Outage Procedure
 If payment-svc appears in findings with critical severity:
-1. Alert ops-manager@company.com immediately
+1. Alert ops team immediately
 2. Wait for approval before any changes
 3. If fix approved: dry-run first, show output to team, require 2 approvals before apply
 4. Post-fix: run compliance audit to verify no side effects
@@ -139,14 +139,14 @@ If correlation engine detects cascade (e.g., database crash → monitoring down 
 1. Fix root cause FIRST (database issue)
 2. DO NOT independently fix cascade effects
 3. Wait 15 minutes for cascade effects to auto-resolve
-4. If effects persist after 15min, escalate to database-team@company.com
+4. If effects persist after 15min, escalate to database team
 
 ## Compliance & Audit
 
 - **Audit trail:** All changes logged to audit.log in ~/.scoutflo/
 - **Compliance:** All changes subject to monthly security review
 - **Retention:** Keep audit logs for 90 days minimum
-- **Reporting:** Monthly cost analysis sent to finance-team@company.com
+- **Reporting:** Monthly cost analysis sent to finance team
 
 ---
 

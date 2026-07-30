@@ -111,7 +111,7 @@ These require explicit approval before execution:
 
 - **Success:** [Silent / Notification]
 - **Skip (unchanged):** [Silent / Log]
-- **New findings in prod:** [Slack #channel / Email team@company.com / Both]
+- **New findings in prod:** [Slack #channel / Email team / Both]
 - **Critical service findings:** [PagerDuty alert / Email with approval gate / Ticket in Jira]
 - **Deprecated service findings:** [Ignore / Log only]
 
