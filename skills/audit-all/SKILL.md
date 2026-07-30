@@ -197,6 +197,38 @@ done
 
 Expected output: one line per completed target, for example `lgtm: 4 of 6 critical services sync-ready`. A target whose report has no readiness section (map-topology never run, or the audit skill predates the section) reads `readiness not recorded`; never guess a count.
 
+## Phase 3.5: Correlation engine (v0.1.66+)
+
+After all audits complete and all `findings.json` files are written, run the correlation engine to detect overlaps, cascades, and apply business context. This step generates `correlation.json` alongside the `all/` combined report.
+
+```bash
+set -eu
+AUDITS_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}"
+RUN_DATE="$(date -u +%F)"
+
+# Source correlation engine (if available; skip gracefully if not installed)
+CORR_LIB="${SKILLS_LIB}/correlation-engine/lib"
+if [ -d "$CORR_LIB" ]; then
+  . "${CORR_LIB}/correlation-engine.sh"
+  correlation_run "$RUN_DATE"
+  echo "[audit-all] Correlation analysis written to ${AUDITS_DIR}/${RUN_DATE}/correlation.json"
+else
+  echo "[audit-all] Correlation engine not installed (v0.1.66+); skipping"
+fi
+```
+
+**Outputs:**
+- `scoutflo-audits/<date>/correlation.json` — overlaps, cascades, deduplication counts
+- Log: "Correlation analysis written"
+
+**Use cases:**
+- Detects redundant monitoring (AWS + Grafana on same metric)
+- Finds cascade risks (database failure → monitoring disabled → incident response fails)
+- Applies business context: staging gaps marked low, critical services prioritized
+- Supports topology-guided setup: `/scoutflo:setup-aws --finding AWS-023 --topology-guided` reads correlation.json
+
+**Graceful degradation:** If correlation engine is not installed (user on v0.1.65 or earlier), the log notes this and continues — correlation is optional but recommended for large estates.
+
 ## Phase 4: Combined summary report
 
 Write `./scoutflo-audits/all/<YYYY-MM-DD>/report.md`. It summarizes and links; it does not restate evidence. Sections, in order:
