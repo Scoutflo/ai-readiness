@@ -229,6 +229,40 @@ fi
 
 **Graceful degradation:** If correlation engine is not installed (user on v0.1.65 or earlier), the log notes this and continues — correlation is optional but recommended for large estates.
 
+## Phase 3.6: Cost analysis (v0.1.67+)
+
+After correlation-engine completes, run the cost-analysis skill to aggregate cost findings from all audit skills and produce a scored 0-100 report with per-finding ROI.
+
+```bash
+set -eu
+AUDITS_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}"
+RUN_DATE="$(date -u +%F)"
+
+# Source cost-analysis engine (if available; skip gracefully if not installed)
+COST_LIB="${SKILLS_LIB}/cost-analysis/lib"
+if [ -d "$COST_LIB" ]; then
+  . "${COST_LIB}/cost-analysis.sh"
+  cost_analysis_run "$RUN_DATE"
+  echo "[audit-all] Cost analysis written to ${AUDITS_DIR}/cost-analysis/${RUN_DATE}/findings.json"
+else
+  echo "[audit-all] Cost analysis not installed (v0.1.67+); skipping"
+fi
+```
+
+**Outputs:**
+- `scoutflo-audits/cost-analysis/<date>/findings.json` — aggregated findings, scored 0-100, sorted by ROI
+- `scoutflo-audits/cost-analysis.jsonl` — appended with one history line (trend tracking)
+- Log: "Cost analysis written"
+
+**Use cases:**
+- Aggregates cost_section from all audit findings (AWS Cost Explorer, GCP Cost Management, Datadog usage, etc)
+- Deduplicates via correlation.json (if overlap detected, count once)
+- Scores cost posture 0-100 based on waste %, trend, overlaps
+- Sorts findings by ROI (if cost_sensitivity=high) or monthly impact (medium/low)
+- Skips re-analysis if <24h old + no new findings (zero extra API calls)
+
+**Graceful degradation:** If cost-analysis is not installed (v0.1.66 or earlier), the log notes this and continues — cost analysis is optional. If no audit cost_section data available, cost-analysis exits cleanly with a note.
+
 ## Phase 4: Combined summary report
 
 Write `./scoutflo-audits/all/<YYYY-MM-DD>/report.md`. It summarizes and links; it does not restate evidence. Sections, in order:
