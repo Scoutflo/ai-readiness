@@ -174,25 +174,91 @@ apply_all_integration_logic() {
   local findings_file="$1"
   local skill_name="$2"
 
+  if [ ! -f "$findings_file" ]; then
+    return 1
+  fi
+
   # Apply in order: exemptions → lifecycle → escalation → remediation → append
   local temp_file=$(mktemp)
 
-  apply_exemptions "$findings_file" > "$temp_file"
-  classify_lifecycle "$temp_file" > "$temp_file.1" && mv "$temp_file.1" "$temp_file"
-  escalate_severity "$temp_file" > "$temp_file.2" && mv "$temp_file.2" "$temp_file"
-  add_remediation "$temp_file" > "$temp_file.3" && mv "$temp_file.3" "$temp_file"
+  # Read input
+  cp "$findings_file" "$temp_file"
+
+  # Apply exemptions (C4)
+  if [ -n "${SCOUTFLO_EXEMPTIONS:-}" ]; then
+    jq --argjson exemptions "$SCOUTFLO_EXEMPTIONS" '
+      .findings |= map(
+        . as $finding |
+        if ($exemptions[] | select(.finding_id == $finding.id or .resource_id == $finding.affected_resource)) then
+          . + {status: "suppressed", suppression_reason: ($exemptions[] | select(.finding_id == $finding.id) | .reason)}
+        else
+          .
+        end
+      ) |
+      .suppressed_findings = [.findings[] | select(.status == "suppressed")] |
+      .findings |= map(select(.status != "suppressed"))
+    ' "$temp_file" > "$temp_file.1" && mv "$temp_file.1" "$temp_file"
+  fi
+
+  # Apply lifecycle (C3)
+  jq '
+    .findings |= map(. + {lifecycle: "new"})
+  ' "$temp_file" > "$temp_file.2" && mv "$temp_file.2" "$temp_file"
+
+  # Escalate severity (B)
+  if [ -n "${SCOUTFLO_BUSINESS_CONTEXT:-}" ]; then
+    jq --argjson context "$SCOUTFLO_BUSINESS_CONTEXT" '
+      .findings |= map(
+        . as $finding |
+        if ($context.critical_services[]? | select(. == $finding.affected_resource)) then
+          .severity = "critical" | .escalation_reason = "Resource in critical services list"
+        else
+          .
+        end
+      )
+    ' "$temp_file" > "$temp_file.3" && mv "$temp_file.3" "$temp_file"
+  fi
+
+  # Add remediation (G3)
+  if [ -f "${PROJECT_ROOT:-$(pwd)}/docs/finding-remediation-map.json" ]; then
+    local remediation_map=$(cat "${PROJECT_ROOT:-$(pwd)}/docs/finding-remediation-map.json" | jq '.mappings // {}')
+    jq --argjson map "$remediation_map" '
+      .findings |= map(
+        . as $finding |
+        if $map[$finding.id] then
+          . + {
+            next_safe_action: $map[$finding.id].setup_skill,
+            remediation_anchor: $map[$finding.id].anchor,
+            remediation_category: $map[$finding.id].category
+          }
+        else
+          .
+        end
+      )
+    ' "$temp_file" > "$temp_file.4" && mv "$temp_file.4" "$temp_file"
+  fi
 
   # Count findings
   local finding_count=$(jq '.findings | length' "$temp_file" 2>/dev/null || echo 0)
 
-  # Append to shared log
-  append_to_shared_log "$temp_file" "$skill_name"
+  # Append to shared log (C1 + data)
+  if [ -n "${SCOUTFLO_FINDINGS_LOG:-}" ]; then
+    jq -c '.findings[]' "$temp_file" | while read -r finding; do
+      echo "$finding" | jq '. + {
+        source_skill: "'$skill_name'",
+        audit_time: "'$(date -u +%FT%T%Z)'",
+        session_id: "'${SCOUTFLO_SESSION_ID:-unknown}'"
+      }' >> "$SCOUTFLO_FINDINGS_LOG"
+    done
+  fi
 
   # Log to history
-  log_to_history "$skill_name" "complete" "$finding_count"
+  if [ -n "${SCOUTFLO_HISTORY_LOG:-}" ]; then
+    log_to_history "$skill_name" "complete" "$finding_count"
+  fi
 
   # Output final findings (for audit's own use)
   cat "$temp_file"
 
-  rm -f "$temp_file" "$temp_file.1" "$temp_file.2" "$temp_file.3"
+  rm -f "$temp_file" "$temp_file.1" "$temp_file.2" "$temp_file.3" "$temp_file.4"
 }
