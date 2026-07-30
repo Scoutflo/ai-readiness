@@ -65,37 +65,6 @@ The optional cost-permission probe (`compute-optimizer get-enrollment-status`) i
 
 Troubleshooting, not a rule: if `aws` times out while `curl` to public sites works, retry the same command once with proxy variables cleared (`env -u HTTPS_PROXY -u https_proxy aws sts get-caller-identity`) before concluding permissions are broken.
 
-## Metadata Load (v0.1.68+)
-
-This skill reads optional business context metadata to apply intelligent filtering:
-
-```bash
-METADATA="${HOME}/.scoutflo/computed_metadata.jsonl"
-CONTEXT="${HOME}/.scoutflo/business_context.md"
-LOAD_METADATA_MODE="none"
-
-# Try v0.1.68 metadata first
-if [ -f "$METADATA" ] && jq -e '.' "$METADATA" >/dev/null 2>&1; then
-  LOAD_METADATA_MODE="v0168"
-# Fallback to v0.1.67 business_context
-elif [ -f "$CONTEXT" ]; then
-  LOAD_METADATA_MODE="v0167"
-fi
-
-case "$LOAD_METADATA_MODE" in
-  v0168) echo "✓ v0.1.68 metadata loaded ($(jq -s 'length' "$METADATA") resources)" ;;
-  v0167) echo "✓ v0.1.67 business_context loaded (fallback)" ;;
-  none)  echo "✓ No business context configured" ;;
-esac
-```
-
-When metadata is available:
-- **Skip excluded resources** — Resources with `action: skip` are excluded from scoring
-- **Escalate critical services** — Services with `escalation: CRITICAL` get higher severity findings
-- **Apply cost sensitivity** — Cost section prioritizes high-cost findings when `cost_sensitivity: high`
-
-See [BUSINESS-CONTEXT-INTEGRATION-v0168.md](../../docs/BUSINESS-CONTEXT-INTEGRATION-v0168.md) for integration patterns.
-
 ## Live-safety gate
 
 Print what you are pointed at and compare it to the config before the first real check, mirroring the GCP project-ID gate exactly, adapted to an account ID and ARN:
