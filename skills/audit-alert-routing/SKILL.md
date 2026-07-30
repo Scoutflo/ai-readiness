@@ -381,6 +381,22 @@ Every finding's `remediation` field points at the fix, so "Next safe actions" in
 | ALR-017: duplicate routes, split-brain dedup | `setup-lgtm#add-severity-routes-and-inhibition` for `continue` fan-out; fix HA clustering through your Alertmanager deployment |
 | ALR-018: resolve-noise on paging receivers | `setup-lgtm#fix-default-receiver` to set `send_resolved: false` on high-volume paging receivers |
 
+## v0.1.69 Smart Auto Integration (v0.1.69+)
+
+This skill is wired into the automatic integration pipeline. When run via `/scoutflo:audit-all`:
+
+- Reads shared state: exemptions, business_context, metadata, topology (via SCOUTFLO_* env vars from Phase 0)
+- Applies exemption filters (C4: suppress excluded resources)
+- Classifies lifecycle (C3: new/unchanged/regressed/resolved)
+- Escalates critical service severity (B: bump for CRITICAL_SERVICES)
+- Adds remediation links (G3: finding → setup-SKILL#anchor)
+- Appends findings to shared log (not individual findings.json)
+- Logs completion to history ledger (C1)
+
+For details, see [Smart Auto Integration Guide](docs/smart-auto-integration-guide.md).
+
+Standalone behavior (direct invocation) is unchanged: local findings.json, no shared state, no integration layers.
+
 ## Common Failure Modes
 
 All windows and thresholds named in this skill (`RECENT_WINDOW`, `LONG_FIRING_HOURS`, `LOG_TAIL`) are example values; tune them to your alert volume before treating a miss as a failure.

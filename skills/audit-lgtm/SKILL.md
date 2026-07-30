@@ -470,6 +470,22 @@ Every finding's `remediation` field points at the fix, so "Next safe actions" in
 | Broken dashboards, dead datasources, dishonest panels | `/scoutflo:setup-grafana` |
 | Single-replica storage, retention, backups, exposure, network policies | `setup-lgtm#set-retention`, `setup-lgtm#enable-ha`, `setup-lgtm#lock-down-exposure`, `setup-lgtm#add-network-policies`, `setup-lgtm#add-disruption-budgets` |
 
+## v0.1.69 Smart Auto Integration (v0.1.69+)
+
+This skill is wired into the automatic integration pipeline. When run via `/scoutflo:audit-all`:
+
+- Reads shared state: exemptions, business_context, metadata, topology (via SCOUTFLO_* env vars from Phase 0)
+- Applies exemption filters (C4: suppress excluded resources)
+- Classifies lifecycle (C3: new/unchanged/regressed/resolved)
+- Escalates critical service severity (B: bump for CRITICAL_SERVICES)
+- Adds remediation links (G3: finding → setup-SKILL#anchor)
+- Appends findings to shared log (not individual findings.json)
+- Logs completion to history ledger (C1)
+
+For details, see [Smart Auto Integration Guide](docs/smart-auto-integration-guide.md).
+
+Standalone behavior (direct invocation) is unchanged: local findings.json, no shared state, no integration layers.
+
 ## Common Failure Modes
 
 All thresholds and time windows named in the checks (`RECENT_WINDOW`, lookbacks, tolerances) are example values; tune them to your traffic and retention before treating a miss as a failure.

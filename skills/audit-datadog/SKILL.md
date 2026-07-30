@@ -323,6 +323,22 @@ No `setup-datadog` ships yet, so every finding's `remediation` field names the c
 | Custom-metric or dashboard cost (DDOPT-NNN) | Metrics Summary and Dashboard list — trim high-cardinality custom metrics and unused dashboards |
 | Topology readiness gaps with no finding | `/scoutflo:map-topology` |
 
+## v0.1.69 Smart Auto Integration (v0.1.69+)
+
+This skill is wired into the automatic integration pipeline. When run via `/scoutflo:audit-all`:
+
+- Reads shared state: exemptions, business_context, metadata, topology (via SCOUTFLO_* env vars from Phase 0)
+- Applies exemption filters (C4: suppress excluded resources)
+- Classifies lifecycle (C3: new/unchanged/regressed/resolved)
+- Escalates critical service severity (B: bump for CRITICAL_SERVICES)
+- Adds remediation links (G3: finding → setup-SKILL#anchor)
+- Appends findings to shared log (not individual findings.json)
+- Logs completion to history ledger (C1)
+
+For details, see [Smart Auto Integration Guide](docs/smart-auto-integration-guide.md).
+
+Standalone behavior (direct invocation) is unchanged: local findings.json, no shared state, no integration layers.
+
 ## Common Failure Modes
 
 All thresholds and windows named in the checks are example values; tune them to your workloads before treating a miss as a failure.
