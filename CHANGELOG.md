@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.1.67
+
+Cost Analysis skill + v0.1.66 architecture refinements: correlation engine for overlap/cascade detection, topology-guided setup for intelligent fix decisions.
+
+- **Cost Analysis Skill** — New `/scoutflo:cost-analysis` aggregates cost_section from all audit skills (AWS Cost Explorer, GCP Cost Management, Datadog usage, etc). Zero extra API calls—reads existing audit findings.json. Deduplicates via correlation.json, scores 0-100 based on waste% + trend + overlaps. Per-finding ROI calculation (annual savings). Sorted by business context (cost_sensitivity high=ROI, low=impact). History-driven skip logic: skips if <24h old + no new findings, saves ~$0.10/week on large estates. Wired into audit-all Phase 3.6.
+- **Correlation Engine** — New `/scoutflo:correlation-engine` detects: (a) coverage overlaps (AWS CloudWatch + Grafana alert same metric = redundant), (b) cascade risks (MySQL crash → monitoring disabled → incident response fails), (c) applies business context (staging gaps intentional, production gaps critical). Outputs correlation.json with overlap IDs, cascade chains, dedup counts. Wired into audit-all Phase 3.5.
+- **Topology-Guided Setup** — New integration layer (not a user-facing skill) makes setup-* skills smart: reads topology.json + correlation.json to avoid cascading failures, skip redundant fixes, prioritize root causes. Decision types: OVERLAP_DETECTED (skip or dedup), CASCADE_ROOT (fix first), CASCADE_IMPACT (wait for root), CRITICAL_SERVICE (require approval), STANDARD (proceed). Token savings: 20-30% by skipping cascade-impacted findings.
+- **Cost-Analysis Architecture Spec** — Documented two-layer cost system: Layer 1 (individual audits' cost_section), Layer 2 (master cost-analysis aggregation). Deduplication logic, skip logic algorithm, scoring formula, history ledger pattern. Attached as docs/specs/cost-analysis-architecture.md.
+
+Testing: ✅ 9 unit tests for cost-analysis (skip logic, aggregation, dedup, scoring, history), ✅ 7 tests for topology-guided setup (overlap, cascades, criticality, business context), ✅ All gates passing.
+
+Context: v0.1.67 completes the correlation and topology-guided workflows promised for v0.1.66. Cost analysis enables ROI-driven remediation for large estates (CoinDCX: 1180 EC2 + 77 RDS → ~$500/mo identifiable waste, scored analysis enables prioritization).
+
+## 0.1.66
+
+Correlation engine and topology-guided setup foundations.
+
+- **Correlation Engine** — Detects overlaps (redundant monitoring) and cascades (dependency chains). Applies business context. Outputs correlation.json for downstream use (cost-analysis, topology-guided setup).
+- **Topology-Guided Setup** — Integration layer for setup skills to make decisions based on topology + correlation. Prevents cascade failures, skips redundant fixes, prioritizes root causes.
+
 ## 0.1.65
 
 Eight new features for production-ready AI-guided infrastructure auditing: persistent doctor state, redaction guardrails, checkpoint scope selection, business context metadata, Kubernetes integration, and correlation foundations.
