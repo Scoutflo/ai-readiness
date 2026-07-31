@@ -528,22 +528,6 @@ fi
 When metadata is available: skip excluded resources, escalate critical services, apply cost sensitivity. See [BUSINESS-CONTEXT-INTEGRATION-v0168.md](../../docs/BUSINESS-CONTEXT-INTEGRATION-v0168.md) for patterns.
 
 
-## v0.1.69 Smart Auto Integration (v0.1.69+)
-
-This skill is wired into the automatic integration pipeline. When run via `/scoutflo:audit-all`:
-
-- Reads shared state: exemptions, business_context, metadata, topology (via SCOUTFLO_* env vars from Phase 0)
-- Applies exemption filters (C4: suppress excluded resources)
-- Classifies lifecycle (C3: new/unchanged/regressed/resolved)
-- Escalates critical service severity (B: bump for CRITICAL_SERVICES)
-- Adds remediation links (G3: finding → setup-SKILL#anchor)
-- Appends findings to shared log (not individual findings.json)
-- Logs completion to history ledger (C1)
-
-For details, see [Smart Auto Integration Guide](docs/smart-auto-integration-guide.md).
-
-Standalone behavior (direct invocation) is unchanged: local findings.json, no shared state, no integration layers.
-
 ## Common Failure Modes
 
 | Failure | Prevention |

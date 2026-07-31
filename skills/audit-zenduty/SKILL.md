@@ -264,31 +264,6 @@ fi
 
 When metadata is available: skip excluded resources, escalate critical services, apply cost sensitivity. See [BUSINESS-CONTEXT-INTEGRATION-v0168.md](../../docs/BUSINESS-CONTEXT-INTEGRATION-v0168.md) for patterns.
 
-## v0.1.69 Smart Auto Integration Pipeline
-
-When run as part of `audit-all` under the v0.1.69 orchestrator, this audit integrates with the shared pipeline:
-
-1. **Phase 0: Shared State Initialization** — The orchestrator sets environment variables available to all audits:
-   - `SCOUTFLO_SESSION_ID`: unique session identifier
-   - `SCOUTFLO_BUSINESS_CONTEXT`: parsed critical services, cost sensitivity, environment
-   - `SCOUTFLO_EXEMPTIONS`: exemptions from `~/.scoutflo/exemptions.yaml`
-   - `SCOUTFLO_TOPOLOGY`: service topology from `~/.scoutflo/topology.json`
-   - `SCOUTFLO_METADATA`: computed metadata from `~/.scoutflo/computed_metadata.jsonl`
-   - `SCOUTFLO_FINDINGS_LOG`: shared JSONL log for collecting all findings
-   - `SCOUTFLO_HISTORY_LOG`: shared ledger for lifecycle and trend tracking
-   - `SCOUTFLO_SHARED_STATE_DIR`: temporary state directory for this session
-
-2. **Phase 1-12: Audit with Integration** — After generating `findings.json`, apply the integration pipeline:
-   - **C4: Apply Exemptions** — Filter findings based on `exemptions.yaml`; move suppressed findings to appendix
-   - **C3: Classify Lifecycle** — Compare against previous run; mark as `new`, `unchanged`, `regressed`, `resolved`, or `improved`
-   - **B: Escalate Severity** — Bump severity to `critical` for resources in critical-services list
-   - **G3: Add Remediation Links** — Map finding IDs to setup skills with anchors
-   - **Append to Shared Log** — Write each finding to `SCOUTFLO_FINDINGS_LOG` with session metadata
-
-3. **Phase 13: Cross-audit Integration** — The orchestrator aggregates findings and emits a unified report with correlated insights across all 12 audits.
-
-When running standalone (direct `/scoutflo:audit-zenduty` invocation), the integration helpers are not sourced and the audit behaves as before: local `findings.json` and `report.md` only, no shared state. When run from `audit-all`, findings flow through the v0.1.69 pipeline and appear in the combined summary, with lifecycle, exemptions, and critical-service escalation applied automatically.
-
 ## Remediation pointers
 
 No `setup-zenduty` ships yet, so every finding's `remediation` field names the concrete manual fix location. When a setup skill lands, these become anchors without the finding IDs changing:

@@ -71,41 +71,24 @@ Auto-detects current cluster, runs checks, writes findings and report.
 
 Runs automatically if kubeconfig is available when user runs `/scoutflo:audit-all`.
 
-## Smart Auto Integration (v0.1.69+)
+## Metadata Load (v0.1.68+)
 
-This skill is automatically wired into the v0.1.69 smart auto integration pipeline when run via `/scoutflo:audit-all`:
+This skill reads optional business context metadata to apply intelligent filtering:
 
-**Shared State (Phase 0):**
-- Reads `SCOUTFLO_BUSINESS_CONTEXT` — guardrails and critical services
-- Reads `SCOUTFLO_EXEMPTIONS` — suppressed findings
-- Reads `SCOUTFLO_METADATA` — K8s labels and resource properties
-- Reads `SCOUTFLO_TOPOLOGY` — service inventory
-- Reads `SCOUTFLO_SESSION_ID` — session tracking
+```bash
+METADATA="${HOME}/.scoutflo/computed_metadata.jsonl"
+CONTEXT="${HOME}/.scoutflo/business_context.md"
+LOAD_METADATA_MODE="none"
 
-**Integration Logic (Phase 1-12):**
-1. **C4 Exemptions** — Filters findings marked as suppressed or excluded
-2. **C3 Lifecycle** — Classifies each finding as new, unchanged, or regressed
-3. **B Criticality** — Escalates severity for findings in critical services
-4. **G3 Remediation** — Adds `next_safe_action` linking to `setup-kubernetes` anchors
-5. **History Ledger** — Records completion in shared audit session log
-
-**Integration Output (Phase 13):**
-- Appends all findings to shared `SCOUTFLO_FINDINGS_LOG` (not individual findings.json)
-- Logs completion to `SCOUTFLO_HISTORY_LOG`
-- Enables correlation, redaction, cost-analysis, and topology-guided-setup to run automatically
-
-**Example:** When a finding is marked as critical service in business_context.md:
-```
-K8S-001 → severity escalated from medium to critical
-         → assigned next_safe_action: "setup-kubernetes#rbac-tighten"
-         → appended to shared log for topology-guided-setup sequencing
+if [ -f "$METADATA" ] && jq -e '.' "$METADATA" >/dev/null 2>&1; then
+  LOAD_METADATA_MODE="v0168"
+elif [ -f "$CONTEXT" ]; then
+  LOAD_METADATA_MODE="v0167"
+fi
 ```
 
-When run standalone (e.g., `/scoutflo:audit-kubernetes`):
-- Operates in v0.1.68 mode (produces individual findings.json, no shared state)
-- Integration logic is skipped (backward compatible)
+When metadata is available: skip excluded resources, escalate critical services, apply cost sensitivity. See [BUSINESS-CONTEXT-INTEGRATION-v0168.md](../../docs/BUSINESS-CONTEXT-INTEGRATION-v0168.md) for patterns.
 
-See [smart-auto-integration-guide.md](../../docs/smart-auto-integration-guide.md) for detailed pipeline documentation.
 
 ## Exit codes
 
@@ -118,5 +101,4 @@ See [smart-auto-integration-guide.md](../../docs/smart-auto-integration-guide.md
 
 ---
 
-**v0.1.65+** — Standalone audit  
-**v0.1.69+** — Automatic integration pipeline (via `/scoutflo:audit-all`)
+**v0.1.65+**

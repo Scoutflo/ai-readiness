@@ -20,30 +20,6 @@ Outputs, per the [report standard](../../report-standard/README.md):
 - One appended line in `./scoutflo-audits/digitalocean/history.jsonl`
 - One Slack brief, when `slack.webhook_env` is configured
 
-## Smart Auto Integration (v0.1.69+)
-
-This skill is wired into the automatic integration pipeline. When invoked by `/scoutflo:audit-all`, the orchestrator:
-
-1. **Phase 0:** Initializes shared state (exemptions, business_context, metadata, topology)
-2. **Phase 1-12:** Runs this audit with env vars set by the orchestrator:
-   - `SCOUTFLO_SESSION_ID` — Session identifier for finding lifecycle
-   - `SCOUTFLO_EXEMPTIONS` — Exemptions.yaml parsed into JSON
-   - `SCOUTFLO_BUSINESS_CONTEXT` — business_context.md parsed into structured data
-   - `SCOUTFLO_METADATA` — computed_metadata.jsonl for tag/label mapping
-   - `SCOUTFLO_TOPOLOGY` — topology.json or topology-export.json for service mapping
-   - `SCOUTFLO_FINDINGS_LOG` — Path to shared findings log (all audits append here)
-   - `SCOUTFLO_HISTORY_LOG` — Path to shared audit session history
-3. **Audit produces:** findings appended to shared log with integration metadata
-4. **Phase 13:** Orchestrator runs correlation, redaction, cost-analysis, topology-guided fixes, and sends combined Slack brief
-
-Integration logic applied by this skill:
-- **C4 Exemptions:** Suppressed findings moved to appendix, not scored
-- **C3 Lifecycle:** Findings marked `new`, `unchanged`, or `regressed` vs. previous run
-- **B Critical Services:** Severity escalated for services listed in `business_context.md` critical-services section
-- **G3 Remediation:** Findings link to setup-digitalocean anchors via finding-remediation-map.json
-
-For standalone runs (not invoked by audit-all), integration features are unavailable and findings.json is local only.
-
 ## Doctor gate
 
 | Integration | toolkit.yaml keys | Secret | Minimum scope | Tier |
@@ -279,9 +255,7 @@ End-to-end gate: claim end-to-end coverage only when the overall score is at or 
 Lifecycle, exemptions, and totals, before rendering the report:
 
 1. Load the previous run's `findings.json` when one exists; classify every finding per the lifecycle table in the [findings schema](../../report-standard/findings-schema.md) (`new`, `unchanged`, `regressed`; resolved IDs go to the delta, and the executive summary names regressions first).
-   - **v0.1.69+ integration:** When `SCOUTFLO_SESSION_ID` is set (running under audit-all), lifecycle is managed by the orchestrator; findings inherit session-level previous-run context.
 2. Load `./scoutflo-audits/exemptions.yaml` when present. Entries with `id`, `reason`, and `expires` all set and unexpired suppress their finding into the Suppressed appendix; malformed or expired entries are reported, never honored. Suppressed findings leave the score and severity counts; the scorecard states the suppressed count.
-   - **v0.1.69+ integration:** When `SCOUTFLO_EXEMPTIONS` is set (running under audit-all), exemptions are already parsed and available; apply them before appending to shared log.
 3. Every findings area and coverage cell carries its denominator (`passed/total`).
 
 Emit and verify:
@@ -300,26 +274,9 @@ grep -q '^# ' "$OUT/report.md" && echo "report.md present"
 sh "${CLAUDE_PLUGIN_ROOT}/report-standard/check-report.sh" "$OUT/report.md"
 ```
 
-After the report is written, handle two paths:
-
-**Standalone run (no `SCOUTFLO_FINDINGS_LOG`):** Close with the run-completion message per the report standard ([report-template.md](../../report-standard/report-template.md#run-completion-message-what-the-skill-says-in-chat-when-the-run-finishes)): the one-line score headline, the top fixes by points_recoverable, the **absolute** report path, the OS-specific open command, and the leak-safe share pointer (Slack brief). Then compute the delta against the previous run's `findings.json` (the latest two date directories; first run states "first run, no delta"), then append one line to the history ledger, replacing any line for the same date:
-
-**Orchestrated run (under audit-all with `SCOUTFLO_FINDINGS_LOG`):** Skip local reporting (audit-all sends one combined brief). Instead, append findings to shared log and log completion to history ledger:
+After the report is written, close with the run-completion message per the report standard ([report-template.md](../../report-standard/report-template.md#run-completion-message-what-the-skill-says-in-chat-when-the-run-finishes)): the one-line score headline, the top fixes by points_recoverable, the **absolute** report path, the OS-specific open command, and the leak-safe share pointer (Slack brief). Then compute the delta against the previous run's `findings.json` (the latest two date directories; first run states "first run, no delta"), then append one line to the history ledger, replacing any line for the same date:
 
 ```bash
-set -eu
-# Orchestrated: append findings to shared log with integration metadata
-if [ -n "${SCOUTFLO_FINDINGS_LOG:-}" ]; then
-  SKILL="audit-digitalocean"
-  AUDIT_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  jq -c '.findings[]' "$OUT/findings.json" | while read line; do
-    echo "$line" | jq ". + {source_skill:\"$SKILL\",audit_time:\"$AUDIT_TIME\",session_id:\"${SCOUTFLO_SESSION_ID}\"}" >> "$SCOUTFLO_FINDINGS_LOG"
-  done
-  [ -n "${SCOUTFLO_HISTORY_LOG:-}" ] && echo "{\"skill\":\"$SKILL\",\"time\":$(date +%s),\"status\":\"complete\",\"findings_count\":$(jq '.findings | length' "$OUT/findings.json")}" >> "$SCOUTFLO_HISTORY_LOG"
-  exit 0   # Orchestrator handles reporting and Slack brief
-fi
-
-# Standalone path: local reporting and Slack brief
 set -eu
 TARGET_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/digitalocean"
 RUN_DATE="$(date -u +%Y-%m-%d)"
@@ -390,22 +347,6 @@ Every finding's `remediation` field points at the fix, so "Next safe actions" st
 | Secret-shaped env vars stored as plaintext | `setup-digitalocean#move-secret-env-vars` |
 | Single instance, no standby, firewall, autoscaling, DNS | `setup-digitalocean#plan-traffic-impacting-changes` (plan only) |
 | Topology readiness gaps with no finding | `/scoutflo:map-topology` |
-
-## v0.1.69 Smart Auto Integration (v0.1.69+)
-
-This skill is wired into the automatic integration pipeline. When run via `/scoutflo:audit-all`:
-
-- Reads shared state: exemptions, business_context, metadata, topology (via SCOUTFLO_* env vars from Phase 0)
-- Applies exemption filters (C4: suppress excluded resources)
-- Classifies lifecycle (C3: new/unchanged/regressed/resolved)
-- Escalates critical service severity (B: bump for CRITICAL_SERVICES)
-- Adds remediation links (G3: finding → setup-SKILL#anchor)
-- Appends findings to shared log (not individual findings.json)
-- Logs completion to history ledger (C1)
-
-For details, see [Smart Auto Integration Guide](docs/smart-auto-integration-guide.md).
-
-Standalone behavior (direct invocation) is unchanged: local findings.json, no shared state, no integration layers.
 
 ## Common Failure Modes
 

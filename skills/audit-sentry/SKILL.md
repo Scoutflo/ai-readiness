@@ -398,52 +398,6 @@ fi
 
 When metadata is available: skip excluded resources, escalate critical services, apply cost sensitivity. See [BUSINESS-CONTEXT-INTEGRATION-v0168.md](../../docs/BUSINESS-CONTEXT-INTEGRATION-v0168.md) for patterns.
 
-## v0.1.69 Smart Auto Integration Pipeline
-
-When run as part of `audit-all` under the v0.1.69 orchestrator, this audit integrates with the shared pipeline:
-
-1. **Phase 0: Shared State Initialization** — The orchestrator sets environment variables available to all audits:
-   - `SCOUTFLO_SESSION_ID`: unique session identifier
-   - `SCOUTFLO_BUSINESS_CONTEXT`: parsed critical services, cost sensitivity, environment
-   - `SCOUTFLO_EXEMPTIONS`: exemptions from `~/.scoutflo/exemptions.yaml`
-   - `SCOUTFLO_TOPOLOGY`: service topology from `~/.scoutflo/topology.json`
-   - `SCOUTFLO_METADATA`: computed metadata from `~/.scoutflo/computed_metadata.jsonl`
-   - `SCOUTFLO_FINDINGS_LOG`: shared JSONL log for collecting all findings
-   - `SCOUTFLO_HISTORY_LOG`: shared ledger for lifecycle and trend tracking
-   - `SCOUTFLO_SHARED_STATE_DIR`: temporary state directory for this session
-
-2. **Phase 1-12: Audit with Integration** — After generating `findings.json`, apply the integration pipeline (via `apply_all_integration_logic`):
-   - **C4: Apply Exemptions** (exemptions filter) — Filter findings based on `exemptions.yaml`; move suppressed findings to appendix
-   - **C3: Classify Lifecycle** (lifecycle classification) — Compare against previous run; mark as `new`, `unchanged`, `regressed`, `resolved`, or `improved`
-   - **B: Escalate Severity** (critical-service escalation) — Bump severity to `critical` for resources in critical-services list
-   - **G3: Add Remediation Links** (remediation mapping) — Map finding IDs to setup skills with anchors
-   - **Append to Shared Log** — Write each finding to `SCOUTFLO_FINDINGS_LOG` with session metadata
-
-3. **Phase 13: Integration Aggregation** — The orchestrator collects findings from all audits, deduplicates, trends, and renders a combined summary
-
-**Integration pattern in audit-sentry:**
-
-After writing `findings.json` and `report.md` per the standard process, load and call the integration helpers:
-
-```bash
-set -eu
-AUDIT_ROOT="${AUDIT_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
-INTEGRATION_HELPERS="${AUDIT_ROOT}/skills/audit-all/lib/integration-helpers.sh"
-
-# Read env vars set by Phase 0 (or use defaults if running standalone)
-SCOUTFLO_SESSION_ID="${SCOUTFLO_SESSION_ID:-}"
-SCOUTFLO_FINDINGS_LOG="${SCOUTFLO_FINDINGS_LOG:-}"
-SCOUTFLO_HISTORY_LOG="${SCOUTFLO_HISTORY_LOG:-}"
-
-# If running inside audit-all orchestration, apply integration logic
-if [ -f "$INTEGRATION_HELPERS" ] && [ -n "$SCOUTFLO_SESSION_ID" ]; then
-  source "$INTEGRATION_HELPERS"
-  apply_all_integration_logic "$OUT/findings.json" "audit-sentry"
-fi
-```
-
-When running standalone (direct `/scoutflo:audit-sentry` invocation), the integration helpers are not sourced and the audit behaves as before: local `findings.json` only, no shared state. When run from `audit-all`, findings flow through the v0.1.69 pipeline and appear in the combined summary, with lifecycle, exemptions, and critical-service escalation applied automatically.
-
 
 ## Common Failure Modes
 

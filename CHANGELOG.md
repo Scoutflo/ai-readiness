@@ -1,6 +1,23 @@
 # Changelog
 
+## 0.1.70
+
+Removes the v0.1.69 "Smart Auto Integration Pipeline" — it was never wired into `audit-all` and its libraries were defective. Every capability it claimed already ships through the v0.1.65–v0.1.68 mechanisms, which are unchanged and remain the single source of truth.
+
+- **Removed dead pipeline code** — `skills/audit-all/lib/{shared-state-init,integration-helpers,integration-pipeline}.sh` and `skills/audit-all/scripts/audit-all-v0169.sh`. Nothing invoked them: `audit-all/SKILL.md` never referenced them, and the orchestrator script attempted to execute `/scoutflo:*` slash commands from bash, which cannot work. The helper library also silently dropped every finding in its exemption filter, so wiring it up would have made every audit report zero findings.
+- **Removed the broken remediation map** — `docs/finding-remediation-map.json` used invented finding IDs (`DATADOG-*`, `GRAFANA-*`, `SENTRY-*`) that match no audit's real catalog (`DD-*`, `GRAF-*`, `SNTRY-*`), pointed at six setup skills that do not exist, and none of its 38 anchors resolved to a real heading.
+- **Reverted the v0.1.69 sections in all 12 audit SKILL.md files** — they claimed integration behavior that did not exist, three files carried duplicate sections, the shared doc links were broken, and two files gained `set -u` blocks that crash standalone runs (`audit-datadog`, `audit-sentry`). This also restores `audit-kubernetes`'s v0.1.68 Metadata Load section, which v0.1.69 had deleted.
+- **Removed assertion-free test suites** — `tests/test-v0169-smart-auto-integration.sh` and `tests/e2e-v0169-real-audit.sh` printed unconditional PASS banners (including "0 findings escalated" as a pass) and could not fail if the code under test were deleted.
+- **Removed the overclaiming docs** — `docs/smart-auto-integration-guide.md` and `docs/v0169-release-summary.md` described the unimplemented design as tested and production-ready.
+- **Removed a corrupted v0.1.68 test file** — `tests/test-v0168-metadata-discovery.sh` was committed containing only the literal unexpanded string `$(cat /tmp/...)`; it never contained a test and could never run.
+
+Where each claimed capability actually lives (unchanged, already shipped): exemptions and finding lifecycle — computed inside every audit per `report-standard/findings-schema.md`; business-context severity adjustment — each audit's Metadata Load section (v0.1.67/v0.1.68); correlation — `audit-all` Phase 3.5 (`correlation-engine`); cost analysis — `audit-all` Phase 3.6 (`cost-analysis`); redaction — the `redaction` skill's report/brief pass; remediation pointers — each report's Next safe actions section; topology sequencing — `topology-guided-setup`.
+
+No audit logic, checks, finding IDs, or scoring changed relative to v0.1.68.
+
 ## 0.1.69
+
+> **Retracted in 0.1.70.** The pipeline described below was never wired into `audit-all`, its libraries were defective, and the "Testing" line below did not reflect reality (the structure-check gate failed on this release's HEAD). See the 0.1.70 entry for what was removed and where each claimed capability actually ships. The entry is preserved unedited below for the record.
 
 Smart Auto Integration Pipeline — all 12 audits wired together with automatic correlation, lifecycle tracking, exemption filtering, and topology-guided remediation.
 
