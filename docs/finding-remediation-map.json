@@ -1,0 +1,478 @@
+{
+  "_comment": "Generated from the setup skills' own fix sections: each finding ID maps to the first fix section in its setup skill that names it. Validated by ci/remediation-map-check.sh (ID prefix must match a real audit catalog; skill dir must exist; anchor must resolve to a real heading). Regenerate when setup skills change; never hand-invent entries.",
+  "version": 1,
+  "mappings": {
+    "AWS-001": {
+      "setup_skill": "setup-aws",
+      "anchor": "add-cloudwatch-alarms"
+    },
+    "AWS-004": {
+      "setup_skill": "setup-aws",
+      "anchor": "add-cloudwatch-alarms"
+    },
+    "AWS-006": {
+      "setup_skill": "setup-aws",
+      "anchor": "add-cloudwatch-alarms"
+    },
+    "AWS-010": {
+      "setup_skill": "setup-aws",
+      "anchor": "fix-alert-routing"
+    },
+    "AWS-011": {
+      "setup_skill": "setup-aws",
+      "anchor": "fix-alert-routing"
+    },
+    "AWS-012": {
+      "setup_skill": "setup-aws",
+      "anchor": "fix-alert-routing"
+    },
+    "AWS-013": {
+      "setup_skill": "setup-aws",
+      "anchor": "prove-alert-delivery"
+    },
+    "AWS-014": {
+      "setup_skill": "setup-aws",
+      "anchor": "fix-alert-routing"
+    },
+    "AWS-020": {
+      "setup_skill": "setup-aws",
+      "anchor": "add-compute-health-alarms"
+    },
+    "AWS-021": {
+      "setup_skill": "setup-aws",
+      "anchor": "add-compute-health-alarms"
+    },
+    "AWS-023": {
+      "setup_skill": "setup-aws",
+      "anchor": "add-compute-health-alarms"
+    },
+    "AWS-026": {
+      "setup_skill": "setup-aws",
+      "anchor": "add-compute-health-alarms"
+    },
+    "AWS-030": {
+      "setup_skill": "setup-aws",
+      "anchor": "harden-managed-databases"
+    },
+    "AWS-034": {
+      "setup_skill": "setup-aws",
+      "anchor": "harden-managed-databases"
+    },
+    "AWS-040": {
+      "setup_skill": "setup-aws",
+      "anchor": "fix-uptime-coverage"
+    },
+    "AWS-041": {
+      "setup_skill": "setup-aws",
+      "anchor": "fix-uptime-coverage"
+    },
+    "AWS-043": {
+      "setup_skill": "setup-aws",
+      "anchor": "fix-uptime-coverage"
+    },
+    "AWS-050": {
+      "setup_skill": "setup-aws",
+      "anchor": "enable-account-observability"
+    },
+    "AWS-051": {
+      "setup_skill": "setup-aws",
+      "anchor": "enable-account-observability"
+    },
+    "AWS-052": {
+      "setup_skill": "setup-aws",
+      "anchor": "enable-account-observability"
+    },
+    "AWS-053": {
+      "setup_skill": "setup-aws",
+      "anchor": "enable-account-observability"
+    },
+    "AWS-054": {
+      "setup_skill": "setup-aws",
+      "anchor": "enable-account-observability"
+    },
+    "AWS-055": {
+      "setup_skill": "setup-aws",
+      "anchor": "enable-account-observability"
+    },
+    "DO-001": {
+      "setup_skill": "setup-digitalocean",
+      "anchor": "fix-alert-routing"
+    },
+    "DO-002": {
+      "setup_skill": "setup-digitalocean",
+      "anchor": "fix-alert-routing"
+    },
+    "DO-003": {
+      "setup_skill": "setup-digitalocean",
+      "anchor": "fix-alert-routing"
+    },
+    "DO-004": {
+      "setup_skill": "setup-digitalocean",
+      "anchor": "prove-alert-delivery"
+    },
+    "DO-005": {
+      "setup_skill": "setup-digitalocean",
+      "anchor": "fix-alert-routing"
+    },
+    "DO-010": {
+      "setup_skill": "setup-digitalocean",
+      "anchor": "fix-uptime-coverage"
+    },
+    "DO-015": {
+      "setup_skill": "setup-digitalocean",
+      "anchor": "fix-uptime-coverage"
+    },
+    "DO-020": {
+      "setup_skill": "setup-digitalocean",
+      "anchor": "add-app-platform-alerts"
+    },
+    "DO-025": {
+      "setup_skill": "setup-digitalocean",
+      "anchor": "add-app-platform-alerts"
+    },
+    "DO-030": {
+      "setup_skill": "setup-digitalocean",
+      "anchor": "harden-health-checks"
+    },
+    "DO-031": {
+      "setup_skill": "setup-digitalocean",
+      "anchor": "harden-health-checks"
+    },
+    "DO-032": {
+      "setup_skill": "setup-digitalocean",
+      "anchor": "plan-traffic-impacting-changes"
+    },
+    "DO-033": {
+      "setup_skill": "setup-digitalocean",
+      "anchor": "plan-traffic-impacting-changes"
+    },
+    "DO-040": {
+      "setup_skill": "setup-digitalocean",
+      "anchor": "set-database-alert-policies"
+    },
+    "DO-043": {
+      "setup_skill": "setup-digitalocean",
+      "anchor": "set-database-alert-policies"
+    },
+    "DO-044": {
+      "setup_skill": "setup-digitalocean",
+      "anchor": "plan-traffic-impacting-changes"
+    },
+    "DO-045": {
+      "setup_skill": "setup-digitalocean",
+      "anchor": "plan-traffic-impacting-changes"
+    },
+    "DO-046": {
+      "setup_skill": "setup-digitalocean",
+      "anchor": "plan-traffic-impacting-changes"
+    },
+    "DO-047": {
+      "setup_skill": "setup-digitalocean",
+      "anchor": "configure-database-logsinks"
+    },
+    "DO-048": {
+      "setup_skill": "setup-digitalocean",
+      "anchor": "set-database-alert-policies"
+    },
+    "DO-050": {
+      "setup_skill": "setup-digitalocean",
+      "anchor": "enable-app-log-forwarding"
+    },
+    "DO-052": {
+      "setup_skill": "setup-digitalocean",
+      "anchor": "enable-app-log-forwarding"
+    },
+    "DO-060": {
+      "setup_skill": "setup-digitalocean",
+      "anchor": "fix-uptime-coverage"
+    },
+    "DO-061": {
+      "setup_skill": "setup-digitalocean",
+      "anchor": "retire-stale-monitoring"
+    },
+    "DO-062": {
+      "setup_skill": "setup-digitalocean",
+      "anchor": "move-secret-env-vars"
+    },
+    "GCP-001": {
+      "setup_skill": "setup-gcp",
+      "anchor": "fix-notification-channels"
+    },
+    "GCP-002": {
+      "setup_skill": "setup-gcp",
+      "anchor": "attach-channels-to-policies"
+    },
+    "GCP-003": {
+      "setup_skill": "setup-gcp",
+      "anchor": "fix-notification-channels"
+    },
+    "GCP-004": {
+      "setup_skill": "setup-gcp",
+      "anchor": "prove-channel-delivery"
+    },
+    "GCP-005": {
+      "setup_skill": "setup-gcp",
+      "anchor": "fix-notification-channels"
+    },
+    "GCP-006": {
+      "setup_skill": "setup-gcp",
+      "anchor": "review-snoozes"
+    },
+    "GCP-010": {
+      "setup_skill": "setup-gcp",
+      "anchor": "fix-uptime-coverage"
+    },
+    "GCP-011": {
+      "setup_skill": "setup-gcp",
+      "anchor": "fix-uptime-coverage"
+    },
+    "GCP-012": {
+      "setup_skill": "setup-gcp",
+      "anchor": "fix-uptime-coverage"
+    },
+    "GCP-015": {
+      "setup_skill": "setup-gcp",
+      "anchor": "fix-uptime-coverage"
+    },
+    "GCP-020": {
+      "setup_skill": "setup-gcp",
+      "anchor": "add-vm-pressure-policies"
+    },
+    "GCP-021": {
+      "setup_skill": "setup-gcp",
+      "anchor": "gate-memory-and-disk-on-the-ops-agent"
+    },
+    "GCP-022": {
+      "setup_skill": "setup-gcp",
+      "anchor": "gate-memory-and-disk-on-the-ops-agent"
+    },
+    "GCP-023": {
+      "setup_skill": "setup-gcp",
+      "anchor": "add-vm-pressure-policies"
+    },
+    "GCP-024": {
+      "setup_skill": "setup-gcp",
+      "anchor": "add-vm-pressure-policies"
+    },
+    "GCP-030": {
+      "setup_skill": "setup-gcp",
+      "anchor": "add-gke-health-policies"
+    },
+    "GCP-031": {
+      "setup_skill": "setup-gcp",
+      "anchor": "add-gke-health-policies"
+    },
+    "GCP-032": {
+      "setup_skill": "setup-gcp",
+      "anchor": "add-gke-health-policies"
+    },
+    "GCP-033": {
+      "setup_skill": "setup-gcp",
+      "anchor": "add-gke-health-policies"
+    },
+    "GCP-040": {
+      "setup_skill": "setup-gcp",
+      "anchor": "add-lb-alert-policies"
+    },
+    "GCP-041": {
+      "setup_skill": "setup-gcp",
+      "anchor": "add-lb-alert-policies"
+    },
+    "GCP-042": {
+      "setup_skill": "setup-gcp",
+      "anchor": "add-lb-alert-policies"
+    },
+    "GCP-043": {
+      "setup_skill": "setup-gcp",
+      "anchor": "add-lb-alert-policies"
+    },
+    "GCP-050": {
+      "setup_skill": "setup-gcp",
+      "anchor": "create-logs-based-metrics"
+    },
+    "GCP-051": {
+      "setup_skill": "setup-gcp",
+      "anchor": "create-logs-based-metrics"
+    },
+    "GCP-052": {
+      "setup_skill": "setup-gcp",
+      "anchor": "create-logs-based-metrics"
+    },
+    "GCP-053": {
+      "setup_skill": "setup-gcp",
+      "anchor": "create-logs-based-metrics"
+    },
+    "GCP-060": {
+      "setup_skill": "setup-gcp",
+      "anchor": "improve-alert-documentation"
+    },
+    "GCP-061": {
+      "setup_skill": "setup-gcp",
+      "anchor": "improve-alert-documentation"
+    },
+    "GCP-062": {
+      "setup_skill": "setup-gcp",
+      "anchor": "improve-alert-documentation"
+    },
+    "GCP-070": {
+      "setup_skill": "setup-gcp",
+      "anchor": "build-dashboards"
+    },
+    "GCP-071": {
+      "setup_skill": "setup-gcp",
+      "anchor": "build-dashboards"
+    },
+    "GRAF-001": {
+      "setup_skill": "setup-grafana",
+      "anchor": "fix-sections-by-finding-family"
+    },
+    "GRAF-002": {
+      "setup_skill": "setup-grafana",
+      "anchor": "datasources"
+    },
+    "GRAF-003": {
+      "setup_skill": "setup-grafana",
+      "anchor": "datasources"
+    },
+    "GRAF-004": {
+      "setup_skill": "setup-grafana",
+      "anchor": "datasources"
+    },
+    "GRAF-005": {
+      "setup_skill": "setup-grafana",
+      "anchor": "datasources"
+    },
+    "GRAF-006": {
+      "setup_skill": "setup-grafana",
+      "anchor": "datasources"
+    },
+    "GRAF-020": {
+      "setup_skill": "setup-grafana",
+      "anchor": "fix-sections-by-finding-family"
+    },
+    "GRAF-028": {
+      "setup_skill": "setup-grafana",
+      "anchor": "dashboards"
+    },
+    "GRAF-050": {
+      "setup_skill": "setup-grafana",
+      "anchor": "fix-sections-by-finding-family"
+    },
+    "GRAF-051": {
+      "setup_skill": "setup-grafana",
+      "anchor": "alert-rules"
+    },
+    "GRAF-052": {
+      "setup_skill": "setup-grafana",
+      "anchor": "alert-rules"
+    },
+    "GRAF-053": {
+      "setup_skill": "setup-grafana",
+      "anchor": "alert-rules"
+    },
+    "GRAF-054": {
+      "setup_skill": "setup-grafana",
+      "anchor": "alert-rules"
+    },
+    "GRAF-055": {
+      "setup_skill": "setup-grafana",
+      "anchor": "test-fire-delivery"
+    },
+    "GRAF-056": {
+      "setup_skill": "setup-grafana",
+      "anchor": "notification-policies"
+    },
+    "GRAF-070": {
+      "setup_skill": "setup-grafana",
+      "anchor": "fix-sections-by-finding-family"
+    },
+    "GRAF-071": {
+      "setup_skill": "setup-grafana",
+      "anchor": "query-hygiene"
+    },
+    "GRAF-072": {
+      "setup_skill": "setup-grafana",
+      "anchor": "query-hygiene"
+    },
+    "GRAF-080": {
+      "setup_skill": "setup-grafana",
+      "anchor": "fix-sections-by-finding-family"
+    },
+    "GRAF-081": {
+      "setup_skill": "setup-grafana",
+      "anchor": "usage-cost-and-retention"
+    },
+    "GRAF-082": {
+      "setup_skill": "setup-grafana",
+      "anchor": "usage-cost-and-retention"
+    },
+    "GRAF-090": {
+      "setup_skill": "setup-grafana",
+      "anchor": "fix-sections-by-finding-family"
+    },
+    "GRAF-091": {
+      "setup_skill": "setup-grafana",
+      "anchor": "service-coverage"
+    },
+    "GRAF-092": {
+      "setup_skill": "setup-grafana",
+      "anchor": "service-coverage"
+    },
+    "SNTRY-001": {
+      "setup_skill": "setup-sentry",
+      "anchor": "alert-rule-taxonomy"
+    },
+    "SNTRY-002": {
+      "setup_skill": "setup-sentry",
+      "anchor": "privacy-gates"
+    },
+    "SNTRY-003": {
+      "setup_skill": "setup-sentry",
+      "anchor": "privacy-gates"
+    },
+    "SNTRY-004": {
+      "setup_skill": "setup-sentry",
+      "anchor": "environment-seeding"
+    },
+    "SNTRY-005": {
+      "setup_skill": "setup-sentry",
+      "anchor": "receiver-wiring"
+    },
+    "SNTRY-006": {
+      "setup_skill": "setup-sentry",
+      "anchor": "releases-and-source-maps"
+    },
+    "SNTRY-007": {
+      "setup_skill": "setup-sentry",
+      "anchor": "cron-and-uptime-monitors"
+    },
+    "SNTRY-008": {
+      "setup_skill": "setup-sentry",
+      "anchor": "privacy-gates"
+    },
+    "SNTRY-009": {
+      "setup_skill": "setup-sentry",
+      "anchor": "github-integration-and-code-mappings"
+    },
+    "SNTRY-010": {
+      "setup_skill": "setup-sentry",
+      "anchor": "quota-spike-protection-and-privacy-sensitive-ingestion"
+    },
+    "SNTRY-011": {
+      "setup_skill": "setup-sentry",
+      "anchor": "receiver-wiring"
+    },
+    "SNTRY-012": {
+      "setup_skill": "setup-sentry",
+      "anchor": "projects"
+    },
+    "SNTRY-013": {
+      "setup_skill": "setup-sentry",
+      "anchor": "alert-rule-taxonomy"
+    },
+    "SNTRY-014": {
+      "setup_skill": "setup-sentry",
+      "anchor": "alert-rule-taxonomy"
+    }
+  }
+}

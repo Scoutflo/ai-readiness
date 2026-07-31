@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.1.71
+
+Delivers the one-command orchestration outcomes v0.1.69 promised — correctly this time: SKILL.md-driven, per-audit `findings.json` canonical, every mechanism executed against mock data before shipping, and a new CI gate that makes the remediation map impossible to fabricate.
+
+- **Phase 3.5/3.6 wiring fixed** — `audit-all`'s correlation and cost-analysis blocks referenced an undefined `${SKILLS_LIB}` variable, so both phases crashed under `set -u` for every user since v0.1.66/67. They now use the standard `${CLAUDE_PLUGIN_ROOT}` convention and are proven to execute.
+- **Correlation engine rewritten to read real audit output** — the old library globbed a directory layout no audit writes (`<date>/<target>/` instead of `<target>/<date>/`), grouped by a `service` field no finding has (the schema field is `affected`), and could therefore never correlate anything. It now reads the report-standard layout, detects overlaps as the same affected service flagged by two or more targets, links cascades from database-family findings to this run's alert-delivery findings (every referenced ID is real), annotates business context without touching audit-owned severity, and writes one canonical `correlation.json`.
+- **Cost analysis rewritten to the report standard** — the old library read a `cost_section` top-level field no audit emits and scored waste against an invented "total spend = waste × 20" denominator. It now aggregates the real `area: cost-optimization` findings (`AWSOPT-*`, `DDOPT-*`), sums only provider-native `estimated_monthly_savings_usd` figures (presence facts are counted, never priced), deduplicates via `correlation.json`, and keeps the 24h skip logic (now macOS/BSD-date compatible). No 0-100 cost score: cost findings are a non-scored parallel section per the report standard.
+- **Phase 3.7: redaction pass** — `audit-all` now runs the shipped redaction library over the combined `report.md` and Slack brief before delivery (defense-in-depth; per-audit reports already follow the no-secrets writing rules).
+- **audit-kubernetes joins the run plan** — a `kubernetes` block in toolkit.yaml now queues `audit-kubernetes` in `audit-all`, completing the 13-row config→audit table.
+- **Remediation map, rebuilt from ground truth** — `docs/finding-remediation-map.json` regenerated from the setup skills' own fix sections: 118 mappings, every finding ID present in its audit's real catalog, every anchor a real heading. The combined report's Next safe actions section uses it as fallback when a finding's `remediation` field is empty; unmapped IDs get an honest "no setup pointer" note, never an invented anchor.
+- **New CI gate: `ci/remediation-map-check.sh`** (wired into structure-check) — fails the build if any map entry names a nonexistent setup skill, an unresolvable anchor, or a finding ID absent from its audit catalog. The v0.1.69 failure class (38/38 fabricated entries) is now mechanically impossible to ship.
+- **Falsifiable tests** — new `tests/test-v0171-orchestration-wiring.sh` executes correlation, cost-analysis, redaction, and the map lookup against report-standard fixtures with exact-value assertions and a negative control (a gutted library fails the suite). `skills/redaction/tests/test-redaction.sh` rewritten to test the actual library (the old one tested inline sed copies and its own fixture didn't match the pattern). Removed four bats-dependent test files that crashed on `BATS_TEST_DIRNAME` and had never run.
+- **Git vs. Local Boundary cleanup** — moved 15 internal planning/execution artifacts (EXECUTION-ROADMAP*, SSOT-*, START-HERE, TESTING-READY, wiring checklists) out of the public repo per AGENTS.md governance.
+- **Pressure scenarios** — new `audit-all/remediation-pointer-from-map-only.md`; `no-phantom-integration-pipeline.md` updated for Phase 3.7.
+
+No audit checks, finding IDs, or scoring changed. Standalone audit behavior is untouched.
+
 ## 0.1.70
 
 Removes the v0.1.69 "Smart Auto Integration Pipeline" — it was never wired into `audit-all` and its libraries were defective. Every capability it claimed already ships through the v0.1.65–v0.1.68 mechanisms, which are unchanged and remain the single source of truth.

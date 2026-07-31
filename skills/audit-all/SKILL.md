@@ -45,6 +45,7 @@ Expected output: one key per line, for example `grafana`, `sentry`, `prometheus`
 | `digitalocean` | `audit-digitalocean` |
 | `gcp` | `audit-gcp` |
 | `aws` | `audit-aws` |
+| `kubernetes` | `audit-kubernetes` |
 
 Show the plan before running anything: every queued audit in order, and every skipped audit with the reason "not configured". If `./scoutflo-audits/topology.md` is missing, note that findings will use inferred service names and suggest `/scoutflo:map-topology`, but do not block.
 
@@ -199,69 +200,96 @@ Expected output: one line per completed target, for example `lgtm: 4 of 6 critic
 
 ## Phase 3.5: Correlation engine (v0.1.66+)
 
-After all audits complete and all `findings.json` files are written, run the correlation engine to detect overlaps, cascades, and apply business context. This step generates `correlation.json` alongside the `all/` combined report.
+After all audits complete and all `findings.json` files are written, run the correlation engine to detect overlaps and cascades and annotate business context. This step generates `correlation.json` at the audits root. Correlation only reads the per-audit `findings.json` files and only writes `correlation.json`; every per-audit artifact stays canonical and untouched.
 
 ```bash
 set -eu
+# ${CLAUDE_PLUGIN_ROOT} is set by the plugin runtime. Running from a repo
+# checkout instead: export CLAUDE_PLUGIN_ROOT as the repo root first.
 AUDITS_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}"
 RUN_DATE="$(date -u +%F)"
 
-# Source correlation engine (if available; skip gracefully if not installed)
-CORR_LIB="${SKILLS_LIB}/correlation-engine/lib"
-if [ -d "$CORR_LIB" ]; then
-  . "${CORR_LIB}/correlation-engine.sh"
+CORR_LIB="${CLAUDE_PLUGIN_ROOT}/skills/correlation-engine/lib/correlation-engine.sh"
+if [ -f "$CORR_LIB" ]; then
+  . "$CORR_LIB"
   correlation_run "$RUN_DATE"
-  echo "[audit-all] Correlation analysis written to ${AUDITS_DIR}/${RUN_DATE}/correlation.json"
 else
   echo "[audit-all] Correlation engine not installed (v0.1.66+); skipping"
 fi
 ```
 
+Expected output: `[correlation] Written <audits-dir>/correlation.json` followed by a one-line count summary (`Raw findings: N | Overlaps: N | Cascades: N`). Zero completed audits means zero findings and the log states "No findings to correlate" — that is a clean skip, not an error.
+
 **Outputs:**
-- `scoutflo-audits/<date>/correlation.json` — overlaps, cascades, deduplication counts
-- Log: "Correlation analysis written"
+- `<audits-dir>/correlation.json` — overlap groups (the same affected service flagged by two or more targets) and cascade chains (a database-family finding linked to this run's alert-delivery findings). Every `finding_id` it references exists in this run's `findings.json` files; the engine never invents findings or dollar figures.
 
 **Use cases:**
-- Detects redundant monitoring (AWS + Grafana on same metric)
-- Finds cascade risks (database failure → monitoring disabled → incident response fails)
-- Applies business context: staging gaps marked low, critical services prioritized
-- Supports topology-guided setup: `/scoutflo:setup-aws --finding AWS-023 --topology-guided` reads correlation.json
+- Surfaces candidate redundant monitoring (two stacks watching the same service) for consolidation review
+- Flags cascade risk: a failing database resource paired with untested alert delivery paths
+- Feeds cost-analysis deduplication (Phase 3.6) and `topology-guided-setup` fix sequencing
 
-**Graceful degradation:** If correlation engine is not installed (user on v0.1.65 or earlier), the log notes this and continues — correlation is optional but recommended for large estates.
+**Graceful degradation:** If the correlation library is absent (user on v0.1.65 or earlier), the log notes this and continues — correlation is optional but recommended for multi-stack estates.
 
 ## Phase 3.6: Cost analysis (v0.1.67+)
 
-After correlation-engine completes, run the cost-analysis skill to aggregate cost findings from all audit skills and produce a scored 0-100 report with per-finding ROI.
+After correlation completes, run cost-analysis to aggregate every audit's cost-optimization findings (`area: cost-optimization` — `AWSOPT-*`, `DDOPT-*`) into one cross-provider report, deduplicated via `correlation.json`.
 
 ```bash
 set -eu
+# ${CLAUDE_PLUGIN_ROOT} is set by the plugin runtime. Running from a repo
+# checkout instead: export CLAUDE_PLUGIN_ROOT as the repo root first.
 AUDITS_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}"
 RUN_DATE="$(date -u +%F)"
 
-# Source cost-analysis engine (if available; skip gracefully if not installed)
-COST_LIB="${SKILLS_LIB}/cost-analysis/lib"
-if [ -d "$COST_LIB" ]; then
-  . "${COST_LIB}/cost-analysis.sh"
+COST_LIB="${CLAUDE_PLUGIN_ROOT}/skills/cost-analysis/lib/cost-analysis.sh"
+if [ -f "$COST_LIB" ]; then
+  . "$COST_LIB"
   cost_analysis_run "$RUN_DATE"
-  echo "[audit-all] Cost analysis written to ${AUDITS_DIR}/cost-analysis/${RUN_DATE}/findings.json"
 else
   echo "[audit-all] Cost analysis not installed (v0.1.67+); skipping"
 fi
 ```
 
+Expected output: `[cost-analysis] Report complete: <audits-dir>/cost-analysis/<date>/findings.json` plus a one-line totals summary, or `[cost-analysis] Skipping (analysis current)` on a re-run within 24h with no new findings, or `[cost-analysis] No cost findings available` when no audit emitted a cost-optimization section — all three are clean outcomes.
+
 **Outputs:**
-- `scoutflo-audits/cost-analysis/<date>/findings.json` — aggregated findings, scored 0-100, sorted by ROI
-- `scoutflo-audits/cost-analysis.jsonl` — appended with one history line (trend tracking)
-- Log: "Cost analysis written"
+- `<audits-dir>/cost-analysis/<date>/findings.json` — aggregated cost findings sorted with provider-native savings figures first (largest first), presence facts after
+- `<audits-dir>/cost-analysis.jsonl` — one appended history line per analyzed run
+
+**Honesty rules (same as the per-audit cost sections):** savings totals sum only `estimated_monthly_savings_usd` values the audits copied verbatim from provider-native recommendations (Compute Optimizer, Cost Explorer, Datadog usage); presence-fact findings are counted but never given an invented dollar figure; no 0-100 cost score is computed — cost findings are a non-scored parallel section per the report standard.
 
 **Use cases:**
-- Aggregates cost_section from all audit findings (AWS Cost Explorer, GCP Cost Management, Datadog usage, etc)
-- Deduplicates via correlation.json (if overlap detected, count once)
-- Scores cost posture 0-100 based on waste %, trend, overlaps
-- Sorts findings by ROI (if cost_sensitivity=high) or monthly impact (medium/low)
+- One cross-provider list of cost opportunities with real, provider-sourced savings totals
+- Deduplicates via correlation.json (overlap-flagged entries annotated, kept visible)
 - Skips re-analysis if <24h old + no new findings (zero extra API calls)
 
-**Graceful degradation:** If cost-analysis is not installed (v0.1.66 or earlier), the log notes this and continues — cost analysis is optional. If no audit cost_section data available, cost-analysis exits cleanly with a note.
+**Graceful degradation:** If the cost-analysis library is absent (v0.1.66 or earlier), the log notes this and continues — cost analysis is optional. If no audit emitted cost-optimization findings, it exits cleanly with a note.
+
+## Phase 3.7: Redaction pass (v0.1.71+)
+
+Before the combined report is finalized and any brief is assembled, run the redaction guardrail over the combined artifacts. Each audit's own report already avoids secrets by construction; this pass is defense-in-depth for the roll-up files this skill writes.
+
+```bash
+set -eu
+# ${CLAUDE_PLUGIN_ROOT} is set by the plugin runtime. Running from a repo
+# checkout instead: export CLAUDE_PLUGIN_ROOT as the repo root first.
+AUDITS_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}"
+RUN_DATE="$(date -u +%F)"
+
+RED_LIB="${CLAUDE_PLUGIN_ROOT}/skills/redaction/lib/redaction.sh"
+if [ -f "$RED_LIB" ]; then
+  . "$RED_LIB"
+  for f in "${AUDITS_DIR}/all/${RUN_DATE}/report.md" "${AUDITS_DIR}/all/${RUN_DATE}/brief.txt"; do
+    [ -f "$f" ] || continue
+    redact_file "$f"
+    echo "[redaction] pass complete: $f"
+  done
+else
+  echo "[audit-all] Redaction library not installed; skipping (reports still follow the no-secrets writing rules)"
+fi
+```
+
+Expected output: one `[redaction] pass complete:` line per existing roll-up file. Run this after Phase 4 writes `report.md` and again after the Phase 5 brief file is assembled, before the send. Redaction masks AWS access keys, Stripe keys, long Bearer tokens, and GitHub PATs in place; a clean file passes through byte-identical.
 
 ## Phase 4: Combined summary report
 
@@ -279,7 +307,7 @@ Write `./scoutflo-audits/all/<YYYY-MM-DD>/report.md`. It summarizes and links; i
 
 6. **Top findings**: the Phase 3 list with each finding's target added.
 7. **Suppressed**: the Phase 3 suppressed-findings roll-up, one line per target plus the `total suppressed across all targets` line. State "No findings suppressed via exemptions this run." when the total is `0`.
-8. **Next safe actions**: the highest-severity findings across all targets, each row pointing at its finding ID and its remediation pointer (a `setup-*` skill anchor), verification-only steps before mutating ones. No timelines, no effort estimates.
+8. **Next safe actions**: the highest-severity findings across all targets, each row pointing at its finding ID and its remediation pointer (a `setup-*` skill anchor), verification-only steps before mutating ones. No timelines, no effort estimates. When a finding's own `remediation` field is empty, look its ID up in [finding-remediation-map.json](../../docs/finding-remediation-map.json) (`.mappings["<ID>"]` → `setup_skill` + `anchor`); the map is generated from the setup skills' own fix sections and CI-validated, so every pointer resolves. An ID absent from both the finding and the map gets "no setup pointer; see the finding's recommendation" — never an invented anchor.
 
 Verify the write with an asserted command, not a glance:
 

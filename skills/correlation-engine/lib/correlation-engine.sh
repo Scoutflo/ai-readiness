@@ -1,177 +1,122 @@
 #!/bin/sh
 # correlation-engine.sh
-# Builds correlation.json after any audit(s): detects overlaps, cascades, applies context
-# Works incrementally with any audit combination (audit-all, sequential, targeted 2-3)
+# Builds correlation.json after any audit(s): detects overlaps and cascades and
+# applies business context. Works incrementally with any audit combination
+# (audit-all, sequential, or a targeted subset).
+#
+# Reads:  ${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/<target>/<date>/findings.json
+#         (the report-standard layout every audit writes)
+# Writes: ${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/correlation.json
+#         (single canonical location; cost-analysis and topology-guided-setup read it here)
 
 set -eu
 
-CORRELATION_FILE="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/correlation.json"
+AUDITS_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}"
+CORRELATION_FILE="${AUDITS_DIR}/correlation.json"
 TOPOLOGY_FILE="${TOPOLOGY_FILE:-$HOME/.scoutflo/topology.json}"
 
-# Initialize correlation.json if missing or merge with existing
-correlation_init() {
-  audit_date="$1"
-
-  if [ ! -f "$CORRELATION_FILE" ]; then
-    jq -n \
-      --arg version "1.0" \
-      --arg generated_at "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" \
-      --arg audit_date "$audit_date" \
-      '{
-        version: $version,
-        generated_at: $generated_at,
-        audit_date: $audit_date,
-        total_findings_raw: 0,
-        total_findings_deduplicated: 0,
-        total_overlaps_detected: 0,
-        total_cascades_detected: 0,
-        overlaps: [],
-        cascades: [],
-        business_context_applied: false,
-        deduplication_rules: []
-      }' > "$CORRELATION_FILE"
-  fi
-}
-
-# Scan all findings.json files and build raw findings list
+# Collect all findings for one run date across every target directory.
+# Emits a flat JSON array; each finding gains a `target` field from its file.
+# Skips the `all/` combined-report dir and the `cost-analysis/` derived dir,
+# whose findings.json files do not follow the per-audit schema.
 correlation_collect_findings() {
-  audit_date="$1"
-  audit_dir="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/$audit_date"
+  date="$1"
+  set --
+  for f in "$AUDITS_DIR"/*/"$date"/findings.json; do
+    [ -e "$f" ] || continue
+    case "$f" in
+      */all/*|*/cost-analysis/*) continue ;;
+    esac
+    set -- "$@" "$f"
+  done
 
-  [ -d "$audit_dir" ] || return 0
+  if [ "$#" -eq 0 ]; then
+    echo "[]"
+    return 0
+  fi
 
-  # Collect all findings across all audit skills
-  jq -s 'reduce .[] as $f (
-    [];
-    . + [
-      $f.findings[] |
-      . + {
-        source_file: $f.source_file,
-        skill: ($f.source_file | split("/")[0])
-      }
-    ]
-  )' $(find "$audit_dir" -name "findings.json" -exec jq '. + {source_file: "'"'"'{}'"'"'"}' {} \; 2>/dev/null | jq -s '.')
+  jq -s '[ .[] | (.target // "unknown") as $t | (.findings // [])[] | . + {target: $t} ]' "$@"
 }
 
-# Detect overlap: same service monitored by multiple skills
+# Overlap: the same affected service appears in findings from two or more
+# different targets — candidate redundant monitoring. Reads findings on stdin.
 correlation_find_overlaps() {
-  findings="$1"
-
-  echo "$findings" | jq '
-    group_by(.service // "unknown") |
-    map(
-      select(length > 1) |
-      {
-        overlap_id: ("OVL-" + (.[0].service // "unknown") + "-" + (now | floor | tostring | .[0:6])),
+  jq '
+    [ .[] | . as $f | (($f.affected // [])[]) as $svc |
+      {service: $svc, target: $f.target, id: $f.id, title: $f.title, severity: $f.severity} ]
+    | group_by(.service)
+    | map(select((map(.target) | unique | length) > 1))
+    | map({
+        overlap_id: ("OVL-" + .[0].service),
         type: "redundant_monitoring",
-        services: [.[0].service // "unknown"],
-        findings: map({
-          skill: .skill,
-          finding_id: .id,
-          title: .title,
-          severity: .severity
-        }),
-        redundancy_level: (if (map(.title) | unique | length) == length then "full" else "partial" end),
-        recommendation: "Review if both findings address the same issue"
-      }
-    )
+        service: .[0].service,
+        targets: (map(.target) | unique),
+        findings: map({target, finding_id: .id, title, severity}),
+        recommendation: ("Multiple stacks report findings against " + .[0].service + "; review whether the monitoring overlaps and consolidate the paging path")
+      })
   '
 }
 
-# Detect cascade: finding A → finding B cannot be prevented/detected
+# Cascade: a database-family finding whose failure would also degrade the
+# alerting/paging findings reported by other targets. Heuristic, evidence-
+# linked: every effect is a real finding ID from this run, never invented.
+# Reads findings on stdin.
 correlation_find_cascades() {
-  findings="$1"
-
-  # Simple cascade detection: database issues → monitoring issues → incident response issues
-  echo "$findings" | jq '
+  jq '
     . as $all |
-    [
-      # Find database findings
-      (.[] | select(.service | contains("database"))) |
-      {
-        cascade_id: ("CASC-" + (.id // "unknown")),
-        chain_length: 3,
-        root_cause: {
-          finding_id: .id,
-          title: .title,
-          service: .service,
-          impact: (.description // "Service unavailable")
-        },
-        effects: [
-          # Monitoring might be affected
-          ($all[] |
-            select(.skill | contains("grafana") or contains("datadog") or contains("prometheus")) |
-            select(.service | contains("monitoring")) |
-            {
-              step: 1,
-              finding_id: .id,
-              title: .title,
-              service: .service,
-              condition: "if root_cause_occurs"
-            }
-          ),
-          # Incident response might fail
-          ($all[] |
-            select(.skill | contains("pagerduty") or contains("zenduty")) |
-            {
-              step: 2,
-              finding_id: .id,
-              title: .title,
-              service: .service,
-              condition: "if monitoring_is_down"
-            }
-          )
-        ]
-      }
-    ] | .[]
+    [ .[]
+      | select(((((.affected // []) | join(" ")) + " " + (.title // ""))
+                | test("database|postgres|mysql|rds|cloudsql|mongo|redis"; "i")))
+      | . as $root
+      | {
+          cascade_id: ("CASC-" + $root.id),
+          root_cause: {finding_id: $root.id, title: $root.title, target: $root.target},
+          effects: [ $all[]
+            | select(.id != $root.id)
+            | select(((.area // "") + " " + (.title // ""))
+                     | test("alert|routing|paging|delivery|receiver|notification"; "i"))
+            | {finding_id: .id, title: .title, target: .target,
+               condition: "delivery of this alert path is untested if the root-cause resource fails"} ]
+        }
+      | select(.effects | length > 0)
+    ]
   '
 }
 
-# Load business context (with safe defaults)
+# Load business context (with safe defaults).
 correlation_load_context() {
   if [ -f "$TOPOLOGY_FILE" ]; then
     jq '.business_context // {
       environment: "production",
       cost_sensitivity: "medium",
-      sla: 99.9,
-      team: "platform",
       critical_dependencies: []
     }' "$TOPOLOGY_FILE"
   else
     jq -n '{
       environment: "production",
       cost_sensitivity: "medium",
-      sla: 99.9,
-      team: "platform",
       critical_dependencies: []
     }'
   fi
 }
 
-# Apply business context: adjust severity based on environment + criticality
+# Apply business context: annotate findings; never change the audit-owned
+# severity field, only add advisory annotations. Reads findings on stdin.
 correlation_apply_context() {
-  findings="$1"
-
   context=$(correlation_load_context)
   environment=$(echo "$context" | jq -r '.environment // "production"')
   critical_deps=$(echo "$context" | jq '.critical_dependencies // []')
 
-  echo "$findings" | jq \
+  jq \
     --arg env "$environment" \
     --argjson crit_deps "$critical_deps" \
     '
     map(
       . as $f |
       if ($env == "staging" and (.severity == "low" or .severity == "medium")) then
-        . + {
-          severity_adjusted: "low",
-          reason: "Staging environment: intentional gap"
-        }
-      elif (($crit_deps | index($f.service // "")) != null) then
-        . + {
-          criticality: "critical",
-          reason: "Service is business-critical"
-        }
+        . + {context_note: "staging environment: gap may be intentional"}
+      elif ((($f.affected // []) | map(. as $a | $crit_deps | index($a)) | any(. != null))) then
+        . + {context_note: "touches a business-critical dependency"}
       else
         .
       end
@@ -179,7 +124,7 @@ correlation_apply_context() {
   '
 }
 
-# Write correlation.json
+# Write correlation.json.
 correlation_save() {
   audit_date="$1"
   overlaps="$2"
@@ -189,10 +134,12 @@ correlation_save() {
   total_raw=$(echo "$findings" | jq 'length')
   total_overlaps=$(echo "$overlaps" | jq 'length')
   total_cascades=$(echo "$cascades" | jq 'length')
-  total_dedup=$((total_raw - total_overlaps / 2))  # rough estimate
+  # Each overlap group of n findings represents n-1 candidate duplicates.
+  dupes=$(echo "$overlaps" | jq '[.[] | (.findings | length) - 1] | add // 0')
+  total_dedup=$((total_raw - dupes))
 
   jq -n \
-    --arg version "1.0" \
+    --arg version "2.0" \
     --arg generated_at "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" \
     --arg audit_date "$audit_date" \
     --argjson total_raw "$total_raw" \
@@ -211,8 +158,7 @@ correlation_save() {
       total_cascades_detected: $total_cascades,
       overlaps: $overlaps,
       cascades: $cascades,
-      business_context_applied: true,
-      confidence: "95%"
+      method: "same-affected-service overlap grouping + database-to-alerting cascade heuristic; every referenced finding_id exists in this run"
     }' > "$CORRELATION_FILE"
 
   echo "[correlation] Written $CORRELATION_FILE"
@@ -222,36 +168,27 @@ correlation_save() {
 # Main entry point
 correlation_run() {
   audit_date="${1:-.}"
-
-  [ "$audit_date" = "." ] && audit_date="$(date +%Y-%m-%d)"
+  [ "$audit_date" = "." ] && audit_date="$(date -u +%Y-%m-%d)"
 
   echo "[correlation] Starting analysis for $audit_date..."
 
-  # Initialize
-  correlation_init "$audit_date"
-
-  # Collect all findings
   findings=$(correlation_collect_findings "$audit_date")
 
-  if [ -z "$findings" ] || [ "$(echo "$findings" | jq 'length')" -eq 0 ]; then
-    echo "[correlation] No findings to correlate"
+  if [ "$(echo "$findings" | jq 'length')" -eq 0 ]; then
+    echo "[correlation] No findings to correlate for $audit_date"
     return 0
   fi
 
-  # Apply context first
   findings=$(echo "$findings" | correlation_apply_context)
-
-  # Detect patterns
   overlaps=$(echo "$findings" | correlation_find_overlaps)
   cascades=$(echo "$findings" | correlation_find_cascades)
 
-  # Save
   correlation_save "$audit_date" "$overlaps" "$cascades" "$findings"
 
-  echo "[correlation] Done. Ready for topology-guided setup."
+  echo "[correlation] Done. Ready for cost-analysis and topology-guided setup."
 }
 
-# Exports for integration
+# Read helpers for integration consumers
 correlation_get_overlaps() {
   jq '.overlaps' "$CORRELATION_FILE" 2>/dev/null || echo "[]"
 }
@@ -262,5 +199,7 @@ correlation_get_cascades() {
 
 correlation_find_related() {
   finding_id="$1"
-  jq ".overlaps[] | select(.findings[].finding_id == \"$finding_id\")" "$CORRELATION_FILE" 2>/dev/null || echo "{}"
+  jq --arg id "$finding_id" \
+    '[.overlaps[] | select(.findings[].finding_id == $id)] | first // {}' \
+    "$CORRELATION_FILE" 2>/dev/null || echo "{}"
 }

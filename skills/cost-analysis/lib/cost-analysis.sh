@@ -36,7 +36,10 @@ cost_analysis_should_skip() {
   [ ! -f "$COST_HISTORY" ] && return 1  # No history = first run, DO RUN
 
   last_run=$(tail -1 "$COST_HISTORY" | jq -r '.date // "2000-01-01"')
-  last_run_epoch=$(date -d "$last_run" +%s 2>/dev/null || echo 0)
+  # GNU date first, BSD/macOS date second; unparseable = treat as stale, DO RUN
+  last_run_epoch=$(date -d "$last_run" +%s 2>/dev/null \
+    || date -j -f %Y-%m-%d "$last_run" +%s 2>/dev/null \
+    || echo 0)
   now_epoch=$(date +%s)
   hours_ago=$(( (now_epoch - last_run_epoch) / 3600 ))
 
@@ -54,40 +57,46 @@ cost_analysis_should_skip() {
   return 1  # RUN
 }
 
-# Collect cost_section from all audit reports (no API calls)
+# Collect cost-optimization findings from all audit reports (no API calls).
+# Per the report standard, cost findings live in the normal findings[] array
+# with a parallel-section area ("cost-optimization" for AWSOPT-*/DDOPT-*),
+# never in a separate top-level field. estimated_monthly_savings_usd is only
+# present when the audit copied it verbatim from a provider-native
+# recommendation; findings without it are presence facts and carry no figure.
 cost_analysis_aggregate_findings() {
   audit_date="$1"
 
-  # Scan all audit directories for findings.json with cost_section
-  all_costs=$(jq -n '[]')
-
+  set --
   for audit_dir in "$AUDITS_DIR"/*; do
     [ -d "$audit_dir" ] || continue
+    case "$audit_dir" in
+      */all|*/cost-analysis) continue ;;
+    esac
     findings_file="$audit_dir/$audit_date/findings.json"
-
     [ -e "$findings_file" ] || continue
-    target=$(jq -r '.target // "unknown"' "$findings_file")
-
-    # Extract cost_section if present
-    cost_section=$(jq '.cost_section // empty' "$findings_file")
-
-    if [ -n "$cost_section" ]; then
-      # Add source target + capture timestamp
-      cost_with_meta=$(echo "$cost_section" | jq \
-        --arg target "$target" \
-        --arg captured "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-        '. + {source_target: $target, imported_at: $captured}')
-
-      all_costs=$(echo "$all_costs" | jq \
-        --argjson cost "$cost_with_meta" \
-        '. += [$cost]')
-    fi
+    set -- "$@" "$findings_file"
   done
 
-  echo "$all_costs"
+  if [ "$#" -eq 0 ]; then
+    echo "[]"
+    return 0
+  fi
+
+  jq -s --arg captured "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '
+    [ .[] | (.target // "unknown") as $t | (.findings // [])[]
+      | select(.area == "cost-optimization")
+      | {
+          id, title,
+          source_target: $t,
+          affected: (.affected // []),
+          estimated_monthly_savings_usd: (.estimated_monthly_savings_usd // null),
+          imported_at: $captured
+        }
+    ]' "$@"
 }
 
-# Apply deduplication: check correlation.json for overlaps
+# Apply deduplication: mark cost findings whose finding ID appears in a
+# correlation.json overlap group (same service flagged by multiple targets).
 cost_analysis_deduplicate() {
   findings="$1"
 
@@ -99,189 +108,78 @@ cost_analysis_deduplicate() {
 
   correlation=$(jq '.overlaps // []' "$CORRELATION_FILE")
 
-  # Mark cost findings that overlap with other providers
   echo "$findings" | jq \
     --argjson overlaps "$correlation" \
     '
     map(
       . as $cost |
-      {
-        $cost,
-        deduplicated: (
-          $overlaps | map(
-            select(
-              .findings[] |
-              select(.finding_id == $cost.findings[].id)
-            )
-          ) | length > 0
-        ),
-        overlap_reason: (
-          ($overlaps | map(
-            select(.findings[] | select(.finding_id == $cost.findings[].id))
-          ) | first | .recommendation) // "No overlap"
-        )
-      }
-    ) |
-    map(
-      .cost as $c |
-      $c + {
-        deduplicated: .deduplicated,
-        dedup_reason: .overlap_reason
+      ([$overlaps[] | select(.findings[]?.finding_id == $cost.id)] | first) as $ovl |
+      . + {
+        deduplicated: ($ovl != null),
+        dedup_reason: ($ovl.recommendation // "No overlap")
       }
     )
     '
 }
 
-# Calculate dynamic score (0-100)
-cost_analysis_calculate_score() {
-  all_costs="$1"
-  context="$2"
-
-  # Get identifiable waste total
-  waste_total=$(echo "$all_costs" | jq '[.[].total_identifiable_waste // 0] | add')
-
-  # Estimate total cloud spend (heuristic: assume waste is 5% of total)
-  estimated_spend=$(echo "$waste_total * 20" | bc 2>/dev/null || echo 0)
-
-  # Waste percentage (capped at 100)
-  waste_pct=$(
-    if [ "$estimated_spend" -gt 0 ]; then
-      echo "scale=2; ($waste_total * 100) / $estimated_spend" | bc
-    else
-      echo "0"
-    fi | xargs printf "%.0f"
-  )
-  [ "$waste_pct" -gt 100 ] && waste_pct=100
-
-  # Count overlaps marked as deduplicated
-  dedup_count=$(echo "$all_costs" | jq '[.[] | select(.deduplicated == true)] | length')
-
-  # Count action items with <5 min fix time (heuristic: cost_section typically quick fixes)
-  action_count=$(echo "$all_costs" | jq '[.[].findings[]? | select(.monthly_cost > 50)] | length')
-  [ "$action_count" -lt 1 ] && action_count=0
-
-  # Score formula: 100 - (waste% * 0.6) - (overlaps * 10) - (missing actions * 5)
-  waste_component=$(echo "scale=0; $waste_pct * 60 / 100" | bc)
-  dedup_component=$(echo "$dedup_count * 10" | bc)
-
-  action_gap=$([ "$action_count" -lt 1 ] && echo "5" || echo "0")
-
-  score=$(echo "100 - $waste_component - $dedup_component - $action_gap" | bc)
-  [ "$score" -lt 0 ] && score=0
-  [ "$score" -gt 100 ] && score=100
-
-  echo "$score"
-}
-
-# Build cost-analysis.json report
+# Build the aggregated cost report. No score is computed: cost findings are a
+# non-scored parallel section per the report standard (scoring waste against
+# reliability creates perverse incentives, and inventing an estimated-total-
+# spend denominator would violate the no-invented-numbers rule). Savings totals
+# sum only provider-native estimated_monthly_savings_usd values; presence-fact
+# findings are counted but never given a dollar figure.
 cost_analysis_build_report() {
   audit_date="$1"
   all_costs="$2"
   context="$3"
 
-  # Calculate score
-  score=$(cost_analysis_calculate_score "$all_costs" "$context")
-
-  # Get trend from history (last 5 runs)
+  # Trend from history (last 5 runs)
   trend_array=$(
     if [ -f "$COST_HISTORY" ]; then
-      tail -5 "$COST_HISTORY" | jq -s '[.[] | {date, overall, monthly_waste, state}]'
+      tail -5 "$COST_HISTORY" | jq -s '[.[] | {date, monthly_savings_identified, state}]'
     else
       jq -n '[]'
     fi
   )
 
-  # Determine trend direction
-  trend_direction="stable"
-  if [ -f "$COST_HISTORY" ]; then
-    prev_score=$(tail -1 "$COST_HISTORY" | jq -r '.overall // 0')
-    if [ "$score" -gt "$prev_score" ]; then
-      trend_direction="improving"
-    elif [ "$score" -lt "$prev_score" ]; then
-      trend_direction="regressing"
-    fi
-  fi
-
-  # Build findings array with per-finding ROI (simplified: monthly_cost / 1 day effort)
-  findings_array=$(echo "$all_costs" | jq \
-    'map(
-      .findings[] as $f |
-      {
-        id: $f.id,
-        title: $f.title,
-        type: $f.type,
-        source: $f.source_target,
-        monthly_cost: $f.monthly_cost,
-        roi_annual: ($f.monthly_cost * 12),
-        fix_priority: (
-          if $f.monthly_cost >= 200 then "high"
-          elif $f.monthly_cost >= 50 then "medium"
-          else "low"
-          end
-        ),
-        effort_minutes: (
-          if $f.type == "stopped_instances" then 5
-          elif $f.type == "underutilized_rds" then 15
-          elif $f.type == "unused_disk_snapshots" then 3
-          else 10
-          end
-        )
-      }
-    ) |
-    sort_by(.monthly_cost) |
-    reverse
-    ')
-
-  # Sort by cost_sensitivity
   cost_sensitivity=$(echo "$context" | jq -r '.cost_sensitivity // "medium"')
 
-  sorted_findings=$(
-    if [ "$cost_sensitivity" = "high" ]; then
-      # High sensitivity: sort by ROI (annual savings)
-      echo "$findings_array" | jq 'sort_by(.roi_annual) | reverse'
-    else
-      # Low/medium sensitivity: sort by monthly impact
-      echo "$findings_array" | jq 'sort_by(.monthly_cost) | reverse'
-    fi
-  )
+  # Sort: findings with a provider-native savings figure first (largest first),
+  # presence facts after, dedup-flagged entries annotated but kept.
+  sorted_findings=$(echo "$all_costs" | jq '
+    map(. + {roi_annual: (if .estimated_monthly_savings_usd != null
+                          then .estimated_monthly_savings_usd * 12 else null end)})
+    | sort_by(.estimated_monthly_savings_usd // -1) | reverse
+  ')
 
-  # Build final report
   jq -n \
     --arg date "$audit_date" \
-    --argjson score "$score" \
     --arg env "$(echo "$context" | jq -r '.environment // "production"')" \
+    --arg sensitivity "$cost_sensitivity" \
     --argjson findings "$sorted_findings" \
     --argjson trend "$trend_array" \
-    --arg direction "$trend_direction" \
     '
     {
       audit_date: $date,
-      timestamp: now | todate,
-      overall_score: $score,
+      generated_at: (now | todate),
       environment: $env,
+      cost_sensitivity: $sensitivity,
       findings: $findings,
       summary: {
         total_findings: ($findings | length),
-        total_monthly_waste: ($findings | map(.monthly_cost) | add),
-        total_annual_impact: ($findings | map(.roi_annual) | add),
-        high_priority: ($findings | map(select(.fix_priority == "high")) | length),
-        medium_priority: ($findings | map(select(.fix_priority == "medium")) | length),
-        low_priority: ($findings | map(select(.fix_priority == "low")) | length)
+        findings_with_native_savings_figure:
+          ($findings | map(select(.estimated_monthly_savings_usd != null)) | length),
+        presence_fact_findings:
+          ($findings | map(select(.estimated_monthly_savings_usd == null)) | length),
+        monthly_savings_identified:
+          ($findings | map(.estimated_monthly_savings_usd // 0) | add),
+        annual_savings_identified:
+          ($findings | map(.roi_annual // 0) | add),
+        deduplicated_overlaps:
+          ($findings | map(select(.deduplicated == true)) | length)
       },
-      trend: {
-        last_5_runs: $trend,
-        direction: $direction,
-        momentum: (
-          if $trend | length >= 2 then
-            (($trend[-1].overall // 0) - ($trend[0].overall // 0)) |
-            if . > 0 then "+" + (. | tostring) + " improving"
-            elif . < 0 then (. | tostring) + " regressing"
-            else "stable"
-            end
-          else "insufficient_data"
-          end
-        )
-      }
+      note: "Savings totals sum only provider-native recommendation figures (Compute Optimizer, Cost Explorer, Datadog usage). Presence-fact findings carry no invented dollar value.",
+      trend: {last_5_runs: $trend}
     }
     '
 }
@@ -327,28 +225,19 @@ cost_analysis_run() {
   echo "$report" > "$report_dir/findings.json"
 
   # Append to history (cost-analysis.jsonl) — ONE LINE per entry
-  score=$(echo "$report" | jq '.overall_score')
-  waste=$(echo "$report" | jq '.summary.total_monthly_waste')
+  count=$(echo "$report" | jq '.summary.total_findings')
+  savings=$(echo "$report" | jq '.summary.monthly_savings_identified')
 
   history_entry=$(jq -c -n \
     --arg date "$audit_date" \
-    --arg score "$score" \
-    --arg waste "$waste" \
-    '{date: $date, overall: ($score | tonumber), monthly_waste: ($waste | tonumber), state: "analyzed"}')
+    --argjson count "$count" \
+    --argjson savings "$savings" \
+    '{date: $date, total_findings: $count, monthly_savings_identified: $savings, state: "analyzed"}')
 
   echo "$history_entry" >> "$COST_HISTORY"
 
   echo "[cost-analysis] Report complete: ${report_dir}/findings.json"
-  echo "[cost-analysis] Score: $score, Monthly waste: \$$waste"
+  echo "[cost-analysis] Findings: $count, provider-native monthly savings identified: \$$savings"
 
   return 0
 }
-
-# Export functions
-export -f cost_analysis_should_skip
-export -f cost_analysis_load_context
-export -f cost_analysis_aggregate_findings
-export -f cost_analysis_deduplicate
-export -f cost_analysis_calculate_score
-export -f cost_analysis_build_report
-export -f cost_analysis_run
