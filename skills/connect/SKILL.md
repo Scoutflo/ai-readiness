@@ -246,8 +246,9 @@ If the user asks to keep the config inside their project folder instead of `~/.s
 Then apply the approved blocks from Step 5:
 
 - Fill in the approved values for every integration you set up. The per-provider blocks are shown in [references/providers.md](references/providers.md).
-- Delete the blocks for integrations you do not run.
+- Delete the blocks for integrations you do not run. Deleting them is correct, not destructive: a leftover placeholder block (for example `grafana.example.com`) makes doctor probe a fake host and fail with noise, and the shape of every deleted block stays available in this plugin's template and in providers.md.
 - On a re-run, touch only the blocks for the integrations you are adding or changing; leave the rest of the file alone.
+- **Re-adding an integration that was deleted earlier:** copy its block verbatim from the provider's **Config** section in [references/providers.md](references/providers.md) (or from `${CLAUDE_PLUGIN_ROOT}/templates/toolkit.yaml.example`), then fill in the approved values. Never reconstruct a block's keys from memory — key names like `token_env` vs `api_key_env`+`app_key_env` (Datadog), `kibana_url` (ELK, not the Elasticsearch URL), `account_id` quoted (AWS), or `context` (Kubernetes) differ per provider, and an invented key silently reads as "not configured" to doctor and every audit.
 
 Confirm the file parses:
 

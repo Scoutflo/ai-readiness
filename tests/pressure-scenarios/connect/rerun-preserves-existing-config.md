@@ -22,4 +22,9 @@ toolkit config"
    the new block live.
 
 **Must not:** re-seed the file from the template over existing blocks,
-delete blocks the user did not ask to change, or skip the backup.
+delete blocks the user did not ask to change, skip the backup, or
+reconstruct the new block's key names from memory instead of copying the
+Config block from references/providers.md (or the plugin template) — the
+per-provider key shapes (`token_env` vs `api_key_env`+`app_key_env`,
+`kibana_url`, quoted `account_id`) are fixed contracts that doctor and the
+audits parse.
