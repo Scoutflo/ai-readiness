@@ -523,6 +523,63 @@ code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 \
 [ "$code" = "200" ] && echo "Groundcover PASS" || echo "FAIL: got $code (401 = bad key; 403 = key lacks Viewer access or wrong/missing X-Backend-Id)"
 ```
 
+## AWS
+
+### Config
+
+```yaml
+aws:
+  account_id: "123456789012"                # AWS account ID the audits target (one account per run)
+  region: us-east-1                         # default region; multi-region checks state their own region
+  # profile: your-aws-profile               # optional; named profile in ~/.aws/config. Omit to use the
+  #                                         # active credential chain (env vars, instance role, SSO).
+  # role_env: AWS_ROLE_ARN                  # optional; names the variable holding a role ARN to assume
+  tier: read-only                           # read-only | elevated; audits require read-only
+  # cost_checks: true                       # optional, default true; set false to skip the Cost & Resource
+  #                                         # Optimization section even when the cost permissions are present
+```
+
+The AWS CLI is a prerequisite for the AWS skills (install AWS CLI v2 from your package manager; `aws --version` is the doctor check). There is no `token_env`: auth rides the AWS credential chain, not a pasted token. `account_id` is quoted so YAML never strips a leading zero. Pick one auth path:
+
+1. **Named profile (recommended on a workstation).** Configure a profile in `~/.aws/config` (SSO or access keys) and set `aws.profile`. Every skill command passes `--profile` and `--region` explicitly, so nothing depends on ambient shell state.
+2. **Active credential chain (CI, instance roles).** Leave `profile` unset; the environment variables, instance role, or SSO session already in effect become the identity.
+3. **Assumed role.** Set `role_env: AWS_ROLE_ARN` and export that variable with the role ARN; the skills assume it on top of the active chain.
+
+### Scopes per tier
+
+| Tier | Used by | Policy |
+| --- | --- | --- |
+| Read-only | audit-aws | `cloudwatch:Describe*`/`List*`/`Get*`, `sns:List*`/`Get*`, `rds:Describe*`, `ec2:Describe*`, `ecs:Describe*`/`List*`, `eks:Describe*`/`List*`, `lambda:List*`/`Get*`, `logs:Describe*`, `route53:Get*`/`List*`, `elasticloadbalancing:Describe*`, `cloudtrail:Describe*`/`Get*`, `config:Describe*`, `xray:Get*` |
+| Read-only cost (optional) | audit-aws Cost & Resource Optimization section | add `compute-optimizer:Get*`, `ce:Get*`, `cost-optimization-hub:List*`, `support:Describe*` (Trusted Advisor needs Business or Enterprise support) |
+| Elevated | setup-aws | the read-only set plus the write actions listed in setup-aws's own doctor gate (`cloudwatch:PutMetricAlarm`, `sns:CreateTopic`/`Subscribe`, `logs:PutRetentionPolicy`, `route53:CreateHealthCheck`, `rds:ModifyDBInstance`, and their paired deletes) |
+
+The managed policy `ReadOnlyAccess` covers the read-only tier but grants far more than these audits need; a customer-managed policy with just the actions above is the least-privilege path. Never hand the audit an admin identity: the audit runs, but records that its credential can write, which is itself a posture gap.
+
+### Where to click
+
+1. Sign in to the AWS console with rights to manage IAM in the target account.
+2. IAM > Policies > Create policy: paste the read-only action set above (all with `Resource: "*"`), name it for the tier, for example `scoutflo-audit-readonly`.
+3. IAM > Users (or Roles for SSO/assume-role setups) > create or pick the audit identity > attach the policy.
+4. For workstation use, create an access key for that identity (or configure SSO) and store it as a named profile: `aws configure --profile scoutflo-audit`.
+5. For setup work, create a second identity or role with the elevated policy instead of widening the audit one, and record `tier: elevated` in the block you use for setup runs.
+
+### Export and verify
+
+```bash
+# YOU run these in your own terminal; an agent never handles the credentials.
+AWS_PROFILE_NAME="your-aws-profile"   # aws.profile; drop the --profile flags below if using the active chain
+AWS_ACCOUNT_ID="123456789012"         # aws.account_id
+AWS_REGION="us-east-1"                # aws.region
+
+aws sts get-caller-identity --profile "$AWS_PROFILE_NAME" --region "$AWS_REGION" --output json \
+  | jq -e --arg acct "$AWS_ACCOUNT_ID" '.Account == $acct'
+# Expect: exit 0 (prints `true`). A different account means the profile points at
+# the wrong account — fix that before any audit runs; doctor enforces this same match.
+
+aws cloudwatch describe-alarms --max-records 1 --profile "$AWS_PROFILE_NAME" --region "$AWS_REGION" >/dev/null \
+  && echo "AWS PASS" || echo "FAIL: cloudwatch:DescribeAlarms denied — attach the read-only policy above"
+```
+
 ## Google Cloud (GCP)
 
 ### Config

@@ -32,7 +32,23 @@ for d in "$DIR"/skills/audit-*/; do
   fi
 done
 
+# 3. Every top-level integration key in the toolkit template must have a
+#    canonical `<key>:` YAML block in connect's providers.md. This is what a
+#    session copies from when re-adding a block that was deleted earlier —
+#    without it the model reconstructs key names from memory and invents
+#    wrong ones (the CoinDCX re-add class).
+TEMPLATE="$DIR/templates/toolkit.yaml.example"
+PROVIDERS="$DIR/skills/connect/references/providers.md"
+if [ -f "$TEMPLATE" ] && [ -f "$PROVIDERS" ]; then
+  for key in $(grep '^[a-z_]*:' "$TEMPLATE" | sed 's/:.*//'); do
+    if ! grep -q "^${key}:" "$PROVIDERS"; then
+      echo "COVERAGE: template block '${key}:' has no canonical Config block in connect references/providers.md — a deleted block can't be re-added verbatim"
+      FAIL=1
+    fi
+  done
+fi
+
 if [ "$FAIL" -eq 0 ]; then
-  echo "COVERAGE-OK (every audit-* is surfaced in connect Step 1 and the start catalog)"
+  echo "COVERAGE-OK (every audit-* is surfaced in connect Step 1 and the start catalog; every template block has a canonical providers.md source)"
 fi
 exit "$FAIL"

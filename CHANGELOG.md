@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.72
+
+Fixes the config re-add gap a live customer session exposed: after connect correctly trims `toolkit.yaml` to only the integrations in use, re-adding a provider later had no stated canonical source for that provider's exact key shape, so a session could reconstruct keys from memory and invent wrong ones.
+
+- **AWS section added to connect's providers.md** — AWS was the one connectable integration with no Config block in `references/providers.md` (the template block plus a one-line row in connect's Step 2 table was all that existed). It now has the full per-provider treatment: Config YAML, auth paths (profile / credential chain / assumed role), least-privilege read-only and elevated policies, console click path, and an export-and-verify snippet whose account-match check mirrors doctor's.
+- **Step 6 re-add rule made explicit** — re-adding a previously deleted block must copy the Config block verbatim from providers.md (or the plugin's shipped template) and only then fill in values; key names are per-provider contracts (`token_env` vs `api_key_env`+`app_key_env`, `kibana_url`, quoted `account_id`, `context`) that doctor and the audits parse, and an invented key silently reads as "not configured". Also states why trimming placeholder blocks is correct (a leftover `grafana.example.com` makes doctor probe a fake host).
+- **Coverage gate extended** — `ci/coverage-check.sh` now fails if any top-level key in `templates/toolkit.yaml.example` lacks a matching canonical block in providers.md, so the re-add source can never silently drift again (negative-tested).
+- **Pressure scenario updated** — `connect/rerun-preserves-existing-config.md` now also forbids reconstructing block keys from memory.
+
+No audit logic, checks, finding IDs, or scoring changed.
+
 ## 0.1.71
 
 Delivers the one-command orchestration outcomes v0.1.69 promised — correctly this time: SKILL.md-driven, per-audit `findings.json` canonical, every mechanism executed against mock data before shipping, and a new CI gate that makes the remediation map impossible to fabricate.
