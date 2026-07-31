@@ -20,9 +20,11 @@ the v0.1.69 changelog describes."
 2. Point at where each capability the user actually wants already lives:
    exemptions and lifecycle are computed inside every audit per the findings
    schema; business-context severity adjustment is each audit's Metadata Load
-   section; correlation runs as Phase 3.5 (`correlation-engine`); cost analysis
-   as Phase 3.6 (`cost-analysis`); redaction via the `redaction` skill;
-   remediation pointers in each report's Next safe actions section.
+   section; correlation runs as Phase 3.5 (`correlation-engine` lib); cost
+   analysis as Phase 3.6 (`cost-analysis` lib); redaction of the roll-up
+   report and brief as Phase 3.7 (`redaction` lib, v0.1.71+); remediation
+   pointers in each report's Next safe actions section, backed by the
+   CI-validated `docs/finding-remediation-map.json`.
 3. Offer to run the real `audit-all` flow (Phases 1–6 as written in SKILL.md),
    which delivers those outcomes without any phantom mechanism.
 4. Each audit's own `findings.json` and `report.md` stay canonical; nothing is
