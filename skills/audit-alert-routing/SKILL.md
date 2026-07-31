@@ -344,24 +344,6 @@ Before rendering the report:
    (`passed/total checks`). The score excludes suppressed findings and
    the scorecard states the suppressed count.
 
-## Metadata Load (v0.1.68+)
-
-This skill reads optional business context metadata to apply intelligent filtering:
-
-```bash
-METADATA="${HOME}/.scoutflo/computed_metadata.jsonl"
-CONTEXT="${HOME}/.scoutflo/business_context.md"
-LOAD_METADATA_MODE="none"
-
-if [ -f "$METADATA" ] && jq -e '.' "$METADATA" >/dev/null 2>&1; then
-  LOAD_METADATA_MODE="v0168"
-elif [ -f "$CONTEXT" ]; then
-  LOAD_METADATA_MODE="v0167"
-fi
-```
-
-When metadata is available: skip excluded resources, escalate critical services, apply cost sensitivity. See [BUSINESS-CONTEXT-INTEGRATION-v0168.md](../../docs/BUSINESS-CONTEXT-INTEGRATION-v0168.md) for patterns.
-
 ## Remediation pointers
 
 Every finding's `remediation` field points at the fix, so "Next safe actions" in the report starts at row 1 with no preparation:
@@ -380,22 +362,6 @@ Every finding's `remediation` field points at the fix, so "Next safe actions" in
 | ALR-016: missing grouping or inhibition | `setup-lgtm#add-severity-routes-and-inhibition` |
 | ALR-017: duplicate routes, split-brain dedup | `setup-lgtm#add-severity-routes-and-inhibition` for `continue` fan-out; fix HA clustering through your Alertmanager deployment |
 | ALR-018: resolve-noise on paging receivers | `setup-lgtm#fix-default-receiver` to set `send_resolved: false` on high-volume paging receivers |
-
-## v0.1.69 Smart Auto Integration (v0.1.69+)
-
-This skill is wired into the automatic integration pipeline. When run via `/scoutflo:audit-all`:
-
-- Reads shared state: exemptions, business_context, metadata, topology (via SCOUTFLO_* env vars from Phase 0)
-- Applies exemption filters (C4: suppress excluded resources)
-- Classifies lifecycle (C3: new/unchanged/regressed/resolved)
-- Escalates critical service severity (B: bump for CRITICAL_SERVICES)
-- Adds remediation links (G3: finding → setup-SKILL#anchor)
-- Appends findings to shared log (not individual findings.json)
-- Logs completion to history ledger (C1)
-
-For details, see [Smart Auto Integration Guide](docs/smart-auto-integration-guide.md).
-
-Standalone behavior (direct invocation) is unchanged: local findings.json, no shared state, no integration layers.
 
 ## Common Failure Modes
 

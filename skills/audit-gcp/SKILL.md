@@ -360,53 +360,6 @@ fi
 
 When metadata is available: skip excluded resources, escalate critical services, apply cost sensitivity. See [BUSINESS-CONTEXT-INTEGRATION-v0168.md](../../docs/BUSINESS-CONTEXT-INTEGRATION-v0168.md) for patterns.
 
-## Smart Auto Integration (v0.1.69+)
-
-This skill integrates with the v0.1.69 smart auto pipeline for distributed audit orchestration. After `findings.json` is written and validated, call `apply_all_integration_logic` to apply lifecycle classification, severity escalation, exemptions, and remediation links:
-
-```bash
-set -eu
-# After Phase 11 writes findings.json and validates it successfully:
-RUN_DATE="$(date -u +%Y-%m-%d)"
-OUT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/gcp/${RUN_DATE}"
-FINDINGS="${OUT}/findings.json"
-
-# Source shared integration helpers (provided by audit-all)
-source "${CLAUDE_PLUGIN_ROOT}/skills/audit-all/lib/integration-helpers.sh"
-
-# Read shared environment variables set by audit-all Phase 0
-# Available when orchestrated: SCOUTFLO_SESSION_ID, SCOUTFLO_BUSINESS_CONTEXT,
-# SCOUTFLO_EXEMPTIONS, SCOUTFLO_SHARED_STATE_DIR
-if [ -n "${SCOUTFLO_SESSION_ID:-}" ]; then
-  # Standalone audit: read shared state that audit-all initialized
-  apply_all_integration_logic "$FINDINGS" "audit-gcp"
-  
-  # Overwrite findings.json with integrated result
-  cat > "$FINDINGS"
-else
-  # Not orchestrated: standalone run, skip integration
-  echo "Standalone run; skipping smart auto integration"
-fi
-```
-
-Three integration points:
-
-1. **Lifecycle Classification (C3)**: When orchestrated, findings are classified as `new`, `unchanged`, `regressed`, or `resolved` by comparing against the previous run's `findings.json`.
-2. **Severity Escalation (B - Business Context)**: Critical services (from `SCOUTFLO_BUSINESS_CONTEXT.critical_services`) have all their findings escalated to `critical` severity.
-3. **Exemption Filtering (C4)**: Findings matching `SCOUTFLO_EXEMPTIONS` entries (by finding ID or resource ID) are moved to `suppressed_findings` with suppression reasons.
-4. **Remediation Links (G3)**: Each finding gets populated with `next_safe_action`, `remediation_anchor`, and `remediation_category` from the shared findings schema.
-
-All four steps are applied in order; each is idempotent and safe to re-run. The final `findings.json` is written atomically; no partial state persists if the integration fails. When not orchestrated (standalone run), all integration steps are safely skipped and the findings.json remains unchanged.
-
-Environment variables available during orchestration:
-
-- `SCOUTFLO_SESSION_ID`: Unique session identifier (UTC timestamp)
-- `SCOUTFLO_BUSINESS_CONTEXT`: Parsed business context as JSON object
-- `SCOUTFLO_EXEMPTIONS`: Array of exemption objects from exemptions.yaml
-- `SCOUTFLO_SHARED_STATE_DIR`: Temporary state directory for the run session
-- `SCOUTFLO_FINDINGS_LOG`: Append-only JSONL log of all findings across audits
-- `SCOUTFLO_HISTORY_LOG`: Session completion history
-
 ## Remediation pointers
 
 Every finding's `remediation` field points at the fix, so "Next safe actions" starts at row 1 with no preparation:
@@ -427,22 +380,6 @@ Every finding's `remediation` field points at the fix, so "Next safe actions" st
 | Missing service dashboards, dashboard-without-alert | `setup-gcp#build-dashboards` |
 | GKE components, backend health checks, get-health IAM, sinks, Ops Agent install, log bucket retention | `setup-gcp#plan-out-of-scope-changes` (plan only) |
 | Topology readiness gaps with no finding | `/scoutflo:map-topology` |
-
-## v0.1.69 Smart Auto Integration (v0.1.69+)
-
-This skill is wired into the automatic integration pipeline. When run via `/scoutflo:audit-all`:
-
-- Reads shared state: exemptions, business_context, metadata, topology (via SCOUTFLO_* env vars from Phase 0)
-- Applies exemption filters (C4: suppress excluded resources)
-- Classifies lifecycle (C3: new/unchanged/regressed/resolved)
-- Escalates critical service severity (B: bump for CRITICAL_SERVICES)
-- Adds remediation links (G3: finding → setup-SKILL#anchor)
-- Appends findings to shared log (not individual findings.json)
-- Logs completion to history ledger (C1)
-
-For details, see [Smart Auto Integration Guide](docs/smart-auto-integration-guide.md).
-
-Standalone behavior (direct invocation) is unchanged: local findings.json, no shared state, no integration layers.
 
 ## Common Failure Modes
 

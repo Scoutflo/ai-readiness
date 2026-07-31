@@ -1,6 +1,6 @@
 ---
 name: audit-datadog
-description: Read-only scored audit of Datadog monitor health across notification delivery, monitor noise controls (recovery thresholds, no-data, renotify, auto-resolve), muting and downtimes, SLO and composite coverage, plus a separate non-scored Cost & Resource Optimization section from Datadog's own usage endpoints; writes findings.json and report.md; integrates with v0.1.69 smart auto pipeline when run under audit-all (exemptions, lifecycle, severity escalation, remediation links). Use when the user mentions auditing or scoring Datadog, Datadog monitors, monitor noise or flapping, muted or downtimed monitors, dead notification handles, SLO alerting, or Datadog custom-metric cost. Do not use to change Datadog (no setup-datadog ships yet; the audit names each fix), for Datadog data shown in Grafana (use audit-grafana), or for the paging layer downstream of a monitor (use audit-pagerduty).
+description: Read-only scored audit of Datadog monitor health across notification delivery, monitor noise controls (recovery thresholds, no-data, renotify, auto-resolve), muting and downtimes, SLO and composite coverage, plus a separate non-scored Cost & Resource Optimization section from Datadog's own usage endpoints; writes findings.json and report.md and changes nothing. Use when the user mentions auditing or scoring Datadog, Datadog monitors, monitor noise or flapping, muted or downtimed monitors, dead notification handles, SLO alerting, or Datadog custom-metric cost. Do not use to change Datadog (no setup-datadog ships yet; the audit names each fix), for Datadog data shown in Grafana (use audit-grafana), or for the paging layer downstream of a monitor (use audit-pagerduty).
 ---
 
 # audit-datadog
@@ -257,56 +257,6 @@ fi
 
 When metadata is available: skip excluded resources, escalate critical services, apply cost sensitivity. See [BUSINESS-CONTEXT-INTEGRATION-v0168.md](../../docs/BUSINESS-CONTEXT-INTEGRATION-v0168.md) for patterns.
 
-## Shared Environment Variables (v0.1.69+)
-
-When running under the `audit-all` orchestrator, these environment variables are pre-populated once and shared across all audit skills:
-
-| Variable | Source | Used for | Example |
-| --- | --- | --- | --- |
-| `SCOUTFLO_EXEMPTIONS` | `./scoutflo-audits/exemptions.yaml` | C4 phase: filter suppressed findings | `[{"id":"DD-001","reason":"known issue","expires":"2026-08-01"}]` |
-| `SCOUTFLO_BUSINESS_CONTEXT` | `~/.scoutflo/business_context.md` (parsed) | B phase: escalate severity for critical services | `{"critical_services":["api","database"]}` |
-| `SCOUTFLO_TOPOLOGY` | `./scoutflo-audits/topology.md` (if exists) | Phase 1: canonical service names for monitor tagging | `{"services":[{"name":"api","owner":"platform"}]}` |
-| `SCOUTFLO_METADATA` | `~/.scoutflo/computed_metadata.jsonl` | Metadata-driven resource discovery and filtering | Auto-discovered K8s labels, AWS tags, CODEOWNERS |
-| `SCOUTFLO_SESSION_ID` | Generated once per `audit-all` run | Session tracking and correlation | `1722361222` |
-| `SCOUTFLO_FINDINGS_LOG` | Shared findings log (created by orchestrator) | Append findings for correlation and audit-all aggregation | `./scoutflo-audits/.session/findings.jsonl` |
-| `SCOUTFLO_HISTORY_LOG` | Session history ledger | Track audit completion and status | `./scoutflo-audits/.session/audit-session.log` |
-| `SKILLS_LIB` | Plugin lib directory | Locate shared integration helper | `./sre-toolkit/skills/audit-all/lib` |
-
-When running standalone (not under `audit-all`): all `SCOUTFLO_*` vars are empty or unset. The skill applies defaults (no exemptions, no escalation, no shared log writes) and works normally.
-
-## Phase 13: Apply Integration Logic (v0.1.69+)
-
-After `findings.json` is written and verified, apply automatic integration logic via the shared helper. This phase is conditional: it runs automatically when invoked by `audit-all`, and runs as a no-op (graceful passthrough) when invoked standalone. The shared state is populated once per orchestrated run by the `audit-all` orchestrator; individual skill runs have empty env vars and skip gracefully.
-
-**When running standalone:** env vars are empty; integration logic applies defaults (no exemptions, no business context escalation, no correlation). The audit's own report and brief send normally.
-
-**When running under audit-all:** env vars are pre-populated by the orchestrator; this phase applies exemptions, lifecycle classification, severity escalation, and appends findings to the shared log automatically.
-
-```bash
-set -eu
-OUT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/datadog/${RUN_DATE}"
-
-# Source the shared integration helper (if available; skip gracefully if v0.1.68 or earlier)
-INTEGRATION_LIB="${SKILLS_LIB}/audit-all/lib/integration-helpers.sh"
-if [ -f "$INTEGRATION_LIB" ]; then
-  . "$INTEGRATION_LIB"
-  # Apply all integration logic in sequence:
-  # - C4: filter by exemptions (exempted monitors appear in suppressed appendix)
-  # - C3: classify lifecycle (new/unchanged/regressed/resolved/improved)
-  # - B: escalate severity for critical services (per business_context.md)
-  # - G3: add remediation links to setup skills (when setup-datadog ships)
-  # - Append to shared log (when running under audit-all)
-  apply_all_integration_logic "$OUT/findings.json" "audit-datadog"
-  echo "[audit-datadog] Integration logic applied (v0.1.69+)"
-else
-  echo "[audit-datadog] Integration helper not found (v0.1.68 or earlier); skipping Phase 13"
-fi
-```
-
-**Expected behavior:**
-- If `audit-all` orchestrator is running: findings are filtered, classified, and appended to the shared log at `${SCOUTFLO_FINDINGS_LOG}`. The audit's own `findings.json` is unchanged for backward compatibility.
-- If running standalone: env vars are absent, integration logic is skipped, and the audit behaves identically to v0.1.68 (reads local exemptions.yaml, sends individual Slack brief).
-
 ## Remediation pointers
 
 No `setup-datadog` ships yet, so every finding's `remediation` field names the concrete manual fix location. When a setup skill lands, these become anchors without the finding IDs changing:
@@ -322,22 +272,6 @@ No `setup-datadog` ships yet, so every finding's `remediation` field names the c
 | SLOs without a monitor (DD-032) | SLO edit — attach or create a burn-rate/error-budget monitor |
 | Custom-metric or dashboard cost (DDOPT-NNN) | Metrics Summary and Dashboard list — trim high-cardinality custom metrics and unused dashboards |
 | Topology readiness gaps with no finding | `/scoutflo:map-topology` |
-
-## v0.1.69 Smart Auto Integration (v0.1.69+)
-
-This skill is wired into the automatic integration pipeline. When run via `/scoutflo:audit-all`:
-
-- Reads shared state: exemptions, business_context, metadata, topology (via SCOUTFLO_* env vars from Phase 0)
-- Applies exemption filters (C4: suppress excluded resources)
-- Classifies lifecycle (C3: new/unchanged/regressed/resolved)
-- Escalates critical service severity (B: bump for CRITICAL_SERVICES)
-- Adds remediation links (G3: finding → setup-SKILL#anchor)
-- Appends findings to shared log (not individual findings.json)
-- Logs completion to history ledger (C1)
-
-For details, see [Smart Auto Integration Guide](docs/smart-auto-integration-guide.md).
-
-Standalone behavior (direct invocation) is unchanged: local findings.json, no shared state, no integration layers.
 
 ## Common Failure Modes
 
