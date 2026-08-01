@@ -10,7 +10,7 @@ How to measure north star metrics on real data.
 
 | Metric | Target | Measured On | v0.1.65 | v0.1.66 | v0.1.67 | v0.1.68 |
 |--------|--------|-------------|---------|---------|---------|---------|
-| Token efficiency (audit full) | 50% save (600K→300K) | CoinDCX estate (1180 EC2, 77 RDS) | [ ] | [ ] | [ ] | [✓] |
+| Token efficiency (audit full) | 50% save (600K→300K) | a large customer estate estate (1180 EC2, 77 RDS) | [ ] | [ ] | [ ] | [✓] |
 | Token efficiency (second run) | 75% save (600K→150K) | Checkpoint + doctor skip | [ ] | [ ] | [ ] | [✓] |
 | Token efficiency (setup) | 70% save (50K→15K) | Topology-guided setup | [ ] | [ ] | [✓] | [✓] |
 | Finding deduplication | 87→42 | Correlation engine | [ ] | [✓] | [✓] | [✓] |

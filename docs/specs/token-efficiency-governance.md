@@ -276,7 +276,7 @@ Weekly savings: $0.30 (66% reduction)
 
 ---
 
-## Real-World Measurement: CoinDCX Estate
+## Real-World Measurement: a large customer estate Estate
 
 **Estate:** 1180 EC2 + 77 RDS instances across 3 regions, 2 accounts
 

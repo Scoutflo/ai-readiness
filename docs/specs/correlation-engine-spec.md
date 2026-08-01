@@ -431,7 +431,7 @@ for each service S:
 |----------|-------|----------|---------------|
 | Small estate | 100 findings | 2 sec | 50 KB |
 | Medium estate | 500 findings | 10 sec | 250 KB |
-| Large estate (CoinDCX) | 1000+ findings | 30 sec | 1 MB |
+| Large estate (a large customer estate) | 1000+ findings | 30 sec | 1 MB |
 
 ---
 

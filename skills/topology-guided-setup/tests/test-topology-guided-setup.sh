@@ -1,179 +1,99 @@
 #!/bin/sh
-# test-topology-guided-setup.sh - Topology-guided setup decision tests
+# test-topology-guided-setup.sh
+# Tests the real topology-guided-setup library against a correlation.json in
+# the current (v0.1.73) shape: shared-resource-join cascades, overlap groups.
+# Replaces a bats-format stub that crashed on an unbound BATS_TEST_DIRNAME and
+# therefore never ran. Every assertion exits 1 on failure; runs under /bin/sh.
 
 set -eu
 
-echo "=== Topology-Guided Setup Tests ==="
+LIB_DIR="$(cd "$(dirname "$0")/../lib" && pwd)"
+WORK="$(mktemp -d)"
+trap 'rm -rf "$WORK"' EXIT
 
-TOPO_LIB="${BATS_TEST_DIRNAME}/../lib"
-TEST_AUDIT_DIR="/tmp/topo-guided-test-audits"
-TEST_CORR_FILE="$TEST_AUDIT_DIR/correlation.json"
-TEST_TOPOLOGY="/tmp/topo-guided-topology.json"
-export SCOUTFLO_AUDIT_DIR="$TEST_AUDIT_DIR"
-export TOPOLOGY_FILE="$TEST_TOPOLOGY"
+export SCOUTFLO_AUDIT_DIR="$WORK/audits"
+export TOPOLOGY_FILE="$WORK/topology.json"
+mkdir -p "$SCOUTFLO_AUDIT_DIR"
 
-setup() {
-  mkdir -p "$TEST_AUDIT_DIR"
-  rm -f "$TEST_CORR_FILE" "$TEST_TOPOLOGY"
-}
+fail() { echo "FAIL: $1" >&2; exit 1; }
 
-teardown() {
-  rm -rf "$TEST_AUDIT_DIR" "$TEST_TOPOLOGY"
-}
+echo "=== topology-guided-setup lib tests ==="
 
-@test "topology-guided: detects overlap and recommends skip" {
-  . "${TOPO_LIB}/topology-guided-setup.sh"
-
-  # Create correlation with overlap
-  jq -n '{
-    overlaps: [
-      {
-        overlap_id: "OVL-001",
-        findings: [
-          {finding_id: "AWS-023", skill: "audit-aws", title: "CloudWatch Not Configured"},
-          {finding_id: "GRAFANA-045", skill: "audit-grafana", title: "Alert Rule Missing"}
-        ],
-        recommendation: "Keep Grafana, skip AWS"
-      }
-    ],
-    cascades: []
-  }' > "$TEST_CORR_FILE"
-
-  recommendation=$(topology_guided_get_recommendation "AWS-023" "payment-svc" "CloudWatch Not Configured")
-  type=$(echo "$recommendation" | jq -r '.recommendation_type')
-  action=$(echo "$recommendation" | jq -r '.action')
-
-  [ "$type" = "OVERLAP_DETECTED" ] || { echo "FAIL: Expected OVERLAP_DETECTED, got $type"; exit 1; }
-  [ "$action" = "SKIP_OR_DEDUP" ] || { echo "FAIL: Expected SKIP_OR_DEDUP, got $action"; exit 1; }
-}
-
-@test "topology-guided: detects cascade root and prioritizes" {
-  . "${TOPO_LIB}/topology-guided-setup.sh"
-
-  # Create correlation with cascade
-  jq -n '{
-    overlaps: [],
-    cascades: [
-      {
-        cascade_id: "CASC-001",
-        root_cause: {finding_id: "AWS-055", title: "MySQL Master Unhealthy", service: "database-svc"},
-        effects: [
-          {step: 1, finding_id: "GRAFANA-022", title: "Alert Rule Disabled"},
-          {step: 2, finding_id: "PAGERDUTY-008", title: "Incident Cannot Be Created"}
-        ]
-      }
-    ]
-  }' > "$TEST_CORR_FILE"
-
-  recommendation=$(topology_guided_get_recommendation "AWS-055" "database-svc" "MySQL Master Unhealthy")
-  type=$(echo "$recommendation" | jq -r '.recommendation_type')
-  action=$(echo "$recommendation" | jq -r '.action')
-
-  [ "$type" = "CASCADE_ROOT" ] || { echo "FAIL: Expected CASCADE_ROOT, got $type"; exit 1; }
-  [ "$action" = "FIX_FIRST_PRIORITY" ] || { echo "FAIL: Expected FIX_FIRST_PRIORITY, got $action"; exit 1; }
-}
-
-@test "topology-guided: applies business context for critical service" {
-  . "${TOPO_LIB}/topology-guided-setup.sh"
-
-  # Create business context with critical service
-  jq -n '{
-    business_context: {
-      environment: "production",
-      critical_dependencies: ["payment-svc"]
+# Fixture: correlation.json in the current engine's output shape.
+cat > "$SCOUTFLO_AUDIT_DIR/correlation.json" <<'EOF'
+{
+  "version": "2.0",
+  "overlaps": [
+    {
+      "overlap_id": "OVL-payments-db",
+      "type": "redundant_monitoring",
+      "service": "payments-db",
+      "targets": ["aws", "grafana"],
+      "findings": [
+        {"target": "aws", "finding_id": "AWS-020", "title": "No alarm on payments-db", "severity": "high"},
+        {"target": "grafana", "finding_id": "GRAF-050", "title": "Alert on payments-db routes nowhere", "severity": "high"}
+      ],
+      "recommendation": "Review overlap"
     }
-  }' > "$TEST_TOPOLOGY"
-
-  # Empty correlation (no overlaps/cascades)
-  jq -n '{overlaps: [], cascades: []}' > "$TEST_CORR_FILE"
-
-  recommendation=$(topology_guided_get_recommendation "AWS-001" "payment-svc" "HTTPS Not Enforced")
-  type=$(echo "$recommendation" | jq -r '.recommendation_type')
-  action=$(echo "$recommendation" | jq -r '.action')
-
-  [ "$type" = "CRITICAL_SERVICE" ] || { echo "FAIL: Expected CRITICAL_SERVICE, got $type"; exit 1; }
-  [ "$action" = "REQUIRE_APPROVAL" ] || { echo "FAIL: Expected REQUIRE_APPROVAL, got $action"; exit 1; }
-}
-
-@test "topology-guided: uses safe defaults without business context" {
-  . "${TOPO_LIB}/topology-guided-setup.sh"
-
-  # No business context file
-  # Empty correlation
-  jq -n '{overlaps: [], cascades: []}' > "$TEST_CORR_FILE"
-
-  recommendation=$(topology_guided_get_recommendation "AWS-001" "api-svc" "HTTPS Not Enforced")
-  type=$(echo "$recommendation" | jq -r '.recommendation_type')
-
-  [ "$type" = "STANDARD" ] || { echo "FAIL: Expected STANDARD (safe default), got $type"; exit 1; }
-}
-
-@test "topology-guided: estimates tokens based on criticality" {
-  . "${TOPO_LIB}/topology-guided-setup.sh"
-
-  jq -n '{
-    business_context: {
-      environment: "production",
-      critical_dependencies: ["critical-svc", "payment-svc"]
+  ],
+  "cascades": [
+    {
+      "cascade_id": "CASC-AWS-030",
+      "root_cause": {"finding_id": "AWS-030", "title": "RDS payments-db no backup", "target": "aws"},
+      "effects": [
+        {"finding_id": "GRAF-050", "title": "Alert on payments-db routes nowhere", "target": "grafana"}
+      ]
     }
-  }' > "$TEST_TOPOLOGY"
-
-  jq -n '{overlaps: [], cascades: []}' > "$TEST_CORR_FILE"
-
-  # Critical prod service
-  tokens=$(topology_guided_estimate_tokens "AWS-001" "payment-svc" "$(jq '.business_context' "$TEST_TOPOLOGY")")
-  [ "$tokens" = "20000" ] || { echo "FAIL: Expected 20000 tokens for critical prod, got $tokens"; exit 1; }
-
-  # Non-critical prod
-  tokens=$(topology_guided_estimate_tokens "AWS-002" "api-svc" "$(jq '.business_context' "$TEST_TOPOLOGY")")
-  [ "$tokens" = "10000" ] || { echo "FAIL: Expected 10000 tokens for standard prod, got $tokens"; exit 1; }
+  ]
 }
+EOF
 
-@test "topology-guided: cascades impact recommendation" {
-  . "${TOPO_LIB}/topology-guided-setup.sh"
+cat > "$TOPOLOGY_FILE" <<'EOF'
+{"business_context":{"environment":"production","critical_dependencies":["payments-db"]}}
+EOF
 
-  # Create cascade impact
-  jq -n '{
-    overlaps: [],
-    cascades: [
-      {
-        cascade_id: "CASC-001",
-        root_cause: {finding_id: "AWS-055", title: "MySQL Master Unhealthy"},
-        effects: [
-          {step: 1, finding_id: "GRAFANA-022", title: "Alert Rule Disabled"}
-        ]
-      }
-    ]
-  }' > "$TEST_CORR_FILE"
+. "$LIB_DIR/topology-guided-setup.sh"
+correlation="$(_load_correlation)"
+context="$(_load_context 2>/dev/null || printf '%s' '{"critical_dependencies":["payments-db"]}')"
 
-  recommendation=$(topology_guided_get_recommendation "GRAFANA-022" "monitoring-svc" "Alert Rule Disabled")
-  type=$(echo "$recommendation" | jq -r '.recommendation_type')
-  action=$(echo "$recommendation" | jq -r '.action')
+echo "Test 1: overlap detection finds the redundant pair"
+ovl="$(topology_guided_check_overlap "AWS-020" "$correlation")"
+printf '%s' "$ovl" | jq -e '.is_redundant == true' > /dev/null \
+  || fail "AWS-020 should be flagged redundant (in OVL-payments-db): $ovl"
+printf '%s' "$ovl" | jq -e '.related_findings[0].finding_id == "GRAF-050"' > /dev/null \
+  || fail "related finding should be GRAF-050"
+echo "PASS"
 
-  [ "$type" = "CASCADE_IMPACT" ] || { echo "FAIL: Expected CASCADE_IMPACT, got $type"; exit 1; }
-  [ "$action" = "WAIT_FOR_ROOT_FIX" ] || { echo "FAIL: Expected WAIT_FOR_ROOT_FIX, got $action"; exit 1; }
-}
+echo "Test 2: cascade root detection"
+root="$(topology_guided_check_cascade_root "AWS-030" "$correlation")"
+printf '%s' "$root" | jq -e '.is_root_cause == true' > /dev/null \
+  || fail "AWS-030 should be a cascade root: $root"
+echo "PASS"
 
-@test "topology-guided: fix order priority" {
-  . "${TOPO_LIB}/topology-guided-setup.sh"
+echo "Test 3: cascade impact says fix the root first"
+impact="$(topology_guided_check_cascade_impact "GRAF-050" "$correlation")"
+printf '%s' "$impact" | jq -e '.root_cause.finding_id == "AWS-030"' > /dev/null \
+  || fail "GRAF-050's cascade root should be AWS-030: $impact"
+echo "PASS"
 
-  jq -n '{
-    overlaps: [],
-    cascades: [
-      {
-        cascade_id: "CASC-001",
-        root_cause: {finding_id: "AWS-055"}
-      }
-    ]
-  }' > "$TEST_CORR_FILE"
+echo "Test 4: criticality from business context"
+[ "$(topology_guided_is_critical "payments-db" "$context")" = "true" ] \
+  || fail "payments-db is in critical_dependencies and must be critical"
+[ "$(topology_guided_is_critical "random-svc" "$context")" = "false" ] \
+  || fail "random-svc must not be critical"
+echo "PASS"
 
-  # Root cause = priority 1
-  order=$(topology_guided_get_fix_order "AWS-055")
-  [ "$order" = "1" ] || { echo "FAIL: Expected priority 1 for root cause, got $order"; exit 1; }
+echo "Test 5: non-existent finding matches nothing (no invented guidance)"
+none="$(topology_guided_check_overlap "FAKE-999" "$correlation")"
+[ -z "$none" ] || fail "FAKE-999 should match no overlap, got: $none"
+echo "PASS"
 
-  # Standard = priority 3
-  order=$(topology_guided_get_fix_order "AWS-001")
-  [ "$order" = "3" ] || { echo "FAIL: Expected priority 3 for standard, got $order"; exit 1; }
-}
+echo "Test 6: missing correlation.json degrades to empty, not a crash"
+rm "$SCOUTFLO_AUDIT_DIR/correlation.json"
+empty="$(_load_correlation)"
+printf '%s' "$empty" | jq -e '.overlaps == [] and .cascades == []' > /dev/null \
+  || fail "missing correlation.json should load as empty lists"
+echo "PASS"
 
-echo "=== All topology-guided tests passed ==="
+echo
+echo "=== All topology-guided-setup tests passed ==="

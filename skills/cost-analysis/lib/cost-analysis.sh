@@ -35,7 +35,9 @@ cost_analysis_load_context() {
 cost_analysis_should_skip() {
   [ ! -f "$COST_HISTORY" ] && return 1  # No history = first run, DO RUN
 
-  last_run=$(tail -1 "$COST_HISTORY" | jq -r '.date // "2000-01-01"')
+  # fromjson? tolerates a corrupted last line: unparseable -> stale date -> DO RUN
+  last_run=$(tail -1 "$COST_HISTORY" | jq -Rr 'fromjson? | .date // empty' 2>/dev/null)
+  [ -n "$last_run" ] || last_run="2000-01-01"
   # GNU date first, BSD/macOS date second; unparseable = treat as stale, DO RUN
   last_run_epoch=$(date -d "$last_run" +%s 2>/dev/null \
     || date -j -f %Y-%m-%d "$last_run" +%s 2>/dev/null \
@@ -133,10 +135,12 @@ cost_analysis_build_report() {
   all_costs="$2"
   context="$3"
 
-  # Trend from history (last 5 runs)
+  # Trend from history (last 5 runs). Malformed ledger lines are skipped
+  # (fromjson? drops them) so a corrupted history line degrades the trend,
+  # never crashes the whole analysis run.
   trend_array=$(
     if [ -f "$COST_HISTORY" ]; then
-      tail -5 "$COST_HISTORY" | jq -s '[.[] | {date, monthly_savings_identified, state}]'
+      tail -5 "$COST_HISTORY" | jq -Rs '[split("\n")[] | select(length > 0) | fromjson? | {date, monthly_savings_identified, state}]'
     else
       jq -n '[]'
     fi

@@ -1,7 +1,7 @@
 #!/bin/sh
 # test-v0167-token-efficiency.sh
 # End-to-end token efficiency testing on realistic audit data
-# Simulates CoinDCX estate with multiple audits and cost-analysis
+# Simulates a large customer estate estate with multiple audits and cost-analysis
 
 set -eu
 
@@ -66,11 +66,11 @@ fi
 record_result ""
 
 # ============================================================================
-# PHASE 2: Create Mock Audit Data (Simulating CoinDCX Estate)
+# PHASE 2: Create Mock Audit Data (Simulating a large customer estate Estate)
 # ============================================================================
 
 record_result "═══════════════════════════════════════════════════════════════"
-record_result "PHASE 2: Create Mock Audit Data (CoinDCX-like Estate)"
+record_result "PHASE 2: Create Mock Audit Data (large-exchange-like Estate)"
 record_result "═══════════════════════════════════════════════════════════════"
 
 TODAY=$(date +%Y-%m-%d)

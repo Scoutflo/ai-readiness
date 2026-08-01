@@ -74,7 +74,7 @@ echo "All regression tests PASSED"
 
 ```
 Before tagging release:
-  [ ] Run full E2E on mock CoinDCX estate (1000 resources)
+  [ ] Run full E2E on mock a large customer estate estate (1000 resources)
   [ ] Verify 12 audits complete, findings generated
   [ ] Run doctor, verify skip logic works
   [ ] Verify no secrets in report
@@ -142,14 +142,14 @@ cat > /tmp/incident-$(date +%Y%m%d-%H%M%S).md << 'EOF'
   - Affected versions: v0.1.66.x
 
 **Impact:**
-  - CoinDCX audit shows 87 findings instead of 42
+  - a large customer estate audit shows 87 findings instead of 42
   - False positives causing alert fatigue
   - Actionable findings obscured
 
 **Root Cause:** [TO BE DETERMINED]
 
 **Timeline:**
-  15:00 - Issue discovered in CoinDCX audit
+  15:00 - Issue discovered in a large customer estate audit
   15:05 - Incident declared P2
   15:10 - Rollback plan initiated
 
@@ -462,7 +462,7 @@ Code Quality:
   [ ] No known warnings or TODOs related to features
 
 Regression Testing:
-  [ ] Full E2E test on mock CoinDCX estate (1000 resources)
+  [ ] Full E2E test on mock a large customer estate estate (1000 resources)
   [ ] All 12 audit skills tested
   [ ] Backward compat verified (v0.1.64 features work)
   [ ] No secrets leaked in reports
@@ -475,7 +475,7 @@ Metrics & Instrumentation:
   [ ] Doctor skip rate >= 70% on re-run
 
 Customer-Specific QA:
-  [ ] CoinDCX estate tested (if applicable)
+  [ ] a large customer estate estate tested (if applicable)
   [ ] Production-like data used (not synthetic)
   [ ] Long-running audits tested (>10 min)
 
