@@ -36,7 +36,7 @@ done
 #    canonical `<key>:` YAML block in connect's providers.md. This is what a
 #    session copies from when re-adding a block that was deleted earlier —
 #    without it the model reconstructs key names from memory and invents
-#    wrong ones (the CoinDCX re-add class).
+#    wrong ones (the customer re-add class seen live).
 TEMPLATE="$DIR/templates/toolkit.yaml.example"
 PROVIDERS="$DIR/skills/connect/references/providers.md"
 if [ -f "$TEMPLATE" ] && [ -f "$PROVIDERS" ]; then

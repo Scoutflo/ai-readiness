@@ -217,7 +217,7 @@ For these, Sonnet 5 is a good middle ground (3–10× more reasoning power, 3.75
 
 ## Real-World Example
 
-**CoinDCX Production Audit (Medium Estate)**
+**Large-estate production audit (Medium Estate)**
 - 12 integrations, ~80 services, 3 clusters
 - Full suite run: `/scoutflo:audit-all`
 - **Tokens consumed:** ~720K

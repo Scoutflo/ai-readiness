@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.74
+
+Senior-review sweep of the whole v0.1.70–v0.1.73 arc: every test file in the repo now genuinely runs and exits 0, one more latent library bug fixed, and boundary hygiene tightened.
+
+- **Removed five dead bats-format test files that never ran** — `audit-all/test-v0165-integration-end-to-end.sh`, `business-context/test-business-context-integration.sh`, `checkpoint/test-checkpoint-integration.sh`, `cli-interactive/test-cli-interactive-integration.sh`, `topology-guided-setup/test-topology-guided-setup.sh` all crashed on load (unbound `BATS_TEST_DIRNAME`/`SCOUTFLO_ROOT` under `set -eu`) and had never executed a single assertion. This is the same dead-test class that hid the doctor persistence bug for eight releases.
+- **topology-guided-setup: fixed `| head -1` on pretty-printed jq output** — the overlap/cascade helpers piped multi-line JSON objects through `head -1`, returning the literal string `{` (unparseable) whenever a finding matched. Every consumer of `topology_guided_check_overlap`/`check_cascade_root`/`check_cascade_impact` received broken JSON. Now `jq -c 'first(...) // empty'`. Replaced the dead stub with a real six-test suite (overlap, cascade root, cascade impact, criticality, no-match, missing-file degradation) that runs under `/bin/sh`.
+- **cost-analysis: corrupted history ledger no longer kills the run** — a malformed line in `cost-analysis.jsonl` crashed both the 24h skip check and the trend build (`jq: Invalid numeric literal`), aborting the whole analysis. Both reads now use `fromjson?`: a bad line degrades the trend and forces a fresh run instead of failing. Regression test added (Test 6b).
+- **Boundary hygiene** — moved the internal test-results artifact `TEST-RESULTS-v0167.md` out of the public repo (AGENTS.md Git vs. Local Boundary) and replaced customer-specific names in tracked files (CHANGELOG history, token-costs, specs, coverage-check comment, test fixture) with neutral descriptions, per the repo's forbidden-content rule.
+
+No audit logic, finding IDs, or scoring changed.
+
 ## 0.1.73
 
 Fixes five real defects a full live `/scoutflo:audit-all` run surfaced — the kind static tests missed because nothing exercised the end-to-end load path. All five now carry falsifiable regression tests.
@@ -98,7 +109,7 @@ Cost Analysis skill + v0.1.66 architecture refinements: correlation engine for o
 
 Testing: ✅ 9 unit tests for cost-analysis (skip logic, aggregation, dedup, scoring, history), ✅ 7 tests for topology-guided setup (overlap, cascades, criticality, business context), ✅ All gates passing.
 
-Context: v0.1.67 completes the correlation and topology-guided workflows promised for v0.1.66. Cost analysis enables ROI-driven remediation for large estates (CoinDCX: 1180 EC2 + 77 RDS → ~$500/mo identifiable waste, scored analysis enables prioritization).
+Context: v0.1.67 completes the correlation and topology-guided workflows promised for v0.1.66. Cost analysis enables ROI-driven remediation for large estates (a large estate: 1180 EC2 + 77 RDS → ~$500/mo identifiable waste, scored analysis enables prioritization).
 
 ## 0.1.66
 
@@ -122,14 +133,14 @@ Eight new features for production-ready AI-guided infrastructure auditing: persi
 
 Testing: ✅ 32 unit tests passing, ✅ 6 E2E scenarios verified, ✅ All gates passing (leak-scan, structure-check, gitleaks, plugin-validate).
 
-Context: v0.1.65 completes the foundation for topology-guided setup and correlation engine (v0.1.66). CoinDCX production rollout readiness confirmed.
+Context: v0.1.65 completes the foundation for topology-guided setup and correlation engine (v0.1.66). First-customer production rollout readiness confirmed.
 
 ## 0.1.64
 
 End-to-end audit verification and token cost documentation.
 
 - **E2E verification: all 12 audits passed conformance** — 8 audits completed with Haiku 4.5 (Opus/Sonnet/Fable unavailable due to account entitlement, awaiting AWS Sales restoration). All reports valid against report-standard schema and lexical gates. Measured token consumption: ~702K tokens for full suite (~$0.56 at Haiku pricing).
-- **New docs/token-costs.md** — per-audit token consumption, cost factors (estate size, config complexity, model choice), real-world example (CoinDCX Medium estate ~$0.58), billing model, and ways to control costs (targeted audits, scheduling, smaller models). Updated FAQ and README with link.
+- **New docs/token-costs.md** — per-audit token consumption, cost factors (estate size, config complexity, model choice), real-world example (a medium estate ~$0.58), billing model, and ways to control costs (targeted audits, scheduling, smaller models). Updated FAQ and README with link.
 - **AWS Bedrock model access RCA** — traced Opus/Sonnet/Fable 403 AccessDeniedException to account-level entitlement issue (not a toggle or IAM policy). Confirmed via exact error message: "is not available for this account." Haiku 4.5 remains fully accessible. Root cause: likely AWS Sales action on billing or compliance hold. No plugin code change needed.
 - No audit logic, checks, finding IDs, or scoring changed.
 

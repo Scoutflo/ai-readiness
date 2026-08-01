@@ -129,6 +129,15 @@ out=$( ( . "$ROOT/skills/cost-analysis/lib/cost-analysis.sh"; cost_analysis_run 
 echo "$out" | grep -q "Skipping" || fail "re-run within 24h did not skip: $out"
 echo "PASS"
 
+echo "Test 6b: corrupted history ledger degrades gracefully, never crashes (v0.1.74)"
+CORR6B="$WORK/corrupt"; mkdir -p "$CORR6B/aws/$D"
+printf '%s' '{"target":"aws","findings":[{"id":"AWSOPT-001","severity":"low","area":"cost-optimization","title":"x","affected":["i-1"],"estimated_monthly_savings_usd":50}]}' > "$CORR6B/aws/$D/findings.json"
+printf 'NOT-JSON-GARBAGE\n' > "$CORR6B/cost-analysis.jsonl"
+( SCOUTFLO_AUDIT_DIR="$CORR6B" sh -c '. "'"$ROOT"'/skills/cost-analysis/lib/cost-analysis.sh"; cost_analysis_run "'"$D"'"' ) > /dev/null 2>&1 \
+  || fail "cost_analysis_run crashed on a corrupted history line (must skip it and run)"
+[ -f "$CORR6B/cost-analysis/$D/findings.json" ] || fail "report not written despite corrupted-history recovery"
+echo "PASS"
+
 # ---- Phase 3.7: redaction ---------------------------------------------------
 echo "Test 7: redact_file scrubs a combined report in place"
 mkdir -p "$SCOUTFLO_AUDIT_DIR/all/$D"

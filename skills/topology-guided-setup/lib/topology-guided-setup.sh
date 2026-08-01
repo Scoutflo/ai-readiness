@@ -43,18 +43,18 @@ topology_guided_check_overlap() {
   finding_id="$1"
   correlation="$2"
 
-  printf '%s\n' "$correlation" | jq \
+  printf '%s\n' "$correlation" | jq -c \
     --arg id "$finding_id" \
-    '
-    .overlaps[] |
-    select(.findings[].finding_id == $id) |
-    {
-      overlap_id,
-      is_redundant: true,
-      related_findings: [.findings[] | select(.finding_id != $id)],
-      recommendation
-    }
-    ' | head -1
+    'first(
+      .overlaps[] |
+      select(.findings[].finding_id == $id) |
+      {
+        overlap_id,
+        is_redundant: true,
+        related_findings: [.findings[] | select(.finding_id != $id)],
+        recommendation
+      }
+    ) // empty'
 }
 
 # Check if finding is root cause of cascades
@@ -62,18 +62,18 @@ topology_guided_check_cascade_root() {
   finding_id="$1"
   correlation="$2"
 
-  printf '%s\n' "$correlation" | jq \
+  printf '%s\n' "$correlation" | jq -c \
     --arg id "$finding_id" \
-    '
-    .cascades[] |
-    select(.root_cause.finding_id == $id) |
-    {
-      cascade_id,
-      is_root_cause: true,
-      effects: [.effects[] | {step, finding_id, title, service}],
-      chain_length
-    }
-    ' | head -1
+    'first(
+      .cascades[] |
+      select(.root_cause.finding_id == $id) |
+      {
+        cascade_id,
+        is_root_cause: true,
+        effects: [.effects[] | {finding_id, title, target}],
+        effect_count: (.effects | length)
+      }
+    ) // empty'
 }
 
 # Check if finding is affected by cascades (impact if not fixed)
@@ -81,18 +81,18 @@ topology_guided_check_cascade_impact() {
   finding_id="$1"
   correlation="$2"
 
-  printf '%s\n' "$correlation" | jq \
+  printf '%s\n' "$correlation" | jq -c \
     --arg id "$finding_id" \
-    '
-    .cascades[] |
-    select(.effects[].finding_id == $id) |
-    {
-      cascade_id,
-      is_cascade_impact: true,
-      root_cause: .root_cause | {finding_id, title, service},
-      fix_sequence: "fix root cause first"
-    }
-    ' | head -1
+    'first(
+      .cascades[] |
+      select(.effects[].finding_id == $id) |
+      {
+        cascade_id,
+        is_cascade_impact: true,
+        root_cause: (.root_cause | {finding_id, title, target}),
+        fix_sequence: "fix root cause first"
+      }
+    ) // empty'
 }
 
 # Determine if finding is on critical service

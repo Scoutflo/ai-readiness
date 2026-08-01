@@ -317,6 +317,6 @@ Friday 5pm: User asks for fresh cost report
 - [ ] Scoring: 0-100 based on waste % + trend + overlaps
 - [ ] Correlation integration: reference correlation.json for overlaps
 - [ ] Business context: sort by cost_sensitivity (high=ROI, low=impact)
-- [ ] Test: cost-analysis on full CoinDCX estate (real AWS Cost Explorer data)
+- [ ] Test: cost-analysis on full a large customer estate estate (real AWS Cost Explorer data)
 - [ ] Measure: token efficiency (0 extra API calls if <24h old)
 - [ ] Document: how to re-run with --force, how history works, when it skips
