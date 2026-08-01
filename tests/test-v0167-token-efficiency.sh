@@ -113,33 +113,30 @@ jq -n '{
   },
   findings: [
     {
-      id: "AWS-COST-001",
+      id: "AWS-020",
       severity: "medium",
       title: "8 stopped instances not terminated",
       description: "8 EC2 instances have been stopped for >30 days"
+    },
+    {
+      id: "AWSOPT-001",
+      severity: "medium",
+      area: "cost-optimization",
+      title: "8 stopped instances not terminated (Compute Optimizer)",
+      affected: ["i-a","i-b"],
+      estimated_monthly_savings_usd: 320,
+      points_recoverable: 0
+    },
+    {
+      id: "AWSOPT-004",
+      severity: "medium",
+      area: "cost-optimization",
+      title: "3 RDS instances over-provisioned",
+      affected: ["db-1","db-2","db-3"],
+      estimated_monthly_savings_usd: 120,
+      points_recoverable: 0
     }
   ],
-  cost_section: {
-    captured_at: "'$(date -u +%Y-%m-%dT%H:%M:%SZ)'",
-    data_source: "AWS Cost Explorer + Compute Optimizer",
-    findings: [
-      {
-        id: "COST-AWS-001",
-        type: "stopped_instances",
-        monthly_cost: 320,
-        description: "8 stopped instances not terminated",
-        effort_minutes: 5
-      },
-      {
-        id: "COST-AWS-002",
-        type: "underutilized_rds",
-        monthly_cost: 120,
-        description: "3 RDS instances <20% utilization",
-        effort_minutes: 15
-      }
-    ],
-    total_identifiable_waste: 440
-  },
   estate: {
     objects: 1180,
     path: "large"
@@ -168,26 +165,21 @@ jq -n '{
   },
   findings: [
     {
-      id: "GCP-COST-001",
+      id: "GCP-041",
       severity: "medium",
       title: "15 unused persistent disks",
       description: "15 disks unattached for >7 days"
+    },
+    {
+      id: "GCPOPT-001",
+      severity: "low",
+      area: "cost-optimization",
+      title: "15 unused persistent disks",
+      affected: ["disk-1","disk-2"],
+      estimated_monthly_savings_usd: 85,
+      points_recoverable: 0
     }
   ],
-  cost_section: {
-    captured_at: "'$(date -u +%Y-%m-%dT%H:%M:%SZ)'",
-    data_source: "GCP Cost Management + Compute Optimizer",
-    findings: [
-      {
-        id: "COST-GCP-001",
-        type: "unused_disks",
-        monthly_cost: 85,
-        description: "15 unused persistent disks",
-        effort_minutes: 10
-      }
-    ],
-    total_identifiable_waste: 85
-  },
   estate: {
     objects: 340,
     path: "medium"
@@ -214,26 +206,21 @@ jq -n '{
   },
   findings: [
     {
-      id: "DATADOG-001",
+      id: "DD-030",
       severity: "low",
       title: "4 unused monitors",
       description: "4 monitors with no alerts in >60 days"
+    },
+    {
+      id: "DDOPT-001",
+      severity: "low",
+      area: "cost-optimization",
+      title: "4 unused monitors driving custom-metric cost",
+      affected: ["mon-1","mon-2"],
+      estimated_monthly_cost_usd: 45,
+      points_recoverable: 0
     }
   ],
-  cost_section: {
-    captured_at: "'$(date -u +%Y-%m-%dT%H:%M:%SZ)'",
-    data_source: "Datadog API",
-    findings: [
-      {
-        id: "COST-DATADOG-001",
-        type: "unused_monitors",
-        monthly_cost: 45,
-        description: "4 unused monitors",
-        effort_minutes: 3
-      }
-    ],
-    total_identifiable_waste: 45
-  },
   estate: {
     objects: 127,
     path: "small"
@@ -283,12 +270,16 @@ RUN_DURATION_MS=$(( (RUN_END - RUN_START) / 1000000 ))
 
 record_result "✓ cost-analysis ran in ${RUN_DURATION_MS}ms"
 
-# Verify output files
+# Verify output files (v0.1.71+ cost-analysis schema: summary.* not overall_score)
 if [ -f "$TEST_AUDIT_DIR/cost-analysis/$TODAY/findings.json" ]; then
-  SCORE=$(jq -r '.overall_score' "$TEST_AUDIT_DIR/cost-analysis/$TODAY/findings.json")
-  FINDINGS=$(jq -r '.findings | length' "$TEST_AUDIT_DIR/cost-analysis/$TODAY/findings.json")
-  WASTE=$(jq -r '.summary.total_monthly_waste' "$TEST_AUDIT_DIR/cost-analysis/$TODAY/findings.json")
-  record_result "✓ cost-analysis.json created (score=$SCORE, findings=$FINDINGS, waste=\$$WASTE/mo)"
+  FINDINGS=$(jq -r '.summary.total_findings' "$TEST_AUDIT_DIR/cost-analysis/$TODAY/findings.json")
+  SAVINGS=$(jq -r '.summary.monthly_savings_identified' "$TEST_AUDIT_DIR/cost-analysis/$TODAY/findings.json")
+  record_result "✓ cost-analysis.json created (findings=$FINDINGS, native monthly savings=\$$SAVINGS)"
+  # AWSOPT/GCPOPT carry estimated_monthly_savings_usd (320+120+85=525); DDOPT
+  # carries estimated_monthly_cost_usd (a cost fact, not a savings figure) so it
+  # is a presence fact here. Assert the aggregation picked up the cost findings.
+  [ "$FINDINGS" -ge 3 ] || { record_result "✗ expected >=3 cost findings aggregated, got $FINDINGS"; exit 1; }
+  [ "$SAVINGS" = "525" ] || record_result "  note: native savings total=$SAVINGS (AWSOPT 320+120 + GCPOPT 85 = 525 expected)"
 else
   record_result "✗ cost-analysis.json NOT created"
   exit 1
@@ -307,9 +298,10 @@ fi
 DEDUPED=$(jq -r '[.findings[] | select(.deduplicated == true)] | length' "$TEST_AUDIT_DIR/cost-analysis/$TODAY/findings.json")
 record_result "✓ Deduplication check: $DEDUPED deduplicated findings"
 
-# Verify sorting (should be by ROI for cost_sensitivity=high)
+# Verify sorting: provider-native savings figures first, largest first
 FIRST_FINDING=$(jq -r '.findings[0].id' "$TEST_AUDIT_DIR/cost-analysis/$TODAY/findings.json")
-record_result "✓ First finding (highest ROI): $FIRST_FINDING (\$$(jq -r '.findings[0].monthly_cost' "$TEST_AUDIT_DIR/cost-analysis/$TODAY/findings.json")/mo)"
+FIRST_SAVINGS=$(jq -r '.findings[0].estimated_monthly_savings_usd // "none"' "$TEST_AUDIT_DIR/cost-analysis/$TODAY/findings.json")
+record_result "✓ First finding (largest native savings first): $FIRST_FINDING (\$$FIRST_SAVINGS/mo)"
 
 record_result ""
 

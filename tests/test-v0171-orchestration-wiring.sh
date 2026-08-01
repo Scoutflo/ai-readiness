@@ -30,7 +30,7 @@ EOF
 cat > "$SCOUTFLO_AUDIT_DIR/aws/$D/findings.json" <<EOF
 {"target":"aws","date":"$D",
  "findings":[
-  {"id":"AWS-020","title":"No alarm on RDS CPU for payments-db","severity":"high","area":"compute-health","lifecycle":"new","affected":["payments-db"]},
+  {"id":"AWS-030","title":"RDS payments-db has no automated backup retention","severity":"high","area":"managed-data-durability","lifecycle":"new","affected":["payments-db"]},
   {"id":"AWS-010","title":"SNS alert delivery route has no subscription","severity":"high","area":"alert-routing","lifecycle":"new","affected":["alerts-topic"]},
   {"id":"AWSOPT-001","title":"Compute Optimizer: db.r5.xlarge over-provisioned","severity":"medium","area":"cost-optimization","lifecycle":"new","affected":["payments-db"],"estimated_monthly_savings_usd":340},
   {"id":"AWSOPT-002","title":"6 EBS volumes unattached 40+ days","severity":"low","area":"cost-optimization","lifecycle":"new","affected":["vol-1"]}
@@ -60,15 +60,46 @@ tcount=$(jq '.overlaps[0].targets | length' "$CORR")
 [ "$tcount" -eq 2 ] || fail "expected 2 targets in overlap, got $tcount"
 echo "PASS"
 
-echo "Test 3: cascade links the db finding to alert-delivery findings, all IDs real"
-jq -e '.cascades[] | select(.root_cause.finding_id == "AWS-020")' "$CORR" > /dev/null \
-  || fail "no cascade rooted at AWS-020"
+echo "Test 3: cascade requires a REAL shared-resource join (v0.1.73 precision fix)"
+# AWS-030 is a datastore-durability finding on payments-db; GRAF-050 is an
+# alerting finding on the SAME resource -> exactly one cascade, one effect.
+# AWS-010 (alerts-topic) shares no resource with the datastore root and must
+# NOT appear as an effect (the v0.1.72 over-match bug).
+jq -e '.cascades[] | select(.root_cause.finding_id == "AWS-030")' "$CORR" > /dev/null \
+  || fail "no cascade rooted at AWS-030 (datastore finding on payments-db)"
+ceff=$(jq -r '[.cascades[]|select(.root_cause.finding_id=="AWS-030").effects[].finding_id]' "$CORR")
+echo "$ceff" | jq -e 'index("GRAF-050")' > /dev/null \
+  || fail "expected GRAF-050 as an effect (shares payments-db), got: $ceff"
+echo "$ceff" | jq -e 'index("AWS-010")' > /dev/null \
+  && fail "AWS-010 shares no resource with the root but was wrongly cascaded (v0.1.72 over-match regressed)"
 for id in $(jq -r '.cascades[].effects[].finding_id' "$CORR"); do
   case "$id" in
-    AWS-020|AWS-010|AWSOPT-001|AWSOPT-002|GRAF-050) : ;;
+    AWS-030|AWS-010|AWSOPT-001|AWSOPT-002|GRAF-050) : ;;
     *) fail "cascade references invented finding ID: $id" ;;
   esac
 done
+echo "PASS"
+
+echo "Test 3b: NO cascade when nothing shares a resource with a datastore finding"
+NOJOIN="$WORK/nojoin"; mkdir -p "$NOJOIN/aws/$D" "$NOJOIN/grafana/$D"
+cat > "$NOJOIN/aws/$D/findings.json" <<EOF
+{"target":"aws","findings":[{"id":"AWS-030","title":"RDS orders-db no backup","severity":"high","area":"managed-data-durability","affected":["orders-db"]}]}
+EOF
+cat > "$NOJOIN/grafana/$D/findings.json" <<EOF
+{"target":"grafana","findings":[{"id":"GRAF-050","title":"Alert on checkout-api routes nowhere","severity":"high","area":"alert-rules","affected":["checkout-api"]}]}
+EOF
+( SCOUTFLO_AUDIT_DIR="$NOJOIN" TOPOLOGY_FILE="$NOJOIN/none.json" \
+  . "$ROOT/skills/correlation-engine/lib/correlation-engine.sh"; \
+  SCOUTFLO_AUDIT_DIR="$NOJOIN" correlation_run "$D" ) > /dev/null
+njc=$(jq '.total_cascades_detected' "$NOJOIN/correlation.json")
+[ "$njc" -eq 0 ] || fail "expected 0 cascades with no shared resource, got $njc (over-match regressed)"
+echo "PASS"
+
+echo "Test 3c: PORTABILITY — correlation runs clean under /bin/sh on escaped-quote JSON (v0.1.73)"
+# The v0.1.72 lib used echo \"\$json\"|jq which mangled \\\" under dash/zsh-sh.
+# Re-run the whole correlation under an explicit sh -c and require exit 0.
+sh -c '. "'"$ROOT"'/skills/correlation-engine/lib/correlation-engine.sh"; correlation_run "'"$D"'"' > /dev/null 2>&1 \
+  || fail "correlation_run crashed under /bin/sh (echo->printf portability regressed)"
 echo "PASS"
 
 # ---- Phase 3.6: cost-analysis ----------------------------------------------

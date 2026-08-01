@@ -43,7 +43,7 @@ topology_guided_check_overlap() {
   finding_id="$1"
   correlation="$2"
 
-  echo "$correlation" | jq \
+  printf '%s\n' "$correlation" | jq \
     --arg id "$finding_id" \
     '
     .overlaps[] |
@@ -62,7 +62,7 @@ topology_guided_check_cascade_root() {
   finding_id="$1"
   correlation="$2"
 
-  echo "$correlation" | jq \
+  printf '%s\n' "$correlation" | jq \
     --arg id "$finding_id" \
     '
     .cascades[] |
@@ -81,7 +81,7 @@ topology_guided_check_cascade_impact() {
   finding_id="$1"
   correlation="$2"
 
-  echo "$correlation" | jq \
+  printf '%s\n' "$correlation" | jq \
     --arg id "$finding_id" \
     '
     .cascades[] |
@@ -100,9 +100,9 @@ topology_guided_is_critical() {
   service="$1"
   context="$2"
 
-  critical_deps=$(echo "$context" | jq '.critical_dependencies // []')
+  critical_deps=$(printf '%s\n' "$context" | jq '.critical_dependencies // []')
 
-  if echo "$critical_deps" | jq -e --arg svc "$service" 'index($svc)' >/dev/null 2>&1; then
+  if printf '%s\n' "$critical_deps" | jq -e --arg svc "$service" 'index($svc)' >/dev/null 2>&1; then
     echo "true"
   else
     echo "false"
@@ -117,7 +117,7 @@ topology_guided_estimate_tokens() {
 
   # Simple heuristic: critical services need more validation
   is_critical=$(topology_guided_is_critical "$service" "$context")
-  env=$(echo "$context" | jq -r '.environment // "production"')
+  env=$(printf '%s\n' "$context" | jq -r '.environment // "production"')
 
   if [ "$is_critical" = "true" ]; then
     if [ "$env" = "production" ]; then
@@ -146,7 +146,7 @@ topology_guided_get_recommendation() {
   # Check overlap
   overlap=$(topology_guided_check_overlap "$finding_id" "$correlation")
   if [ -n "$overlap" ] && [ "$overlap" != "null" ]; then
-    echo "$overlap" | jq -n --slurpfile data /dev/stdin '
+    printf '%s\n' "$overlap" | jq -n --slurpfile data /dev/stdin '
       {
         recommendation_type: "OVERLAP_DETECTED",
         action: "SKIP_OR_DEDUP",
@@ -161,7 +161,7 @@ topology_guided_get_recommendation() {
   # Check if root cause of cascade
   cascade_root=$(topology_guided_check_cascade_root "$finding_id" "$correlation")
   if [ -n "$cascade_root" ] && [ "$cascade_root" != "null" ]; then
-    echo "$cascade_root" | jq -n --slurpfile data /dev/stdin '
+    printf '%s\n' "$cascade_root" | jq -n --slurpfile data /dev/stdin '
       {
         recommendation_type: "CASCADE_ROOT",
         action: "FIX_FIRST_PRIORITY",
@@ -176,7 +176,7 @@ topology_guided_get_recommendation() {
   # Check if impacted by cascade
   cascade_impact=$(topology_guided_check_cascade_impact "$finding_id" "$correlation")
   if [ -n "$cascade_impact" ] && [ "$cascade_impact" != "null" ]; then
-    echo "$cascade_impact" | jq -n --slurpfile data /dev/stdin '
+    printf '%s\n' "$cascade_impact" | jq -n --slurpfile data /dev/stdin '
       {
         recommendation_type: "CASCADE_IMPACT",
         action: "WAIT_FOR_ROOT_FIX",
@@ -190,7 +190,7 @@ topology_guided_get_recommendation() {
 
   # Standard case: check criticality
   is_critical=$(topology_guided_is_critical "$service" "$context")
-  env=$(echo "$context" | jq -r '.environment // "production"')
+  env=$(printf '%s\n' "$context" | jq -r '.environment // "production"')
 
   if [ "$is_critical" = "true" ]; then
     echo "{
@@ -219,9 +219,9 @@ topology_guided_should_fix() {
   title="$3"
 
   recommendation=$(topology_guided_get_recommendation "$finding_id" "$service" "$title")
-  action=$(echo "$recommendation" | jq -r '.action // "UNKNOWN"')
+  action=$(printf '%s\n' "$recommendation" | jq -r '.action // "UNKNOWN"')
   context=$(_load_context)
-  cost_sensitivity=$(echo "$context" | jq -r '.cost_sensitivity // "medium"')
+  cost_sensitivity=$(printf '%s\n' "$context" | jq -r '.cost_sensitivity // "medium"')
 
   case "$action" in
     SKIP_OR_DEDUP)
@@ -242,7 +242,7 @@ topology_guided_should_fix() {
       return 1
       ;;
     CAN_PROCEED)
-      tokens=$(echo "$recommendation" | jq -r '.tokens_estimated // "10000"')
+      tokens=$(printf '%s\n' "$recommendation" | jq -r '.tokens_estimated // "10000"')
       if [ "$cost_sensitivity" = "high" ]; then
         echo "✓ Can proceed. Estimated cost: $tokens tokens ≈ \$0.$(((tokens / 1000) * 5))."
       else
@@ -266,7 +266,7 @@ topology_guided_show_guidance() {
   echo "Finding: $finding_id — $title"
   echo "Service: $service"
   echo ""
-  echo "$recommendation" | jq '
+  printf '%s\n' "$recommendation" | jq '
     "Recommendation: \(.recommendation_type)\n" +
     "Action: \(.action)\n" +
     "Rationale: \(.rationale)\n" +
@@ -285,14 +285,14 @@ topology_guided_get_fix_order() {
   correlation=$(_load_correlation)
 
   # Root causes = priority 1
-  root=$(echo "$correlation" | jq --arg id "$finding_id" '.cascades[] | select(.root_cause.finding_id == $id) | .cascade_id' | head -1)
+  root=$(printf '%s\n' "$correlation" | jq --arg id "$finding_id" '.cascades[] | select(.root_cause.finding_id == $id) | .cascade_id' | head -1)
   if [ -n "$root" ]; then
     echo "1"
     return 0
   fi
 
   # Impacted by cascade = priority 2
-  impact=$(echo "$correlation" | jq --arg id "$finding_id" '.cascades[] | select(.effects[].finding_id == $id) | .cascade_id' | head -1)
+  impact=$(printf '%s\n' "$correlation" | jq --arg id "$finding_id" '.cascades[] | select(.effects[].finding_id == $id) | .cascade_id' | head -1)
   if [ -n "$impact" ]; then
     echo "2"
     return 0

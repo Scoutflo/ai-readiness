@@ -1,11 +1,13 @@
 ---
 name: audit-kubernetes
-description: Audit Kubernetes cluster security and operational readiness. Discovers Pod Security Policies, RBAC gaps, network policies, resource limits, and pod security issues. Read-only; runs against the current kubeconfig context.
+description: Audit Kubernetes cluster security and operational readiness. Discovers Pod Security Admission enforcement, RBAC gaps, network policies, resource limits, and pod disruption budgets. Read-only; runs against the current kubeconfig context.
 ---
 
 # Kubernetes Audit
 
-Audit a Kubernetes cluster for security and operational configuration gaps. Checks Pod Security Policies, RBAC role bindings, network policies, resource requests/limits, and pod disruption budgets.
+Audit a Kubernetes cluster for security and operational configuration gaps. Checks Pod Security Admission (PSA) namespace enforcement, RBAC role bindings, network policies, resource requests/limits, and pod disruption budgets.
+
+> **Version note (K8s 1.25+):** PodSecurityPolicy (PSP) was **removed** in Kubernetes 1.25. Do not audit for PSP objects on any current cluster — the API no longer exists, so a "missing PSP" result is meaningless. The pod-security check below evaluates **Pod Security Admission** instead: the `pod-security.kubernetes.io/{enforce,audit,warn}` labels on namespaces. Detect the server version first (`kubectl version -o json`) and only fall back to PSP discovery if the server is genuinely older than 1.25.
 
 ## Prerequisites
 
@@ -32,7 +34,7 @@ Run read-only checks against the cluster:
 
 | Check | What | Category |
 | --- | --- | --- |
-| **Pod Security Policies** | Detect missing or permissive PSP (privileged, allow all) | Security |
+| **Pod Security Admission** | Detect namespaces with no `pod-security.kubernetes.io/enforce` label (unrestricted pod security). On servers older than 1.25, fall back to PSP discovery | Security |
 | **RBAC Gaps** | Find subjects with overly broad permissions (wildcard verbs, cluster-admin) | Security |
 | **Network Policies** | Count enforced vs missing ingress/egress policies per namespace | Network |
 | **Resource Limits** | Find deployments with no resource requests or limits | Reliability |

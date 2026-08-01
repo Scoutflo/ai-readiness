@@ -67,11 +67,13 @@ doctor_should_skip() {
   skip_until=$(echo "$check" | jq -r '.skip_until // empty' 2>/dev/null || echo "")
   [ -z "$skip_until" ] && return 1  # No skip_until, don't skip
 
-  # Compare skip_until to now (ISO 8601)
-  # For now: simple string comparison (works for ISO 8601)
-  now=$(date -u +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || date -u +"%Y-%m-%dT%H:%M:%SZ")
+  # Compare skip_until to now: ISO 8601 UTC strings sort lexicographically, so
+  # string comparison is correct. The operator must be escaped (\>) — a bare >
+  # inside [ ] is a shell redirect that creates a file named after the
+  # timestamp and makes the test always-true.
+  now=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
-  if [ "$skip_until" > "$now" ]; then
+  if [ "$skip_until" \> "$now" ]; then
     return 0  # Skip (skip_until is in future)
   fi
 

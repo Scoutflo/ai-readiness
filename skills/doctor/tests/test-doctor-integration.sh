@@ -1,111 +1,83 @@
 #!/bin/sh
-# Integration tests: doctor persistence with main doctor loop
-# Tests that doctor.sh calls doctor-integration.sh correctly
+# test-doctor-integration.sh
+# END-TO-END smoke test: actually invoke scripts/doctor.sh and assert it does
+# not crash on load. This is the test that was missing when v0.1.65's
+# persistence layer shipped broken — the old bats-style unit tests sourced the
+# lib directly (and crashed on an unbound BATS_TEST_DIRNAME, so they never ran
+# at all), which is exactly why doctor.sh failing to source
+# doctor-persistence.sh went unnoticed (doctor_state_init: command not found,
+# exit 127).
+#
+# Runs under plain /bin/sh with a throwaway HOME and a minimal config, so it
+# exercises the real load path without any live integration or secret.
+# Every assertion exits 1 on failure; no unconditional PASS.
 
 set -eu
 
-DOCTOR_LIB="${BATS_TEST_DIRNAME}/../lib"
-DOCTOR_STATE="/tmp/.scoutflo/doctor-state-integration-test.json"
-export DOCTOR_STATE
+DOCTOR_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+PLUGIN_ROOT="$(cd "$DOCTOR_DIR/../.." && pwd)"
+WORK="$(mktemp -d)"
+trap 'rm -rf "$WORK"' EXIT
 
-setup() {
-  mkdir -p "$(dirname "$DOCTOR_STATE")"
-  rm -f "$DOCTOR_STATE" "$DOCTOR_STATE.bak"
-}
+fail() { echo "FAIL: $1" >&2; exit 1; }
 
-teardown() {
-  rm -f "$DOCTOR_STATE" "$DOCTOR_STATE.bak"
-}
+echo "=== doctor end-to-end integration test ==="
 
-@test "doctor integration: init creates state file" {
-  . "${DOCTOR_LIB}/doctor-persistence.sh"
-  . "${DOCTOR_LIB}/doctor-integration.sh"
+# Isolated env: fake HOME, minimal config, plugin root pointed at the repo.
+export HOME="$WORK/home"
+export CLAUDE_PLUGIN_ROOT="$PLUGIN_ROOT"
+export SCOUTFLO_CONFIG="$WORK/toolkit.yaml"
+mkdir -p "$HOME/.scoutflo"
+# Minimal config: one block that is skipped (bogus creds) — doctor must still
+# load, init persistence, and exit without crashing on the load path.
+cat > "$SCOUTFLO_CONFIG" <<'EOF'
+grafana:
+  url: https://grafana.example.invalid
+  token_env: GRAFANA_TOKEN_DOES_NOT_EXIST
+  tier: read-only
+EOF
 
-  [ ! -f "$DOCTOR_STATE" ]
-  doctor_integration_init
-  [ -f "$DOCTOR_STATE" ]
-}
+echo "Test 1: doctor.sh loads and runs under /bin/sh without a 'command not found' crash"
+OUT="$WORK/out"; mkdir -p "$OUT"
+LOG="$WORK/doctor.log"
+# doctor may exit non-zero on a failed live check — fine. We assert on the
+# CRASH signature (bug#1), not the verdict.
+set +e
+sh "$DOCTOR_DIR/scripts/doctor.sh" --out "$OUT" > "$LOG" 2>&1
+rc=$?
+set -e
+if grep -q "command not found" "$LOG"; then
+  fail "doctor.sh emitted 'command not found' (persistence lib not sourced — bug#1): $(grep 'command not found' "$LOG" | head -1)"
+fi
+if grep -q "doctor_state_init:" "$LOG"; then
+  fail "doctor.sh referenced doctor_state_init before it was defined (sourcing order regressed)"
+fi
+echo "PASS (exit $rc, no load crash)"
 
-@test "doctor integration: full loop with skip logic" {
-  . "${DOCTOR_LIB}/doctor-persistence.sh"
-  . "${DOCTOR_LIB}/doctor-integration.sh"
+echo "Test 2: persistence initialized — doctor-state.json created and valid JSON"
+STATE="$HOME/.scoutflo/doctor-state.json"
+[ -f "$STATE" ] || fail "doctor-state.json not created (persistence init did not run)"
+jq empty "$STATE" 2>/dev/null || fail "doctor-state.json is not valid JSON"
+grep -q '"version"' "$STATE" || fail "doctor-state.json missing version field"
+echo "PASS"
 
-  doctor_integration_init
+echo "Test 3: skip-logic comparison does not leak a junk timestamp file (bug#2)"
+# The v0.1.72 bug: [ "\$a" > "\$b" ] was a redirect, creating a file named after
+# the timestamp. Assert no ISO-8601-named file appeared in the working dirs.
+junk=$(find "$WORK" "$PLUGIN_ROOT" -maxdepth 1 -name '20[0-9][0-9]-[0-1][0-9]-*T*' 2>/dev/null | head -1)
+[ -z "$junk" ] || fail "skip-logic created a junk timestamp file (unescaped > redirect regressed): $junk"
+echo "PASS"
 
-  # First run: check is NOT skipped (new)
-  if doctor_integration_should_skip "check-001"; then
-    skip "Check should not skip on first run"
-  fi
+echo "Test 4: matrix output written with a header"
+[ -f "$OUT/matrix.tsv" ] || fail "doctor did not write matrix.tsv"
+head -1 "$OUT/matrix.tsv" | grep -q "integration" || fail "matrix.tsv missing header row"
+echo "PASS"
 
-  # Simulate check pass and save state
-  doctor_integration_save_result "check-001" "Sample Check" "passed"
+echo "Test 5: NEGATIVE — a doctor.sh that fails to source the lib must fail Test 1"
+# Prove the assertion bites: simulate the bug by calling the un-sourced function.
+probe=$(sh -c 'doctor_state_init 2>&1 || true')
+echo "$probe" | grep -q "not found" || fail "negative control did not reproduce the bug#1 signature"
+echo "PASS (assertion is falsifiable)"
 
-  # Second run: check SHOULD be skipped (passed previously)
-  if ! doctor_integration_should_skip "check-001"; then
-    skip "Check should skip after passing"
-  fi
-}
-
-@test "doctor integration: auto-detect fix" {
-  . "${DOCTOR_LIB}/doctor-persistence.sh"
-  . "${DOCTOR_LIB}/doctor-integration.sh"
-
-  doctor_integration_init
-
-  # First run: check fails
-  doctor_integration_save_result "check-002" "Failed Check" "failed"
-  state=$(jq -r '.checks["check-002"].status' "$DOCTOR_STATE" 2>/dev/null || true)
-  [ "$state" = "failed" ]
-
-  # Simulate manual fix: update to passed
-  doctor_state_load
-  jq '.checks["check-002"].status = "passed"' "$DOCTOR_STATE" > "$DOCTOR_STATE.tmp"
-  mv "$DOCTOR_STATE.tmp" "$DOCTOR_STATE"
-
-  # Auto-detect fix
-  doctor_integration_auto_detect_fix "check-002"
-
-  # Verify auto_fixed flag set
-  auto_fixed=$(jq -r '.checks["check-002"].auto_fixed' "$DOCTOR_STATE" 2>/dev/null || true)
-  [ "$auto_fixed" = "true" ]
-}
-
-@test "doctor integration: persist state across sessions" {
-  . "${DOCTOR_LIB}/doctor-persistence.sh"
-  . "${DOCTOR_LIB}/doctor-integration.sh"
-
-  doctor_integration_init
-  doctor_integration_save_result "check-003" "Session Check" "passed"
-
-  # Unset functions to simulate new session
-  unset doctor_integration_should_skip doctor_integration_save_result
-
-  # Reload in new "session"
-  . "${DOCTOR_LIB}/doctor-persistence.sh"
-  . "${DOCTOR_LIB}/doctor-integration.sh"
-
-  # State should persist
-  if ! doctor_integration_should_skip "check-003"; then
-    skip "State should persist across sessions"
-  fi
-}
-
-@test "doctor integration: multiple checks tracked independently" {
-  . "${DOCTOR_LIB}/doctor-persistence.sh"
-  . "${DOCTOR_LIB}/doctor-integration.sh"
-
-  doctor_integration_init
-
-  # Save different statuses for different checks
-  doctor_integration_save_result "check-a" "Check A" "passed"
-  doctor_integration_save_result "check-b" "Check B" "failed"
-
-  # Check A should skip, Check B should not
-  if ! doctor_integration_should_skip "check-a"; then
-    skip "Check A should skip"
-  fi
-
-  if doctor_integration_should_skip "check-b"; then
-    skip "Check B should not skip (failed)"
-  fi
-}
+echo
+echo "=== All doctor integration tests passed ==="

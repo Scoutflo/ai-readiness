@@ -102,13 +102,13 @@ cost_analysis_deduplicate() {
 
   if [ ! -f "$CORRELATION_FILE" ]; then
     # No correlation = no dedup possible, return as-is
-    echo "$findings"
+    printf '%s\n' "$findings"
     return 0
   fi
 
   correlation=$(jq '.overlaps // []' "$CORRELATION_FILE")
 
-  echo "$findings" | jq \
+  printf '%s\n' "$findings" | jq \
     --argjson overlaps "$correlation" \
     '
     map(
@@ -142,11 +142,11 @@ cost_analysis_build_report() {
     fi
   )
 
-  cost_sensitivity=$(echo "$context" | jq -r '.cost_sensitivity // "medium"')
+  cost_sensitivity=$(printf '%s\n' "$context" | jq -r '.cost_sensitivity // "medium"')
 
   # Sort: findings with a provider-native savings figure first (largest first),
   # presence facts after, dedup-flagged entries annotated but kept.
-  sorted_findings=$(echo "$all_costs" | jq '
+  sorted_findings=$(printf '%s\n' "$all_costs" | jq '
     map(. + {roi_annual: (if .estimated_monthly_savings_usd != null
                           then .estimated_monthly_savings_usd * 12 else null end)})
     | sort_by(.estimated_monthly_savings_usd // -1) | reverse
@@ -154,7 +154,7 @@ cost_analysis_build_report() {
 
   jq -n \
     --arg date "$audit_date" \
-    --arg env "$(echo "$context" | jq -r '.environment // "production"')" \
+    --arg env "$(printf '%s\n' "$context" | jq -r '.environment // "production"')" \
     --arg sensitivity "$cost_sensitivity" \
     --argjson findings "$sorted_findings" \
     --argjson trend "$trend_array" \
@@ -208,7 +208,7 @@ cost_analysis_run() {
   # Aggregate findings from all audits (zero API calls)
   all_costs=$(cost_analysis_aggregate_findings "$audit_date")
 
-  if [ "$(echo "$all_costs" | jq '. | length')" -eq 0 ]; then
+  if [ "$(printf '%s\n' "$all_costs" | jq '. | length')" -eq 0 ]; then
     echo "[cost-analysis] No cost findings available"
     return 0
   fi
@@ -222,11 +222,11 @@ cost_analysis_run() {
   # Write report to cost-analysis.json
   report_dir="$AUDITS_DIR/cost-analysis/$audit_date"
   mkdir -p "$report_dir"
-  echo "$report" > "$report_dir/findings.json"
+  printf '%s\n' "$report" > "$report_dir/findings.json"
 
   # Append to history (cost-analysis.jsonl) — ONE LINE per entry
-  count=$(echo "$report" | jq '.summary.total_findings')
-  savings=$(echo "$report" | jq '.summary.monthly_savings_identified')
+  count=$(printf '%s\n' "$report" | jq '.summary.total_findings')
+  savings=$(printf '%s\n' "$report" | jq '.summary.monthly_savings_identified')
 
   history_entry=$(jq -c -n \
     --arg date "$audit_date" \
@@ -234,7 +234,7 @@ cost_analysis_run() {
     --argjson savings "$savings" \
     '{date: $date, total_findings: $count, monthly_savings_identified: $savings, state: "analyzed"}')
 
-  echo "$history_entry" >> "$COST_HISTORY"
+  printf '%s\n' "$history_entry" >> "$COST_HISTORY"
 
   echo "[cost-analysis] Report complete: ${report_dir}/findings.json"
   echo "[cost-analysis] Findings: $count, provider-native monthly savings identified: \$$savings"
