@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.1.73
+
+Fixes five real defects a full live `/scoutflo:audit-all` run surfaced — the kind static tests missed because nothing exercised the end-to-end load path. All five now carry falsifiable regression tests.
+
+- **doctor never initialized its persistence layer** — `scripts/doctor.sh` referenced `doctor_integration_init` but only sourced `doctor-integration.sh` (a thin forwarder), never `doctor-persistence.sh` where the functions are defined. Under `set -eu` this crashed with `doctor_state_init: command not found` (exit 127) the moment persistence was reached — broken since v0.1.65. Now sources both libs in order. Regression-tested by a new end-to-end `test-doctor-integration.sh` that actually invokes `doctor.sh` (the old bats-style test only sourced the lib directly and, worse, crashed on an unbound `BATS_TEST_DIRNAME` so it never ran).
+- **doctor skip-logic used an unescaped `>`** — `[ "$a" > "$b" ]` is a shell redirect, not a string comparison: it always succeeded and silently created a junk file named after the timestamp in the launch directory. Now `[ "$a" \> "$b" ]`; the new integration test asserts no such file appears.
+- **correlation-engine and cost-analysis crashed under `/bin/sh`** — both libraries piped JSON through `echo "$var" | jq`, and shells whose `echo` interprets backslashes (dash, zsh-as-sh) mangled the `\"` escapes, producing `jq: Invalid escape` on any real findings set. Converted every data pipe to `printf '%s\n'` (escape-safe). Also fixed in `topology-guided-setup`. New test re-runs correlation under an explicit `sh -c` and requires exit 0.
+- **correlation cascade detection over-matched** — the effect predicate had no join to the root, so every "database-ish" finding attached the same global list of every alert-ish finding (a live run produced 6 bogus roots each with an identical 28-effect list, matching `redis` as a substring of a rule name). Rewritten to require a **real shared-resource join**: a cascade root must be a datastore-durability finding whose concrete affected resource is also named in the effect finding. New tests prove it fires on a genuine shared-resource cascade and emits nothing when no resource is shared.
+- **audit-kubernetes shipped a fabrication stub and a removed-API check** — `lib/k8s-audit.sh` emitted three hardcoded findings and a canned report without ever querying a cluster (referenced by nothing; deleted). The SKILL.md also audited PodSecurityPolicy, **removed in Kubernetes 1.25** — updated to Pod Security Admission (`pod-security.kubernetes.io/*` namespace labels) with a documented PSP fallback only for pre-1.25 servers.
+
+No audit finding IDs or scoring semantics changed. Standalone audit behavior is unchanged except audit-kubernetes now checks the current pod-security mechanism.
+
 ## 0.1.72
 
 Fixes the config re-add gap a live customer session exposed: after connect correctly trims `toolkit.yaml` to only the integrations in use, re-adding a provider later had no stated canonical source for that provider's exact key shape, so a session could reconstruct keys from memory and invent wrong ones.

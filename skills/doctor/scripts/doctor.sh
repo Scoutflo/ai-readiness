@@ -118,8 +118,11 @@ if [ ! -f "$MATRIX" ]; then
   printf 'integration\tcheck\tconfigured\tenv_var\tresult\thttp_code\thint\n' > "$MATRIX"
 fi
 
-# Initialize doctor persistence layer
-if [ -f "${DOCTOR_LIB_DIR}/doctor-integration.sh" ]; then
+# Initialize doctor persistence layer. doctor-integration.sh only forwards to
+# functions defined in doctor-persistence.sh, so both must be sourced, in order.
+if [ -f "${DOCTOR_LIB_DIR}/doctor-persistence.sh" ] && [ -f "${DOCTOR_LIB_DIR}/doctor-integration.sh" ]; then
+  # shellcheck disable=SC1090
+  . "${DOCTOR_LIB_DIR}/doctor-persistence.sh"
   # shellcheck disable=SC1090
   . "${DOCTOR_LIB_DIR}/doctor-integration.sh"
   doctor_integration_init
