@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.75
+
+Adds a measured, reproducible efficiency section to `docs/token-costs.md` and retires an unsubstantiated wall-clock claim.
+
+- **New `tests/measure-efficiency.sh`** — regenerates every efficiency number from the repo on demand. Byte counts are exact; token columns are labelled ~chars/4 estimates. Measures: fixed instruction cost per audit (exact bytes of each `SKILL.md` + `references/*.md`), the full-suite-vs-targeted lever, and that the correlation/cost phases are pure shell (zero model tokens) with a 24h skip on unchanged data.
+- **docs/token-costs.md: "Efficiency, measured" section** — per-audit fixed instruction floor (all 13 = ~915KB / ~228.9K est tokens), the targeted-subset cost lever, and the re-run-avoidance behaviour, each tied to the script that reproduces it. Explicit "what this does not claim" block.
+- **Withdrew the wall-clock time figure** — removed the unmeasured "~40 minutes" line from the Real-World Example and added a note that no "X% faster / N hours" figure is published: audit wall-time is model-latency- and estate-bound, not a plugin property. Token/cost is the efficiency the plugin actually controls, and that is what is now measured. (This closes the same gap as the retracted v0.1.69 "40–50% faster" announcement claim — it was never in the repo and is not added.)
+
+No audit logic, finding IDs, or scoring changed. Docs + a measurement script only.
+
 ## 0.1.74
 
 Senior-review sweep of the whole v0.1.70–v0.1.73 arc: every test file in the repo now genuinely runs and exits 0, one more latent library bug fixed, and boundary hygiene tightened.
