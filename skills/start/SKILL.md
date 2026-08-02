@@ -45,7 +45,8 @@ State your installed toolkit version in this orientation (read `version` from `$
 | `/scoutflo:audit-jsm` | audit | JSM Operations paging: escalation and routing, on-call schedules, notification-policy noise, heartbeats, unacked aging |
 | `/scoutflo:audit-zenduty` | audit | Zenduty (Xurrent IMR) paging: escalation and on-call, collation dedup and alert-rule noise, routing, and analytics-backed MTTA/MTTR |
 | `/scoutflo:audit-groundcover` | audit | groundcover monitors: per-monitor firing hygiene (pendingFor, hysteresis, no-data/error state), notification noise, silence hygiene, and destination liveness |
-| `/scoutflo:audit-kubernetes` | audit | Kubernetes security and configuration: pod security policies, RBAC rules, network policies, resource limits |
+| `/scoutflo:audit-kubernetes` | audit | Kubernetes security and reliability: Pod Security Admission, RBAC over-permissioning, network policies, resource limits, disruption budgets |
+| `/scoutflo:setup-kubernetes` | setup | Guided hardening for `audit-kubernetes` findings: PSA labels, RBAC tightening, network policies, resource limits, PDBs |
 | `/scoutflo:setup-sentry` | setup | Projects, environments, alert taxonomy, integrations |
 | `/scoutflo:audit-alert-routing` | audit | Proves your paging path is live, rule to receiver |
 | `/scoutflo:audit-digitalocean` | audit | App Platform, managed databases, uptime, alert routing |

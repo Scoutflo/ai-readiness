@@ -24,6 +24,16 @@ jobs:
         run: sh ci/leak-scan.sh .
       - name: structure check
         run: sh ci/structure-check.sh .
+      - name: install jq
+        # The audit/correlation/cost/redaction libraries and their test suites
+        # parse JSON with jq; the runner needs it available.
+        run: sudo apt-get update && sudo apt-get install -y jq
+      - name: run test suites
+        # Executes every tests/*.sh and skills/*/tests/*.sh under /bin/sh and
+        # fails the build on any failure. Also rejects dead bats-syntax tests
+        # that cannot run under POSIX sh (the class that hid live bugs through
+        # eight releases). This is the step that actually exercises the code.
+        run: sh ci/run-tests.sh .
       - name: install Claude Code
         # Earliest version whose plugin validator supports --strict.
         run: npm install --global @anthropic-ai/claude-code@2.1.145

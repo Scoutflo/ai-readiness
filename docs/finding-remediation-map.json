@@ -418,6 +418,30 @@
       "setup_skill": "setup-grafana",
       "anchor": "service-coverage"
     },
+    "K8S-001": {
+      "setup_skill": "setup-kubernetes",
+      "anchor": "enforce-pod-security"
+    },
+    "K8S-002": {
+      "setup_skill": "setup-kubernetes",
+      "anchor": "tighten-rbac"
+    },
+    "K8S-003": {
+      "setup_skill": "setup-kubernetes",
+      "anchor": "add-network-policies"
+    },
+    "K8S-004": {
+      "setup_skill": "setup-kubernetes",
+      "anchor": "set-resource-limits"
+    },
+    "K8S-005": {
+      "setup_skill": "setup-kubernetes",
+      "anchor": "add-disruption-budgets"
+    },
+    "K8S-006": {
+      "setup_skill": "setup-kubernetes",
+      "anchor": "tighten-rbac"
+    },
     "SNTRY-001": {
       "setup_skill": "setup-sentry",
       "anchor": "alert-rule-taxonomy"
