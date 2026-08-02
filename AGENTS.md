@@ -9,14 +9,46 @@ Run the repository gates from the repo root:
 ```bash
 sh ci/leak-scan.sh .
 sh ci/structure-check.sh .
+sh ci/run-tests.sh .
 claude plugin validate . --strict
 ```
+
+`ci/structure-check.sh` composes the anchor, cross-block, coverage,
+remediation-map, and **skill-completeness** checks. `ci/run-tests.sh` executes
+every `tests/*.sh` and `skills/*/tests/*.sh` under `/bin/sh` (and rejects dead
+bats-syntax files that cannot run). All four run in CI on every push/PR — a
+failure blocks the merge.
 
 Smoke-test affected skills interactively with:
 
 ```bash
 claude --plugin-dir .
 ```
+
+## Adding or changing a skill — what the gates enforce
+
+`ci/skill-completeness-check.sh` mechanically enforces per-lane structure so a
+stub can never ship again (an audit skill once shipped as a 4KB placeholder with
+a fabricated `lib/` because the only automatic check was "has frontmatter"). A
+new skill must clear its lane's markers or CI fails:
+
+- **audit-\*** (except `audit-all`): SKILL.md ≥ 8KB, a Doctor gate, a Live-safety
+  gate, a reference to the report standard / findings schema, a Common Failure
+  Modes section, a `references/*.md` check catalog, and a
+  `tests/pressure-scenarios/<name>/*.md` scenario (I4).
+- **setup-\***: SKILL.md ≥ 8KB, "The change protocol" section, a Doctor gate, a
+  Live-safety gate, `disable-model-invocation: true` in frontmatter, and a Common
+  Failure Modes section.
+- **harness** (correlation-engine, cost-analysis, redaction, checkpoint, …): no
+  provider gates required; a `lib/`+`tests/`-only helper with no SKILL.md is a
+  library and is allowed. If it has a lib, add a `tests/*.sh` suite (it will be
+  run by `ci/run-tests.sh`).
+
+These gates check **structure**, not correctness. The judgment review
+(`docs/skill-review-rubric.md` via the maintainer `review-ai-readiness-skill`)
+still decides whether the checks a skill runs are the right ones — run it on any
+new or substantially changed skill before shipping. The gate stops stubs; the
+review stops wrong logic.
 
 ## Before editing
 
