@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.1.77
+
+Closes the onboarding-check gap that let the v0.1.76 `audit-kubernetes` stub ship green: the automatic gates only checked that a `SKILL.md` had frontmatter, so a 4KB placeholder passed everything and the real quality bar (the rubric review) is manual and was simply never run on it. New skills are now mechanically held to their lane's structure.
+
+- **New `ci/skill-completeness-check.sh` — a lane-aware structural gate, wired into `ci/structure-check.sh`** (so it runs in CI on every push/PR). It classifies each skill by name prefix and enforces the markers every shipped skill in that lane already has:
+  - **audit-\*** (except `audit-all`): `SKILL.md` ≥ 8KB, a Doctor gate, a Live-safety gate, a reference to the report standard / findings schema, a Common Failure Modes section, a `references/*.md` check catalog, and an I4 pressure scenario under `tests/pressure-scenarios/<name>/`.
+  - **setup-\***: `SKILL.md` ≥ 8KB, "The change protocol" section, a Doctor gate, a Live-safety gate, `disable-model-invocation: true` in frontmatter, and a Common Failure Modes section.
+  - **harness**: no provider gates; a `lib/`+`tests/`-only helper with no `SKILL.md` is correctly treated as a library, not a stub. The 8KB floor is applied only to the audit/setup lanes, where genuinely concise harness skills (checkpoint ~2.5KB) would otherwise false-fail.
+  The gate asserts gate *presence* by phrase, not heading depth, because some skills write "Live-safety gate." as bold-inline rather than a `##` heading.
+- **New `tests/test-skill-completeness-gate.sh` — the gate guards itself.** Five falsifiable cases prove the current fleet passes, an audit stub is rejected, a complete audit skill passes every marker, a setup skill missing `disable-model-invocation` is rejected, and a harness library dir is allowed. Runs under `ci/run-tests.sh` (13 suites now).
+- **AGENTS.md documents the contract** — a new "Adding or changing a skill" section states exactly what each lane must contain, and reiterates that the gate checks *structure* while the rubric review (`docs/skill-review-rubric.md`) still decides whether the checks a skill runs are the *right* ones. The gate stops stubs; the review stops wrong logic.
+
+No audit logic, finding IDs, or scoring changed. CI + contributor-guardrail only.
+
 ## 0.1.76
 
 Three structural improvements from the post-v0.1.75 review: CI now actually runs the tests, `audit-kubernetes` is rebuilt to fleet parity, and `setup-kubernetes` closes the first of the audit→setup remediation gaps.
