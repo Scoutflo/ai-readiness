@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.76
+
+Three structural improvements from the post-v0.1.75 review: CI now actually runs the tests, `audit-kubernetes` is rebuilt to fleet parity, and `setup-kubernetes` closes the first of the audit→setup remediation gaps.
+
+- **CI executes the test suites (the root-cause fix).** For eight releases CI ran only leak-scan / structure-check / plugin-validate and never executed a single test or shell library — which is how the v0.1.69 finding-dropping pipeline, the doctor crash, and the echo/jq portability break all shipped green. New `ci/run-tests.sh` discovers and runs every `tests/*.sh` and `skills/*/tests/*.sh` under `/bin/sh`, fails the build on any failure, and **hard-rejects dead bats-syntax tests** (`@test`/`$BATS_TEST_DIRNAME`) that cannot run under POSIX sh — the class that hid those bugs. Wired into `.github/workflows/ci.yml` as a required step (12 suites pass today).
+- **audit-kubernetes rebuilt to fleet parity.** It was a 4KB stub (no `references/`, still auditing PodSecurityPolicy — removed in K8s 1.25). Now a ~24KB skill matching its siblings: doctor + live-safety gates, estate sizing, a full check catalog in `references/kubernetes-checks.md` (K8S-001 Pod Security Admission, K8S-002/006 RBAC over-permissioning, K8S-003 network policies, K8S-004 resource limits, K8S-005 disruption budgets), category weights, the report standard, explicit-context safety, and a pressure scenario pinning "PSP-absence is not a finding on 1.25+". Check set grounded in the live audit-all run.
+- **New `setup-kubernetes` skill.** Pairs with the rebuilt audit so its remediation pointers resolve to a real, safe procedure: confirm-then-verify hardening for all five K8S findings (PSA labels, RBAC tightening, default-deny+allow network policies, resource limits, PDBs), with baseline-before-restricted and scoped-Role-before-removing-wildcard guards. Carries an explicit maturity note that it is **not yet proven live end to end**. 6 K8S remediation mappings added (124 total, all gate-verified).
+- The remaining 6 audits without a setup counterpart (datadog, elk, zenduty, pagerduty, alert-routing, groundcover) stay a tracked, build-one-at-a-time-with-live-proof roadmap — not a fabricated batch, per the v0.1.69 lesson.
+
+No existing audit logic, finding IDs, or scoring changed.
+
 ## 0.1.75
 
 Adds a measured, reproducible efficiency section to `docs/token-costs.md` and retires an unsubstantiated wall-clock claim.
