@@ -222,10 +222,76 @@ For these, Sonnet 5 is a good middle ground (3–10× more reasoning power, 3.75
 - Full suite run: `/scoutflo:audit-all`
 - **Tokens consumed:** ~720K
 - **Cost:** ~$0.58 at Haiku pricing
-- **Time:** ~40 minutes (wall-clock, ~5 min per audit, parallel runs possible)
 - **Output:** 12 reports with findings, scores, remediation advice
 
 **Cost amortized over 6 months (monthly audits):** ~$3.50 / month, or $0.07 per integration.
+
+> **On wall-clock time:** we do not publish a "minutes per audit" or "X% faster"
+> figure. Audit wall-time is dominated by model latency and estate size — neither
+> is a property of the plugin, and we have not benchmarked it under controlled
+> conditions. The efficiency the plugin actually controls is **token/cost**, and
+> that is what the section below measures. Any speed figure you have seen in an
+> announcement was an estimate and is withdrawn.
+
+## Efficiency, measured
+
+The claims here are reproducible: run `sh tests/measure-efficiency.sh` from the
+repo root to regenerate every number. Byte counts are exact; token columns use
+the standard ~4-characters-per-token approximation and are labelled as estimates.
+The exact **variable** cost of a run (the provider data the model reads) can only
+be read from Claude Code's own per-turn token counter during a live run — this
+section measures the parts that are deterministic and plugin-controlled.
+
+### Fixed instruction cost per audit (exact bytes, measured on v0.1.74)
+
+Every audit run loads that audit's `SKILL.md` plus its `references/*.md`. This is
+the fixed floor before any of your live data is read:
+
+| Audit | Fixed instructions (bytes) | ~tokens (est) |
+| --- | --- | --- |
+| audit-aws | 120,316 | ~30,100 |
+| audit-lgtm | 110,072 | ~27,500 |
+| audit-gcp | 96,112 | ~24,000 |
+| audit-sentry | 90,977 | ~22,700 |
+| audit-alert-routing | 89,598 | ~22,400 |
+| audit-digitalocean | 80,907 | ~20,200 |
+| audit-grafana | 72,662 | ~18,200 |
+| audit-pagerduty | 58,761 | ~14,700 |
+| audit-zenduty | 50,932 | ~12,700 |
+| audit-groundcover | 50,455 | ~12,600 |
+| audit-datadog | 47,307 | ~11,800 |
+| audit-elk | 43,394 | ~10,800 |
+| audit-kubernetes | 4,002 | ~1,000 |
+| **All 13** | **915,495** | **~228,900** |
+
+Plus the shared report standard loaded once per run: ~70,300 bytes (~17,600 tokens est).
+
+### The lever you control: run the audits you need
+
+`/scoutflo:audit-all` runs everything configured. If you only care about three
+stacks, run those three skills directly. Because the fixed instruction cost is
+per-audit, a targeted subset cuts that floor proportionally — e.g. `audit-datadog`
+alone carries ~11,800 fixed instruction tokens versus ~228,900 for all 13. The
+audits also do not filter their own live queries (they aim for full breadth), so
+**running fewer audits — not filtering within an audit — is the real cost lever.**
+
+### Re-run avoidance: 24h skip logic (measured: zero extra model tokens)
+
+`audit-all`'s cost-analysis phase (3.6) and its correlation phase (3.5) are pure
+`/bin/sh` + `jq` — they cost **zero model tokens**. Cost-analysis additionally
+skips entirely when it ran within the last 24h and no audit produced newer
+findings (`cost-analysis.jsonl` history check). Verified by
+`tests/measure-efficiency.sh`: a first run writes the aggregated report; an
+unchanged re-run within the window short-circuits and does no model work at all.
+For recurring monitoring this means the aggregation/correlation layer adds no
+per-run model cost, and unchanged re-runs of that layer are free.
+
+### What this does **not** claim
+
+- No "X% faster" or "N hours → M hours." Not measured; not a plugin property.
+- The per-audit **variable** token cost (your live config data) scales with
+  estate size — see the estimates in "Measured Costs" above; read the exact
+  figure from Claude Code's turn counter for your own estate.
 
 ## Billing
 
