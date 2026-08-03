@@ -466,6 +466,7 @@ jq -e '.estate.path == "small" or .estate.path == "medium" or .estate.path == "l
 grep -q '^# ' "$OUT/report.md" && echo "report.md present"
 # Output conformance: the emitted report.md must match report-standard/report-template.md.
 # This catches header/score-line/section drift before the run is declared done.
+sh "${CLAUDE_PLUGIN_ROOT}/report-standard/check-findings.sh" "$OUT/findings.json"
 sh "${CLAUDE_PLUGIN_ROOT}/report-standard/check-report.sh" "$OUT/report.md"
 
 # One Slack brief per run: titles only, never evidence values, no hostnames.

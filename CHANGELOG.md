@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.78
+
+Closes a report-quality gap: an audit's headline score is authored by the model at runtime, and nothing mechanically checked that it reconciled with the scorecard printed beside it — so a report could ship with an overall 2–5 points above what its own categories supported. Now the numbers are gated, not just the report's shape.
+
+- **New `report-standard/check-findings.sh` — scoring-integrity + schema gate for `findings.json`.** It recomputes `overall` from `score.categories` (excluding renormalized categories exactly as `severity-and-scoring.md` prescribes) and fails on any disagreement over one point, plus the machine-checkable schema invariants: required envelope fields present, `severity_counts` equal to the actual histogram, weights summing to 100, well-formed unique finding IDs, valid `status`/`lifecycle`/`severity` enums, evidence + a non-empty `remediation` pointer on every finding, `end_to_end` allowed only at/above the gate with no excluded category, and info findings at `points_recoverable: 0`. It checks arithmetic and schema, **not** whether a finding is *true* about the live system — that still needs live verification.
+- **Wired into all 14 audit skills' final self-validation phase**, run on `findings.json` immediately before `check-report.sh` runs on `report.md` (findings.json is canonical, so it validates first). A run cannot declare done with a score that does not reconcile.
+- **New `tests/test-check-findings.sh`** — the gate guards itself: a valid file (with a renormalized excluded category) passes, and each defect class is rejected (score drift, wrong `severity_counts`, missing envelope field, empty `remediation`, weights ≠ 100, malformed ID, `end_to_end` below gate, info finding with non-zero points). Runs under `ci/run-tests.sh` (14 suites now).
+- **Documented in `severity-and-scoring.md`** as an enforced "Scoring integrity" note, mirroring the existing report-conformance note.
+
+No audit logic, finding IDs, category weights, or the scoring model itself changed — this validates the model, it does not alter it. The `report-standard` docs and the gate are the only shipped changes.
+
 ## 0.1.77
 
 Closes the onboarding-check gap that let the v0.1.76 `audit-kubernetes` stub ship green: the automatic gates only checked that a `SKILL.md` had frontmatter, so a 4KB placeholder passed everything and the real quality bar (the rubric review) is manual and was simply never run on it. New skills are now mechanically held to their lane's structure.

@@ -36,6 +36,8 @@ Check results (used in scoring and in the coverage matrix, one value per check p
 
 Score conservatively. When you are unsure between two results, pick the lower one and state why.
 
+**Scoring integrity (enforced).** Every generated `findings.json` must pass [`check-findings.sh`](check-findings.sh), which recomputes the overall score from `score.categories` (excluding renormalized categories exactly as the model below prescribes) and fails if it disagrees by more than one point — plus the machine-checkable schema invariants (required envelope fields present, `severity_counts` equal to the actual histogram, weights summing to 100, well-formed unique finding IDs, evidence and a remediation pointer on every finding, `end_to_end` allowed only at or above the gate with no excluded category). Each audit skill runs it on its own `findings.json` in its final phase, before `check-report.sh`, so a headline score can never silently drift from the scorecard printed beside it (the exact defect this gate was built for: real runs shipped an overall 2–5 points above what their categories supported). Run it directly with `sh report-standard/check-findings.sh path/to/findings.json`; it exits non-zero and lists each violation. It checks arithmetic and schema, not judgment — it cannot know whether a finding is *true* about the live system, only that the file agrees with itself and the schema.
+
 ## Scoring model
 
 Each audit skill defines a category table: named categories with integer weights summing to 100. The reference example, from the LGTM audit:
