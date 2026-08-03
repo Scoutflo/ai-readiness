@@ -306,123 +306,54 @@ record_result "✓ First finding (largest native savings first): $FIRST_FINDING 
 record_result ""
 
 # ============================================================================
-# PHASE 4: Test Skip Logic (Second Run, <24h)
+# PHASE 4: Always-regenerate (no skip, no --force) — v0.1.82
 # ============================================================================
 
 record_result "═══════════════════════════════════════════════════════════════"
-record_result "PHASE 4: Cost-Analysis Skip Logic Test (<24h, No New Findings)"
+record_result "PHASE 4: Cost-Analysis Always Regenerates (no 24h skip)"
 record_result "═══════════════════════════════════════════════════════════════"
 
-# Run cost-analysis again (same day)
-SKIP_START=$(date +%s%N)
-cost_analysis_run "$TODAY" 2>&1 | grep -i "skip\|current" | head -2 | tee -a "$RESULTS_FILE"
-SKIP_END=$(date +%s%N)
-SKIP_DURATION_MS=$(( (SKIP_END - SKIP_START) / 1000000 ))
-
-record_result "✓ Skip check ran in ${SKIP_DURATION_MS}ms (should be <100ms if working)"
-
-# Verify skip was detected (check log output)
-if grep -q "Cost analysis is current\|Skipping (analysis current)" "$RESULTS_FILE"; then
-  record_result "✓ Skip logic verified: history <24h detected + skip message printed"
-  record_result "  → Token efficiency: skip detection in ${SKIP_DURATION_MS}ms vs full run in ${RUN_DURATION_MS}ms"
-  EFFICIENCY=$((100 - (SKIP_DURATION_MS * 100 / RUN_DURATION_MS)))
-  record_result "  → Efficiency gain: ${EFFICIENCY}% reduction in execution time"
-else
-  record_result "⚠ Skip log not detected, but function may have skipped anyway"
-  record_result "  (Test runs too fast to reliably check 24h boundary in same session)"
+# Re-run same day: must regenerate, never skip. The 24h skip cache was removed
+# (it could serve a stale roll-up — the "past data overpowers the output" bias).
+RERUN_OUT=$(cost_analysis_run "$TODAY" 2>&1)
+printf '%s\n' "$RERUN_OUT" | head -3 | tee -a "$RESULTS_FILE"
+if printf '%s\n' "$RERUN_OUT" | grep -qi "skip\|is current"; then
+  record_result "✗ FAIL: re-run skipped — the biasing 24h cache must be gone"
+  echo "FAIL: cost-analysis re-run skipped; 24h cache not removed" >&2
+  exit 1
 fi
+printf '%s\n' "$RERUN_OUT" | grep -q "Starting analysis" \
+  || { record_result "✗ FAIL: re-run did not regenerate"; echo "FAIL: no 'Starting analysis' on re-run" >&2; exit 1; }
+# The skip function must be gone from the lib.
+if grep -qE '^cost_analysis_should_skip *\(\)' "skills/cost-analysis/lib/cost-analysis.sh" 2>/dev/null; then
+  record_result "✗ FAIL: cost_analysis_should_skip() still defined"; echo "FAIL: should_skip still defined" >&2; exit 1
+fi
+record_result "✓ Re-run regenerates (no skip); cost_analysis_should_skip() removed; no --force needed"
 
 record_result ""
 
 # ============================================================================
-# PHASE 5: Test Force Flag
+# PHASE 6: Summary (behavior verified — no fabricated token numbers)
 # ============================================================================
-
-record_result "═══════════════════════════════════════════════════════════════"
-record_result "PHASE 5: Force Flag Test (--force Skips Skip Logic)"
-record_result "═══════════════════════════════════════════════════════════════"
-
-# Run with --force (should NOT skip)
-FORCE_START=$(date +%s%N)
-cost_analysis_run "$TODAY" --force 2>&1 | head -3 | tee -a "$RESULTS_FILE"
-FORCE_END=$(date +%s%N)
-FORCE_DURATION_MS=$(( (FORCE_END - FORCE_START) / 1000000 ))
-
-record_result "✓ Force run completed in ${FORCE_DURATION_MS}ms"
-
-# With --force, should always run (in same session, appending again to same date is expected)
-HISTORY_LINES_AFTER_FORCE=$(wc -l < "$TEST_AUDIT_DIR/cost-analysis.jsonl")
-record_result "✓ Force flag executed (--force bypasses skip logic)"
-record_result "  History entries: $HISTORY_LINES_AFTER_FORCE (may append to same date if running same-day)"
-
-record_result ""
-
-# ============================================================================
-# PHASE 6: Token Efficiency Summary
-# ============================================================================
-
-record_result "═══════════════════════════════════════════════════════════════"
-record_result "PHASE 6: Token Efficiency Measurement Summary"
-record_result "═══════════════════════════════════════════════════════════════"
-
-# Simulate token counts (based on audit findings size)
-FIRST_RUN_TOKENS=63000  # Baseline for all 3 audits
-SKIP_RUN_TOKENS=100     # Skip detection only
-FORCE_RUN_TOKENS=58000  # Force re-run
-
-SKIP_SAVINGS=$((100 - (SKIP_RUN_TOKENS * 100 / FIRST_RUN_TOKENS)))
-
-record_result ""
-record_result "Real Data Simulation Results:"
-record_result "  Estate size: 1,257 resources (AWS 1180 + GCP 340 + Datadog 127)"
-record_result "  Total identifiable waste: \$570/month"
-record_result ""
-record_result "First run (all audits + cost-analysis):"
-record_result "  Estimated tokens: ~${FIRST_RUN_TOKENS} tokens"
-record_result "  Duration: ${RUN_DURATION_MS}ms"
-record_result ""
-record_result "Second run (<24h, skip logic active):"
-record_result "  Estimated tokens: ~${SKIP_RUN_TOKENS} tokens (skip detection only)"
-record_result "  Duration: ${SKIP_DURATION_MS}ms"
-record_result "  ✓ Token savings: ${SKIP_SAVINGS}% (${FIRST_RUN_TOKENS} → ${SKIP_RUN_TOKENS})"
-record_result ""
-record_result "Force re-run (--force flag):"
-record_result "  Estimated tokens: ~${FORCE_RUN_TOKENS} tokens"
-record_result "  Duration: ${FORCE_DURATION_MS}ms"
-record_result ""
-
-# Weekly projection
-WEEKLY_WITHOUT_GOVERNANCE=$((FIRST_RUN_TOKENS * 7))
-WEEKLY_WITH_GOVERNANCE=$((FIRST_RUN_TOKENS + (SKIP_RUN_TOKENS * 3) + FORCE_RUN_TOKENS + FIRST_RUN_TOKENS))
-WEEKLY_SAVINGS=$((100 - (WEEKLY_WITH_GOVERNANCE * 100 / WEEKLY_WITHOUT_GOVERNANCE)))
-ANNUAL_SAVINGS=$((WEEKLY_SAVINGS * 52))
-
-record_result "Weekly projection (assuming audit cycle):"
-record_result "  Without governance: ~${WEEKLY_WITHOUT_GOVERNANCE} tokens"
-record_result "  With governance: ~${WEEKLY_WITH_GOVERNANCE} tokens"
-record_result "  ✓ Weekly savings: ${WEEKLY_SAVINGS}%"
-record_result "  ✓ Annual savings: ~${ANNUAL_SAVINGS}% reduction in token cost"
-record_result ""
 
 record_result "═══════════════════════════════════════════════════════════════"
 record_result "TEST SUMMARY"
 record_result "═══════════════════════════════════════════════════════════════"
-
 record_result ""
 record_result "✅ All tests passed!"
 record_result ""
-record_result "✓ Cost-Analysis aggregates findings from multiple audits"
-record_result "✓ Skip logic prevents redundant analysis (<24h + no new findings)"
-record_result "✓ Force flag allows bypassing skip logic when needed"
-record_result "✓ History ledger updated correctly"
-record_result "✓ Deduplication applied (0 conflicts in this run)"
+record_result "✓ Cost-Analysis aggregates cost-optimization findings from multiple audits"
+record_result "✓ Roll-up ALWAYS regenerates from the current run (no 24h skip, no --force)"
+record_result "✓ cost_analysis_should_skip() removed — no path can serve a stale roll-up"
+record_result "✓ History ledger updated (trend only; never used to skip)"
+record_result "✓ Deduplication applied via correlation.json"
 record_result "✓ Business context applied (high cost_sensitivity sorts by ROI)"
 record_result "✓ Reports valid JSON (findings.json + history.jsonl)"
 record_result ""
-record_result "Token Efficiency Verified:"
-record_result "  ✓ Skip run: ${SKIP_SAVINGS}% reduction"
-record_result "  ✓ Weekly: ${WEEKLY_SAVINGS}% reduction"
-record_result "  ✓ Annual: ${ANNUAL_SAVINGS}% reduction"
+record_result "Note: the roll-up makes ZERO provider API calls (reads local findings"
+record_result "only), so there is nothing to cache; the old token/dollar 'savings from"
+record_result "skipping' figures were removed as unmeasured. For measured efficiency"
+record_result "numbers see tests/measure-efficiency.sh + docs/token-costs.md."
 record_result ""
 record_result "Results saved to: $RESULTS_FILE"
 record_result ""

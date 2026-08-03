@@ -42,33 +42,10 @@ cost_analysis_load_context() {
   fi
 }
 
-# Check if cost-analysis should skip (already current within 24h, no new findings)
-cost_analysis_should_skip() {
-  [ ! -f "$COST_HISTORY" ] && return 1  # No history = first run, DO RUN
-
-  # fromjson? tolerates a corrupted last line: unparseable -> stale date -> DO RUN
-  last_run=$(tail -1 "$COST_HISTORY" | jq -Rr 'fromjson? | .date // empty' 2>/dev/null)
-  [ -n "$last_run" ] || last_run="2000-01-01"
-  # GNU date first, BSD/macOS date second; unparseable = treat as stale, DO RUN
-  last_run_epoch=$(date -d "$last_run" +%s 2>/dev/null \
-    || date -j -f %Y-%m-%d "$last_run" +%s 2>/dev/null \
-    || echo 0)
-  now_epoch=$(date +%s)
-  hours_ago=$(( (now_epoch - last_run_epoch) / 3600 ))
-
-  # Skip if <24h old AND no new audit findings
-  if [ "$hours_ago" -lt 24 ]; then
-    new_findings=$(find "$AUDITS_DIR" -name "findings.json" \
-      -newer "$COST_HISTORY" 2>/dev/null | wc -l)
-
-    if [ "$new_findings" -eq 0 ]; then
-      echo "Cost analysis is current (${hours_ago}h old, no new findings)"
-      return 0  # SKIP
-    fi
-  fi
-
-  return 1  # RUN
-}
+# (Removed cost_analysis_should_skip — this roll-up now ALWAYS regenerates.
+# It re-reads only the current run's findings at zero API cost, so caching bought
+# nothing and a 24h skip could serve a stale roll-up. History is still appended
+# below for the trend line; it is never used to skip a run.)
 
 # Collect cost-optimization findings from all audit reports (no API calls).
 # Per the report standard, cost findings live in the normal findings[] array
@@ -202,19 +179,18 @@ cost_analysis_build_report() {
 # Main entry point
 cost_analysis_run() {
   audit_date="${1:-.}"
-  force="${2:-}"
+  # (Second positional arg is ignored; kept for call-site compatibility.)
 
   # Normalize audit_date to YYYY-MM-DD if "."
   if [ "$audit_date" = "." ]; then
     audit_date=$(date +%Y-%m-%d)
   fi
 
-  # Check skip condition (unless --force)
-  if [ "$force" != "--force" ] && cost_analysis_should_skip; then
-    echo "[cost-analysis] Skipping (analysis current)"
-    return 0
-  fi
-
+  # ALWAYS regenerate. This roll-up only re-reads the current run's findings
+  # (zero API calls), so there is nothing worth caching — and a 24h skip that
+  # served a stale roll-up is exactly the "past data overpowers the output"
+  # bias we removed from the deep cost path. There is no skip and no --force:
+  # every invocation rebuilds from the findings present now.
   echo "[cost-analysis] Starting analysis for $audit_date"
 
   # Load context

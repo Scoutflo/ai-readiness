@@ -252,7 +252,7 @@ else
 fi
 ```
 
-Expected output: `[cost-analysis] Report complete: <audits-dir>/cost-analysis/<date>/findings.json` plus a one-line totals summary, or `[cost-analysis] Skipping (analysis current)` on a re-run within 24h with no new findings, or `[cost-analysis] No cost findings available` when no audit emitted a cost-optimization section — all three are clean outcomes.
+Expected output: `[cost-analysis] Report complete: <audits-dir>/cost-analysis/<date>/findings.json` plus a one-line totals summary, or `[cost-analysis] No cost findings available` when no audit emitted a cost-optimization section — both clean outcomes. The roll-up always regenerates from the current run's findings (no 24h skip); it makes zero API calls, so there is nothing to cache.
 
 **Outputs:**
 - `<audits-dir>/cost-analysis/<date>/findings.json` — aggregated cost findings sorted with provider-native savings figures first (largest first), presence facts after

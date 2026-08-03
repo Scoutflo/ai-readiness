@@ -123,10 +123,15 @@ jq -e '.findings[] | select(.id == "AWSOPT-002") | .estimated_monthly_savings_us
   || fail "presence fact AWSOPT-002 was given a dollar figure"
 echo "PASS"
 
-echo "Test 6: history line appended and 24h skip logic engages on re-run"
+echo "Test 6: roll-up ALWAYS regenerates on re-run (no 24h skip — v0.1.82)"
 [ -f "$SCOUTFLO_AUDIT_DIR/cost-analysis.jsonl" ] || fail "history ledger not written"
 out=$( ( . "$ROOT/skills/cost-analysis/lib/cost-analysis.sh"; cost_analysis_run "$D" ) 2>&1 )
-echo "$out" | grep -q "Skipping" || fail "re-run within 24h did not skip: $out"
+echo "$out" | grep -qi "Skipping" && fail "re-run wrongly skipped — the 24h skip must be gone: $out"
+echo "$out" | grep -q "Starting analysis" || fail "re-run did not regenerate (expected 'Starting analysis'): $out"
+# The should_skip function DEFINITION must no longer exist in the lib
+# (match the function definition, not a mention in a comment).
+grep -qE '^cost_analysis_should_skip *\(\)' "$ROOT/skills/cost-analysis/lib/cost-analysis.sh" \
+  && fail "cost_analysis_should_skip() still defined — the biasing skip cache was not removed"
 echo "PASS"
 
 echo "Test 6b: corrupted history ledger degrades gracefully, never crashes (v0.1.74)"
@@ -134,7 +139,7 @@ CORR6B="$WORK/corrupt"; mkdir -p "$CORR6B/aws/$D"
 printf '%s' '{"target":"aws","findings":[{"id":"AWSOPT-001","severity":"low","area":"cost-optimization","title":"x","affected":["i-1"],"estimated_monthly_savings_usd":50}]}' > "$CORR6B/aws/$D/findings.json"
 printf 'NOT-JSON-GARBAGE\n' > "$CORR6B/cost-analysis.jsonl"
 ( SCOUTFLO_AUDIT_DIR="$CORR6B" sh -c '. "'"$ROOT"'/skills/cost-analysis/lib/cost-analysis.sh"; cost_analysis_run "'"$D"'"' ) > /dev/null 2>&1 \
-  || fail "cost_analysis_run crashed on a corrupted history line (must skip it and run)"
+  || fail "cost_analysis_run crashed on a corrupted history line (the malformed trend line must be dropped, run still completes)"
 [ -f "$CORR6B/cost-analysis/$D/findings.json" ] || fail "report not written despite corrupted-history recovery"
 echo "PASS"
 
