@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.1.80
+
+Rebuilds the **business-context** skill from a 5-field scalar prompt into rich source-of-truth capture, and consolidates three competing context stores into one. The old skill asked only team/environment/SLA/cost/billing and saved scalars to `topology.json` — so per-service SLAs, per-environment access, exclusions, risky-ops, and custom runbooks (all of which the shipped template already defined) had nowhere to go, and a rich `business_context.md` was required by other skills but created by none.
+
+- **`~/.scoutflo/business_context.md` is now the single source of truth** — a rich, version-controllable file (like a CLAUDE.md for your infra) following `templates/business_context_template.md`: per-service SLAs, a new **Environment Map** (which AWS profile / GCP project / kube context + which SLA each environment uses — so staging is audited with staging's profile and judged against staging's SLA, never production's), critical services, exclusions, risky operations, cost sensitivity, token budgets, notification routing, custom runbooks, and a free-form Custom Rules section.
+- **Four capture modes** in the rebuilt skill: guided core questions, guided rich questions, **paste your own rules/runbooks verbatim**, and **import an existing file**. None past the core is forced.
+- **Consolidation with no behavior loss.** The skill derives `~/.scoutflo/business_context.json` (a machine projection) from the SSOT; `correlation-engine`, `cost-analysis`, and `topology-guided-setup` now read that projection first, falling back to the legacy `topology.json:.business_context` so nothing regresses mid-migration. `bc_migrate_from_topology` seeds the SSOT from a legacy scalar store on first run **without deleting `topology.json`** (checkpoint owns `.audit_scope` there — a migration that deleted the file would silently disable that; the test asserts it survives). The safety-critical `topology-guided-setup` critical-service approval gate keeps working (its test passes against the new projection).
+- **Fixed the broken 31-byte `docs/BUSINESS-CONTEXT-INTEGRATION-v0168.md` stub** (it literally contained `$(cat /tmp/spec_integration.md)` — the unexpanded command) that all 10 audit skills delegate their "apply business context" logic to. It now documents the real load order, per-field effects, and the Metadata Load block.
+- **`connect` now offers business-context capture** (Step 8) after doctor verification — previously it never mentioned `business_context.md` even though `business-context-resolver` required it.
+- The `business-context` test is rewritten to exercise the real lib (SSOT emission, validator pass, JSON derivation, critical-services + environment-map parsing, paste, import, migration) instead of hand-building `topology.json` and asserting on it.
+
+No audit finding IDs, category weights, or the scoring model changed.
+
 ## 0.1.79
 
 New first-class **`audit-cost`** skill — a deep, live, per-resource cloud cost audit — replacing the thin `cost-analysis` re-aggregator as the way to investigate cost. The old skill only re-read the cost-optimization findings other audits had already written (so a real run surfaced one recycled finding and no report.md); this one queries each provider's own cost surfaces live and produces per-resource findings.
