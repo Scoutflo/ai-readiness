@@ -65,7 +65,7 @@ This document specifies how to avoid these issues.
 **Reads from:**
 1. Individual audit `findings.json:cost_section` (already computed)
 2. `correlation.json` (dedup overlaps — "Grafana already tracks this, don't double-count AWS cost")
-3. `cost-analysis.jsonl` history (skip re-runs within 24h, compute delta)
+3. `cost-analysis.jsonl` history (trend + delta only; never skips a run)
 4. `business_context` (sort by cost_sensitivity: high → ROI first, low → impact first)
 
 **Writes:**
@@ -74,59 +74,29 @@ This document specifies how to avoid these issues.
 
 ---
 
-## History & Skip Logic
+## History (trend only — no skip)
 
 ### cost-analysis.jsonl
 
 Same pattern as `findings.jsonl`, but for cost trends:
 
 ```jsonl
-{"date":"2026-07-29","overall":38,"monthly_waste":520,"identifiable_waste":440,"state":"trend_rising"}
-{"date":"2026-07-30","overall":42,"monthly_waste":500,"identifiable_waste":410,"state":"improving"}
+{"date":"2026-07-29","total_findings":6,"monthly_savings_identified":520,"state":"analyzed"}
+{"date":"2026-07-30","total_findings":5,"monthly_savings_identified":410,"state":"analyzed"}
 ```
 
-### Skip Logic: When to Re-Run Cost Analysis
+### No skip logic — the roll-up ALWAYS regenerates (v0.1.82)
 
-**Run cost-analysis if:**
-- `cost-analysis.jsonl` does not exist (first run)
-- Last entry in `cost-analysis.jsonl` is >24h old
-- Any new audit findings since last cost-analysis run (check timestamps)
-- User explicitly runs `/scoutflo:cost-analysis --force`
+There is **no** 24h skip and **no** `--force` flag. The old `cost_analysis_should_skip`
+was removed: it could serve a *stale* roll-up (the "past data overpowers the
+output" bias the deep `audit-cost` skill was built to avoid). This roll-up reads
+only local `findings.json` and `correlation.json` — **zero provider API calls** —
+so there is nothing worth caching. Every invocation rebuilds from the findings
+present now, then appends one line to `cost-analysis.jsonl` for the trend. The
+history ledger is used only for the delta/trend line; it never gates a run.
 
-**Skip cost-analysis if:**
-- Last entry is <24h old AND no new audit findings added
-- Log: "Cost analysis up-to-date (last run 2h ago). Run with --force to refresh."
-
-### Skip Detection Algorithm
-
-```bash
-cost_analysis_should_skip() {
-  cost_history_file="$AUDITS_DIR/cost-analysis.jsonl"
-  
-  # No history = first run
-  [ ! -f "$cost_history_file" ] && return 1
-  
-  # Get timestamp of last cost-analysis run
-  last_run=$(tail -1 "$cost_history_file" | jq -r '.date')
-  last_run_epoch=$(date -d "$last_run" +%s)
-  now_epoch=$(date +%s)
-  hours_ago=$(( (now_epoch - last_run_epoch) / 3600 ))
-  
-  # Skip if <24h old
-  if [ "$hours_ago" -lt 24 ]; then
-    # Check if any NEW audit findings since last cost-analysis
-    new_findings=$(find "$AUDITS_DIR" -name "findings.json" \
-      -newer "$cost_history_file" | wc -l)
-    
-    if [ "$new_findings" -eq 0 ]; then
-      echo "Cost analysis is current (${hours_ago}h old, no new findings)"
-      return 0  # SKIP
-    fi
-  fi
-  
-  return 1  # RUN
-}
-```
+For deep, live, per-resource cost analysis (which queries the providers), use
+`/scoutflo:audit-cost` — it also always runs live and has no cache to force past.
 
 ---
 
@@ -301,8 +271,8 @@ Wednesday 9am: Run /scoutflo:audit-all + cost analysis
   └─ Appends to cost-analysis.jsonl
 
 Friday 5pm: User asks for fresh cost report
-  └─ Run /scoutflo:cost-analysis --force
-  └─ Skips 24h check, re-aggregates all audits
+  └─ Run /scoutflo:cost-analysis
+  └─ Always re-aggregates all audits (no skip, no --force needed)
 ```
 
 ---

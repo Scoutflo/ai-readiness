@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.82
+
+Removes the last "past data overpowers the output" bias: the `cost-analysis` roll-up's 24h skip-and-reuse cache. It's the same class of defect that made the old deep-cost path shallow — a cache that could hand back a **stale** roll-up instead of rebuilding.
+
+- **`cost-analysis` now ALWAYS regenerates.** Deleted `cost_analysis_should_skip` and the `--force` branch from `skills/cost-analysis/lib/cost-analysis.sh`. Every invocation rebuilds from the findings present now. The roll-up reads only local `findings.json`/`correlation.json` (**zero provider API calls**), so there was nothing worth caching — and no `--force` is needed because there's no skip to force past. History (`cost-analysis.jsonl`) is still appended for the trend line; it never gates a run.
+- **`audit-cost` deliberately has no `--force`** — it already always runs deep and live with no skip/reuse cache (verified: zero skip logic). A `--force` flag would falsely imply a stale/cheap mode exists. The estate-scope checkpoint (v0.1.81) is the only pause, and it's about scope, not caching.
+- **Tests updated to assert the new behavior, and fabricated numbers removed.** `test-v0171` Test 6 now asserts the roll-up regenerates and `cost_analysis_should_skip()` is gone; `test-v0167-token-efficiency` dropped its skip/force phases and the fabricated `~63000-token / N% savings` Phase 6 (unmeasured claims) in favor of an honest summary pointing at `tests/measure-efficiency.sh` for real numbers; `measure-efficiency.sh` and the SKILL/spec docs updated to describe always-regenerate.
+
+No audit finding IDs, category weights, or the scoring model changed. Docs + the roll-up harness + tests only; the deep `audit-cost` path is unchanged (it never had a skip).
+
 ## 0.1.81
 
 Wires the interactive estate-sizing **scope checkpoint** into every audit and adds a CI parity gate so it can't rot again. The `cli_pause_before_audit` / `cli_prompt_exclude_services` helpers and the `checkpoint` scope-persistence skill shipped in v0.1.65, but **no audit ever called them** — so a large estate (e.g. `audit-grafana` at 4,017 objects, `audit-aws` at 1,336) ground through the whole estate with no pause and no chance to scope.

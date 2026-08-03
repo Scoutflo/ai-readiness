@@ -1,6 +1,6 @@
 ---
 name: cost-analysis
-description: 'Internal roll-up harness (v0.1.67+): inside /scoutflo:audit-all, aggregates the cost-optimization findings the individual audits already wrote (area cost-optimization — AWSOPT-*, DDOPT-*), de-duplicates them via correlation.json, and writes a combined cost roll-up with a 24h skip. It re-reads existing findings; it does NOT query providers. For a DEEP, live, per-resource cost analysis, use /scoutflo:audit-cost. Wired into /scoutflo:audit-all after the correlation engine.'
+description: 'Internal roll-up harness (v0.1.67+): inside /scoutflo:audit-all, aggregates the cost-optimization findings the individual audits already wrote (area cost-optimization — AWSOPT-*, DDOPT-*), de-duplicates them via correlation.json, and writes a combined cost roll-up. It ALWAYS regenerates (no skip, no cache) and re-reads existing findings only; it does NOT query providers. For a DEEP, live, per-resource cost analysis, use /scoutflo:audit-cost. Wired into /scoutflo:audit-all after the correlation engine.'
 ---
 
 # Cost Analysis (roll-up harness)
@@ -15,29 +15,11 @@ Aggregates the cost-optimization findings the individual audits already wrote in
 
 ## How it works
 
-### Skip Logic: Zero Re-Analysis if Unchanged
+### Always regenerates — no skip, no stale roll-up
 
-First run: cost-analysis always runs. Result: `cost-analysis.json` + one line appended to `cost-analysis.jsonl` (history).
+This roll-up **always rebuilds** from the findings present in the current run. It re-reads only local `findings.json` files (zero API calls), so there is nothing worth caching — and a "skip if <24h old" cache could hand back a stale roll-up, the exact "past data overpowers the output" bias that was removed from the deep cost path. There is no skip and no `--force`: every invocation aggregates whatever findings exist now, then appends one history line for the trend.
 
-Subsequent runs within 24h with no new audit findings: **SKIP** — reuses previous report, no API calls.
-
-Example:
-```bash
-Monday 9am:  /scoutflo:audit-all
-  └─ audit-aws: calls AWS Cost Explorer, stores findings.json:cost_section
-  └─ audit-gcp: calls GCP Cost Management, stores findings.json:cost_section
-  └─ correlation-engine: detects overlaps
-  └─ cost-analysis: aggregates (RUNS, 0 extra API calls)
-
-Tuesday 2pm: /scoutflo:audit-all again
-  └─ cost-analysis: skips (only 29h old, no new audit findings)
-  └─ Log: "Cost analysis is current (29h old, no new findings)"
-
-Wednesday 9am: /scoutflo:audit-all again + new AWS findings
-  └─ AWS audit finds NEW instances
-  └─ cost-analysis detects change, RUNS
-  └─ Computes delta vs yesterday, updates trend
-```
+For a **deep, live, per-resource** cost analysis (querying Cost Explorer / Compute Optimizer / GCP Recommender / Datadog usage / K8s / DO billing), run [`/scoutflo:audit-cost`](../audit-cost/SKILL.md) — that skill always runs live too and has no cache to force past.
 
 ### Data Flow: Individual Audits → Master Report
 
@@ -210,49 +192,13 @@ Example from `topology.json`:
 
 → cost-analysis sorts by annual ROI, shows token cost for each fix.
 
-## Skip Logic Behavior
+## Run behavior — always regenerate, zero API calls
 
-**Run cost-analysis if:**
-- File `cost-analysis.jsonl` doesn't exist (first run)
-- Last entry in `cost-analysis.jsonl` is >24 hours old
-- Any new audit findings since last cost-analysis run (checked via find newer)
-- User runs `/scoutflo:cost-analysis --force`
+- **Always runs.** Every invocation rebuilds the roll-up from the findings present now; there is no skip and no `--force`. Removing the old 24h skip removes the only path that could serve a stale roll-up.
+- **Zero API calls.** It reads local `findings.json` and `correlation.json` only — it never calls a provider. (The deep, live provider queries belong to `/scoutflo:audit-cost` and the individual audits, not here.)
+- **Log output:** `[cost-analysis] Starting analysis for <date>` → `[cost-analysis] Report complete: …/cost-analysis/<date>/findings.json`, or `[cost-analysis] No cost findings available` when no audit emitted a cost-optimization finding.
 
-**Skip cost-analysis if:**
-- Last entry is <24h old AND no new audit findings added
-- Reuses previous report, no work
-
-**Log output:**
-- Run: `[cost-analysis] Starting analysis for 2026-07-30`
-- Skip: `[cost-analysis] Skipping (analysis current)`
-- Success: `[cost-analysis] Report complete: scoutflo-audits/cost-analysis/2026-07-30/findings.json`
-
-## No Double API Calls
-
-| Who calls what | When | Cost-analysis behavior |
-|---|---|---|
-| audit-aws → AWS Cost Explorer | Every audit run | Reads from findings.json:cost_section (zero API calls) |
-| audit-gcp → GCP Cost Management | Every audit run | Reads from findings.json:cost_section (zero API calls) |
-| audit-datadog → Datadog usage API | Every audit run | Reads from findings.json:cost_section (zero API calls) |
-| correlation-engine → overlaps | After audit-all | Reads from correlation.json (zero API calls) |
-| cost-analysis → (reads only) | After audit-all or standalone | Reads local files only (ZERO API calls) |
-
-**Result:** cost-analysis makes **zero additional API calls** if run within 24h of audits.
-
-## Token Efficiency
-
-**Estimated savings per week (audits 2x/week):**
-```
-Monday:   cost-analysis runs (0 wasted tokens, reads findings.json)
-Thursday: cost-analysis skips (24h < 72h, no new findings) → saves 10K tokens ≈ $0.05
-Monday:   cost-analysis runs (new findings available)
-Thursday: cost-analysis skips → saves 10K tokens ≈ $0.05
-
-Weekly savings: $0.10 per audit cycle
-Annual savings: ~$5.20
-```
-
-On large estates (500+ resources): skip logic saves 20-30% of total analysis tokens by avoiding redundant cost re-calculation.
+Because it makes no API calls, there is nothing to cache: the token cost is only re-reading local JSON, so always regenerating is both correct and cheap. History (`cost-analysis.jsonl`) is still appended for the trend line; it is never used to skip a run.
 
 ## Graceful Degradation
 

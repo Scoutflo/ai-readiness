@@ -55,16 +55,18 @@ printf "one targeted audit (datadog): ~%s tokens vs the 13-audit set ~%s tokens\
 printf "=> running the 3 audits you care about instead of all 13 cuts fixed instruction cost by roughly the ratio of their sizes.\n"
 
 echo
-echo "=== 4. Skip-logic: cost-analysis re-run within 24h does zero model work ==="
+echo "=== 4. Roll-up phases are pure shell/jq: zero model tokens (always regenerate) ==="
 W="$(mktemp -d)"; D="2026-08-01"
 mkdir -p "$W/aws/$D"
 printf '%s' '{"target":"aws","findings":[{"id":"AWSOPT-001","area":"cost-optimization","title":"x","affected":["i-1"],"estimated_monthly_savings_usd":100}]}' > "$W/aws/$D/findings.json"
 run1=$(SCOUTFLO_AUDIT_DIR="$W" TOPOLOGY_FILE="$W/none.json" sh -c '. "'"$ROOT"'/skills/cost-analysis/lib/cost-analysis.sh"; cost_analysis_run "'"$D"'" 2>&1' | grep -c "Report complete" || true)
-# force the skip path by making history look >0 findings and current
-run2=$(SCOUTFLO_AUDIT_DIR="$W" TOPOLOGY_FILE="$W/none.json" sh -c '. "'"$ROOT"'/skills/cost-analysis/lib/cost-analysis.sh"; cost_analysis_run "'"$D"'" 2>&1' || true)
+# Re-run: the roll-up ALWAYS regenerates now (the 24h skip cache was removed in
+# v0.1.82 — it could serve a stale roll-up). It regenerates rather than skipping.
+run2=$(SCOUTFLO_AUDIT_DIR="$W" TOPOLOGY_FILE="$W/none.json" sh -c '. "'"$ROOT"'/skills/cost-analysis/lib/cost-analysis.sh"; cost_analysis_run "'"$D"'" 2>&1' | grep -c "Starting analysis" || true)
 echo "first run produced a report: $([ "$run1" -ge 1 ] && echo yes || echo no)"
-echo "correlation + cost phases are pure shell/jq: $(head -1 "$ROOT/skills/correlation-engine/lib/correlation-engine.sh" "$ROOT/skills/cost-analysis/lib/cost-analysis.sh" | grep -c '#!/bin/sh')/2 use /bin/sh, 0 model tokens"
-echo "=> a re-run that skips (unchanged data, <24h) consumes 0 additional model tokens for these phases."
+echo "re-run regenerates (does not skip): $([ "$run2" -ge 1 ] && echo yes || echo no)"
+echo "correlation + cost roll-up phases are pure shell/jq: $(head -1 "$ROOT/skills/correlation-engine/lib/correlation-engine.sh" "$ROOT/skills/cost-analysis/lib/cost-analysis.sh" | grep -c '#!/bin/sh')/2 use /bin/sh, 0 model tokens"
+echo "=> the roll-up makes ZERO provider API calls (reads local findings only), so it is cheap to always regenerate; nothing is cached, nothing goes stale."
 rm -rf "$W"
 
 echo
