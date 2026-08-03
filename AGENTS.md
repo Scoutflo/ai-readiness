@@ -44,6 +44,15 @@ new skill must clear its lane's markers or CI fails:
   library and is allowed. If it has a lib, add a `tests/*.sh` suite (it will be
   run by `ci/run-tests.sh`).
 
+An audit skill's *behavior* is also gated: `ci/scope-checkpoint-check.sh` requires
+every `audit-*` (except `audit-all`) to wire the shared estate-sizing scope
+checkpoint (`report-standard/estate-scope-checkpoint.md`) — a real
+`cli_pause_before_audit` call behind a large-estate threshold — so a large estate
+can never grind unbounded with no scoping question. This is a *behavioral* parity
+gate (does the skill act on its estate-sizing phase?), distinct from the
+structural completeness gate (does the section exist?); both run in
+`structure-check.sh`.
+
 An audit skill's output is also gated: `report-standard/check-findings.sh`
 validates that a `findings.json`'s `overall` reconciles with its scorecard (the
 weight-normalized sum over included categories, rounding aside) and that the

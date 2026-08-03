@@ -92,6 +92,29 @@ echo "estate: ${OBJ} objects, ${P} path"
 
 Record `estate: {objects, path}` in `findings.json`. On `xlarge`, scope by namespace (ask the user which namespaces matter) rather than listing every object cluster-wide in one pass.
 
+### Scope checkpoint
+
+On a large estate this audit pauses to let you scope before spending tokens, per the shared [estate-sizing scope checkpoint](../../report-standard/estate-scope-checkpoint.md). After the sizing step above computes the object count, run the shared checkpoint block:
+
+```bash
+set -eu
+# audit-kubernetes sizing counts objects into OBJ, not TOTAL; set TOTAL from the estate object count computed above.
+TOTAL="${OBJ:?estate sizing must set OBJ (the estate object count) before the scope checkpoint}"
+: "${TOTAL:?estate sizing must set TOTAL before the scope checkpoint}"
+. "${CLAUDE_PLUGIN_ROOT}/skills/cli-interactive/lib/cli-interactive.sh"
+. "${CLAUDE_PLUGIN_ROOT}/skills/checkpoint/lib/checkpoint.sh"
+SCOPE="$(checkpoint_load_scope)"                # reuse a saved scope, or "all"
+[ "$SCOPE" = "all" ] || echo "[checkpoint] reusing saved audit scope: ${SCOPE}"
+if [ "${TOTAL}" -ge 501 ]; then
+  echo "estate: ${TOTAL} objects (large path) — pausing to let you scope before spending tokens"
+  cli_pause_before_audit "${TOTAL}"             # confirm before a large run
+  cli_prompt_exclude_services                   # offer service/region exclusions
+  echo "[checkpoint] narrow scope any time with /scoutflo:checkpoint; reset with /scoutflo:checkpoint --reset-scope"
+fi
+```
+
+The large-path phases then run against the scoped set; the report names anything scoped out.
+
 ## Phase 1: Service context
 
 If `./scoutflo-audits/topology.md` or a business-context file names critical services, load them (see [Metadata Load](#metadata-load-v0168) below). They set which workloads make the Reliability checks high vs medium and which namespaces are "application namespaces" for the network-policy check. Without them, treat every non-system namespace as an application namespace and every workload equally.

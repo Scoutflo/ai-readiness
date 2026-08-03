@@ -122,6 +122,28 @@ echo "drift: ${DRIFT}"
 
 Never silently truncate: name the spaces audited and any space skipped, and reflect it in the coverage denominators. The rate-limit retry rule in [references/elk-checks.md](references/elk-checks.md) section 9 applies to every call.
 
+### Scope checkpoint
+
+On a large estate this audit pauses to let you scope before spending tokens, per the shared [estate-sizing scope checkpoint](../../report-standard/estate-scope-checkpoint.md). After the sizing step above computes the object count, run the shared checkpoint block:
+
+```bash
+set -eu
+# The Estate sizing step above sets TOTAL to this audit's object count.
+TOTAL="${TOTAL:?estate sizing must set TOTAL before the scope checkpoint}"
+. "${CLAUDE_PLUGIN_ROOT}/skills/cli-interactive/lib/cli-interactive.sh"
+. "${CLAUDE_PLUGIN_ROOT}/skills/checkpoint/lib/checkpoint.sh"
+SCOPE="$(checkpoint_load_scope)"                # reuse a saved scope, or "all"
+[ "$SCOPE" = "all" ] || echo "[checkpoint] reusing saved audit scope: ${SCOPE}"
+if [ "${TOTAL}" -ge 501 ]; then
+  echo "estate: ${TOTAL} objects (large path) — pausing to let you scope before spending tokens"
+  cli_pause_before_audit "${TOTAL}"             # confirm before a large run
+  cli_prompt_exclude_services                   # offer service/region exclusions
+  echo "[checkpoint] narrow scope any time with /scoutflo:checkpoint; reset with /scoutflo:checkpoint --reset-scope"
+fi
+```
+
+The large-path phases then run against the scoped set; the report names anything scoped out.
+
 ## Phase 1: Service context and spaces
 
 If `./scoutflo-audits/topology.md` exists, load it; its service list is the critical-service list and its names are canonical. Resolve the spaces to audit from `elk.spaces` (default: the `default` space alone) and state them in the report. If topology.md does not exist, infer critical services from rule names and tags, note the inference, and suggest `/scoutflo:map-topology`.

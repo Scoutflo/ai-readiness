@@ -142,6 +142,29 @@ Proportionality runs both directions:
 
 Never silently truncate a large org: if a run judged a subset because it stopped mid-batch, the report names what was skipped and the coverage denominators reflect it.
 
+### Scope checkpoint
+
+On a large estate this audit pauses to let you scope before spending tokens, per the shared [estate-sizing scope checkpoint](../../report-standard/estate-scope-checkpoint.md). After the sizing step above computes the object count, run the shared checkpoint block:
+
+```bash
+set -eu
+# audit-sentry sizing counts projects into PROJECT_COUNT, not TOTAL; set TOTAL from the estate object count computed above.
+TOTAL="${PROJECT_COUNT:?estate sizing must set PROJECT_COUNT before the scope checkpoint}"
+: "${TOTAL:?estate sizing must set TOTAL before the scope checkpoint}"
+. "${CLAUDE_PLUGIN_ROOT}/skills/cli-interactive/lib/cli-interactive.sh"
+. "${CLAUDE_PLUGIN_ROOT}/skills/checkpoint/lib/checkpoint.sh"
+SCOPE="$(checkpoint_load_scope)"                # reuse a saved scope, or "all"
+[ "$SCOPE" = "all" ] || echo "[checkpoint] reusing saved audit scope: ${SCOPE}"
+if [ "${TOTAL}" -ge 501 ]; then
+  echo "estate: ${TOTAL} objects (large path) — pausing to let you scope before spending tokens"
+  cli_pause_before_audit "${TOTAL}"             # confirm before a large run
+  cli_prompt_exclude_services                   # offer service/region exclusions
+  echo "[checkpoint] narrow scope any time with /scoutflo:checkpoint; reset with /scoutflo:checkpoint --reset-scope"
+fi
+```
+
+The large-path phases then run against the scoped set; the report names anything scoped out.
+
 ## Phase 1: Inventory
 
 Paginated GETs only. Sentry paginates with a `Link` header cursor; the `fetch_all` helper follows it (rules in [references/api-checks.md](references/api-checks.md#pagination-and-rate-limits)).
