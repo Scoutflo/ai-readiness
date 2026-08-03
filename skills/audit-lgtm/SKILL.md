@@ -340,6 +340,7 @@ jq -e '.schema == "scoutflo-findings/v1" and (.findings | type == "array") and (
 grep -q '^# ' "$OUT/report.md" && echo "report.md present"
 # Output conformance: the emitted report.md must match report-standard/report-template.md.
 # This catches header/score-line/section drift before the run is declared done.
+sh "${CLAUDE_PLUGIN_ROOT}/report-standard/check-findings.sh" "$OUT/findings.json"
 sh "${CLAUDE_PLUGIN_ROOT}/report-standard/check-report.sh" "$OUT/report.md"
 ls -l "$OUT"
 ```

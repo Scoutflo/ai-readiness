@@ -44,11 +44,22 @@ new skill must clear its lane's markers or CI fails:
   library and is allowed. If it has a lib, add a `tests/*.sh` suite (it will be
   run by `ci/run-tests.sh`).
 
-These gates check **structure**, not correctness. The judgment review
-(`docs/skill-review-rubric.md` via the maintainer `review-ai-readiness-skill`)
-still decides whether the checks a skill runs are the right ones — run it on any
-new or substantially changed skill before shipping. The gate stops stubs; the
-review stops wrong logic.
+An audit skill's output is also gated: `report-standard/check-findings.sh`
+validates that a `findings.json`'s `overall` reconciles with its scorecard (the
+weight-normalized sum over included categories, rounding aside) and that the
+schema invariants hold (envelope fields, `severity_counts` = the histogram,
+weights = 100, valid enums, evidence + `remediation` on every finding). Every
+audit runs it on its own output before `check-report.sh`. It caught real drift —
+scores authored 2–5 points above their scorecard — that shape-only conformance
+could not. Add nothing to bypass it; a score that does not reconcile is a bug.
+
+These gates check **structure and internal consistency**, not correctness — they
+cannot know whether a finding is *true* about the live system. The judgment
+review (`docs/skill-review-rubric.md` via the maintainer
+`review-ai-readiness-skill`) still decides whether the checks a skill runs are
+the right ones — run it on any new or substantially changed skill before
+shipping. The gates stop stubs and self-inconsistent output; the review stops
+wrong logic; live verification proves the findings are real.
 
 ## Before editing
 
