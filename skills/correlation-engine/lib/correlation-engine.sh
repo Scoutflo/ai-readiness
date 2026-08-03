@@ -112,8 +112,17 @@ correlation_find_cascades() {
 }
 
 # Load business context (with safe defaults).
+# Precedence: business_context.json (derived from the SSOT) is authoritative;
+# legacy topology.json:.business_context is the migration fallback.
 correlation_load_context() {
-  if [ -f "$TOPOLOGY_FILE" ]; then
+  BC_JSON="${BC_JSON:-$HOME/.scoutflo/business_context.json}"
+  if [ -f "$BC_JSON" ]; then
+    jq '{
+      environment: (.environment // "production"),
+      cost_sensitivity: (.cost_sensitivity // "medium"),
+      critical_dependencies: (.critical_dependencies // [])
+    }' "$BC_JSON"
+  elif [ -f "$TOPOLOGY_FILE" ]; then
     jq '.business_context // {
       environment: "production",
       cost_sensitivity: "medium",

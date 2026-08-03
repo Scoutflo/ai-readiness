@@ -7,10 +7,21 @@ set -eu
 
 CORRELATION_FILE="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/correlation.json"
 TOPOLOGY_FILE="${TOPOLOGY_FILE:-$HOME/.scoutflo/topology.json}"
+# Derived projection of the business_context.md SSOT (authoritative when present).
+BC_JSON="${BC_JSON:-$HOME/.scoutflo/business_context.json}"
 
-# Load business context (with safe defaults)
+# Load business context (with safe defaults).
+# Precedence: business_context.json (derived from the SSOT) is authoritative;
+# legacy topology.json:.business_context is the migration fallback.
 _load_context() {
-  if [ -f "$TOPOLOGY_FILE" ]; then
+  if [ -f "$BC_JSON" ]; then
+    jq '{
+      environment: (.environment // "production"),
+      cost_sensitivity: (.cost_sensitivity // "medium"),
+      critical_dependencies: (.critical_dependencies // []),
+      environment_map: (.environment_map // [])
+    }' "$BC_JSON"
+  elif [ -f "$TOPOLOGY_FILE" ]; then
     jq '.business_context // {
       environment: "production",
       cost_sensitivity: "medium",

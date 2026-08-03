@@ -281,6 +281,25 @@ When doctor exits 0:
 
 On any other exit: fix the failing rows using the hint column (exit 1: config missing — rerun this skill; exit 2: export the named variable per Step 4; exit 3: recheck that provider's host and token per Step 3), then rerun `/scoutflo:doctor`.
 
+## Step 8: Offer to capture business context (optional but recommended)
+
+Credentials tell the toolkit *how* to reach your stack; business context tells it
+*what matters* — SLAs per service, which environment uses which profile/cluster
+and its SLA, critical services that gate on approval, regions/accounts to never
+touch, cost priorities, and your own custom rules and runbooks. Without it,
+audits run with neutral defaults (everything production-severity, no exclusions).
+
+Offer it, don't force it:
+
+> Optionally set your SRE guardrails now so every audit is tuned to your business.
+> Run `/scoutflo:business-context` to capture them interactively (guided questions,
+> paste your own rules, or import an existing file). It writes
+> `~/.scoutflo/business_context.md` — the one place your rules live, which every
+> audit and setup reads. You can also skip this and add it any time later.
+
+Do not write `business_context.md` from this skill; `/scoutflo:business-context`
+owns that file and its rich capture flow.
+
 ## Common Failure Modes
 
 | Failure | Prevention |

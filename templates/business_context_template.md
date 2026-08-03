@@ -16,6 +16,26 @@ Save this as `~/.scoutflo/business_context.md` and customize for your environmen
 
 ---
 
+## Environment Map (per-environment access + SLA)
+
+Define each environment you operate and how the toolkit reaches it, so a single
+audit run targets the right account/profile/cluster per environment and applies
+that environment's own SLA. One row per environment; add as many as you run.
+
+| Environment | AWS profile | GCP project | K8s context / cluster | Region | Uptime SLA | Notes |
+|---|---|---|---|---|---|---|
+| production | [aws profile] | [gcp project] | [kube context] | [region] | 99.95% | [e.g. customer-facing] |
+| staging | [aws profile] | [gcp project] | [kube context] | [region] | 99.5% | [e.g. lower priority] |
+| dr | [aws profile] | [gcp project] | [kube context] | [region] | 99.9% | [warm standby] |
+
+- Different environments may have **different SLAs** — state each per row above; a
+  staging gap is judged against staging's SLA, not production's.
+- Different environments may use **different cloud credentials** — the profile /
+  project / context columns tell each audit which target to use for that
+  environment, so you never audit staging with the production profile.
+
+---
+
 ## SLAs / SLOs
 
 | Service | SLA | SLO (Error Budget) |
@@ -147,11 +167,19 @@ If correlation engine detects cascades (e.g., database crash → monitoring down
 
 ---
 
-## Questions?
+## Custom Rules (free-form)
 
-**For help customizing this file:**
-- Read the full spec: `docs/specs/business-context-ssot.md`
-- Example: `docs/specs/business-context-ssot.md` (production example)
-- Contact: [Your Scoutflo support contact]
+Anything the sections above do not capture. Write plain-language rules the
+audits and setups should honor — the toolkit reads this section verbatim. For
+example: "Never page on-call for staging between 22:00–07:00 IST", "treat any
+finding on the payments namespace as critical regardless of environment",
+"our retention policy for EBS snapshots is 14 days".
+
+- [your rule]
+- [your rule]
+
+---
 
 Save this file as `~/.scoutflo/business_context.md` to activate custom guardrails.
+Re-run `/scoutflo:business-context` any time to update it interactively, or edit
+it directly — the file is the source of truth.
