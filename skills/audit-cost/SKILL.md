@@ -71,6 +71,7 @@ echo "live-safety gate: pass — confirm these are the accounts you intend to au
 - **Per-resource or it doesn't ship.** Every finding names the concrete resource(s) in `affected` — id, region/zone, size, age, utilization. "The account has waste" is not a finding.
 - **Read-only by effect.** Not just read-only verbs: `gcloud recommender ... mark-*` and `aws ce ...` write operations are forbidden even though they look like reads. Each reference has a forbidden-command list.
 - **Honest denominators.** A provider whose cost scope is missing is recorded in `providers_excluded` with its reason, never silently dropped and never scored as zero savings.
+- **Never print or write a secret value.** Webhook URLs, API tokens, bearer/auth headers, cloud keys, and connection strings are captured by key name or type only, never by value — not into the terminal, evidence, `findings.json`, `report.md`, or a Slack brief. Follow the shared [secret-redaction discipline](../../report-standard/secret-redaction.md); the redaction filter (`skills/redaction/lib/redaction.sh`, `redact_file`) masks any residual secret in a written artifact as defense-in-depth.
 
 ## The change-risk classes
 
@@ -156,7 +157,7 @@ Close with: the savings headline (`Potential savings ~$X/mo (~$Y/yr) across N pr
 
 ## Metadata Load (v0.1.68+)
 
-When `topology.json` names `critical_dependencies` and `cost_sensitivity`, use them to order the report: on `cost_sensitivity: high`, lead with the highest annual-savings opportunities; mark opportunities on critical-dependency resources so a reader sees the reliability trade-off before acting. Metadata never changes a dollar figure or invents one.
+When the business-context SSOT projection `~/.scoutflo/business_context.json` names `critical_dependencies` and `cost_sensitivity`, use them to order the report: on `cost_sensitivity: high`, lead with the highest annual-savings opportunities; mark opportunities on critical-dependency resources so a reader sees the reliability trade-off before acting. Metadata never changes a dollar figure or invents one.
 
 ## Remediation pointers
 

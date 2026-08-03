@@ -74,6 +74,7 @@ The context selects the cluster; there is no ambient default in this audit. The 
 - RBAC severity is about *who* holds the grant. A wildcard ClusterRole bound to a human break-glass group is a posture note; the same grant bound to a **workload ServiceAccount** (especially one reachable from a public ingress) is high — a pod compromise becomes cluster compromise.
 - Errors are evidence. An RBAC `Forbidden` on a specific list means the audit credential lacks that `view` grant; record `blocked` for that check with the exact resource, never convert it to a pass.
 - Captures keep object names, namespaces, kinds, and RBAC verbs/resources. Never capture Secret *values*; this audit never reads Secret data (`kubectl get secret -o yaml` is forbidden — only names/types via `get secret` without `-o yaml`).
+- **Never print or write a secret value.** Webhook URLs, API tokens, bearer/auth headers, cloud keys, and connection strings are captured by key name or type only, never by value — not into the terminal, evidence, `findings.json`, `report.md`, or a Slack brief. Follow the shared [secret-redaction discipline](../../report-standard/secret-redaction.md); the redaction filter (`skills/redaction/lib/redaction.sh`, `redact_file`) masks any residual secret in a written artifact as defense-in-depth.
 
 ## Estate sizing
 
@@ -165,21 +166,22 @@ Write `findings.json` first (canonical), then regenerate `report.md`, the histor
 
 ## Metadata Load (v0.1.68+)
 
-This skill reads optional business context metadata to apply intelligent filtering:
+This skill reads the optional business-context SSOT to honor your guardrails:
 
 ```bash
-METADATA="${HOME}/.scoutflo/computed_metadata.jsonl"
-CONTEXT="${HOME}/.scoutflo/business_context.md"
+set -eu
+BC_JSON="${HOME}/.scoutflo/business_context.json"      # derived from business_context.md (the SSOT)
+METADATA="${HOME}/.scoutflo/computed_metadata.jsonl"   # per-resource cache from business-context-resolver
 LOAD_METADATA_MODE="none"
-
 if [ -f "$METADATA" ] && jq -e '.' "$METADATA" >/dev/null 2>&1; then
-  LOAD_METADATA_MODE="v0168"
-elif [ -f "$CONTEXT" ]; then
-  LOAD_METADATA_MODE="v0167"
+  LOAD_METADATA_MODE="per-resource"
+elif [ -f "$BC_JSON" ] && jq -e '.' "$BC_JSON" >/dev/null 2>&1; then
+  LOAD_METADATA_MODE="workspace"
 fi
+echo "metadata mode: $LOAD_METADATA_MODE"
 ```
 
-When metadata is available: mark the critical services (raising their Reliability findings to high), skip namespaces flagged as excluded, and honor declared ownership for the coverage matrix. See [BUSINESS-CONTEXT-INTEGRATION-v0168.md](../../docs/BUSINESS-CONTEXT-INTEGRATION-v0168.md) for patterns.
+When context is available, apply it per [BUSINESS-CONTEXT-INTEGRATION-v0168.md](../../docs/BUSINESS-CONTEXT-INTEGRATION-v0168.md): **exclude** namespaces/resources matched by an exclusion (record them `not-in-scope` with the reason, never a fail); **escalate** findings on a `critical_dependencies` service (raise Reliability findings to high, mark it in the coverage matrix); reduce severity for a gap that exists only in a non-production `environment`; and apply `cost_sensitivity` to ordering. With no context, run neutral defaults and say so — never invent a business rule.
 
 ## Remediation pointers
 

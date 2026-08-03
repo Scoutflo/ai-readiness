@@ -247,21 +247,22 @@ The report's trend line renders the last five history.jsonl entries, oldest firs
 
 ## Metadata Load (v0.1.68+)
 
-This skill reads optional business context metadata to apply intelligent filtering:
+This skill reads the optional business-context SSOT to honor your guardrails:
 
 ```bash
-METADATA="${HOME}/.scoutflo/computed_metadata.jsonl"
-CONTEXT="${HOME}/.scoutflo/business_context.md"
+set -eu
+BC_JSON="${HOME}/.scoutflo/business_context.json"      # derived from business_context.md (the SSOT)
+METADATA="${HOME}/.scoutflo/computed_metadata.jsonl"   # per-resource cache from business-context-resolver
 LOAD_METADATA_MODE="none"
-
 if [ -f "$METADATA" ] && jq -e '.' "$METADATA" >/dev/null 2>&1; then
-  LOAD_METADATA_MODE="v0168"
-elif [ -f "$CONTEXT" ]; then
-  LOAD_METADATA_MODE="v0167"
+  LOAD_METADATA_MODE="per-resource"
+elif [ -f "$BC_JSON" ] && jq -e '.' "$BC_JSON" >/dev/null 2>&1; then
+  LOAD_METADATA_MODE="workspace"
 fi
+echo "metadata mode: $LOAD_METADATA_MODE"
 ```
 
-When metadata is available: skip excluded resources, escalate critical services, apply cost sensitivity. See [BUSINESS-CONTEXT-INTEGRATION-v0168.md](../../docs/BUSINESS-CONTEXT-INTEGRATION-v0168.md) for patterns.
+When context is available, apply it per [BUSINESS-CONTEXT-INTEGRATION-v0168.md](../../docs/BUSINESS-CONTEXT-INTEGRATION-v0168.md): **exclude** resources matched by an exclusion (record them `not-in-scope` with the reason, never a fail); **escalate** findings on a `critical_dependencies` service; reduce severity for a gap that exists only in a non-production `environment`; and apply `cost_sensitivity` to ordering. With no context, run neutral defaults and say so — never invent a business rule.
 
 ## Remediation pointers
 

@@ -17,4 +17,6 @@ sh "$SELF_DIR/coverage-check.sh" "$DIR" || FAIL=1
 sh "$SELF_DIR/remediation-map-check.sh" "$DIR" || FAIL=1
 sh "$SELF_DIR/skill-completeness-check.sh" "$DIR" || FAIL=1
 sh "$SELF_DIR/scope-checkpoint-check.sh" "$DIR" || FAIL=1
+sh "$SELF_DIR/redaction-parity-check.sh" "$DIR" || FAIL=1
+sh "$SELF_DIR/business-context-parity-check.sh" "$DIR" || FAIL=1
 [ "$FAIL" -eq 0 ] && echo STRUCTURE-OK || exit 1
