@@ -230,9 +230,11 @@ Expected output: `[correlation] Written <audits-dir>/correlation.json` followed 
 
 **Graceful degradation:** If the correlation library is absent (user on v0.1.65 or earlier), the log notes this and continues — correlation is optional but recommended for multi-stack estates.
 
-## Phase 3.6: Cost analysis (v0.1.67+)
+## Phase 3.6: Cost roll-up (v0.1.67+)
 
-After correlation completes, run cost-analysis to aggregate every audit's cost-optimization findings (`area: cost-optimization` — `AWSOPT-*`, `DDOPT-*`) into one cross-provider report, deduplicated via `correlation.json`.
+After correlation completes, run the cost-analysis roll-up to aggregate every audit's cost-optimization findings (`area: cost-optimization` — `AWSOPT-*`, `DDOPT-*`) into one cross-provider view, deduplicated via `correlation.json`. This is a lightweight roll-up of findings the individual audits already produced; it makes no provider calls.
+
+> For a **deep, live, per-resource cost analysis** (queries Compute Optimizer / Cost Explorer / GCP Recommender / Datadog usage / K8s requests-vs-usage / DO billing, ranked by provider-native savings), run [`/scoutflo:audit-cost`](../audit-cost/SKILL.md) directly. `audit-all` intentionally runs only the fast roll-up so a combined run stays bounded; the deep cost audit is its own explicitly-invoked run.
 
 ```bash
 set -eu

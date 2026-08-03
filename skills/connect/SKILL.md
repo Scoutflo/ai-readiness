@@ -64,6 +64,7 @@ Ask which integrations to configure as a plain numbered list in a normal chat me
 | Sentry | audit-sentry, setup-sentry | `sentry:` | `SENTRY_TOKEN` | read scopes for audits; write scopes for setup |
 | PagerDuty | audit-pagerduty | `pagerduty:` | `PAGERDUTY_TOKEN` | read-only REST key for audits |
 | Datadog | audit-datadog | `datadog:` | `DATADOG_API_KEY` + `DATADOG_APP_KEY` | scoped read-only app key for audits |
+| Cost (cross-provider) | audit-cost | (reuses `aws:`, `gcp:`, `datadog:`, `digitalocean:`, `kubernetes:` blocks) | none of its own | reuses each provider's read creds; add the optional cost scope per provider (AWS Compute Optimizer/Cost Explorer read; GCP Recommender viewer; Datadog `usage_read`) to get provider-native dollar figures |
 | ELK / Kibana | audit-elk | `elk:` | `KIBANA_API_KEY` | read-only Kibana feature privileges for audits |
 | JSM Operations | audit-jsm | `jsm:` | `JSM_EMAIL` + `JSM_API_TOKEN` | Atlassian API token over Basic auth; read-only by GET-only use |
 | Zenduty | audit-zenduty | `zenduty:` | `ZENDUTY_TOKEN` | `Authorization: Token` API key; Bot Token (Beta) for least privilege, read-only by GET-only use |

@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.1.79
+
+New first-class **`audit-cost`** skill — a deep, live, per-resource cloud cost audit — replacing the thin `cost-analysis` re-aggregator as the way to investigate cost. The old skill only re-read the cost-optimization findings other audits had already written (so a real run surfaced one recycled finding and no report.md); this one queries each provider's own cost surfaces live and produces per-resource findings.
+
+- **`audit-cost` (audit lane, report-only).** Queries live: AWS (Compute Optimizer / Cost Explorer SP+RI coverage / Cost Optimization Hub / Trusted Advisor + presence facts: unattached EBS, idle EIPs, stopped EC2, snapshot sprawl, no-lifecycle S3, gp2→gp3), GCP (Recommender idle/rightsizing/CUD, per-location), Kubernetes (requests-vs-usage over-provisioning, idle PVCs, orphaned PVs, node headroom — ratio facts, plus Kubecost/OpenCost native $ when present), Datadog (host/custom-metric/log-volume cost from the usage API), DigitalOcean (idle droplets/volumes/snapshots, list-price context). 64 checks across five per-provider reference catalogs.
+- **Ranked-savings, not scored.** New schema `scoutflo-cost/v1` (no 0–100 score — cost is a ranked-savings axis, not a health score, per the toolkit's parallel-non-scored-section rule). Report leads with the savings summary line. Validated by a new **`report-standard/check-cost.sh`** (the money-integrity gate: the savings total sums *only* verbatim provider-native figures; a presence fact can never carry a dollar; per-resource `affected` required; ranked native-first) with a 10-case self-test. **The one hard rule — never invent a dollar figure — is mechanically enforced.**
+- **Interactive scope checkpoint built in.** On large/xlarge estates the skill pauses (via `cli-interactive` + `checkpoint`) and offers scope/exclusions saved to `topology.json`, instead of grinding unbounded — the behavior large audits were missing.
+- **Wired** into connect (picker), start (catalog), doctor (GCP Recommender cost probe), and audit-all (which keeps the fast `cost-analysis` roll-up and points at `audit-cost` for deep analysis). `cost-analysis`'s description/doc corrected to describe what it actually is (a roll-up) and to redirect deep analysis to `audit-cost`.
+- **AWS phase proven live** end to end against a real account: produced a validated `findings.json` + ranked `report.md` (4 unattached EBS with per-volume ages, 117 no-lifecycle S3 buckets, 0% RI/SP coverage, gp2→gp3 candidates) and correctly reported **zero native-dollar figures** because Compute Optimizer was not enrolled — the honest presence-fact path. GCP/Kubernetes/Datadog/DigitalOcean are authored to the same contract but not yet live-proven (see the skill's maturity note); built one at a time with proof.
+
+No existing audit logic, finding IDs, category weights, or the scoring model changed.
+
 ## 0.1.78
 
 Closes a report-quality gap: an audit's headline score is authored by the model at runtime, and nothing mechanically checked that it reconciled with the scorecard printed beside it — so a report could ship with an overall 2–5 points above what its own categories supported. Now the numbers are gated, not just the report's shape.
