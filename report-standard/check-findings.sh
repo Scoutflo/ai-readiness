@@ -120,6 +120,16 @@ noev="$(jq -r '.findings[] | select((.evidence | type != "array") or (.evidence 
 norem="$(jq -r '.findings[] | select((.remediation // "") == "") | .id' "$F")"
 [ -z "$norem" ] || fail "findings with empty 'remediation' (schema requires a pointer, or an explicit doc anchor): $(echo "$norem" | tr '\n' ' ')"
 
+# 7f-corr. Correlation readiness: a non-info finding should name a concrete
+#     resource in `affected` so the correlation engine can join it to findings
+#     from other audits (it groups overlaps by shared `affected` service, and
+#     detects cascades by shared-resource join). A finding with no `affected`
+#     silently contributes no join key — correlation degrades but never sees it.
+#     Advisory for info findings (observations may be account-scoped); required
+#     for critical/high/medium/low so cross-stack correlation is not blinded.
+noaff="$(jq -r '.findings[] | select(.severity != "info") | select((.affected | type != "array") or (.affected | length == 0)) | .id' "$F")"
+[ -z "$noaff" ] || fail "findings with no concrete resource in 'affected' (correlation cannot join them across audits; name the affected service/resource): $(echo "$noaff" | tr '\n' ' ')"
+
 # 7g. info findings must carry points_recoverable 0.
 badpts="$(jq -r '.findings[] | select(.severity == "info" and (.points_recoverable // 0) != 0) | .id' "$F")"
 [ -z "$badpts" ] || fail "info findings with non-zero points_recoverable (must be 0): $(echo "$badpts" | tr '\n' ' ')"

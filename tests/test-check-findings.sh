@@ -38,8 +38,8 @@ good() {
   },
   "severity_counts": { "critical": 0, "high": 1, "medium": 1, "low": 0, "info": 1 },
   "findings": [
-    {"id":"FX-001","title":"t","severity":"high","area":"escalation","status":"validated-live","lifecycle":"new","points_recoverable":5,"evidence":[{"check":"c","command":"curl x","observed":"o"}],"recommendation":"r","remediation":"setup-fixture#a"},
-    {"id":"FX-002","title":"t","severity":"medium","area":"noise","status":"configured","lifecycle":"new","points_recoverable":2,"evidence":[{"check":"c","command":"curl y","observed":"o"}],"recommendation":"r","remediation":"setup-fixture#b"},
+    {"id":"FX-001","title":"t","severity":"high","area":"escalation","status":"validated-live","lifecycle":"new","points_recoverable":5,"affected":["svc-a"],"evidence":[{"check":"c","command":"curl x","observed":"o"}],"recommendation":"r","remediation":"setup-fixture#a"},
+    {"id":"FX-002","title":"t","severity":"medium","area":"noise","status":"configured","lifecycle":"new","points_recoverable":2,"affected":["svc-b"],"evidence":[{"check":"c","command":"curl y","observed":"o"}],"recommendation":"r","remediation":"setup-fixture#b"},
     {"id":"FX-003","title":"t","severity":"info","area":"hygiene","status":"validated-live","lifecycle":"new","points_recoverable":0,"evidence":[{"check":"c","command":"curl z","observed":"o"}],"recommendation":"r","remediation":"doc#c"}
   ]
 }

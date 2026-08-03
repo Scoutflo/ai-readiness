@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.83
+
+Closes the last three "feature built but not wired everywhere" gaps and locks each behind a behavioral-parity CI gate, so the whole audit fleet honors redaction, business context, and correlation uniformly — the same discipline used for the estate-scope checkpoint in v0.1.81.
+
+- **Secret redaction — uniform + gated.** New `report-standard/secret-redaction.md` states the shared two-layer discipline (redact at capture; mask written artifacts with `redact_file` as defense-in-depth). New `ci/redaction-parity-check.sh` (in `structure-check.sh`) requires every `audit-*` to carry the no-secret-values discipline; the 3 audits that lacked it (cost, grafana, kubernetes) now state it. Complements `leak-scan.sh` (repo secrets) with runtime-output protection.
+- **Business context — actually applied, not just detected.** New `ci/business-context-parity-check.sh` requires every `audit-*` to (a) have a Metadata Load block, (b) read the SSOT projection `business_context.json` (or `computed_metadata.jsonl`), and (c) name a concrete apply behavior (exclude excluded resources / escalate critical services / per-environment SLA / cost sensitivity). All 15 audits now read `business_context.json` (upgraded from the old `business_context.md`-only blocks that set a mode flag and did nothing); the 4 audits with no block at all (alert-routing, digitalocean, groundcover, jsm) got one. Aligns the fleet with the v0.1.80 SSOT and the fixed integration doc.
+- **Correlation readiness — enforced.** `check-findings.sh` now requires every non-info finding to name a concrete `affected` resource, which is the key the correlation engine joins on for overlaps and cascades. Info findings stay exempt (observations may be account-scoped). All 16 shipped findings.json already comply. This closes correlation as done: the engine already reads `area` (required) + `affected` (now required), and degrades gracefully when a finding omits it.
+- **Guarded by tests:** new `tests/test-parity-gates.sh` (7 cases: fleet passes both gates; stubs missing the discipline/block/apply-behavior are rejected; audit-all exempt). 17 test suites now, all green. AGENTS.md documents all three gates.
+
+No audit finding IDs, category weights, or the scoring model changed. Gates + shared references + per-audit discipline wiring only.
+
 ## 0.1.82
 
 Removes the last "past data overpowers the output" bias: the `cost-analysis` roll-up's 24h skip-and-reuse cache. It's the same class of defect that made the old deep-cost path shallow — a cache that could hand back a **stale** roll-up instead of rebuilding.

@@ -272,6 +272,25 @@ tail -1 "${TARGET_DIR}/history.jsonl" | jq -e '.run_date and (.overall >= 0)' >/
 
 The report's trend line renders the last five history.jsonl entries, oldest first. After the report is written, close with the run-completion message per the report standard ([report-template.md](../../report-standard/report-template.md#run-completion-message-what-the-skill-says-in-chat-when-the-run-finishes)): the one-line score headline, the top fixes by points_recoverable, the **absolute** report path, the OS-specific open command, and the leak-safe share pointer (Slack brief). Then send the Slack brief exactly as [report-template.md](../../report-standard/report-template.md) specifies: score, severity counts, top finding titles, delta line, topology readiness line, report path — titles only, never evidence values, service names allowed. When invoked by `audit-all`, skip the brief; the orchestrator sends exactly one combined message per run. Keep `./scoutflo-audits/` out of public version control; reports describe your paging setup.
 
+## Metadata Load (v0.1.68+)
+
+This skill reads the optional business-context SSOT to honor your guardrails:
+
+```bash
+set -eu
+BC_JSON="${HOME}/.scoutflo/business_context.json"      # derived from business_context.md (the SSOT)
+METADATA="${HOME}/.scoutflo/computed_metadata.jsonl"   # per-resource cache from business-context-resolver
+LOAD_METADATA_MODE="none"
+if [ -f "$METADATA" ] && jq -e '.' "$METADATA" >/dev/null 2>&1; then
+  LOAD_METADATA_MODE="per-resource"
+elif [ -f "$BC_JSON" ] && jq -e '.' "$BC_JSON" >/dev/null 2>&1; then
+  LOAD_METADATA_MODE="workspace"
+fi
+echo "metadata mode: $LOAD_METADATA_MODE"
+```
+
+When context is available, apply it per [BUSINESS-CONTEXT-INTEGRATION-v0168.md](../../docs/BUSINESS-CONTEXT-INTEGRATION-v0168.md): **exclude** resources matched by an exclusion (record them `not-in-scope` with the reason, never a fail); **escalate** findings on a `critical_dependencies` service; reduce severity for a gap that exists only in a non-production `environment`; and apply `cost_sensitivity` to ordering. With no context, run neutral defaults and say so — never invent a business rule.
+
 ## Remediation pointers
 
 No `setup-jsm` ships yet, so every finding's `remediation` field names the concrete manual fix location. When a setup skill lands, these become anchors without the finding IDs changing:
