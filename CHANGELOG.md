@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.84
+
+Housekeeping from a senior over-engineering review of v0.1.76–0.1.83: the review found the architecture stable and its complexity justified (the business-context SSOT→projection stores have a single writer with read-only consumers; the three behavioral-parity gates share only trivial skeleton and are clearer separate; cost-analysis roll-up and audit-cost are distinct, not redundant), with exactly one real defect.
+
+- **Removed dead file `ci/validate-metadata-discovery.sh`** — a 45-byte stub containing the literal unexpanded string `$(cat /tmp/ci_validate-metadata-discovery.sh)` (the same broken-authoring class as the v0.1.80 integration stub), left over from the reverted v0.1.68 metadata feature. Nothing referenced or invoked it. No behavior change.
+
+No skills, gates, tests, finding IDs, or scoring changed.
+
 ## 0.1.83
 
 Closes the last three "feature built but not wired everywhere" gaps and locks each behind a behavioral-parity CI gate, so the whole audit fleet honors redaction, business context, and correlation uniformly — the same discipline used for the estate-scope checkpoint in v0.1.81.
