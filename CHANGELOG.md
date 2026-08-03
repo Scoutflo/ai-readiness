@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.81
+
+Wires the interactive estate-sizing **scope checkpoint** into every audit and adds a CI parity gate so it can't rot again. The `cli_pause_before_audit` / `cli_prompt_exclude_services` helpers and the `checkpoint` scope-persistence skill shipped in v0.1.65, but **no audit ever called them** — so a large estate (e.g. `audit-grafana` at 4,017 objects, `audit-aws` at 1,336) ground through the whole estate with no pause and no chance to scope.
+
+- **New `report-standard/estate-scope-checkpoint.md`** — the single shared mechanism: after an audit's Estate sizing step computes its object count, it pauses on the large/xlarge path (≥501 objects), confirms, offers service/region exclusions, and reuses any scope saved by `/scoutflo:checkpoint`. Consistent thresholds (small ≤100 / medium ≤500 / large 501–2000 / xlarge >2000) across all audits.
+- **All 14 audits wired** — each got a `### Scope checkpoint` subsection in its Estate sizing phase calling the shared block (`audit-cost` already had it). Two audits whose sizing counts into a differently-named variable (`audit-kubernetes` → `OBJ`, `audit-sentry` → `PROJECT_COUNT`) set `TOTAL` from it explicitly.
+- **New `ci/scope-checkpoint-check.sh` behavioral-parity gate** (wired into `structure-check.sh`) — fails if any `audit-*` (except `audit-all`) doesn't wire a real `cli_pause_before_audit` behind a large-estate threshold. This is a *behavioral* gate (does the skill act on its estate-sizing phase?), complementing the *structural* skill-completeness gate (does the section exist?). Guarded by a 5-case self-test (`tests/test-scope-checkpoint-gate.sh`); 16 test suites now.
+
+No audit finding IDs, category weights, or the scoring model changed. This closes the systemic "features built but never wired" gap for the estate-scoping feature; the same parity-gate pattern can now be extended to other v0.1.65 features (redaction, correlation emit) that are still inconsistently wired.
+
 ## 0.1.80
 
 Rebuilds the **business-context** skill from a 5-field scalar prompt into rich source-of-truth capture, and consolidates three competing context stores into one. The old skill asked only team/environment/SLA/cost/billing and saved scalars to `topology.json` — so per-service SLAs, per-environment access, exclusions, risky-ops, and custom runbooks (all of which the shipped template already defined) had nowhere to go, and a rich `business_context.md` was required by other skills but created by none.

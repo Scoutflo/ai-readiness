@@ -121,6 +121,28 @@ fi
 
 Never silently truncate a large estate: if the run judged a subset of dashboards, the report names what was skipped and the coverage denominators reflect it.
 
+### Scope checkpoint
+
+On a large estate this audit pauses to let you scope before spending tokens, per the shared [estate-sizing scope checkpoint](../../report-standard/estate-scope-checkpoint.md). After the sizing step above computes the object count, run the shared checkpoint block:
+
+```bash
+set -eu
+# The Estate sizing step above sets TOTAL to this audit's object count.
+TOTAL="${TOTAL:?estate sizing must set TOTAL before the scope checkpoint}"
+. "${CLAUDE_PLUGIN_ROOT}/skills/cli-interactive/lib/cli-interactive.sh"
+. "${CLAUDE_PLUGIN_ROOT}/skills/checkpoint/lib/checkpoint.sh"
+SCOPE="$(checkpoint_load_scope)"                # reuse a saved scope, or "all"
+[ "$SCOPE" = "all" ] || echo "[checkpoint] reusing saved audit scope: ${SCOPE}"
+if [ "${TOTAL}" -ge 501 ]; then
+  echo "estate: ${TOTAL} objects (large path) — pausing to let you scope before spending tokens"
+  cli_pause_before_audit "${TOTAL}"             # confirm before a large run
+  cli_prompt_exclude_services                   # offer service/region exclusions
+  echo "[checkpoint] narrow scope any time with /scoutflo:checkpoint; reset with /scoutflo:checkpoint --reset-scope"
+fi
+```
+
+The large-path phases then run against the scoped set; the report names anything scoped out.
+
 ## Large-path worklist: dashboard batches and resume
 
 Runs on the large path only. State lives under a run-ID-keyed run directory, `./scoutflo-audits/grafana/runs/<RUN_ID>/`, not a calendar-date directory: a run that is still batching when the UTC date rolls over would otherwise abandon its worklist or have to guess which date directory is still its own. This directory holds only the worklist, the lock, and per-batch UID files; the dashboard, datasource, and rule data itself still lands in the standard dated raw directory every other phase in this skill reads from, so nothing else in the skill changes when the large path is active.
