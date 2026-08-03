@@ -21,7 +21,7 @@ State your installed toolkit version in this orientation (read `version` from `$
 1. `/scoutflo:connect` sets up `~/.scoutflo/toolkit.yaml` and walks you through creating credentials per integration: exact scopes, where to click, read-only tokens for audits. It first scans for credentials you already have and offers to reuse them, and it stores tokens in the home-anchored `~/.scoutflo/env` so you set each one **once** — new terminals, new sessions, and other directories all pick them up automatically.
 2. `/scoutflo:doctor` validates everything live: config parses, env vars are set, binaries exist, one cheap call per integration succeeds. Run it whenever something feels off. Type the full name — bare `/doctor` is Claude Code's own built-in install-diagnostic, a different command with nothing to do with this toolkit.
 3. `/scoutflo:map-topology` (recommended) writes `./scoutflo-audits/topology.md`, your service map. With it, findings name your actual services instead of generic ones. On large clusters it works in namespace batches and resumes if interrupted.
-4. Run your first audit: `/scoutflo:audit-lgtm`, `/scoutflo:audit-grafana`, `/scoutflo:audit-sentry`, `/scoutflo:audit-pagerduty`, `/scoutflo:audit-datadog`, `/scoutflo:audit-elk`, `/scoutflo:audit-jsm`, `/scoutflo:audit-zenduty`, `/scoutflo:audit-groundcover`, `/scoutflo:audit-kubernetes`, `/scoutflo:audit-alert-routing`, `/scoutflo:audit-digitalocean`, `/scoutflo:audit-gcp`, or `/scoutflo:audit-aws`. Or run everything configured at once with `/scoutflo:audit-all`. Every audit sizes your estate first with cheap list calls and says which path it picked: small estates get a single pass, large ones run in bounded, resumable batches.
+4. Run your first audit: `/scoutflo:audit-lgtm`, `/scoutflo:audit-grafana`, `/scoutflo:audit-sentry`, `/scoutflo:audit-pagerduty`, `/scoutflo:audit-datadog`, `/scoutflo:audit-elk`, `/scoutflo:audit-jsm`, `/scoutflo:audit-zenduty`, `/scoutflo:audit-groundcover`, `/scoutflo:audit-kubernetes`, `/scoutflo:audit-alert-routing`, `/scoutflo:audit-digitalocean`, `/scoutflo:audit-gcp`, `/scoutflo:audit-aws`, or `/scoutflo:audit-cost` (cross-provider cost). Or run everything configured at once with `/scoutflo:audit-all`. Every audit sizes your estate first with cheap list calls and says which path it picked: small estates get a single pass, large ones run in bounded, resumable batches.
 5. Optional: `/scoutflo:schedule-audits` makes the audits recurring, with a Slack brief per run.
 
 ## The skills
@@ -55,6 +55,7 @@ State your installed toolkit version in this orientation (read `version` from `$
 | `/scoutflo:setup-gcp` | setup | Notification channels, uptime checks, alerting policies |
 | `/scoutflo:audit-aws` | audit | CloudWatch alarms, SNS routing, compute/DB/uptime health, plus a separate Cost & Resource Optimization report |
 | `/scoutflo:setup-aws` | setup | CloudWatch alarms, SNS routing, log forwarding, account observability |
+| `/scoutflo:audit-cost` | audit | Deep cross-provider cost: rightsizing, idle/unattached, commitment coverage, over-provisioned K8s requests — ranked by provider-native $ savings (never invented) |
 
 More audits are planned. Installed skills always appear in this table.
 

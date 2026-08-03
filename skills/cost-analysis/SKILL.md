@@ -1,17 +1,17 @@
 ---
 name: cost-analysis
-description: 'Master cost aggregator (v0.1.67+): reads all audit cost_sections (AWS, GCP, Datadog, etc), deduplicates via correlation.json, and produces scored 0-100 report with ROI-sorted findings. Triggered after /scoutflo:audit-all or standalone. Uses history (cost-analysis.jsonl) to skip redundant analysis within 24h—zero extra API calls for current reports. Wired into: /scoutflo:audit-all Phase 4 (after correlation-engine), also /scoutflo:cost-analysis standalone.'
+description: 'Internal roll-up harness (v0.1.67+): inside /scoutflo:audit-all, aggregates the cost-optimization findings the individual audits already wrote (area cost-optimization — AWSOPT-*, DDOPT-*), de-duplicates them via correlation.json, and writes a combined cost roll-up with a 24h skip. It re-reads existing findings; it does NOT query providers. For a DEEP, live, per-resource cost analysis, use /scoutflo:audit-cost. Wired into /scoutflo:audit-all after the correlation engine.'
 ---
 
-# Cost Analysis Skill
+# Cost Analysis (roll-up harness)
 
-Aggregates cost findings from all audit skills into a scored, deduplicated report.
+Aggregates the cost-optimization findings the individual audits already wrote into one combined, de-duplicated roll-up. This is a lightweight post-run roll-up, **not** a deep cost analysis.
 
-**Purpose:** After all audits complete, gather cost data from each provider (AWS Cost Explorer, GCP Cost Management, etc.) into one report. Score it 0-100, sort by ROI, and avoid re-analyzing if nothing changed.
+> **For a real cost audit, run [`/scoutflo:audit-cost`](../audit-cost/SKILL.md).** That skill queries each provider's live cost surfaces (AWS Compute Optimizer / Cost Explorer / Cost Optimization Hub, GCP Recommender, Datadog usage, Kubernetes requests-vs-usage, DigitalOcean billing), produces per-resource findings ranked by provider-native dollar savings, and writes a full `report.md`. This roll-up only re-reads findings other audits already produced — by design it makes zero provider calls and adds no new findings. It never scores 0–100 (cost is a ranked-savings axis, not a health score) and never invents a dollar figure.
 
-**When to run:**
-- Automatically: Phase 4 of `/scoutflo:audit-all` (after correlation-engine completes)
-- Standalone: `/scoutflo:cost-analysis` or `/scoutflo:cost-analysis --force` to refresh
+**When it runs:**
+- Automatically inside `/scoutflo:audit-all` after the correlation engine, to give one combined cost view across whatever audits ran.
+- It is not the place to start a cost investigation — `/scoutflo:audit-cost` is.
 
 ## How it works
 

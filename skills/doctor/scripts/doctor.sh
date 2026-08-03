@@ -842,6 +842,20 @@ else
       row gcp identity yes "${GCP_CRED_VAR:-none}" fail - "gcloud produced no access token; run gcloud auth login (or point credentials_env at a service-account key) and rerun doctor"
     else
       live_check gcp monitoring-api "https://monitoring.googleapis.com/v3/projects/${GCP_PROJECT}/notificationChannels?pageSize=1" "${GCP_CRED_VAR:-none}" "$GCP_TOKEN"
+      # Informational cost probe (like the AWS/Datadog ones): never fails doctor.
+      # audit-cost reads this row to run GCP Recommender native-dollar checks or
+      # report them excluded; the presence-fact GCP checks run regardless.
+      GCP_COST_CHECKS="$(cfg gcp cost_checks)"
+      if [ "$GCP_COST_CHECKS" = "false" ]; then
+        row gcp cost-permissions yes "${GCP_CRED_VAR:-none}" skipped - "gcp.cost_checks is false in toolkit.yaml; audit-cost GCP Recommender checks will be skipped"
+      else
+        GCP_REC_CODE="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 -H "Authorization: Bearer ${GCP_TOKEN}" "https://recommender.googleapis.com/v1/projects/${GCP_PROJECT}/locations/global/recommenders/google.compute.image.IdleResourceRecommender/recommendations?pageSize=1" 2>/dev/null || echo 000)"
+        if [ "$GCP_REC_CODE" = "200" ]; then
+          row gcp cost-permissions yes "${GCP_CRED_VAR:-none}" pass "$GCP_REC_CODE" -
+        else
+          row gcp cost-permissions yes "${GCP_CRED_VAR:-none}" skipped "$GCP_REC_CODE" "Recommender API/viewer role not confirmed (HTTP ${GCP_REC_CODE}); audit-cost will report GCP native-dollar checks excluded with this reason, presence-fact checks still run"
+        fi
+      fi
     fi
   fi
 fi
