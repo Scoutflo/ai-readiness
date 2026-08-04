@@ -33,6 +33,7 @@ State your installed toolkit version in this orientation (read `version` from `$
 | `/scoutflo:doctor` | harness | Preflight: config, env vars, one live check per integration |
 | `/scoutflo:map-topology` | harness | Service map into `./scoutflo-audits/topology.md` |
 | `/scoutflo:audit-all` | harness | Run every configured audit, one combined report and brief |
+| `/scoutflo:rca` | harness | Ask "why is X failing — give me the RCA": evidence-cited root cause correlated across all reports + topology + business context, with confidence and honest gaps |
 | `/scoutflo:schedule-audits` | harness | Recurring audits via GitHub Actions, cron, or a Claude cloud schedule |
 | `/scoutflo:audit-lgtm` | audit | Scored audit of LGTM and VictoriaMetrics observability stacks |
 | `/scoutflo:setup-lgtm` | setup | Guided hardening for findings from `audit-lgtm` |

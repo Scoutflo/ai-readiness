@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.85
+
+New **`/scoutflo:rca`** skill — the "ask a question about the reports and get a grounded root cause" capability. Ask *"why is `<service/resource>` failing / at risk — give me the RCA?"* and it correlates across every audit's `findings.json`, the correlation engine's overlaps/cascades, the service topology, and business context, then returns an evidence-cited root-cause analysis with a confidence level and an explicit "what I could not determine."
+
+- **Evidence-grounded, never invents a cause.** Every factual clause cites the finding-id / topology edge / correlation id it came from; the answer carries a confidence level and a mandatory gaps section; when signal is thin it emits an "insufficient signal — run this audit to confirm" form instead of a fabricated chain. Same never-fabricate discipline the toolkit enforces on scores and dollars. A pressure scenario pins the six anti-hallucination behaviors.
+- **Read-only analysis.** It reasons over local artifacts only (`findings.json`, `correlation.json`, `topology-export.json`, `business_context.json`) — makes zero provider calls and changes nothing. If live confirmation is needed it names the audit to run.
+- **Live-proven on real data.** Run end to end against the live reports: for a business-critical service it correlated **6 findings across 4 monitoring stacks + 3 topology edges + business criticality** into one cited RCA with confidence and gaps. The live run also surfaced and fixed a real robustness bug — `topology-export.json` ships in two shapes under the same schema version (`edges[]` in generated files vs `relationships[]` in the spec); the RCA now reads **both** and guards nulls, so a partial export never blinds it.
+- Wired into the `/scoutflo:start` catalog; passed the rubric review (one schema-mismatch blocker found and fixed before ship).
+
+No audit finding IDs, category weights, scoring, or existing skills changed — this is purely additive analysis over artifacts audits already produce.
+
 ## 0.1.84
 
 Housekeeping from a senior over-engineering review of v0.1.76–0.1.83: the review found the architecture stable and its complexity justified (the business-context SSOT→projection stores have a single writer with read-only consumers; the three behavioral-parity gates share only trivial skeleton and are clearer separate; cost-analysis roll-up and audit-cost are distinct, not redundant), with exactly one real defect.
