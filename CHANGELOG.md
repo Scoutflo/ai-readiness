@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.88
+
+Docs fix for a real customer-facing confusion: the README/FAQ overclaimed that after install the plugin "works directly inside Claude.app's chat, no terminal needed." Every skill runs local shell + writes local files, so it needs a **Local** Claude surface — a customer in the desktop app's **Chat tab** (a cloud surface) hit `/scoutflo:connect` failing with "cannot create the toolkit file locally" while `/scoutflo:start` (pure text) worked, and the docs implied that shouldn't happen.
+
+- **Corrected the surface requirement across README (Install intro, Step 3, Troubleshooting) and docs/faq.md.** Now states plainly: skills need local execution and work in the `claude` terminal CLI, the desktop app's **Code tab with the "Local" environment**, or the VS Code/JetBrains extensions — **not** the desktop **Chat tab** or claude.ai browser (cloud VMs with no access to your machine). Added a Troubleshooting entry for the exact "can't create the toolkit file" error and why `start` succeeds where `connect` fails in a cloud surface.
+
+Docs only — no skill, gate, test, or scoring change. (Capability map confirmed against current Claude Code documentation.)
+
 ## 0.1.87
 
 Docs: README now shows the end-to-end flow and refreshes the stale intro.
