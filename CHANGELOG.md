@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.87
+
+Docs: README now shows the end-to-end flow and refreshes the stale intro.
+
+- **New "How it works (end to end)" section with a Mermaid flow diagram** — the full path from `/scoutflo:start` through setup (connect / doctor / map-topology / business-context) → audit (14 audits + audit-cost) → understand (correlation-engine + rca) → fix (setup-*, gated on your yes), with the `findings.json`/`report.md` artifacts as the source of truth every analysis reads. Color-coded: read-only (green), write-behind-confirmation (amber), on-disk artifacts (blue). Plus a use-case → skill table.
+- **Refreshed the stale "What's New in v0.1.65" block** to the current v0.1.86 reality (rca, audit-cost, business-context SSOT, scope checkpoint, self-policing gates) and pointed to CHANGELOG for full history.
+
+Docs only — no skill, gate, test, or scoring change.
+
 ## 0.1.86
 
 Adversarial live-data testing of the new `/scoutflo:rca` skill — and it earned its keep by catching a real latent bug before any customer could.

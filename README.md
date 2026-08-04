@@ -9,19 +9,90 @@ Audit, harden, and monitor your infrastructure and observability stacks from ins
 
 ---
 
-## What's New in v0.1.65
+## How it works (end to end)
 
-Eight new production-ready features for large-scale infrastructure auditing:
+The flow is: **set up once → audit (read-only) → understand across everything → optionally fix (only with your yes).** Every audit writes a `findings.json` (the machine-readable source of truth) and a human `report.md`; the correlation engine, cost roll-up, and RCA all read those artifacts — they never re-call your providers.
 
-- **Doctor Persistence** — Check results persist across runs with intelligent skip logic (7 days for passing checks). Auto-detects when you fix issues mid-session.
-- **Redaction Guardrail** — All secrets (AWS keys, Stripe tokens, Bearer tokens) are automatically redacted before findings are displayed.
-- **Checkpoint/Scope Selection** — Select which services/regions to audit interactively. Saved for reuse. Smart batching reduces token spend 50-70% on re-runs.
-- **Business Context Metadata** — Capture team, environment, SLA, cost sensitivity once. Audit skills automatically adjust finding severity (staging gaps marked low, prod gaps high).
-- **Kubernetes Audit** — New `/scoutflo:audit-kubernetes` audits PSP, RBAC, network policies. Integrated into `/scoutflo:audit-all`.
-- **CLI Filters** — Build exclusion filters by service/region/status. Prevents accidental large-estate token spend.
-- **Cross-References** — Finding linkage enables cascade-risk detection (e.g., "DB crash → alerts disabled → backups fail").
+```mermaid
+flowchart TD
+    start(["/scoutflo:start — orientation"])
 
-Tested: ✅ 32 unit tests + 6 real-world E2E scenarios. All gates passing.
+    subgraph SETUP["① Set up once — read-only credentials & context"]
+        connect["/scoutflo:connect<br/>scoped tokens to toolkit.yaml"]
+        doctor["/scoutflo:doctor<br/>preflight: reachable?"]
+        topo["/scoutflo:map-topology<br/>service graph to topology-export.json"]
+        bctx["/scoutflo:business-context<br/>SLAs, critical svcs, per-env to business_context.md"]
+    end
+
+    subgraph AUDIT["② Audit — read-only, scored 0–100, changes nothing"]
+        aud["14 audit skills: lgtm · grafana · sentry · pagerduty · datadog<br/>elk · jsm · zenduty · groundcover · alert-routing<br/>kubernetes · digitalocean · gcp · aws"]
+        cost["/scoutflo:audit-cost<br/>deep per-resource cost, ranked savings"]
+    end
+
+    all["/scoutflo:audit-all<br/>runs every configured audit + one Slack brief"]
+    findings[("findings.json + report.md<br/>per target — the source of truth")]
+
+    subgraph CORRELATE["③ Understand across everything — read-only analysis"]
+        corr["/scoutflo:correlation-engine<br/>overlaps + cause-to-effect cascades"]
+        rca["/scoutflo:rca<br/>why is X failing? evidence-cited<br/>root cause + confidence + honest gaps"]
+    end
+
+    subgraph FIX["④ Fix — only with your explicit yes"]
+        setup["7 setup skills: lgtm · grafana · sentry<br/>digitalocean · gcp · aws · kubernetes<br/>announce → confirm → apply → re-verify"]
+    end
+
+    start --> connect --> doctor
+    doctor --> topo --> bctx
+    bctx -.->|large estate: pause & scope| aud
+    doctor --> aud
+    aud --> findings
+    cost --> findings
+    all --> aud
+    all --> cost
+    topo -. names services in .-> findings
+    bctx -. tunes severity / exclusions / SLA .-> findings
+    findings --> corr
+    corr --> rca
+    topo -. blast radius .-> rca
+    bctx -. what is critical .-> rca
+    findings --> rca
+    rca -->|next safe action| setup
+    findings -->|each finding maps to its fix| setup
+    setup -->|re-run audit to confirm| aud
+
+    classDef ro fill:#e6f4ea,stroke:#137333,color:#0b3d1a;
+    classDef write fill:#fef7e0,stroke:#b06000,color:#5c3400;
+    classDef data fill:#e8f0fe,stroke:#1a56c4,color:#0b2e6b;
+    class start,connect,doctor,topo,bctx,aud,cost,all,corr,rca ro;
+    class setup write;
+    class findings data;
+```
+
+Green = read-only (safe, changes nothing) · amber = write, gated behind your confirmation · blue = the on-disk artifacts every analysis reads. Steps ③–④ are optional: many teams get full value from ② alone.
+
+**Common use cases mapped to the flow:**
+
+| You want to… | Do this |
+| --- | --- |
+| Score one stack's health | an `audit-*` skill (step ②) |
+| Score everything at once | `/scoutflo:audit-all` |
+| Find where you're wasting cloud spend | `/scoutflo:audit-cost` |
+| Ask *"why is `<service>` failing — give me the RCA?"* | `/scoutflo:rca` (step ③, after audits + topology + business-context) |
+| See redundant monitoring / cascade risk across stacks | `/scoutflo:correlation-engine` |
+| Actually fix a finding | the matching `setup-*` skill (step ④, with your yes) |
+| Run it on a schedule | `/scoutflo:schedule-audits` |
+
+---
+
+## What's new (current: v0.1.86)
+
+- **`/scoutflo:rca` — ask questions about your reports.** *"Why is `<service>` failing — give me the RCA?"* correlates every finding naming that resource across all stacks, the service topology, and business context into an **evidence-cited** root cause with a confidence level and an explicit "what I couldn't determine." Read-only; it never invents a cause — thin signal means it tells you which audit to run, not a guess.
+- **`/scoutflo:audit-cost` — deep, per-resource cloud cost.** Queries each provider's own cost APIs (AWS Compute Optimizer / Cost Explorer, GCP Recommender, Datadog usage, Kubernetes requests-vs-usage, DigitalOcean billing) for ranked savings opportunities. Never invents a dollar figure — every number is copied verbatim from the provider or reported as a presence fact.
+- **Business context as a source of truth** — `/scoutflo:business-context` captures SLAs per service, per-environment access/SLA, critical services, exclusions, and your own custom rules into one `business_context.md`; every audit reads it to tune severity and scope.
+- **Large-estate scope checkpoint** — audits pause on a big estate and let you scope before spending tokens, instead of grinding everything.
+- **Self-policing quality** — the numbers in every report reconcile with their own scorecard, secrets are never emitted, and each audit's behavior is enforced by CI gates (13 gates / 18 test suites) so quality can't silently regress.
+
+See [CHANGELOG.md](CHANGELOG.md) for the full v0.1.76 → v0.1.86 history.
 
 ---
 
