@@ -49,6 +49,11 @@ Sentry is required only when your alerts claim an error-tracker handoff (ALR-008
 set -eu
 CFG="${SCOUTFLO_CONFIG:-$HOME/.scoutflo/toolkit.yaml}"
 [ -f "$CFG" ] || { echo "missing $CFG; run /scoutflo:connect"; exit 1; }
+# Load the home-anchored secret store so a token added to ~/.scoutflo/env (by connect,
+# even mid-session) is seen here without re-exporting or opening a new terminal. It only
+# sets *_env variables; no secret value is printed. A profile that already sources it makes
+# this a no-op. This mirrors what /scoutflo:doctor does, so doctor and this audit agree.
+[ -f "$HOME/.scoutflo/env" ] && . "$HOME/.scoutflo/env" || true
 command -v curl >/dev/null || { echo "curl not installed"; exit 1; }
 command -v jq   >/dev/null || { echo "jq not installed"; exit 1; }
 command -v kubectl >/dev/null || { echo "kubectl not installed; cluster-side chain links will be blocked"; exit 1; }

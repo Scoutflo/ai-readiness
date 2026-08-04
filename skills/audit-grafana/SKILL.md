@@ -29,6 +29,11 @@ This audit owns the Grafana application layer: datasources, dashboards, Grafana-
 set -eu
 # Resolved from ~/.scoutflo/toolkit.yaml
 GRAFANA_URL="https://grafana.example.com"   # grafana.url
+# Load the home-anchored secret store so a token added to ~/.scoutflo/env (by connect,
+# even mid-session) is seen here without re-exporting or opening a new terminal. It only
+# sets *_env variables; no secret value is printed. A profile that already sources it makes
+# this a no-op. This mirrors what /scoutflo:doctor does, so doctor and this audit agree.
+[ -f "$HOME/.scoutflo/env" ] && . "$HOME/.scoutflo/env" || true
 # grafana.token_env names the variable; presence check only, never print the value.
 [ -n "${GRAFANA_TOKEN:-}" ] || { echo "GRAFANA_TOKEN is not set; run /scoutflo:connect"; exit 1; }
 command -v curl >/dev/null || { echo "curl is required"; exit 1; }

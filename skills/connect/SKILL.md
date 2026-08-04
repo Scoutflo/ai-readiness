@@ -139,6 +139,8 @@ Create read-only credentials now, named `scoutflo-audit` per the naming rule. Cr
 
 The commands in this step read secret values, so they are yours to run in your own terminal. An agent shows them and never executes them; the value never enters the conversation. **The agent's job here is to hand you an exact, copy-pasteable command for every variable you need to set — never just a "show the token" command.**
 
+**"I made the token — now what do I do with it?"** The token *value* does **not** go into `toolkit.yaml`. That file only records the **name** of the environment variable (`token_env: KIBANA_API_KEY`); the value lives separately, in your environment, under that exact name. So "add my token" means: put the value in the home-anchored secret store `~/.scoutflo/env` keyed by that `*_env` name (Step 4c) — one line, once — and every skill reads it from there at run time by matching the name. You do not paste the token into chat, into `toolkit.yaml`, or into any skill. Three moving parts: (1) `toolkit.yaml` names the var, (2) `~/.scoutflo/env` holds the value, (3) the audit reads the value by that name. Get the value into `~/.scoutflo/env` and you are done — `doctor` and every audit source that file, so a token added there is picked up in the same session without opening a new terminal.
+
 ### 4a. First, reuse what's already there
 
 Before asking you to create or paste anything, the agent runs this **presence-only scan** (it prints variable names and whether they are set, never any value) to find credentials you may already have exported for these systems:

@@ -25,6 +25,16 @@ No. The toolkit runs inside your Claude Code. Your credentials stay in your envi
 **What credentials do I need?**
 `/scoutflo:connect` walks you through it per integration, with exact minimal scopes. Audits use read-only tokens. Setup skills need a second, higher-permission token that you create only if you use them.
 
+**I created the token in the provider — where does it go so the toolkit uses it?**
+Not into `toolkit.yaml`. That file only records the *name* of the environment variable (for example `token_env: KIBANA_API_KEY`); the token **value** lives separately, in your environment, under that exact name. Put it in the home-anchored secret store once:
+```bash
+mkdir -p ~/.scoutflo && touch ~/.scoutflo/env && chmod 600 ~/.scoutflo/env
+grep -q 'scoutflo/env' ~/.zshrc 2>/dev/null || echo '[ -f ~/.scoutflo/env ] && . ~/.scoutflo/env' >> ~/.zshrc
+echo 'export KIBANA_API_KEY="<paste-the-token-here>"' >> ~/.scoutflo/env
+source ~/.scoutflo/env
+```
+Swap `KIBANA_API_KEY` for the provider's `*_env` name (`GRAFANA_TOKEN`, `DATADOG_API_KEY`, `PROM_TOKEN`, …; `/scoutflo:connect` and `references/providers.md` name it per provider). Then `/scoutflo:doctor` confirms it. The three moving parts: `toolkit.yaml` names the var → `~/.scoutflo/env` holds the value → each audit reads the value by that name. `doctor` **and** every audit source `~/.scoutflo/env` at the start of a run, so a token added there is picked up in the same session — no need to open a new terminal. (On Windows PowerShell, use `setx KIBANA_API_KEY "<paste>"` and reopen the terminal.) The value never goes into chat, into `toolkit.yaml`, or into any skill; a plain `export KIBANA_API_KEY="…"` also works but only for the current shell — the `~/.scoutflo/env` file is what makes it persist across sessions.
+
 **Can an audit change anything in my systems?**
 No. Audit skills are read-only by design and doctor-gated; the only writes are local report files. Setup skills are separate, state every change up front, and do nothing until you explicitly confirm.
 
