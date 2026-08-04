@@ -63,7 +63,7 @@ TARGET="web-3"   # the resource/service/finding-id the user asked about
 # Every finding that names the target, across every provider report:
 find "$AUD" -name findings.json 2>/dev/null | while read -r f; do
   jq -r --arg t "$TARGET" '.findings[]
-    | select(((.affected // []) | join(" ") + " " + .title + " " + .id) | test($t; "i"))
+    | select(( ((.affected // []) | join(" ")) + " " + (.title // "") + " " + (.id // "") ) | test($t; "i"))
     | "\(.id)\t\(.severity)\t\(.area)\t\(.title)"' "$f" 2>/dev/null \
     | sed "s#^#$(basename "$(dirname "$(dirname "$f")")")\t#"
 done
