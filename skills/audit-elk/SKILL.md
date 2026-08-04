@@ -24,7 +24,7 @@ Outputs, per the [report standard](../../report-standard/README.md):
 
 | Integration | toolkit.yaml keys | Secret | Minimum scope | Tier |
 | --- | --- | --- | --- | --- |
-| ELK / Kibana | `elk.kibana_url`, `elk.token_env`, optional `elk.spaces` | the variable named by `token_env` (`KIBANA_API_KEY`) | Elasticsearch API key whose role has Kibana Read on Stack Rules, Rules Settings, and Actions and Connectors (recipe in `/scoutflo:connect`) | read-only |
+| ELK / Kibana | `elk.kibana_url`, `elk.token_env`, optional `elk.spaces` (a *restriction* on the auto-discovered set) | the variable named by `token_env` (`KIBANA_API_KEY`) | Elasticsearch API key whose role has Kibana Read on Stack Rules, Rules Settings, and Actions and Connectors, granted at **`spaces:["*"]`** so `GET /api/spaces/space` discovery is complete (recipe in `/scoutflo:connect`) — a narrower per-space scope hides spaces and recreates the empty-default bug | read-only |
 | Slack (optional) | `slack.webhook_env` | webhook variable | post to one channel | n/a |
 
 ```bash
@@ -73,9 +73,10 @@ The API key plus the Kibana URL select the target; there is no ambient default. 
 
 - Configuration is metadata; execution state is proof. A rule that exists is `configured`; only a rule whose `last_run.outcome` is `succeeded` and whose actions target a live connector is `validated-live`.
 - API errors are evidence. A `404` on `/api/alerting/*` means `elk.kibana_url` points at Elasticsearch or a space prefix is wrong; a `401`/`403` means the key's role lacks the Kibana Read privilege on Stack Rules or Connectors. Record which, never convert an error into empty success.
-- Rules are space-isolated; coverage denominators name the spaces audited.
+- Rules are space-isolated, and spaces are **discovered** (`GET /api/spaces/space`), never assumed. Coverage denominators name the spaces discovered, audited, and skipped. Zero rules in the audited set never scores as an empty estate — it trips the Phase-1 guardrail (ELK-033), because the rules may live in a space this run did not see.
   - ❌ `Scored coverage 90: forty alerting rules exist.` (which space? one space's forty rules say nothing about another space)
-  - ✅ `Scored coverage 55: the default and observability spaces were audited (elk.spaces); the security space was not and is named as uncovered; within the two audited spaces, six rules are in execution error.`
+  - ❌ `Score 0/100: no alerting rules.` (only the default space was checked; the rules were in a space the run never enumerated — the exact bug this fix prevents)
+  - ✅ `Scored coverage 55: discovered five spaces; audited default and observability; security was discovered but skipped (out of scope) and named as uncovered; within the two audited spaces, six rules are in execution error.`
 - Never score from rule counts. A rule in `execution_status: error` detects nothing; a rule with no actions notifies nobody; a draft-equivalent disabled rule is not coverage. Count what actually works.
 - Flapping `null` on a rule means "use the space default", and the space default is ON — that is healthy, not a finding. Only an explicit per-rule `flapping.enabled: false`, or a weak `look_back_window`/`status_change_threshold`, is the finding.
 - Respect the version gates: this audit uses `/api/alerting/rule(s)` only (legacy `/api/alerts/*` removed in 9.0), and version-gates the maintenance-window check (public API 9.2+) to `not-in-scope` on older versions rather than failing it.
@@ -92,10 +93,22 @@ KIBANA_URL="${KIBANA_URL%/}"
 SMALL_MAX_OBJECTS="30"    # example, tune to your environment
 MEDIUM_MAX_OBJECTS="150"  # example, tune to your environment
 BATCH_SIZE="50"           # rules per batch on the large path; example, tune it
-# Sum rule totals across the spaces in elk.spaces (default space shown; add /s/<space> per entry).
-TOTAL="$(curl -fsS --max-time 30 -H "Authorization: ApiKey ${KIBANA_API_KEY}" \
-  "${KIBANA_URL}/api/alerting/rules/_find?per_page=1&page=1" | jq -r '.total // 0')"
-echo "rules_in_default_space=${TOTAL} scored_objects=${TOTAL} (sum across elk.spaces in the real run)"
+AUTH="Authorization: ApiKey ${KIBANA_API_KEY}"
+RUN_DATE="$(date -u +%Y-%m-%d)"
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/elk/${RUN_DATE}/raw"
+# Sum rule totals across the AUDITED spaces (spaces.txt, materialized by elk-checks.md
+# section 4a from live enumeration — NOT a bare default-space call). Per-space breakdown.
+[ -s "${RAW_DIR}/spaces.txt" ] || { echo "run space enumeration (elk-checks.md 4a) before sizing"; exit 1; }
+TOTAL=0
+while read -r space; do
+  [ -n "$space" ] || continue
+  if [ "$space" = "default" ]; then base="${KIBANA_URL}"; else base="${KIBANA_URL}/s/${space}"; fi
+  n="$(curl -fsS --max-time 30 -H "$AUTH" "${base}/api/alerting/rules/_find?per_page=1&page=1" | jq -r '.total // 0')"
+  echo "  rules_in_space[${space}]=${n}"
+  TOTAL=$((TOTAL + n))
+done < "${RAW_DIR}/spaces.txt"
+ZERO_RULES=0; [ "$TOTAL" -eq 0 ] && ZERO_RULES=1
+echo "scored_objects=${TOTAL} (summed across audited spaces) zero_rules=${ZERO_RULES}"
 
 # Guided-walkthrough drift check, per report-standard/README.md.
 TARGET_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/elk"
@@ -144,13 +157,48 @@ fi
 
 The large-path phases then run against the scoped set; the report names anything scoped out.
 
-## Phase 1: Service context and spaces
+### Empty / hidden-rules guardrail
 
-If `./scoutflo-audits/topology.md` exists, load it; its service list is the critical-service list and its names are canonical. Resolve the spaces to audit from `elk.spaces` (default: the `default` space alone) and state them in the report. If topology.md does not exist, infer critical services from rule names and tags, note the inference, and suggest `/scoutflo:map-topology`.
+The scope checkpoint above narrows a *large* estate. This guardrail catches the opposite and more dangerous case — an estate that looks **empty** because the rules are in a space this run did not (or could not) see. It is the fix for the customer bug where auditing only `default` reported a confident, wrong `0/100`. After sizing sets `ZERO_RULES`:
+
+```bash
+set -eu
+RUN_DATE="$(date -u +%Y-%m-%d)"
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/elk/${RUN_DATE}/raw"
+# Spaces discovered (4a) vs audited (this run). Are there rules-bearing spaces we did NOT audit?
+UNAUDITED="$(comm -23 "${RAW_DIR}/spaces-discovered.txt" "${RAW_DIR}/spaces.txt" 2>/dev/null | tr '\n' ' ')"
+if [ "${ZERO_RULES:-0}" -eq 1 ]; then
+  if [ -n "${UNAUDITED// /}" ]; then
+    # Case A: zero rules in the audited set, but other spaces exist — the rules are likely there.
+    echo "[guard] 0 rules in the audited spaces, but these spaces were discovered and not audited: ${UNAUDITED}"
+    echo "[guard] pausing to re-scope rather than reporting an empty estate"
+    # Interactive: offer to add them; non-interactive/scheduled: audit all discovered by default.
+  else
+    # Case B: zero rules and NO other space is even visible to this key. Either the estate is
+    # truly empty, or the key cannot see the space that holds the rules. Do NOT score a
+    # confident 0/100 or a vacuous-high — this is the ELK-033 visibility trip-wire.
+    echo "[guard] 0 rules visible across every discoverable space — possible key-visibility gap (ELK-033)"
+    echo "[guard] widen the key to spaces:[\"*\"] read (see /scoutflo:connect) if rules live elsewhere"
+  fi
+fi
+```
+
+Behavior this enforces (Phase 8 honors it):
+
+- **Case A** (zero in audited set, other spaces discovered): in an interactive run, present the discovered spaces (id, name, per-space rule count) as a numbered pick-list, validate the choice against the discovered list, write it into the audit scope (`elk.spaces` / `checkpoint_save_scope`), and re-size against the chosen space(s). In a non-interactive or scheduled run (`audit-all`, `schedule-audits`), take the safe default — audit **all discovered** spaces — so the picker never hangs.
+- **Case B** (zero visible anywhere): mark the rule-dependent categories (delivery, health, noise, coverage) `blocked`, exclude and renormalize per [severity-and-scoring.md](../../report-standard/severity-and-scoring.md), emit finding **ELK-033** with the visibility-gap reason, and **never** write a confident `0/100`, a vacuously-high score, or an end-to-end claim. If space discovery itself was `unavailable` (the 4a 404 fallback), say so as the reason.
+
+## Phase 1: Service context and space discovery
+
+If `./scoutflo-audits/topology.md` exists, load it; its service list is the critical-service list and its names are canonical. If topology.md does not exist, infer critical services from rule names and tags, note the inference, and suggest `/scoutflo:map-topology`.
+
+**Discover the spaces — never assume `default`.** Run the space-enumeration step in [references/elk-checks.md](references/elk-checks.md#4a-space-enumeration-do-this-first--never-assume-default): call `GET /api/spaces/space` (a global endpoint, no `/s/` prefix, no admin privilege needed) to enumerate the spaces this key can see. Then resolve the audited set: `elk.spaces` when it is set (each entry validated against the discovered list — a configured space the key cannot see is a scope gap, reported `skipped`, never silently dropped), else **every discovered space**. State three distinct sets in the report and in every coverage denominator: **discovered**, **audited**, **skipped**. If `GET /api/spaces/space` returns 404 (Spaces feature or the Security plugin is off, or a Serverless difference), fall back to `elk.spaces`/`default` and **state that discovery was unavailable** — never silently treat the default space as the whole estate.
+
+This replaces the old blind `["default"]`-only default: a customer's alerting rules commonly live in a non-default space, and auditing only `default` reports an empty estate — the wrong `0/100` (or a vacuously-high score) that this fix exists to prevent.
 
 ## Phase 2: Read-only inventory
 
-Build the raw picture with the commands in [references/elk-checks.md](references/elk-checks.md) section 4: the Kibana version (drives the version gates), the alerting framework health, and per space the rules (with execution state, actions, flapping, alert_delay, snooze), connectors, and rule types. Judgment starts in Phase 3. A 401/403 on any space is a privilege finding naming the missing Kibana Read feature; a 404 means the URL is Elasticsearch, not Kibana.
+Build the raw picture with the commands in [references/elk-checks.md](references/elk-checks.md): section 4a already enumerated the spaces (`GET /api/spaces/space`) and resolved the audited set; section 4 then captures the Kibana version (drives the version gates), the alerting framework health, and per audited space the rules (with execution state, actions, flapping, alert_delay, snooze), connectors, and rule types. Judgment starts in Phase 3. A 401/403 on any space is a privilege finding naming the missing Kibana Read feature; a 404 on `/api/alerting/*` means the URL is Elasticsearch, not Kibana.
 
 ## Phase 3: Rule delivery (ELK-001 to ELK-004)
 
@@ -171,7 +219,7 @@ Honest ceiling, stated in the report every run: rule configuration is intent; wh
 
 ## Phase 6: Coverage (ELK-030 to ELK-032)
 
-Commands in section 8. Rule-type coverage — a space using only one rule type may have blind signal classes (`ELK-030`), critical services from topology each covered by at least one rule (`ELK-031`), and the legacy-Watcher-versus-Kibana-Alerting split identified so a Kibana-only view does not silently miss Watcher-covered services (`ELK-032` — needs `elk.es_url` and the `monitor_watcher` privilege; blocked with that reason when absent).
+Commands in section 8. Rule-type coverage — a space using only one rule type may have blind signal classes (`ELK-030`), critical services from topology each covered by at least one rule (`ELK-031`), the legacy-Watcher-versus-Kibana-Alerting split identified so a Kibana-only view does not silently miss Watcher-covered services (`ELK-032` — needs `elk.es_url` and the `monitor_watcher` privilege; blocked with that reason when absent), and rules visible in at least one discovered space (`ELK-033`, high — zero rules across every space this key can see is `blocked` with the visibility-gap reason from the Phase-1 guardrail, not a plain fail; it points at widening the key to `spaces:["*"]` read).
 
 ## Phase 7: Coverage matrix and topology readiness
 
@@ -190,12 +238,14 @@ Then render the Scoutflo Topology Readiness section per [topology-readiness.md](
 
 Score per [severity-and-scoring.md](../../report-standard/severity-and-scoring.md): each check yields `pass` (1.0), `partial` (0.5), `fail`/`blocked` (0), `not-in-scope` leaves the denominator. Category score is the credit ratio times 100 rounded down; overall is the weight-normalized sum over included categories. Whole categories that could not be assessed (a space that 403'd; ELK-025 on a pre-9.2 version leaves that one check not-in-scope, not the whole category) are excluded, renormalized, and stated. Score conservatively. Assign each category a maturity value (`reactive`, `proactive`, `systematic`).
 
+**Empty / hidden estate (ELK-033, from the Phase-1 guardrail):** when zero rules are visible across every discoverable space, do not emit a confident `0/100` — nor a vacuously-high score from checks that pass on an empty set. Mark the rule-dependent categories (delivery, health, noise, coverage) `blocked`, author them into `score.excluded` with the reason ("no alerting rules visible to this credential; rules may live in a space this key cannot see — widen to `spaces:[\"*\"]` read", or "space discovery unavailable" on the 4a 404 fallback), renormalize over whatever remains, and emit ELK-033 with evidence (the discovered-vs-audited space sets) and a remediation pointer. `check-findings.sh` requires the excluded categories be authored into `score.excluded` for the overall to reconcile.
+
 | Category | Weight | ID range |
 | --- | ---: | --- |
 | Rule delivery | 30 | ELK-001 to ELK-004 |
 | Rule health | 25 | ELK-010 to ELK-013 |
 | Alert noise | 25 | ELK-020 to ELK-025 |
-| Coverage | 20 | ELK-030 to ELK-032 |
+| Coverage | 20 | ELK-030 to ELK-033 |
 
 The full check catalog and the target profile (what 100 means per category) are at the top of [references/elk-checks.md](references/elk-checks.md). IDs are stable: the same defect gets the same ID every run, one finding per failed check, affected objects and their space enumerated. Compute `points_recoverable` per finding by re-running the scoring model with that check at full credit; `info` findings and excluded categories carry 0. The executive summary states the gap to target and the two or three findings with the highest `points_recoverable` as the biggest levers.
 
@@ -279,6 +329,7 @@ No `setup-elk` ships yet, so every finding's `remediation` field names the concr
 | Indefinite snooze or mute_all (ELK-024) | Rule details — unsnooze or time-bound the snooze |
 | Permanent maintenance window (ELK-025) | Stack Management > Maintenance Windows — time-bound or remove it |
 | Signal-class or service coverage gaps, Watcher split (ELK-030 to ELK-032) | Add the missing rule types/rules; migrate legacy Watcher watches to Kibana Alerting |
+| No rules visible in any discovered space (ELK-033) | Confirm which Kibana space holds the rules (`GET /api/spaces/space`); if the key sees only some spaces, widen its role to grant the three Read feature privileges at `spaces:["*"]` (`/scoutflo:connect`), or set `elk.spaces` to the space that holds the rules |
 | Topology readiness gaps with no finding | `/scoutflo:map-topology` |
 
 ## Common Failure Modes
@@ -288,7 +339,8 @@ All thresholds and windows named in the checks are example values; tune them to 
 | Failure | Prevention |
 | --- | --- |
 | `elk.kibana_url` set to the Elasticsearch host | Alerting is a Kibana API; a 404 on `/api/alerting/*` means the URL is Elasticsearch (`:9200`), not Kibana (`:5601`) |
-| Only the default space audited, other spaces silently missed | Rules are space-isolated; iterate `elk.spaces` and name every space audited and skipped in the denominators |
+| Only the default space audited, other spaces silently missed (the customer 0/100 bug) | Discover spaces via `GET /api/spaces/space` (Phase 1 / elk-checks.md 4a), audit all visible or the `elk.spaces` subset, and treat a single visible space with 0 rules as the ELK-033 visibility trip-wire — never a confident 0/100 or a vacuous-high score |
+| Space discovery returns only `default` even though rules exist elsewhere | The key sees only spaces where it holds a privilege; a single-space key enumerates one space. Widen the key to `spaces:["*"]` read (see `/scoutflo:connect`); the report states discovery may be incomplete |
 | `flapping: null` flagged as flapping-disabled | null means "use the space default", which is ON; only an explicit `enabled:false` or a weak window is a finding |
 | Maintenance-window check failed on Kibana 8.x/9.0/9.1 | The public maintenance-window API is 9.2+; version-gate ELK-025 to not-in-scope on older versions |
 | Legacy `/api/alerts/*` used | Those routes were removed in 9.0; this audit uses `/api/alerting/rule(s)` only |

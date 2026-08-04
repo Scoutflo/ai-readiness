@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.1.90
+
+Fixes the ELK audit's wrong/empty-space failure and the ELK onboarding friction seen in a live customer session — **live-proven against a real multi-space Kibana 8.19.11**, not just gated.
+
+**The headline bug (a real customer 0/100 on a non-default space).** `audit-elk` derived its audited spaces purely from static `elk.spaces` (defaulting to `["default"]`) and never enumerated the spaces that actually exist — so when a customer's alerting rules lived in a non-default Kibana space, it audited the empty `default` space and reported a confident, wrong result, with no way to re-scope when told "use the right space." This was a plugin design gap, not a Kibana API limit.
+
+- **Phase 1 now discovers spaces via `GET /api/spaces/space`** (a global endpoint, no admin privilege) and audits every discovered space, or the `elk.spaces` subset when set. `elk.spaces` is now an optional *restriction*, not the source of truth. The report names three sets: discovered, audited, skipped (elk-checks.md new section 4a).
+- **New empty/hidden-rules guardrail + check ELK-033 (Coverage).** Zero rules across every visible space no longer scores as an empty estate. It trips a visibility trip-wire: mark the rule-dependent categories `blocked`, author them into `score.excluded`, renormalize, and emit ELK-033 with the reason — never a confident `0/100` or a vacuously-high score. When other spaces were discovered but not audited, it pauses to re-scope (interactive) or audits all discovered (non-interactive/scheduled).
+- **A key sees only spaces where it holds a privilege**, so complete discovery needs the read privileges at `spaces:["*"]`. The connect recipe now grants exactly that.
+
+**ELK onboarding friction (also from the session).**
+- **connect `references/providers.md`** now leads with a worked `POST /_security/api_key` example using the *correct* Kibana-feature `role_descriptors` (`feature_stackAlerts.read` / `feature_rulesSettings.read` / `feature_actions.read` at `spaces:["*"]`), and warns that a `cluster:["monitor"]` + index-read key authenticates but **403s** the alerting/connector reads — the exact wrong shape the customer built. Verify steps now include a real rule read and a space list, not just `/api/alerting/_health` (which can pass on an under-privileged key).
+- **`read -rs` "shows nothing as you paste — that's the -s flag, not a hang"** note added, with a plain `export VAR="…"` alternative.
+- **`doctor`** now surfaces a `spaces` row (how many Kibana spaces the key can see, with a widen-to-`spaces:["*"]` hint when only `default` is visible), and the aws/gcloud/kubectl missing-CLI hints now carry install links; connect Prerequisites gained a CLI-install table.
+
+**Locks.** Two new pressure scenarios (`rules-in-non-default-space`, `zero-rules-visible-scope-gap`) + `skills/audit-elk/tests/test-space-discovery.sh` (8 assertions, structural + functional). Rubric review: PASS. Live-proof against `scoutflo-elk-stack`: OLD default-only path saw 4 rules and missed a seeded non-default-space rule; NEW discovery found both spaces (5 rules total) and surfaced the missed rule as a real ELK-001; the correct `role_descriptors` returned 200 while the wrong shape returned 403 — all on real Kibana, all seeded objects reverted.
+
 ## 0.1.89
 
 Discoverability + a live-friction fix, both surfaced from real customer-meeting runs.
