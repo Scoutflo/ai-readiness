@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.1.91
+
+Fixes a "doctor says connected, the audit says the token isn't set" asymmetry — and clarifies the step customers kept getting stuck on: "I made the token, now what do I do with it?" **Live-proven against a real Kibana 8.19.11.**
+
+**The bug.** `/scoutflo:doctor` sources the home-anchored secret store `~/.scoutflo/env` before its checks, but the 14 audit skills did not — they only presence-checked the `*_env` variable. So a customer who added a token to `~/.scoutflo/env` mid-session saw **green** in doctor (which sourced the file) but **"TOKEN is not set"** in the audit (a fresh shell that never sourced it, whose login profile was read at launch before the token was added). Same session, opposite answers.
+
+- **Every audit skill now sources `~/.scoutflo/env` in its doctor gate**, exactly as doctor does (`[ -f "$HOME/.scoutflo/env" ] && . "$HOME/.scoutflo/env" || true`). A token added to the store is now picked up by the audit in the same session — no re-export, no new terminal. Applied uniformly to all 15 audit skills (alert-routing, aws, cost, datadog, digitalocean, elk, gcp, grafana, groundcover, jsm, kubernetes, lgtm, pagerduty, sentry, zenduty).
+- **New parity gate `ci/env-load-parity-check.sh`** (composed into `structure-check.sh`) mechanically requires every `audit-*` to source the store, so no future audit can regress into the doctor-green-but-audit-blind trap. Guarded by 3 new cases in `test-parity-gates.sh`.
+
+**"I created the token — where does it go?" (docs clarity).** The value does **not** go into `toolkit.yaml`; that file only names the variable (`token_env: KIBANA_API_KEY`). The value goes into `~/.scoutflo/env` keyed by that exact name, and skills read it there at run time. connect Step 4 and a new FAQ entry now spell out the three moving parts (config names the var → `~/.scoutflo/env` holds the value → the audit reads it by name) with the one-time copy-paste setup.
+
+Live-proof: with a real read-only API key placed only in `~/.scoutflo/env` (never pre-exported), the OLD gate left `KIBANA_API_KEY` unset (audit would stop); the NEW gate sourced it, the audit proceeded, and the key returned **HTTP 200** against real Kibana. Proof key invalidated and all scratch reverted afterward.
+
+Skill/CI/docs only — no check logic, scoring, schema, or report change; the one behavior change (audits now read `~/.scoutflo/env`) is additive and matches doctor.
+
 ## 0.1.90
 
 Fixes the ELK audit's wrong/empty-space failure and the ELK onboarding friction seen in a live customer session — **live-proven against a real multi-space Kibana 8.19.11**, not just gated.

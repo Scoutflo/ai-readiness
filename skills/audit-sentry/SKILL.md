@@ -33,6 +33,11 @@ set -eu
 SENTRY_HOST="us.sentry.io"   # sentry.host: us.sentry.io, de.sentry.io, or your self-hosted host
 SENTRY_ORG="your-org-slug"   # sentry.org
 API="https://${SENTRY_HOST}/api/0"
+# Load the home-anchored secret store so a token added to ~/.scoutflo/env (by connect,
+# even mid-session) is seen here without re-exporting or opening a new terminal. It only
+# sets *_env variables; no secret value is printed. A profile that already sources it makes
+# this a no-op. This mirrors what /scoutflo:doctor does, so doctor and this audit agree.
+[ -f "$HOME/.scoutflo/env" ] && . "$HOME/.scoutflo/env" || true
 # sentry.token_env names the variable; presence check only, never print the value.
 [ -n "${SENTRY_TOKEN:-}" ] || { echo "SENTRY_TOKEN is not set; run /scoutflo:connect"; exit 1; }
 command -v curl >/dev/null || { echo "curl is required"; exit 1; }

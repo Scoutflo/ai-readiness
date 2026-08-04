@@ -31,6 +31,11 @@ Outputs, per the [report standard](../../report-standard/README.md):
 set -eu
 CFG="${SCOUTFLO_CONFIG:-$HOME/.scoutflo/toolkit.yaml}"
 [ -f "$CFG" ] || { echo "missing $CFG; run /scoutflo:connect"; exit 1; }
+# Load the home-anchored secret store so a token added to ~/.scoutflo/env (by connect,
+# even mid-session) is seen here without re-exporting or opening a new terminal. It only
+# sets *_env variables; no secret value is printed. A profile that already sources it makes
+# this a no-op. This mirrors what /scoutflo:doctor does, so doctor and this audit agree.
+[ -f "$HOME/.scoutflo/env" ] && . "$HOME/.scoutflo/env" || true
 for bin in kubectl jq; do
   command -v "$bin" >/dev/null || { echo "missing binary: $bin"; exit 1; }
 done
