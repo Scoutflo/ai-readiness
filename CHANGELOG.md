@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.86
+
+Adversarial live-data testing of the new `/scoutflo:rca` skill — and it earned its keep by catching a real latent bug before any customer could.
+
+- **Fixed a Phase 1 jq precedence bug in `/scoutflo:rca`.** The resource-resolution filter `select(((.affected // []) | join(" ") + " " + .title + " " + .id) | test(...))` had wrong operator precedence: the `|` piped the joined string into `+ .title + .id`, so `.title`/`.id` were indexed against a string, erroring out under jq (`Cannot index array with string "id"`). Effect: **searching by a resource name silently found nothing in the per-report findings** — exactly the "why is X failing" lookup the skill exists for. It only appeared to work in the v0.1.85 demo because the correlation path (a separate, correct filter) still returned signal. Corrected to fully parenthesize the joined string: `( ((.affected // []) | join(" ")) + " " + (.title // "") + " " + (.id // "") )`. Verified on the real reports — resource-name lookup now surfaces genuine cross-stack findings (e.g. `checkout-edge-api` → ALR-002/GC-032/LGTM-031 across four stacks). No other skill had this pattern.
+- **New `tests/test-rca-grounding-live.sh`** — an adversarial, deterministic grounding proof (18 test suites now). Against real-shape fixtures it asserts the anti-hallucination guarantees: a real target resolves across findings + topology + correlation; a **cascade root and its effect both resolve to real finding-ids**; **every citation any phase can emit resolves to a real finding** (no fabrication); a **nonexistent target yields zero signal** (the insufficient-signal path, never an invented cause); a **null topology node** doesn't crash; and missing topology/correlation **degrade rather than crash**. This locks the customer-facing "grounded, never invents a cause" promise as CI.
+
+No audit finding IDs, scoring, or other skills changed. This hardens the RCA skill shipped in v0.1.85.
+
 ## 0.1.85
 
 New **`/scoutflo:rca`** skill — the "ask a question about the reports and get a grounded root cause" capability. Ask *"why is `<service/resource>` failing / at risk — give me the RCA?"* and it correlates across every audit's `findings.json`, the correlation engine's overlaps/cascades, the service topology, and business context, then returns an evidence-cited root-cause analysis with a confidence level and an explicit "what I could not determine."
