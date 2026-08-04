@@ -6,7 +6,7 @@ Runnable, read-only checks for every surface the [audit-elk](../SKILL.md) workfl
 
 - Auth is `Authorization: ApiKey <encoded>` with the encoded Elasticsearch API key from the variable named by `elk.token_env`. Presence-check it only; never echo, log, or write the value. One ES API key works on both the Elasticsearch and Kibana APIs; alerting rules are a **Kibana** API.
 - `KIBANA_URL` is `elk.kibana_url` — the Kibana host, not Elasticsearch. Every block declares it. A 404 on an alerting path usually means the URL points at Elasticsearch, or a space/base-path prefix is wrong.
-- **Rules are space-isolated.** Every alerting and connector read is scoped to a space: the default space uses `/api/alerting/...`; a named space uses `/s/<space_id>/api/alerting/...`. This skill iterates the spaces in `elk.spaces` (default: `["default"]`) and every coverage denominator names which spaces were audited.
+- **Rules are space-isolated, and spaces are discovered — never assumed.** Every alerting and connector read is scoped to a space: the default space uses `/api/alerting/...`; a named space uses `/s/<space_id>/api/alerting/...`. This skill **enumerates the live spaces** via `GET /api/spaces/space` (section 4a) and audits `elk.spaces` when it is set, else **every discovered space** — a blind `["default"]`-only default is gone, because a customer's rules commonly live in a non-default space and auditing only `default` reports an empty estate (a wrong 0/100 or a vacuously-high score). Every coverage denominator names which spaces were **discovered**, **audited**, and **skipped**.
 - Every command here is read-only: GET on rules, connectors, rule types, health, and maintenance windows (9.2+); `POST /_watcher/_query/watches` is a read-by-query on the Elasticsearch side (it lists watches, changes nothing) used only for the legacy-Watcher split check. The forbidden-command list is section 12.
 - **Version gates matter.** Legacy `/api/alerts/*` was removed in Kibana 9.0 — this skill uses `/api/alerting/rule(s)` only. The maintenance-window list API (`GET /api/maintenance_window/_find`) is public only from 9.2; on 8.x-9.1 it is internal, so that check version-gates itself and reports `not-in-scope` with the detected version rather than failing.
 - `curl -fsS --max-time 30` is the default. Where the status code is the evidence, `-f` is dropped and `-w '%{http_code}'` captures it.
@@ -35,6 +35,7 @@ One permanent ID per check. IDs never change or get reused; retired checks keep 
 | ELK-030 | Coverage | Rule-type coverage: the rule types present cover the critical services | high |
 | ELK-031 | Coverage | Critical services from topology have at least one alerting rule | high |
 | ELK-032 | Coverage | Legacy Watcher vs Kibana Alerting split identified (no silent Watcher-only coverage) | medium |
+| ELK-033 | Coverage | Alerting rules are visible in at least one discovered space (zero rules across every space this key can see is `blocked`, not a plain fail — a likely space-visibility gap: the rules may live in a space the key cannot see; widen the key to `spaces:["*"]` read) | high |
 
 ## 3. Target profile
 
@@ -43,11 +44,76 @@ What 100/100 means per category; the checks above are this profile made executab
 - **Rule delivery**: every enabled rule fires to at least one live connector, no connector has missing secrets or is deprecated, no orphaned connectors, and the alerting framework itself is healthy and securely configured.
 - **Rule health**: no rule in error or warning execution state, every enabled rule's last run succeeded, and no rule that should be live sits disabled.
 - **Alert noise**: flapping detection on, FOR-like debounce where needed, actions throttled or status-change-gated rather than re-notifying every interval, summaries on high-cardinality rules, no indefinite snoozes or permanent maintenance windows.
-- **Coverage**: rule types and rules actually cover the critical services, and any legacy Watcher coverage is identified rather than silently trusted or missed.
+- **Coverage**: spaces are discovered live (not assumed), rules are visible in at least one discovered space, rule types and rules actually cover the critical services, and any legacy Watcher coverage is identified rather than silently trusted or missed.
 
-## 4. Space discovery and inventory (all categories)
+## 4a. Space enumeration (do this first — never assume `default`)
 
-Resolve which spaces to audit, then capture rules and connectors per space.
+Kibana alerting rules are **space-isolated**, and a customer's rules commonly live in a **non-default** space. Auditing only `default` when the rules are elsewhere reports an empty estate — a wrong `0/100`, or (worse) a vacuously-high score from checks that pass on zero rules. So the first inventory step is to **enumerate the spaces that actually exist**, via the global Spaces API, and drive the per-space loop from that — not from a hardcoded default.
+
+```bash
+set -eu
+KIBANA_URL="https://kibana.example.com"   # elk.kibana_url
+KIBANA_URL="${KIBANA_URL%/}"
+AUTH="Authorization: ApiKey ${KIBANA_API_KEY}"
+RUN_DATE="$(date -u +%Y-%m-%d)"
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/elk/${RUN_DATE}/raw"
+mkdir -p "$RAW_DIR"
+
+# GET /api/spaces/space is a GLOBAL endpoint (no /s/<space> prefix). It needs NO admin /
+# kibana_admin privilege — any authenticated key can call it — but its response is FILTERED
+# to only the spaces where the key holds at least one Kibana feature privilege. So a key
+# scoped to a single space enumerates only that space (this is exactly how the wrong/empty
+# space bug happens). For complete discovery the key's role must grant the three Read
+# feature privileges (Stack Rules, Rules Settings, Actions and Connectors) at spaces:["*"]
+# — still fully read-only, no admin. See /scoutflo:connect (references/providers.md).
+SPACES_CODE="$(curl -s -o "${RAW_DIR}/spaces.json" -w '%{http_code}' --max-time 15 \
+  -H "$AUTH" "${KIBANA_URL}/api/spaces/space")"
+
+DISCOVERY="ok"
+if [ "$SPACES_CODE" = "200" ] && jq -e 'type == "array"' "${RAW_DIR}/spaces.json" >/dev/null 2>&1; then
+  jq -r '.[].id' "${RAW_DIR}/spaces.json" | sort -u > "${RAW_DIR}/spaces-discovered.txt"
+else
+  # 404 = Spaces feature / Security plugin absent (or a Serverless difference). Do NOT
+  # silently assume the default space is the whole estate — record it and fall back.
+  DISCOVERY="unavailable (HTTP ${SPACES_CODE}: Spaces API not reachable — Security plugin or Spaces feature may be off)"
+  printf '%s\n' "default" > "${RAW_DIR}/spaces-discovered.txt"
+fi
+echo "space discovery: ${DISCOVERY}"
+echo "discovered spaces: $(tr '\n' ' ' < "${RAW_DIR}/spaces-discovered.txt")"
+```
+
+Then resolve the **audited set**:
+
+- If `elk.spaces` is set, audit exactly those — but validate each against `spaces-discovered.txt`. A configured space that is **not** in the discovered list is a privilege/scope gap (the key cannot see it): report it as `skipped` with that reason, never silently drop it.
+- If `elk.spaces` is **unset**, audit **every discovered space**.
+- Always record three sets for the report and the coverage denominators: **discovered**, **audited**, **skipped**.
+
+```bash
+# Audited set = elk.spaces ∩ discovered  (when elk.spaces set), else all discovered.
+# ELK_SPACES holds the configured entries one per line, empty when unset.
+: > "${RAW_DIR}/spaces.txt"
+if [ -s "${RAW_DIR}/elk-spaces-config.txt" ]; then
+  while read -r s; do
+    [ -n "$s" ] || continue
+    if grep -qxF "$s" "${RAW_DIR}/spaces-discovered.txt"; then
+      printf '%s\n' "$s" >> "${RAW_DIR}/spaces.txt"
+    else
+      printf '%s\tconfigured-but-not-visible-to-this-key (widen to spaces:["*"] read)\n' "$s" \
+        >> "${RAW_DIR}/spaces-skipped.txt"
+    fi
+  done < "${RAW_DIR}/elk-spaces-config.txt"
+else
+  cp "${RAW_DIR}/spaces-discovered.txt" "${RAW_DIR}/spaces.txt"
+fi
+echo "audited spaces: $(tr '\n' ' ' < "${RAW_DIR}/spaces.txt")"
+[ -f "${RAW_DIR}/spaces-skipped.txt" ] && echo "skipped (not visible): $(cut -f1 "${RAW_DIR}/spaces-skipped.txt" | tr '\n' ' ')"
+```
+
+Edge cases to state, never hide: a **disabled Security plugin** returns all spaces unconditionally (discovery is trivially complete); a **404** means discovery was unavailable and the run fell back to `default` — say so in the report and treat a resulting zero-rule estate as a possible visibility gap (ELK-033), not a confident empty.
+
+## 4. Per-space inventory (all categories)
+
+The audited set now comes from `spaces.txt`, materialized by section 4a from **live enumeration** (never a hardcoded default). Capture rules, connectors, and rule types per space.
 
 ```bash
 set -eu
@@ -67,9 +133,11 @@ curl -fsS --max-time 15 -H "$AUTH" "${KIBANA_URL}/api/alerting/_health" \
   | jq '{is_sufficiently_secure, has_permanent_encryption_key, alerting_framework_health}' \
   > "${RAW_DIR}/alerting-health.json"
 
-# Spaces to audit: elk.spaces from config, default ["default"]. Written to a file the
-# per-space loop reads, so this stays stateless.
-printf '%s\n' "default" > "${RAW_DIR}/spaces.txt"   # replace with elk.spaces entries, one per line
+# Spaces to audit come from ${RAW_DIR}/spaces.txt, which section 4a already materialized
+# from live GET /api/spaces/space enumeration (intersected with elk.spaces when set).
+# Do NOT hardcode "default" here — that is the wrong/empty-space bug. If section 4a did not
+# run, run it first; spaces.txt must exist and be non-empty before this loop.
+[ -s "${RAW_DIR}/spaces.txt" ] || { echo "spaces.txt missing/empty — run section 4a (space enumeration) first"; exit 1; }
 
 while read -r space; do
   [ -n "$space" ] || continue
@@ -255,7 +323,7 @@ curl -fsS --max-time 30 -H "Authorization: ApiKey ${KIBANA_API_KEY}" \
 
 ## 9. Per-space iteration and rate handling
 
-Every check in sections 5-8 runs once per space in `elk.spaces`. On the large path (many rules across many spaces), batch by space against the worklist per skill-authoring-conventions.md. Kibana returns 429 under load; on 429, sleep 10s once and retry, then record the affected space's checks as `blocked`.
+Every check in sections 5-8 runs once per **audited** space (the `spaces.txt` set that section 4a resolved from live enumeration — every discovered space, or the `elk.spaces` subset). On the large path (many rules across many spaces), batch by space against the worklist per skill-authoring-conventions.md. Kibana returns 429 under load; on 429, sleep 10s once and retry, then record the affected space's checks as `blocked`. If **zero** rules are found across every audited space, do not score it as empty coverage — that is the ELK-033 visibility trip-wire (section 4a): the rules may live in a space this key cannot see. Block the rule-dependent categories with that reason rather than emitting a confident `0/100` or a vacuously-high score.
 
 ## 10. Per-service coverage queries (coverage matrix)
 

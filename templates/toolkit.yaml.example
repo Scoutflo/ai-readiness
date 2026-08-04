@@ -59,7 +59,9 @@ elk:
   kibana_url: https://kibana.example.com    # Kibana base URL (NOT Elasticsearch); alerting rules live in Kibana
   token_env: KIBANA_API_KEY                 # Elasticsearch API key (works on both ES and Kibana APIs)
   tier: read-only
-  # spaces: [default]                       # Kibana spaces to audit; omit to audit the default space only
+  # spaces: [default]                       # OPTIONAL: omit to audit ALL Kibana spaces the key can see
+                                            # (auto-discovered via GET /api/spaces/space); list ids to restrict.
+                                            # Discovery is complete only if the key has Read at spaces:["*"].
 
 jsm:
   site: your-site.atlassian.net             # your Atlassian site host (used to discover cloud_id)

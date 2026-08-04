@@ -321,14 +321,19 @@ elk:
   kibana_url: https://kibana.example.com   # Kibana base URL (NOT the Elasticsearch URL); no trailing slash
   token_env: KIBANA_API_KEY                # env var holding the Elasticsearch API key
   tier: read-only                          # tier of the key behind token_env
-  # spaces: [default]                       # Kibana spaces to audit; omit to audit the default space only
+  # spaces: [default]                       # OPTIONAL restriction. Omit to audit ALL Kibana spaces the
+                                            # key can see (auto-discovered via GET /api/spaces/space).
+                                            # List space ids to restrict to a subset. Discovery is
+                                            # complete only if the key has Read at spaces:["*"].
 ```
 
 Alerting rules live in **Kibana**, not Elasticsearch, so `kibana_url` is the Kibana application endpoint — a different host and port from the Elasticsearch API (on self-managed, Kibana is `:5601`, Elasticsearch is `:9200`; on Elastic Cloud they are two separate endpoints). One Elasticsearch API key authenticates both the Elasticsearch and Kibana APIs, so there is no separate "Kibana key" to create.
 
-### Rules are space-isolated
+### Rules are space-isolated — and the audit discovers spaces for you
 
-Kibana alerting rules and connectors belong to a **space**. A key that reads the `default` space sees only the `default` space's rules; auditing another space means iterating `/s/<space_id>/api/alerting/...`. List the spaces you want audited in `elk.spaces` (the audit defaults to `default` when omitted) so coverage denominators are honest about which spaces were checked.
+Kibana alerting rules and connectors belong to a **space**, and a team's rules very often live in a **non-default** space. `audit-elk` **auto-discovers** your spaces at run time via `GET /api/spaces/space` and audits all of them, so you no longer have to know your space ids up front — `elk.spaces` is now an **optional restriction** (list ids to audit only a subset), not the source of truth.
+
+One catch that decides whether discovery is complete: `GET /api/spaces/space` returns **only the spaces your key can see**, and a key sees a space only where its role holds at least one Kibana feature privilege there. So a key scoped to a single space enumerates only that space — and the audit would again miss the space that holds your rules. Grant the read privileges at **`spaces:["*"]`** (all spaces) so discovery is complete. This is still fully read-only and needs no admin privilege.
 
 ### Scopes per tier
 
@@ -336,31 +341,77 @@ Read-only for the audit is a set of **Kibana feature privileges**, granted to th
 
 | Tier | Used by | Privileges |
 | --- | --- | --- |
-| Read-only | audit-elk | Kibana `Read` on **Stack Rules**, **Rules Settings**, and **Actions and Connectors**, in each space you audit. Add `monitor_watcher` cluster privilege only if you want the legacy-Watcher split check. |
+| Read-only | audit-elk | Kibana `Read` on **Stack Rules**, **Rules Settings**, and **Actions and Connectors**, granted at **`spaces:["*"]`** (all spaces) so space auto-discovery is complete. Add `monitor_watcher` cluster privilege only if you want the legacy-Watcher split check. |
 | Elevated | (future setup-elk) | Kibana `All` on the same features, created as a separate key when setup work starts. |
+
+> **These are Kibana *feature* privileges, not Elasticsearch *cluster/index* privileges.** A key scoped to `cluster: ["monitor"]` plus index `read`/`view_index_metadata` (the natural "read-only Elasticsearch" shape) **authenticates** against Kibana but returns **403** on `/api/alerting/rules/_find` and `/api/actions/connectors`, because those endpoints are gated by Kibana feature privileges. If your audit 403s on the rule/connector reads while the key clearly "works", this is why — the key has the wrong *kind* of privilege. Use the `role_descriptors` shape in *Where to click* below, which grants the Kibana feature privileges.
 
 Version note: this audit targets the current `/api/alerting/rule(s)` API. Kibana **9.0 removed** the legacy `/api/alerts/*` routes, and maintenance-window listing (`GET /api/maintenance_window/_find`) is a **public API only from 9.2**; the audit version-gates those checks rather than assuming them.
 
-### Where to click
+### Where to click (Kibana UI)
 
 1. In Kibana, Stack Management > API keys > Create API key (this mints an Elasticsearch key usable on both APIs). Name it `scoutflo-audit`.
-2. Restrict it: under Elasticsearch security, the key's role needs the Kibana feature privileges above; if your key supports role descriptors, scope it to `read` on the alerting and connectors features rather than granting a broad role.
+2. Restrict it: turn on **User API key** restrictions and, under the role descriptors, grant the **Kibana feature privileges** above (`Read` on Stack Rules, Rules Settings, Actions and Connectors) at **All spaces** — not an Elasticsearch cluster/index privilege.
 3. Copy the key's **encoded** value (the base64 `id:api_key` form) once.
 4. For setup work later, mint a second key named `scoutflo-setup` with the write privileges.
+
+### Or mint it directly via the Elasticsearch API (curl)
+
+If you create keys with `POST /_security/api_key` instead of the UI, use **exactly** this `role_descriptors` shape — it grants the Kibana feature privileges at all spaces, which is what the audit needs. (Do **not** use `cluster:["monitor"]` + index read; that authenticates but 403s the alerting reads, per the note above.)
+
+```bash
+# YOU run this in your own terminal, against Elasticsearch (:9200), with a user allowed to mint keys.
+curl -fsS -u "<es_user>" -X POST "https://elasticsearch.example.com:9200/_security/api_key" \
+  -H "Content-Type: application/json" -d '{
+    "name": "scoutflo-audit",
+    "role_descriptors": {
+      "scoutflo_audit_elk": {
+        "cluster": [],
+        "indices": [],
+        "applications": [
+          { "application": "kibana-.kibana",
+            "privileges": [
+              "feature_stackAlerts.read",
+              "feature_rulesSettings.read",
+              "feature_actions.read"
+            ],
+            "resources": ["*"] }
+        ]
+      }
+    }
+  }' | jq -r '.encoded'
+# The printed "encoded" value is your KIBANA_API_KEY. resources:["*"] = all spaces (complete discovery).
+# The Kibana application name is "kibana-.kibana" on a default install; confirm yours via
+# GET /_security/privilege or the Stack Management > API keys UI if it differs.
+```
+
+If you also want the legacy-Watcher split check (ELK-032), add `"cluster": ["monitor_watcher"]` to that descriptor.
 
 ### Export and verify
 
 ```bash
 # YOU run this in your own terminal; an agent never executes this line.
+# This prompt shows NOTHING as you paste the key — that is the -s (silent) flag hiding the
+# value, not a hang. Paste and press Enter. (Prefer a visible paste? Use the plain form:
+#   export KIBANA_API_KEY="<paste-the-encoded-key-here>" )
 printf 'KIBANA_API_KEY: ' && read -rs KIBANA_API_KEY && export KIBANA_API_KEY && printf '\n'
 
 KIBANA_URL="https://kibana.example.com"   # elk.kibana_url
-# Kibana takes the encoded key as "Authorization: ApiKey <encoded>". _health is the
-# cheapest alerting-scoped probe and is itself audit-worthy.
+# Kibana takes the encoded key as "Authorization: ApiKey <encoded>".
+# 1) Cheapest liveness probe (also audit-worthy):
 curl -fsS --max-time 10 -H "Authorization: ApiKey ${KIBANA_API_KEY}" \
   "${KIBANA_URL}/api/alerting/_health" | jq -e '.is_sufficiently_secure != null'
-# Expect: exit 0 (prints true). 401 = wrong key; 404 = wrong host (pointed at
-# Elasticsearch instead of Kibana, or a base-path/space-prefix mismatch).
+# 2) Prove the key actually has the Kibana FEATURE privileges the audit needs. _health can
+#    pass on a key that still 403s the real reads, so verify the rule read directly:
+curl -fsS --max-time 10 -H "Authorization: ApiKey ${KIBANA_API_KEY}" \
+  "${KIBANA_URL}/api/alerting/rules/_find?per_page=1" | jq -e '.total != null' \
+  && echo "rule read OK" || echo "403? key lacks Kibana Read on Stack Rules — see the role_descriptors above"
+# 3) List the spaces this key can see (this is what audit-elk auto-discovers). If your rules
+#    live in a space that is NOT listed here, widen the key to spaces:["*"] read.
+curl -fsS --max-time 10 -H "Authorization: ApiKey ${KIBANA_API_KEY}" \
+  "${KIBANA_URL}/api/spaces/space" | jq -r '.[].id'
+# Expect: (1) exit 0/true, (2) "rule read OK", (3) a list including the space with your rules.
+# 401 = wrong key; 404 = wrong host (pointed at Elasticsearch, or a base-path/space-prefix mismatch).
 ```
 
 ## JSM Operations

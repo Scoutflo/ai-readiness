@@ -525,6 +525,21 @@ else
       row elk alerting-health yes "$ELK_TOKEN_VAR" fail "000" "$(transport_hint "$ELK_RC") (${ELK_KIBANA_URL}/api/alerting/_health)"
     elif [ "$ELK_CODE" = "200" ]; then
       row elk alerting-health yes "$ELK_TOKEN_VAR" pass "$ELK_CODE" "-"
+      # Space visibility: audit-elk auto-discovers spaces via GET /api/spaces/space, but the
+      # response is filtered to spaces this key can see. Surface how many are visible so a
+      # single-space key (the wrong/empty-space bug) is caught at doctor time. Degrade
+      # gracefully: a non-200 or empty body just skips this row, it never fails the elk block.
+      ELK_SPACES_JSON="$(curl -s --connect-timeout "$CONNECT_TIMEOUT" --max-time "$MAX_TIME" \
+        -H "Authorization: ApiKey ${ELK_TOKEN}" "${ELK_KIBANA_URL}/api/spaces/space" 2>/dev/null || echo '')"
+      ELK_SPACE_IDS="$(printf '%s' "$ELK_SPACES_JSON" | jq -r 'if type=="array" then .[].id else empty end' 2>/dev/null | tr '\n' ' ')"
+      ELK_SPACE_N="$(printf '%s' "$ELK_SPACE_IDS" | wc -w | tr -d ' ')"
+      if [ "${ELK_SPACE_N:-0}" -gt 0 ]; then
+        if [ "$ELK_SPACE_N" = "1" ] && printf '%s' "$ELK_SPACE_IDS" | grep -qw default; then
+          row elk spaces yes "$ELK_TOKEN_VAR" pass "$ELK_CODE" "only the 'default' space is visible to this key; if alerting rules live in another space, widen the key to spaces:[\"*\"] read (connect references/providers.md) so audit-elk can discover it"
+        else
+          row elk spaces yes "$ELK_TOKEN_VAR" pass "$ELK_CODE" "visible spaces (${ELK_SPACE_N}): ${ELK_SPACE_IDS}"
+        fi
+      fi
     elif [ "$ELK_CODE" = "404" ]; then
       row elk alerting-health yes "$ELK_TOKEN_VAR" fail "$ELK_CODE" "HTTP 404: elk.kibana_url likely points at Elasticsearch, not Kibana, or a space/base-path prefix is wrong; alerting rules live in Kibana (:5601 self-managed)"
     elif [ "$ELK_CODE" = "401" ] || [ "$ELK_CODE" = "403" ]; then
@@ -815,7 +830,7 @@ if [ -z "$GCP_PROJECT" ]; then
 else
   CONFIGURED_COUNT=$((CONFIGURED_COUNT + 1))
   if ! command -v gcloud >/dev/null 2>&1; then
-    row gcp binary-gcloud yes - fail - "gcp is configured but gcloud is not installed"
+    row gcp binary-gcloud yes - fail - "gcp is configured but gcloud is not installed; install the Google Cloud CLI (https://cloud.google.com/sdk/docs/install) — macOS: brew install --cask google-cloud-sdk"
   else
     GCP_CRED_VAR="$(cfg gcp credentials_env)"
     GCP_TOKEN=""
@@ -868,7 +883,7 @@ if [ -z "$AWS_ACCOUNT" ]; then
 else
   CONFIGURED_COUNT=$((CONFIGURED_COUNT + 1))
   if ! command -v aws >/dev/null 2>&1; then
-    row aws binary-aws yes - fail - "aws is configured but the AWS CLI is not installed"
+    row aws binary-aws yes - fail - "aws is configured but the AWS CLI is not installed; install AWS CLI v2 (https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html) — macOS: brew install awscli"
   else
     AWS_PROFILE_CFG="$(cfg aws profile)"
     AWS_REGION_CFG="$(cfg aws region)"
@@ -944,7 +959,7 @@ if [ -z "$KUBE_CONTEXT" ]; then
 else
   CONFIGURED_COUNT=$((CONFIGURED_COUNT + 1))
   if ! command -v kubectl >/dev/null 2>&1; then
-    row kubernetes binary-kubectl yes - fail - "kubernetes is configured but kubectl is not installed"
+    row kubernetes binary-kubectl yes - fail - "kubernetes is configured but kubectl is not installed; install it (https://kubernetes.io/docs/tasks/tools/) — macOS: brew install kubectl"
   else
     note "doctor: checking kubernetes rbac: kubectl --context ${KUBE_CONTEXT} auth can-i get pods"
     K_RC=0
