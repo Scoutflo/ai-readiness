@@ -68,6 +68,8 @@ Expected: `403` means least privilege holds. `200` means the token can administe
 
 ## /api/ds/query cookbook
 
+**Always express the time window as Grafana relative-time strings — `from: "now-1h"`, `to: "now"` — for every datasource type, including Prometheus, Mimir, Loki, and other time-series backends.** Grafana parses these server-side into the range each datasource needs, so a panel or rule replays over a real, recent window with no client-side clock math. Do **not** compute an absolute epoch-milliseconds window (e.g. `NOW_MS=$(date +%s%3N); FROM_MS=$((NOW_MS - 300000))`) and pass it as `from`/`to`: it is unnecessary (the relative strings already cover instant and range queries), it makes the payload non-reproducible, and the `$(( … ))` arithmetic on a shell variable is rejected outright by Claude Code's command sandbox ("Arithmetic expansion references variable or non-literal"), which stops the audit for a permission prompt mid-run. If you ever need an instant value at "now" (for a cadvisor-style `count by(instance)(...)` probe), set `instant: true` on the query and keep `from: "now-5m", to: "now"` — never a computed millisecond literal.
+
 ### Pattern 1: replay a panel's own target (preferred)
 
 The most reliable payload is the panel's own target object, because it carries every plugin-specific field. Build it from the raw dump written by `scripts/grafana-audit.sh`:

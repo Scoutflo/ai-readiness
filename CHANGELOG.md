@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.89
+
+Discoverability + a live-friction fix, both surfaced from real customer-meeting runs.
+
+- **Prometheus is now first-class discoverable — no new skill, because coverage already exists.** Prometheus is audited by `audit-lgtm` (backend health: scrape targets, rule evaluation, TSDB cardinality, retention) and by `audit-alert-routing` (the Prometheus→Alertmanager→receiver paging path). But a Prometheus-only shop looking for an `audit-prometheus` command wouldn't find it, and neither skill *named* Prometheus where a user looks. Fixed by naming it explicitly, without duplicating any checks:
+  - `audit-lgtm` frontmatter now lists **Prometheus** as a trigger word (so "audit my Prometheus" auto-invokes it), and its README + `start` catalog rows and the "run your first audit" lines now say plainly that `audit-lgtm` *is* your Prometheus audit, paired with `audit-alert-routing` for the paging path.
+  - `audit-alert-routing` frontmatter now names the **Prometheus/Alertmanager paging path** as a trigger (its body already opened on it).
+- **Hardened the `audit-grafana` `/api/ds/query` cookbook against a bash-sandbox stall.** During a live Prometheus-datasource panel replay, an agent improvised an absolute epoch-milliseconds window (`NOW_MS=…; FROM_MS=$((NOW_MS - 300000))`), which Claude Code's command sandbox rejects ("Arithmetic expansion references variable or non-literal") — stopping the audit for a permission prompt mid-run. The cookbook now states the rule up front: always use Grafana relative-time strings (`from: "now-1h", to: "now"`) for every datasource including Prometheus, and use `instant: true` for a point value — never computed millisecond literals. (The shipped cookbook already used relative strings; this makes the constraint explicit so it isn't improvised away.)
+
+Docs/frontmatter only — no check logic, gate, scoring, or schema change. Coverage is unchanged; only how customers find it, and one friction removed.
+
 ## 0.1.88
 
 Docs fix for a real customer-facing confusion: the README/FAQ overclaimed that after install the plugin "works directly inside Claude.app's chat, no terminal needed." Every skill runs local shell + writes local files, so it needs a **Local** Claude surface — a customer in the desktop app's **Chat tab** (a cloud surface) hit `/scoutflo:connect` failing with "cannot create the toolkit file locally" while `/scoutflo:start` (pure text) worked, and the docs implied that shouldn't happen.

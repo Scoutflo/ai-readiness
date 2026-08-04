@@ -21,7 +21,7 @@ State your installed toolkit version in this orientation (read `version` from `$
 1. `/scoutflo:connect` sets up `~/.scoutflo/toolkit.yaml` and walks you through creating credentials per integration: exact scopes, where to click, read-only tokens for audits. It first scans for credentials you already have and offers to reuse them, and it stores tokens in the home-anchored `~/.scoutflo/env` so you set each one **once** — new terminals, new sessions, and other directories all pick them up automatically.
 2. `/scoutflo:doctor` validates everything live: config parses, env vars are set, binaries exist, one cheap call per integration succeeds. Run it whenever something feels off. Type the full name — bare `/doctor` is Claude Code's own built-in install-diagnostic, a different command with nothing to do with this toolkit.
 3. `/scoutflo:map-topology` (recommended) writes `./scoutflo-audits/topology.md`, your service map. With it, findings name your actual services instead of generic ones. On large clusters it works in namespace batches and resumes if interrupted.
-4. Run your first audit: `/scoutflo:audit-lgtm`, `/scoutflo:audit-grafana`, `/scoutflo:audit-sentry`, `/scoutflo:audit-pagerduty`, `/scoutflo:audit-datadog`, `/scoutflo:audit-elk`, `/scoutflo:audit-jsm`, `/scoutflo:audit-zenduty`, `/scoutflo:audit-groundcover`, `/scoutflo:audit-kubernetes`, `/scoutflo:audit-alert-routing`, `/scoutflo:audit-digitalocean`, `/scoutflo:audit-gcp`, `/scoutflo:audit-aws`, or `/scoutflo:audit-cost` (cross-provider cost). Or run everything configured at once with `/scoutflo:audit-all`. Every audit sizes your estate first with cheap list calls and says which path it picked: small estates get a single pass, large ones run in bounded, resumable batches.
+4. Run your first audit: `/scoutflo:audit-lgtm` (also your **Prometheus** audit; pair with `/scoutflo:audit-alert-routing` for the Prometheus→Alertmanager paging path), `/scoutflo:audit-grafana`, `/scoutflo:audit-sentry`, `/scoutflo:audit-pagerduty`, `/scoutflo:audit-datadog`, `/scoutflo:audit-elk`, `/scoutflo:audit-jsm`, `/scoutflo:audit-zenduty`, `/scoutflo:audit-groundcover`, `/scoutflo:audit-kubernetes`, `/scoutflo:audit-alert-routing`, `/scoutflo:audit-digitalocean`, `/scoutflo:audit-gcp`, `/scoutflo:audit-aws`, or `/scoutflo:audit-cost` (cross-provider cost). Or run everything configured at once with `/scoutflo:audit-all`. Every audit sizes your estate first with cheap list calls and says which path it picked: small estates get a single pass, large ones run in bounded, resumable batches.
 5. Optional: `/scoutflo:schedule-audits` makes the audits recurring, with a Slack brief per run.
 
 ## The skills
@@ -35,7 +35,7 @@ State your installed toolkit version in this orientation (read `version` from `$
 | `/scoutflo:audit-all` | harness | Run every configured audit, one combined report and brief |
 | `/scoutflo:rca` | harness | Ask "why is X failing — give me the RCA": evidence-cited root cause correlated across all reports + topology + business context, with confidence and honest gaps |
 | `/scoutflo:schedule-audits` | harness | Recurring audits via GitHub Actions, cron, or a Claude cloud schedule |
-| `/scoutflo:audit-lgtm` | audit | Scored audit of LGTM and VictoriaMetrics observability stacks |
+| `/scoutflo:audit-lgtm` | audit | Scored audit of Prometheus, LGTM, and VictoriaMetrics stacks (this is your **Prometheus** audit; pair with `audit-alert-routing` for the Prometheus→Alertmanager paging path) |
 | `/scoutflo:setup-lgtm` | setup | Guided hardening for findings from `audit-lgtm` |
 | `/scoutflo:audit-grafana` | audit | Dashboard truthfulness, alert semantics, query hygiene |
 | `/scoutflo:setup-grafana` | setup | Datasources, dashboards, and alerting to production grade |
@@ -49,7 +49,7 @@ State your installed toolkit version in this orientation (read `version` from `$
 | `/scoutflo:audit-kubernetes` | audit | Kubernetes security and reliability: Pod Security Admission, RBAC over-permissioning, network policies, resource limits, disruption budgets |
 | `/scoutflo:setup-kubernetes` | setup | Guided hardening for `audit-kubernetes` findings: PSA labels, RBAC tightening, network policies, resource limits, PDBs |
 | `/scoutflo:setup-sentry` | setup | Projects, environments, alert taxonomy, integrations |
-| `/scoutflo:audit-alert-routing` | audit | Proves your paging path is live, rule to receiver |
+| `/scoutflo:audit-alert-routing` | audit | Proves your paging path is live, rule to receiver (the Prometheus→Alertmanager→receiver walk) |
 | `/scoutflo:audit-digitalocean` | audit | App Platform, managed databases, uptime, alert routing |
 | `/scoutflo:setup-digitalocean` | setup | Alert policies, uptime checks, database and app hardening |
 | `/scoutflo:audit-gcp` | audit | Cloud Monitoring, uptime checks, GKE telemetry, logging |

@@ -1,6 +1,6 @@
 ---
 name: audit-lgtm
-description: Read-only scored audit of LGTM and VictoriaMetrics observability stacks; writes findings.json and report.md. Use when the user mentions auditing or scoring Loki, Tempo, Mimir, VictoriaMetrics, VictoriaLogs, VictoriaTraces, vmalert, or Alertmanager, or asks whether metrics, logs, traces, or alerting are healthy or production-ready. Do not use for the Grafana application layer (use audit-grafana), for proving alerts reach a human (use audit-alert-routing), for application error tracking (use audit-sentry), for DigitalOcean-managed infrastructure (use audit-digitalocean), for GCP-managed infrastructure (use audit-gcp), or to change anything (use setup-lgtm).
+description: Read-only scored audit of Prometheus, LGTM, and VictoriaMetrics observability stacks; writes findings.json and report.md. Use when the user mentions auditing or scoring Prometheus, Loki, Tempo, Mimir, VictoriaMetrics, VictoriaLogs, VictoriaTraces, vmalert, or Alertmanager, or asks whether metrics, logs, traces, or alerting are healthy or production-ready. Do not use for the Grafana application layer (use audit-grafana), for proving alerts reach a human (use audit-alert-routing), for application error tracking (use audit-sentry), for DigitalOcean-managed infrastructure (use audit-digitalocean), for GCP-managed infrastructure (use audit-gcp), or to change anything (use setup-lgtm).
 ---
 
 # audit-lgtm
