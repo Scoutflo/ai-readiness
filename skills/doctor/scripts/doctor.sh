@@ -532,8 +532,8 @@ else
       ELK_SPACES_JSON="$(curl -s --connect-timeout "$CONNECT_TIMEOUT" --max-time "$MAX_TIME" \
         -H "Authorization: ApiKey ${ELK_TOKEN}" "${ELK_KIBANA_URL}/api/spaces/space" 2>/dev/null || echo '')"
       ELK_SPACE_IDS="$(printf '%s' "$ELK_SPACES_JSON" | jq -r 'if type=="array" then .[].id else empty end' 2>/dev/null | tr '\n' ' ')"
-      if [ -n "${ELK_SPACE_IDS// /}" ]; then
-        ELK_SPACE_N="$(printf '%s' "$ELK_SPACE_IDS" | wc -w | tr -d ' ')"
+      ELK_SPACE_N="$(printf '%s' "$ELK_SPACE_IDS" | wc -w | tr -d ' ')"
+      if [ "${ELK_SPACE_N:-0}" -gt 0 ]; then
         if [ "$ELK_SPACE_N" = "1" ] && printf '%s' "$ELK_SPACE_IDS" | grep -qw default; then
           row elk spaces yes "$ELK_TOKEN_VAR" pass "$ELK_CODE" "only the 'default' space is visible to this key; if alerting rules live in another space, widen the key to spaces:[\"*\"] read (connect references/providers.md) so audit-elk can discover it"
         else

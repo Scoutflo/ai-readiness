@@ -167,8 +167,9 @@ RUN_DATE="$(date -u +%Y-%m-%d)"
 RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/elk/${RUN_DATE}/raw"
 # Spaces discovered (4a) vs audited (this run). Are there rules-bearing spaces we did NOT audit?
 UNAUDITED="$(comm -23 "${RAW_DIR}/spaces-discovered.txt" "${RAW_DIR}/spaces.txt" 2>/dev/null | tr '\n' ' ')"
+UNAUDITED_TRIM="$(printf '%s' "$UNAUDITED" | tr -d '[:space:]')"
 if [ "${ZERO_RULES:-0}" -eq 1 ]; then
-  if [ -n "${UNAUDITED// /}" ]; then
+  if [ -n "$UNAUDITED_TRIM" ]; then
     # Case A: zero rules in the audited set, but other spaces exist — the rules are likely there.
     echo "[guard] 0 rules in the audited spaces, but these spaces were discovered and not audited: ${UNAUDITED}"
     echo "[guard] pausing to re-scope rather than reporting an empty estate"

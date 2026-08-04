@@ -101,10 +101,10 @@ discover "$WORK/spaces-default-only.json" > "$WORK/spaces-discovered.txt"
 cp "$WORK/spaces-discovered.txt" "$WORK/spaces.txt"    # elk.spaces unset => audit all discovered
 TOTAL=0                                                # simulate 0 rules in default
 ZERO_RULES=0; [ "$TOTAL" -eq 0 ] && ZERO_RULES=1
-UNAUDITED="$(comm -23 "$WORK/spaces-discovered.txt" "$WORK/spaces.txt" 2>/dev/null | tr '\n' ' ')"
+UNAUDITED="$(comm -23 "$WORK/spaces-discovered.txt" "$WORK/spaces.txt" 2>/dev/null | tr -d '[:space:]')"
 [ "$ZERO_RULES" -eq 1 ] || fail "zero-rule flag not set on an empty estate"
 # Case B: nothing unaudited is discoverable => this is the ELK-033 gap, NOT empty coverage.
-[ -z "${UNAUDITED// /}" ] || fail "fixture wrong: expected no unaudited spaces for the single-space case"
+[ -z "$UNAUDITED" ] || fail "fixture wrong: expected no unaudited spaces for the single-space case"
 echo "PASS (Case B: block coverage w/ ELK-033 visibility reason, never a confident 0/100)"
 
 echo "Test 8: 404 from the Spaces API degrades to a stated fallback, does not crash"
