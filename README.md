@@ -98,7 +98,9 @@ See [CHANGELOG.md](CHANGELOG.md) for the full v0.1.76 → v0.1.86 history.
 
 ## Install
 
-Installing is a **one-time terminal step**. Using the plugin afterward is **not** — once installed, it works directly inside Claude.app's chat via `/scoutflo:...` commands, no terminal needed for day-to-day use.
+Installing is a **one-time terminal step**. After that, use the plugin in any Claude surface that runs **locally on your machine** — the `claude` terminal CLI, or the Claude desktop app's **Code tab with the "Local" environment selected**.
+
+> **Where it runs — read this first (it's the #1 support question).** Every skill executes real shell commands and reads/writes files on *your* machine (it creates `~/.scoutflo/toolkit.yaml`, runs `curl`/`kubectl`/`aws`, writes reports to your disk). So it needs a **local execution** surface. It works in: the `claude` terminal CLI, the desktop app's **Code tab set to Local**, and the VS Code / JetBrains Claude Code extensions. It does **not** work in the desktop app's **Chat tab** or **claude.ai in a browser** — those run in Anthropic-managed cloud VMs with no access to your machine, so a skill like `/scoutflo:connect` fails with "cannot create the toolkit file in your local environment." That error is expected — it just means you're in a cloud surface; switch to a Local session and re-run. (Pure-text skills like `/scoutflo:start` appear to work anywhere because they touch nothing local — don't take that as a sign the cloud surface will run the rest.)
 
 **Step 1 — one time, in a real terminal window** (Terminal.app, iTerm, etc. — not the Claude.app chat box). If you don't have the `claude` command yet:
 
@@ -119,13 +121,13 @@ claude plugin install scoutflo@scoutflo
 
 **Step 2 — restart Claude Code / Claude.app** (fully quit and reopen, not just a new chat tab) so it picks up the plugin from the shared config the terminal command just wrote.
 
-**Step 3 — everyday use, back inside Claude.app (or any Claude Code surface), no terminal needed:**
+**Step 3 — everyday use, in a Local session** (the `claude` terminal CLI, or the desktop app's **Code tab → Local** — not the Chat tab / browser):
 
 ```
 /scoutflo:start
 ```
 
-That orients you — what's installed, what to do first, where reports land. Every skill after this (`/scoutflo:connect`, `/scoutflo:audit-lgtm`, etc.) is a normal slash command you type directly in the chat.
+That orients you — what's installed, what to do first, where reports land. Every skill after this (`/scoutflo:connect`, `/scoutflo:audit-lgtm`, etc.) is a normal slash command you type directly in that Local session. If `/scoutflo:connect` reports it can't write the toolkit file, you're in a cloud surface (Chat tab or browser) — switch to a Local session per the box above.
 
 For team-wide or org-wide rollout instead of one person at a time, see [docs/install.md](docs/install.md).
 
@@ -229,7 +231,8 @@ Every `report.md` is validated against a fixed output-conformance standard befor
 
 ## Troubleshooting
 
-- **`/plugin isn't available in this environment.`** You typed a `/plugin ...` command inside Claude.app's chat window. `/plugin marketplace add` and `/plugin install` only run in the standalone `claude` terminal CLI — open a real terminal, run `claude`, and run the commands there (see Install above). Once installed, you go back to using Claude.app normally — only this one setup step needs a terminal.
+- **`/plugin isn't available in this environment.`** You typed a `/plugin ...` command inside Claude.app's chat window. `/plugin marketplace add` and `/plugin install` only run in the standalone `claude` terminal CLI — open a real terminal, run `claude`, and run the commands there (see Install above).
+- **`/scoutflo:connect` (or any audit) says it can't create the toolkit file / can't run locally.** You're in a **cloud** Claude surface (the desktop app's **Chat tab**, or claude.ai in a browser) — those run in Anthropic's cloud with no access to your machine, so a skill that writes `~/.scoutflo/toolkit.yaml` or runs `curl`/`kubectl` can't work there. Switch to a **Local** session: the `claude` terminal CLI, or the desktop app's **Code tab with the "Local" environment selected**, then re-run. (`/scoutflo:start` works in a cloud surface because it's pure text — that's not a sign the rest will.)
 - **`/plugin marketplace add` fails or hangs (in the terminal).** The marketplace fetches this **public** repo the same way `git` clones any public repo, so no GitHub login or token is required — but it does go over the network with `git` under the hood. In a locked-down corporate network the usual causes are a firewall/proxy blocking `github.com`, `git` not installed, or a proxy that needs authentication. Pre-flight test: `git clone https://github.com/Scoutflo/ai-readiness.git /tmp/air-test` — if that succeeds from the same machine, `/plugin marketplace add` will too.
 - **After installing, the `/scoutflo:*` commands don't show up.** New plugin installs need a full restart to load — fully quit Claude Code / Claude.app and reopen it, not just a new chat/tab. An in-progress conversation, or even a new tab in an already-running app, won't pick up a plugin installed partway through the session.
 - **A command says "not recognized here" but then answers anyway.** Some Claude Code clients have their own fixed list of built-in slash commands separate from installed-plugin commands; this message just means the client's own list doesn't include it, not that the skill failed. If it responds with real content right after, it worked.

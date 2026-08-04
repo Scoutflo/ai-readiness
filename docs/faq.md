@@ -1,7 +1,14 @@
 # FAQ
 
-**Do I need a terminal to use this, or does it work inside Claude.app's chat?**
-Both — for different steps. The `/plugin ...` commands (`marketplace add`, `install`) only work in the standalone `claude` terminal CLI; typing `/plugin ...` inside Claude.app's chat window fails with "isn't available in this environment" — that's not a bug, it just means those specific commands aren't supported in that surface. It's a one-time step: once installed, restart Claude Code / Claude.app, and every skill (`/scoutflo:start`, `/scoutflo:connect`, `/scoutflo:audit-*`, etc.) works as a normal slash command typed directly in Claude.app's chat — no terminal needed for day-to-day use. See [docs/install.md](install.md) for the exact commands.
+**Which Claude surface does this run in? Why did `/scoutflo:connect` fail when `/scoutflo:start` worked?**
+Every skill executes real shell commands and reads/writes files on **your** machine — it creates `~/.scoutflo/toolkit.yaml`, runs `curl`/`kubectl`/`aws`, and writes reports to your disk. So it needs a **Local** Claude surface:
+
+- ✅ Works: the `claude` **terminal CLI**; the Claude **desktop app's Code tab with the "Local" environment selected**; the VS Code / JetBrains Claude Code extensions.
+- ❌ Does not work: the desktop app's **Chat tab**, or **claude.ai in a browser** — these run in Anthropic-managed cloud VMs with no access to your machine, so `/scoutflo:connect` fails with a "can't create the toolkit file locally" error.
+
+That's why `/scoutflo:start` can succeed in a cloud surface while `/scoutflo:connect` fails: `start` is pure text (touches nothing local), so it renders anywhere; `connect` writes files, so it needs a Local session. The error is expected — switch to a Local session and re-run.
+
+Separately, the one-time **install** commands (`/plugin marketplace add`, `/plugin install`) only run in the standalone `claude` terminal CLI (or the Team/Enterprise `settings.json` path); typing `/plugin ...` in the Chat tab fails with "isn't available in this environment." See [docs/install.md](install.md) for the exact commands.
 
 **Can I install without a terminal at all?**
 Yes, two ways. For a team, add the marketplace and enable the plugin through a `.claude/settings.json` file (the Team/Enterprise path in [docs/install.md](install.md)) — no `/plugin` command anywhere. And the Claude desktop app has a built-in plugin browser (the **+** next to the prompt → **Plugins**) that installs from a marketplace once it's been added. The one thing the desktop app can't do by itself is add a brand-new marketplace — that first step needs the terminal command or the settings file. Also note `/plugin` needs a fairly recent Claude Code (roughly v2.1.140+); run `claude --version` if the commands seem missing.
