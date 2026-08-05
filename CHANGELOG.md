@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.92
+
+Closes the one loose end in the v0.1.90 ELK space fix before a customer re-runs the ELK scan.
+
+- **Empty/hidden-estate scoring no longer risks a self-gate crash.** The Case B path (zero rules visible across every space the key can see) told the skill to exclude **all four** scored categories — but their weights sum to 100, leaving no included category, and `check-findings.sh` (which every audit runs on its own output in its final phase) rejects an all-excluded scorecard with "no included categories to recompute overall from." That would have surfaced as a validation error at the very end of the run instead of a clean "insufficient signal, widen your key" result. Fixed: Case B now excludes only the three genuinely rule-dependent categories (**Rule health, Alert noise, Coverage**) and keeps **Rule delivery included**, scored from its rule-independent checks (ELK-004 framework health, ELK-002/003 connectors). This is both crash-safe and more truthful — framework health is assessable with zero rules.
+- **Locked in CI.** `skills/audit-elk/tests/test-space-discovery.sh` gains a case that runs the real `check-findings.sh` against the Case B scorecard: the delivery-included shape reconciles (`overall=100` over the one remaining weight), and the old all-four-excluded shape is rejected.
+
+audit-elk SKILL.md only (2 lines) + its test; no other skill, gate, schema, or report change.
+
 ## 0.1.91
 
 Fixes a "doctor says connected, the audit says the token isn't set" asymmetry — and clarifies the step customers kept getting stuck on: "I made the token, now what do I do with it?" **Live-proven against a real Kibana 8.19.11.**

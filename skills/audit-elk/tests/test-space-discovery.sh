@@ -118,4 +118,40 @@ fi
 grep -qx default "$WORK/spaces-discovered-fallback.txt" || fail "404 fallback did not write the default space"
 echo "PASS (discovery unavailable => stated fallback, not a silent default-is-the-estate assumption)"
 
+echo "Test 9: Case B scorecard RECONCILES — Rule delivery stays included; all-excluded is rejected"
+# The empty/hidden-estate path must NOT exclude all four categories (that leaves no
+# denominator and check-findings.sh rejects it, crashing the run at its final phase).
+# Rule delivery stays included (ELK-004 framework health + ELK-002/003 connectors are
+# rule-independent). Prove the real gate accepts the correct shape and rejects the old one.
+CF="$ELK/../../report-standard/check-findings.sh"
+if [ -f "$CF" ]; then
+  cat > "$WORK/caseB.json" <<'JSON'
+{"schema":"scoutflo-findings/v1","toolkit_version":"0.0.0","skill":"audit-elk","target":"elk",
+ "run_date":"2026-01-01","generated_at":"2026-01-01T00:00:00Z","estate":{"objects":0,"path":"x"},
+ "score":{"overall":100,"gate":false,"end_to_end":false,
+  "categories":[{"name":"Rule delivery","weight":30,"score":100,"checks_passed":1,"checks_total":1,"maturity":"reactive"}],
+  "excluded":[{"name":"Rule health","weight":25,"reason":"no rules visible"},{"name":"Alert noise","weight":25,"reason":"no rules visible"},{"name":"Coverage","weight":20,"reason":"no rules visible"}]},
+ "severity_counts":{"critical":0,"high":1,"medium":0,"low":0,"info":0},
+ "findings":[{"id":"ELK-033","severity":"high","area":"coverage","status":"blocked","lifecycle":"new","points_recoverable":0,
+   "title":"No alerting rules visible to this credential across any discovered space","affected":["kibana:visible-spaces=default"],
+   "evidence":[{"command":"GET /api/spaces/space ; GET /api/alerting/rules/_find","observed":"spaces=[default]; total=0"}],
+   "recommendation":"Widen the key to all-spaces read, or set elk.spaces","remediation":"See /scoutflo:connect"}]}
+JSON
+  sh "$CF" "$WORK/caseB.json" >/dev/null 2>&1 || fail "Case B scorecard (delivery included) does not reconcile under check-findings.sh"
+  # And the old all-four-excluded shape MUST fail (no denominator).
+  cat > "$WORK/caseB-bad.json" <<'JSON'
+{"schema":"scoutflo-findings/v1","toolkit_version":"0.0.0","skill":"audit-elk","target":"elk",
+ "run_date":"2026-01-01","generated_at":"2026-01-01T00:00:00Z","estate":{"objects":0,"path":"x"},
+ "score":{"overall":0,"gate":false,"end_to_end":false,"categories":[],
+  "excluded":[{"name":"Rule delivery","weight":30,"reason":"x"},{"name":"Rule health","weight":25,"reason":"x"},{"name":"Alert noise","weight":25,"reason":"x"},{"name":"Coverage","weight":20,"reason":"x"}]},
+ "severity_counts":{"critical":0,"high":1,"medium":0,"low":0,"info":0},
+ "findings":[{"id":"ELK-033","severity":"high","area":"coverage","status":"blocked","lifecycle":"new","points_recoverable":0,
+   "title":"t","affected":["x"],"evidence":[{"command":"c","observed":"o"}],"recommendation":"r","remediation":"m"}]}
+JSON
+  sh "$CF" "$WORK/caseB-bad.json" >/dev/null 2>&1 && fail "all-four-excluded scorecard wrongly passed (would crash a real run)"
+  echo "PASS (delivery-included reconciles; all-excluded rejected)"
+else
+  echo "SKIP (check-findings.sh not found from test dir)"
+fi
+
 echo "=== ALL SPACE-DISCOVERY TESTS PASSED ==="
