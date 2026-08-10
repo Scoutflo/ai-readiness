@@ -32,14 +32,16 @@ State your installed toolkit version in this orientation (read `version` from `$
 | `/scoutflo:connect` | harness | Guided credential setup per integration, two token tiers |
 | `/scoutflo:doctor` | harness | Preflight: config, env vars, one live check per integration |
 | `/scoutflo:map-topology` | harness | Service map into `./scoutflo-audits/topology.md` |
-| `/scoutflo:audit-all` | harness | Run every configured audit, one combined report and brief |
+| `/scoutflo:business-context` | harness | Capture SLAs, critical services, per-environment rules, and exclusions into `business_context.md`; every audit reads it to tune severity and scope |
+| `/scoutflo:audit-all` | harness | Run every configured audit, then correlate across them, into one combined report and brief |
+| `/scoutflo:correlation-engine` | harness | Cross-audit correlation: redundant monitoring, cascade risks, business-context filtering (also run automatically by `audit-all`) |
 | `/scoutflo:rca` | harness | Ask "why is X failing — give me the RCA": evidence-cited root cause correlated across all reports + topology + business context, with confidence and honest gaps |
 | `/scoutflo:schedule-audits` | harness | Recurring audits via GitHub Actions, cron, or a Claude cloud schedule |
 | `/scoutflo:audit-lgtm` | audit | Scored audit of Prometheus, LGTM, and VictoriaMetrics stacks (this is your **Prometheus** audit; pair with `audit-alert-routing` for the Prometheus→Alertmanager paging path) |
 | `/scoutflo:setup-lgtm` | setup | Guided hardening for findings from `audit-lgtm` |
 | `/scoutflo:audit-grafana` | audit | Dashboard truthfulness, alert semantics, query hygiene |
 | `/scoutflo:setup-grafana` | setup | Datasources, dashboards, and alerting to production grade |
-| `/scoutflo:audit-sentry` | audit | Org, project, and alert-rule assessment |
+| `/scoutflo:audit-sentry` | audit | Org/project config, privacy scrubbing (PII), alert-rule tiers and receiver liveness, releases and source maps, cron/uptime monitors |
 | `/scoutflo:audit-pagerduty` | audit | Paging health: escalation, on-call, grouping, incident aging, actionability |
 | `/scoutflo:audit-datadog` | audit | Monitor health: delivery, noise controls, muting/downtimes, SLO coverage, plus non-scored cost |
 | `/scoutflo:audit-elk` | audit | Kibana Alerting: rule delivery, execution health, noise controls, coverage per space |

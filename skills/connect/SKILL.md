@@ -63,7 +63,7 @@ Two conventions are rules, not suggestions:
 
 Configure only what you run. Unconfigured integrations are skipped cleanly by every skill; they are not failures.
 
-Ask which integrations to configure as a plain numbered list in a normal chat message, per the "Asking questions" rule above — this table has 18 rows, well past the option ceiling that rule warns about.
+Ask which integrations to configure as a plain numbered list in a normal chat message, per the "Asking questions" rule above — this table has many rows, well past the option ceiling that rule warns about.
 
 | Integration | Used by | Config block | Suggested env var | Tier summary |
 | --- | --- | --- | --- | --- |
@@ -133,7 +133,7 @@ Work through the matching section of [references/providers.md](references/provid
 
 Create read-only credentials now, named `scoutflo-audit` per the naming rule. Create elevated ones later, named `scoutflo-setup`, when a `setup-*` skill asks for them.
 
-**Run each provider's verify command the moment you export that credential — before starting the next integration, not after all of them.** With twelve possible integrations, a wrong host, wrong scope, or mistyped org slug is far cheaper to catch and fix one provider at a time than to debug from a single `doctor` run at the very end of Step 7, where several small mistakes can compound into one confusing failure list. Step 7's `doctor` pass is the final confirmation that everything is wired together, not the first time any of it gets checked.
+**Run each provider's verify command the moment you export that credential — before starting the next integration, not after all of them.** Across the many possible integrations, a wrong host, wrong scope, or mistyped org slug is far cheaper to catch and fix one provider at a time than to debug from a single `doctor` run at the very end of Step 7, where several small mistakes can compound into one confusing failure list. Step 7's `doctor` pass is the final confirmation that everything is wired together, not the first time any of it gets checked.
 
 ## Step 4: Set the secrets (you run these, not the agent)
 

@@ -33,7 +33,7 @@ Open a pull request to `main`. Resolve review and validation failures without by
 
 ## Validation Expectations
 
-Before review, run the standard leak, structure, and strict plugin-validation gates defined in `AGENTS.md`. Documentation-only changes run the same standard gates.
+Before review, run the standard leak, structure, **test-suite** (`sh ci/run-tests.sh .`), and strict plugin-validation gates defined in `AGENTS.md`. Documentation-only changes run the same standard gates.
 
 Audit and runtime changes also run the relevant report validation, pressure scenarios, and interactive smoke tests required by their native guidance. Before merge, the hosted `gates` check must pass against the current pull-request head.
 

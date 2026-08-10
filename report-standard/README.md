@@ -141,8 +141,12 @@ This is why `map-topology`'s own T1/T2 pre-check (in its own SKILL.md) exists: i
 | [findings-schema.md](findings-schema.md) | The findings.json contract: envelope, finding object, ID rules, evidence rules |
 | [severity-and-scoring.md](severity-and-scoring.md) | Severity definitions, status values, the weighted scoring model, the end-to-end gate, the coverage definition |
 | [report-template.md](report-template.md) | The report.md skeleton and the Slack brief derivation |
+| [cost-schema.md](cost-schema.md) | The separate `scoutflo-cost/v1` ranked-savings contract emitted by `audit-cost` (non-scored, `COST-<PROVIDER>` IDs, validated by `check-cost.sh`) |
+| [estate-scope-checkpoint.md](estate-scope-checkpoint.md) | The shared estate-sizing thresholds (small/medium/large/xlarge) and the large-estate scope-pause every audit wires in |
+| [secret-redaction.md](secret-redaction.md) | The secret-redaction discipline: capture credentials by key/name only, never print or write a value |
+| [topology-readiness.md](topology-readiness.md) | The optional Scoutflo Topology Readiness section: the six per-service checks and how to render them |
 
-Audit skills must conform to all three. Authoring rules for the skills themselves live in [../docs/skill-authoring-conventions.md](../docs/skill-authoring-conventions.md).
+Every audit must conform to the findings, scoring, and report-template contracts; `audit-cost` also conforms to cost-schema; and every audit carries the estate-scope and secret-redaction disciplines. Topology Readiness is optional (rendered when a topology export exists). Authoring rules for the skills themselves live in [../docs/skill-authoring-conventions.md](../docs/skill-authoring-conventions.md).
 
 ## Exemptions
 

@@ -59,6 +59,6 @@ if [ "$ERRORS" -eq 0 ]; then
   exit 0
 else
   echo "❌ business_context.md has $ERRORS error(s)"
-  echo "   Review: docs/specs/business-context-ssot.md"
+  echo "   Review: docs/BUSINESS-CONTEXT-INTEGRATION-v0168.md"
   exit 1
 fi

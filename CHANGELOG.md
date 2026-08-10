@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.1.94
+
+Repo-wide documentation quality pass — a parallel audit of all 40+ docs against current (v0.1.93) reality, fixing stale facts, dead references, duplication, and governance violations, and sharpening how the docs communicate what the plugin delivers.
+
+**Governance (internal docs removed from the public repo, per Governance Principle #2):**
+- **Deleted `docs/specs/` (10 files).** These were version-stamped internal planning artifacts (v0.1.63–v0.1.68); 6 literally self-marked "Internal Spec Only / not shipped to customers" yet shipped publicly, and several misdescribed shipped behavior (phantom audit-github/audit-jira, an auto-fixing doctor, a removed cost cache, "12 audits"). One was a 25-byte failed-heredoc stub that leaked an internal `/tmp` path. Redirected the one live pointer (`ci/validate-business-context.sh`) to the surviving authoritative doc.
+- **Deleted the stale `docs/BUSINESS-CONTEXT-INTEGRATION.md`** (v0.1.67 predecessor, self-referencing, dead links). Kept `docs/BUSINESS-CONTEXT-INTEGRATION-v0168.md` (14 skills + the CI parity gate reference it by exact path) and added a header note clarifying it is the current authoritative doc, not a v0.1.68 snapshot.
+
+**Accuracy fixes:**
+- **README catalog** now lists every shipped skill a buyer scans: added `rca` + `business-context` to the Harness table, `audit-cost` to Audits, `setup-kubernetes` to Setups. "What's new" label de-versioned so it can't lag again.
+- **`docs/token-costs.md`** — fixed a dead copy-pasteable command (`/scoutflo:audit-prometheus-alerting` → `audit-lgtm` + `audit-alert-routing`), replaced every "12/13-audit" count with the current 15-scored-audit reality, regenerated the fixed-instruction byte table from the actual shipped files (now 14 audits incl. audit-cost), reframed stale per-version measurements as approximate baselines, genericized model prices (pointing to live Claude pricing) while keeping the real model names, added `audit-cost` + `rca` framing, and fixed a contradictory "Large-estate (Medium Estate)" heading.
+- **`report-standard/findings-schema.md`** — completed the registered-prefix list (was missing DD, ELK, GC, JSM, K8S, PD, ZD, COST-*), corrected the PREFIX rule to match the enforcing regex (`^[A-Z][A-Z0-9]{1,5}-`), added `xlarge` to the estate.path enum, and cross-referenced cost-schema.
+- **`report-standard/README.md`** now indexes all 8 contract docs (was 3); **topology-readiness.md** softened its "every audit carries" overclaim to match the gate (optional).
+- **Contributor docs** (AGENTS/CONTRIBUTING/ENGINEERING) — corrected the gate list to all 9 structure checks incl. env-load-parity ("three" parity checks → "four"), added `ci/run-tests.sh` to the PR checklist and validation gates, and reworded the maintainer-rubric reference that cited an in-repo path not present in this repo.
+- **`docs/faq.md`, `skills/start`, `skills/connect`** — coverage answer now names Kubernetes + cost + rca; start catalog adds `business-context` + `correlation-engine` and enriches the sentry one-liner; connect integration counts made count-free so they can't drift.
+
+Docs/CI-helper only — no skill logic, scoring, schema, or gate behavior change. All gates green (structure-check 9 gates, 19 test suites).
+
 ## 0.1.93
 
 Docs: the README "What's new" block was stale at v0.1.86 while the plugin shipped through v0.1.92 — six releases, including the ELK space-discovery fix and the env-load fix, were not reflected.

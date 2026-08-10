@@ -1,1 +1,0 @@
-$(cat /tmp/v0168_ARCH.md)
