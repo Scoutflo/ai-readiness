@@ -84,15 +84,18 @@ Green = read-only (safe, changes nothing) · amber = write, gated behind your co
 
 ---
 
-## What's new (current: v0.1.86)
+## What's new (current: v0.1.92)
 
+- **ELK audits discover your Kibana spaces — never assume `default`.** `audit-elk` enumerates every space your key can see (`GET /api/spaces/space`) and audits where your rules actually live, so a stack whose alerting sits in a non-default space is no longer reported as an empty `0/100`. When zero rules are visible it says so honestly (a possible key-visibility gap: widen the key to `spaces:["*"]` read) instead of a confident wrong score. The `/scoutflo:connect` recipe now grants the correct Kibana feature privileges at all spaces.
+- **A token you added is picked up in the same session.** Every audit now sources `~/.scoutflo/env` at its doctor gate, exactly as `/scoutflo:doctor` does — so a credential added mid-session works immediately, no new terminal. A new FAQ entry spells out where the token value goes (`~/.scoutflo/env`, keyed by the `*_env` name — not into `toolkit.yaml`).
+- **Prometheus is first-class discoverable.** `audit-lgtm` is your Prometheus audit (scrape targets, rules, TSDB cardinality, retention); pair it with `audit-alert-routing` for the Prometheus→Alertmanager paging path. Both name Prometheus explicitly so "audit my Prometheus" finds them.
 - **`/scoutflo:rca` — ask questions about your reports.** *"Why is `<service>` failing — give me the RCA?"* correlates every finding naming that resource across all stacks, the service topology, and business context into an **evidence-cited** root cause with a confidence level and an explicit "what I couldn't determine." Read-only; it never invents a cause — thin signal means it tells you which audit to run, not a guess.
 - **`/scoutflo:audit-cost` — deep, per-resource cloud cost.** Queries each provider's own cost APIs (AWS Compute Optimizer / Cost Explorer, GCP Recommender, Datadog usage, Kubernetes requests-vs-usage, DigitalOcean billing) for ranked savings opportunities. Never invents a dollar figure — every number is copied verbatim from the provider or reported as a presence fact.
 - **Business context as a source of truth** — `/scoutflo:business-context` captures SLAs per service, per-environment access/SLA, critical services, exclusions, and your own custom rules into one `business_context.md`; every audit reads it to tune severity and scope.
 - **Large-estate scope checkpoint** — audits pause on a big estate and let you scope before spending tokens, instead of grinding everything.
-- **Self-policing quality** — the numbers in every report reconcile with their own scorecard, secrets are never emitted, and each audit's behavior is enforced by CI gates (13 gates / 18 test suites) so quality can't silently regress.
+- **Self-policing quality** — the numbers in every report reconcile with their own scorecard, secrets are never emitted, and each audit's behavior is enforced by CI gates (9 structure/parity gates + report self-validation, 19 test suites) so quality can't silently regress.
 
-See [CHANGELOG.md](CHANGELOG.md) for the full v0.1.76 → v0.1.86 history.
+See [CHANGELOG.md](CHANGELOG.md) for the full v0.1.76 → v0.1.92 history.
 
 ---
 
