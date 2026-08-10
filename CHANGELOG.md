@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.93
+
+Docs: the README "What's new" block was stale at v0.1.86 while the plugin shipped through v0.1.92 — six releases, including the ELK space-discovery fix and the env-load fix, were not reflected.
+
+- **Refreshed "What's new" to v0.1.92.** Now leads with the ELK space discovery (enumerate Kibana spaces, never assume `default`, honest zero-rules/visibility-gap handling, `spaces:["*"]` connect recipe), the same-session `~/.scoutflo/env` sourcing across all audits + the "where does my token go" FAQ, and Prometheus first-class discoverability — alongside the existing rca / audit-cost / business-context / scope-checkpoint entries.
+- **Corrected the self-policing counts** from "13 gates / 18 test suites" to the current "9 structure/parity gates + report self-validation, 19 test suites," and the history pointer to `v0.1.76 → v0.1.92`.
+
+README only — no skill, gate, schema, or scoring change.
+
 ## 0.1.92
 
 Closes the one loose end in the v0.1.90 ELK space fix before a customer re-runs the ELK scan.
