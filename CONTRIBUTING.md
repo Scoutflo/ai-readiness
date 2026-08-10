@@ -14,10 +14,11 @@ Start with [AGENTS.md](AGENTS.md) and [docs/skill-authoring-conventions.md](docs
 ## PR checklist
 
 1. `sh ci/leak-scan.sh .` prints CLEAN and `sh ci/structure-check.sh .` prints STRUCTURE-OK.
-2. `claude plugin validate . --strict` passes on Claude Code v2.1.145, the earliest validator version that supports `--strict`.
-3. Skill changes update or add pressure scenarios under `tests/pressure-scenarios/`.
-4. Tested live with `claude --plugin-dir .` for the skills you touched.
-5. No renames of shipped skill or command names; they are frozen public API.
+2. `sh ci/run-tests.sh .` prints TESTS-OK (every `tests/*.sh` and `skills/*/tests/*.sh` pass under `/bin/sh`).
+3. `claude plugin validate . --strict` passes on Claude Code v2.1.145, the earliest validator version that supports `--strict`.
+4. Skill changes update or add pressure scenarios under `tests/pressure-scenarios/`.
+5. Tested live with `claude --plugin-dir .` for the skills you touched.
+6. No renames of shipped skill or command names; they are frozen public API.
 
 ## License
 

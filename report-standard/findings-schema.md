@@ -82,7 +82,7 @@
 | `severity_counts` | object | yes | Count of findings per severity level |
 | `findings` | array | yes | Finding objects, highest severity first |
 | `coverage` | array | no | Optional per-service coverage rows mirroring the report's coverage matrix |
-| `estate` | object | no | Estate sizing recorded by the run: `objects` (integer the sizing pre-check counted) and `path` (`small`, `medium`, or `large`). `audit-all` reads these for its roll-up; omit only when sizing was impossible |
+| `estate` | object | no | Estate sizing recorded by the run: `objects` (integer the sizing pre-check counted) and `path` (`small`, `medium`, `large`, or `xlarge` per [estate-scope-checkpoint.md](estate-scope-checkpoint.md)). `audit-all` reads these for its roll-up; omit only when sizing was impossible |
 
 `score` object:
 
@@ -130,7 +130,7 @@ Each evidence item:
 
 ## Finding ID rules
 
-- Format: `<PREFIX>-<NNN>`. `PREFIX` is 2 to 5 uppercase letters registered by the audit skill; registered prefixes: `LGTM`, `GRAF`, `SNTRY`, `ALR`, `DO`, `GCP`, `AWS`, `AWSOPT`, `TOPO`. `NNN` is a zero-padded number, e.g. `LGTM-014`, `GRAF-003`. `AWSOPT` is `audit-aws`'s parallel non-scored Cost & Resource Optimization prefix, kept distinct from `AWS` (the scored reliability prefix) so a reader can tell which axis a finding ID belongs to at a glance.
+- Format: `<PREFIX>-<NNN>`. `PREFIX` is 2 to 6 characters that start with a letter and may contain digits (enforced by `check-findings.sh` as `^[A-Z][A-Z0-9]{1,5}-[0-9]{2,4}$` — so `K8S` and `AWSOPT` are valid). Registered prefixes, one per audit: `ALR` (alert-routing), `AWS` + `AWSOPT` (aws reliability + its non-scored cost section), `DD` (datadog), `DO` (digitalocean), `ELK` (elk), `GC` (groundcover), `GCP` (gcp), `GRAF` (grafana), `JSM` (jsm), `K8S` (kubernetes), `LGTM` (lgtm), `PD` (pagerduty), `SNTRY` (sentry), `ZD` (zenduty), and `TOPO` (the parallel Topology Readiness section). The dedicated `audit-cost` skill emits its own non-scored `scoutflo-cost/v1` file with `COST-<PROVIDER>` IDs — see [cost-schema.md](cost-schema.md). `NNN` is a zero-padded number, e.g. `LGTM-014`, `GRAF-003`. `AWSOPT` is kept distinct from `AWS` so a reader can tell the cost axis from the reliability axis at a glance.
 - IDs are stable identifiers from the skill's check catalog, not counters minted per run. The same defect gets the same ID on every run. This is what makes deltas exact.
 - Each audit skill maintains its check catalog (in `SKILL.md` or `references/`) assigning one permanent ID per check. Retired IDs are never reused or renumbered.
 - One finding per failed check. When one check fails for several services or objects, emit one finding and enumerate them in `affected`.

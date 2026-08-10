@@ -4,9 +4,11 @@
 
 Scoutflo AI Readiness audit runs use Claude models via Claude Code on your machine. **All model invocations are billed to your Claude subscription or API account — nothing is sent to or billed by Scoutflo.** This page helps you understand and estimate the token consumption for your audit suite.
 
-## Measured Costs (v0.1.63, Haiku 4.5)
+## Approximate baseline costs (Haiku 4.5)
 
-### Per-Audit Token Consumption
+These are **order-of-magnitude baseline figures** to help you plan, not a guaranteed per-run price — actual consumption scales with your estate size (an audit that pages through thousands of rules costs more than the small/medium samples below). The plugin ships **15 scored audit skills** plus `audit-cost` and `audit-all`; the table below samples a representative subset. Your own numbers are reproducible — see [Reproducing these numbers](#reproducing-these-numbers).
+
+### Per-Audit Token Consumption (representative sample)
 
 | Audit Skill | Estate Size | Input Tokens | Output Tokens | Total | Cost (Haiku) |
 |---|---|---|---|---|---|
@@ -20,17 +22,19 @@ Scoutflo AI Readiness audit runs use Claude models via Claude Code on your machi
 | `audit-sentry` | Small | ~25K | ~13K | ~38K | ~$0.030 |
 | **Average** | **~45K per audit** | — | — | — | **~$0.047** |
 
-### Full Suite (12 Audits, All Configured)
+`audit-cost` (deep per-resource cost) and `/scoutflo:rca` (root-cause across your reports) consume on the same order as an audit; `rca` is typically cheaper since it reasons over reports already on disk rather than making fresh provider calls.
 
-**Token consumption (same for all models):** ~702K tokens
+### Full Suite (all configured audits)
 
-**Cost by model:**
+**Token consumption (same for all models):** on the order of ~700K–1M tokens for a full multi-audit suite, scaling with how many integrations you configured and your estate size.
 
-| Model | Cost | Time | Notes |
-|---|---|---|---|
-| **Haiku 4.5** | **$0.56** | ~60 min | ✓ Recommended |
-| Sonnet 5 | $2.11 | ~120 min | 3.8× more expensive |
-| Opus 5 | $10.53 | ~180 min | 18.8× more expensive |
+**Relative cost by model tier** (Haiku is the default and recommended; the larger tiers cost proportionally more per token — check the current [Claude pricing](https://www.anthropic.com/pricing) for exact per-1M rates, which change over time):
+
+| Model tier | Relative cost | Notes |
+|---|---|---|
+| **Haiku 4.5** | **1× (baseline)** | ✓ Recommended — fast and sufficient for these audits |
+| Sonnet 5 | several× Haiku | Use only if you need deeper reasoning on a specific audit |
+| Opus 5 | ~an order of magnitude over Haiku | Rarely needed for these audits |
 
 **Cost range** (depending on estate complexity): 
 - Haiku: $0.40–$0.80
@@ -55,7 +59,7 @@ Scoutflo AI Readiness audit runs use Claude models via Claude Code on your machi
 
 4. **Audit scope**:
    - Running a single audit: 40–70K tokens
-   - Running all 12 audits (`/scoutflo:audit-all`): ~700K tokens
+   - Running your full configured suite (`/scoutflo:audit-all`): on the order of ~700K-1M tokens
    - Running a subset: proportional to audits included
 
 ## Model Selection Guide
@@ -79,7 +83,7 @@ Scoutflo AI Readiness audit runs use Claude models via Claude Code on your machi
 - Fast enough for interactive runs or scheduled audits
 - Cheap enough for daily runs (full suite ~$0.56)
 
-**Verified:** All 8 test audits in v0.1.64 passed conformance using Haiku with zero failures.
+**Verified:** The audit suite has passed conformance using Haiku with zero failures.
 
 #### Sonnet 5 (Consider If...)
 
@@ -103,7 +107,7 @@ Scoutflo AI Readiness audit runs use Claude models via Claude Code on your machi
 
 **Use Opus only if:**
 - You're doing advanced AI reasoning over the audit findings
-- You need to synthesize insights across 12 audits with complex logic
+- You need to synthesize insights across many audits with complex logic
 - Full suite cost is <$11 for you
 
 **For audits alone:** Opus is overkill and too expensive.
@@ -142,7 +146,7 @@ Single audit (~60K tokens, average):
   Sonnet 5:     60K × $3/1M     = $0.18
   Opus 5:       60K × $15/1M    = $0.90
 
-Weekly recurring (52 weeks, 12 audits each):
+Weekly recurring (52 weeks, full suite each):
   Haiku 4.5:    ~$29/year
   Sonnet 5:     ~$110/year
   Opus 5:       ~$548/year
@@ -158,7 +162,8 @@ Instead of `/scoutflo:audit-all`, run only the audits you need:
 ```bash
 # Run only the audits you care about:
 /scoutflo:audit-grafana
-/scoutflo:audit-prometheus-alerting
+/scoutflo:audit-lgtm            # your Prometheus/LGTM metrics-backend audit
+/scoutflo:audit-alert-routing  # the Prometheus -> Alertmanager paging path
 /scoutflo:audit-sentry
 ```
 
@@ -199,7 +204,7 @@ For these, Sonnet 5 is a good middle ground (3–10× more reasoning power, 3.75
 
 #### Cost Impact Examples
 
-**Full suite (12 audits, all Haiku):**
+**Full suite (all configured audits, all Haiku):**
 - 702K tokens × $0.80/1M = **$0.56**
 - Time: ~60 minutes
 
@@ -217,7 +222,7 @@ For these, Sonnet 5 is a good middle ground (3–10× more reasoning power, 3.75
 
 ## Real-World Example
 
-**Large-estate production audit (Medium Estate)**
+**Large-estate production audit**
 - 12 integrations, ~80 services, 3 clusters
 - Full suite run: `/scoutflo:audit-all`
 - **Tokens consumed:** ~720K
@@ -230,8 +235,8 @@ For these, Sonnet 5 is a good middle ground (3–10× more reasoning power, 3.75
 > figure. Audit wall-time is dominated by model latency and estate size — neither
 > is a property of the plugin, and we have not benchmarked it under controlled
 > conditions. The efficiency the plugin actually controls is **token/cost**, and
-> that is what the section below measures. Any speed figure you have seen in an
-> announcement was an estimate and is withdrawn.
+> that is what the section below measures. We deliberately publish no wall-time
+> figure, since it would depend on your model choice and estate rather than the plugin.
 
 ## Efficiency, measured
 
@@ -242,27 +247,29 @@ The exact **variable** cost of a run (the provider data the model reads) can onl
 be read from Claude Code's own per-turn token counter during a live run — this
 section measures the parts that are deterministic and plugin-controlled.
 
-### Fixed instruction cost per audit (exact bytes, measured on v0.1.74)
+### Fixed instruction cost per audit (exact bytes, current sources)
 
 Every audit run loads that audit's `SKILL.md` plus its `references/*.md`. This is
-the fixed floor before any of your live data is read:
+the fixed floor before any of your live data is read. Regenerate these anytime with
+`sh tests/measure-efficiency.sh` (byte counts come straight from the shipped files):
 
 | Audit | Fixed instructions (bytes) | ~tokens (est) |
 | --- | --- | --- |
-| audit-aws | 120,316 | ~30,100 |
-| audit-lgtm | 110,072 | ~27,500 |
-| audit-gcp | 96,112 | ~24,000 |
-| audit-sentry | 90,977 | ~22,700 |
-| audit-alert-routing | 89,598 | ~22,400 |
-| audit-digitalocean | 80,907 | ~20,200 |
-| audit-grafana | 72,662 | ~18,200 |
-| audit-pagerduty | 58,761 | ~14,700 |
-| audit-zenduty | 50,932 | ~12,700 |
-| audit-groundcover | 50,455 | ~12,600 |
-| audit-datadog | 47,307 | ~11,800 |
-| audit-elk | 43,394 | ~10,800 |
-| audit-kubernetes | 4,002 | ~1,000 |
-| **All 13** | **915,495** | **~228,900** |
+| audit-cost | 172,136 | ~43,000 |
+| audit-aws | 122,560 | ~30,600 |
+| audit-lgtm | 112,341 | ~28,100 |
+| audit-gcp | 98,356 | ~24,600 |
+| audit-sentry | 93,360 | ~23,300 |
+| audit-alert-routing | 92,511 | ~23,100 |
+| audit-digitalocean | 83,779 | ~20,900 |
+| audit-grafana | 76,462 | ~19,100 |
+| audit-pagerduty | 61,005 | ~15,300 |
+| audit-elk | 58,848 | ~14,700 |
+| audit-zenduty | 53,176 | ~13,300 |
+| audit-groundcover | 53,327 | ~13,300 |
+| audit-datadog | 49,551 | ~12,400 |
+| audit-kubernetes | 26,690 | ~6,700 |
+| **All 14** | **1,154,102** | **~288,500** |
 
 Plus the shared report standard loaded once per run: ~70,300 bytes (~17,600 tokens est).
 

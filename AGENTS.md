@@ -13,8 +13,10 @@ sh ci/run-tests.sh .
 claude plugin validate . --strict
 ```
 
-`ci/structure-check.sh` composes the anchor, cross-block, coverage,
-remediation-map, and **skill-completeness** checks. `ci/run-tests.sh` executes
+`ci/structure-check.sh` composes nine checks: anchor, cross-block, coverage,
+remediation-map, **skill-completeness**, and the four behavioral-parity gates
+(scope-checkpoint, redaction-parity, business-context-parity, **env-load-parity**).
+`ci/run-tests.sh` executes
 every `tests/*.sh` and `skills/*/tests/*.sh` under `/bin/sh` (and rejects dead
 bats-syntax files that cannot run). All four run in CI on every push/PR — a
 failure blocks the merge.
@@ -44,7 +46,7 @@ new skill must clear its lane's markers or CI fails:
   library and is allowed. If it has a lib, add a `tests/*.sh` suite (it will be
   run by `ci/run-tests.sh`).
 
-An audit skill's *behavior* is also gated by three behavioral-parity checks in
+An audit skill's *behavior* is also gated by four behavioral-parity checks in
 `structure-check.sh`, each asserting every `audit-*` (except `audit-all`) actually
 wires a feature rather than just having a section for it:
 
@@ -60,6 +62,10 @@ wires a feature rather than just having a section for it:
   *and* names a concrete apply behavior (exclude / escalate critical / cost
   sensitivity / per-env SLA), per `docs/BUSINESS-CONTEXT-INTEGRATION-v0168.md`, so
   business context actually changes the audit rather than being a read-and-ignored flag.
+- `ci/env-load-parity-check.sh` — every `audit-*` sources the home-anchored secret
+  store `~/.scoutflo/env` in its doctor gate, exactly as `/scoutflo:doctor` does, so a
+  credential added to the store (even mid-session) is picked up in the same run — no
+  "doctor is green but the audit says the token isn't set" asymmetry.
 
 These are *behavioral* gates (does the skill act?), distinct from the structural
 completeness gate (does the section exist?). Correlation readiness is enforced in
@@ -76,12 +82,12 @@ scores authored 2–5 points above their scorecard — that shape-only conforman
 could not. Add nothing to bypass it; a score that does not reconcile is a bug.
 
 These gates check **structure and internal consistency**, not correctness — they
-cannot know whether a finding is *true* about the live system. The judgment
-review (`docs/skill-review-rubric.md` via the maintainer
-`review-ai-readiness-skill`) still decides whether the checks a skill runs are
-the right ones — run it on any new or substantially changed skill before
-shipping. The gates stop stubs and self-inconsistent output; the review stops
-wrong logic; live verification proves the findings are real.
+cannot know whether a finding is *true* about the live system. A separate
+maintainer judgment review (kept outside this repo, against a rubric the Scoutflo
+team maintains) still decides whether the checks a skill runs are the right ones;
+it should run on any new or substantially changed skill before shipping. The gates
+stop stubs and self-inconsistent output; the review stops wrong logic; live
+verification proves the findings are real.
 
 ## Before editing
 
@@ -111,7 +117,7 @@ Never:
 
 Three non-negotiable principles enforced on every skill change and release:
 
-1. **Skill Review Gate Compliance** — Every skill must pass the rubric review (docs/skill-review-rubric.md) with all Blocking parameters at PASS before shipping. Pressure scenarios (I4) are mandatory, not optional. No workarounds, no exceptions.
+1. **Skill Review Gate Compliance** — Every skill must pass the maintainer rubric review (maintained by the Scoutflo team outside this repo) with all Blocking parameters at PASS before shipping. Pressure scenarios (I4) are mandatory, not optional. No workarounds, no exceptions.
 
 2. **Git vs. Local Boundary** — Production code only in the public repo. Internal planning docs, governance notes, implementation guides, and working artifacts must not be committed to GitHub. Move them to memory or local-only CLAUDE.local.md instead. Customers must never see internal working notes.
 

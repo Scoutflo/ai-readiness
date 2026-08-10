@@ -84,7 +84,7 @@ Green = read-only (safe, changes nothing) · amber = write, gated behind your co
 
 ---
 
-## What's new (current: v0.1.92)
+## What's new (latest release)
 
 - **ELK audits discover your Kibana spaces — never assume `default`.** `audit-elk` enumerates every space your key can see (`GET /api/spaces/space`) and audits where your rules actually live, so a stack whose alerting sits in a non-default space is no longer reported as an empty `0/100`. When zero rules are visible it says so honestly (a possible key-visibility gap: widen the key to `spaces:["*"]` read) instead of a confident wrong score. The `/scoutflo:connect` recipe now grants the correct Kibana feature privileges at all spaces.
 - **A token you added is picked up in the same session.** Every audit now sources `~/.scoutflo/env` at its doctor gate, exactly as `/scoutflo:doctor` does — so a credential added mid-session works immediately, no new terminal. A new FAQ entry spells out where the token value goes (`~/.scoutflo/env`, keyed by the `*_env` name — not into `toolkit.yaml`).
@@ -95,7 +95,7 @@ Green = read-only (safe, changes nothing) · amber = write, gated behind your co
 - **Large-estate scope checkpoint** — audits pause on a big estate and let you scope before spending tokens, instead of grinding everything.
 - **Self-policing quality** — the numbers in every report reconcile with their own scorecard, secrets are never emitted, and each audit's behavior is enforced by CI gates (9 structure/parity gates + report self-validation, 19 test suites) so quality can't silently regress.
 
-See [CHANGELOG.md](CHANGELOG.md) for the full v0.1.76 → v0.1.92 history.
+See [CHANGELOG.md](CHANGELOG.md) for the current version and full release history.
 
 ---
 
@@ -167,7 +167,9 @@ Secrets live only in environment variables you export yourself. `~/.scoutflo/too
 | `/scoutflo:connect` | Guided credential setup per integration, two token tiers |
 | `/scoutflo:doctor` | Preflight: config parses, env vars are set, one live check per integration |
 | `/scoutflo:map-topology` | Builds your real service map from Kubernetes/Istio |
-| `/scoutflo:audit-all` | Runs every audit you've configured, one combined report and Slack brief |
+| `/scoutflo:business-context` | Captures your SLAs, critical services, per-environment rules, and exclusions into one `business_context.md` that every audit reads to tune severity and scope |
+| `/scoutflo:audit-all` | Runs every audit you've configured, then correlates across them, into one combined report and Slack brief |
+| `/scoutflo:rca` | Ask *"why is `<service>` failing — give me the RCA?"* — evidence-cited root cause correlated across every report + topology + business context, with a confidence level and an honest list of what it couldn't determine |
 | `/scoutflo:schedule-audits` | Sets up recurring audits via GitHub Actions, cron, or a Claude cloud schedule |
 
 **Audits** — read-only, scored 0–100, evidence-backed, change nothing. Beyond coverage, every audit also scores **alert hygiene** — flapping alerts, permanently-firing "wallpaper" rules, missing debounce, and noisy routing — so a healthy score means signal, not noise:
@@ -188,6 +190,7 @@ Secrets live only in environment variables you export yourself. `~/.scoutflo/too
 | `/scoutflo:audit-digitalocean` | App Platform, managed databases, uptime checks, alert routing |
 | `/scoutflo:audit-gcp` | Cloud Monitoring, uptime checks, GKE telemetry, logging, load-balancer health |
 | `/scoutflo:audit-aws` | CloudWatch alarms, SNS routing, EC2/ECS/EKS/Lambda/RDS health, uptime, log forwarding — plus a separate, non-scored **Cost & Resource Optimization** report sourced from AWS's own Compute Optimizer / Cost Explorer / Trusted Advisor |
+| `/scoutflo:audit-cost` | Deep, cross-provider cloud cost — rightsizing, idle/unattached resources, commitment coverage, over-provisioned Kubernetes requests — ranked by each provider's **own** dollar figures (never invented). A separate ranked-savings report, not a 0–100 score |
 
 **Setups** — fix what an audit found. Always: announce the exact change → wait for your yes → apply it → re-read the object to prove it landed:
 
@@ -199,6 +202,7 @@ Secrets live only in environment variables you export yourself. `~/.scoutflo/too
 | `/scoutflo:setup-digitalocean` | Alert destinations, uptime checks, App Platform and database alerting |
 | `/scoutflo:setup-gcp` | Notification channels, uptime checks, alert policies, dashboards |
 | `/scoutflo:setup-aws` | CloudWatch alarms, SNS routing, log forwarding, account-level observability. Never automates a cost-driven change (resize/delete) — Cost & Resource Optimization findings are always plan-only, a decision for you to make deliberately |
+| `/scoutflo:setup-kubernetes` | Pod Security Admission labels, RBAC tightening, network policies, resource limits, and PodDisruptionBudgets — each announced and confirmed before it's applied |
 
 (No `setup-alert-routing` yet — that's coming; today alert-routing findings point at `setup-lgtm` or `setup-grafana`.)
 

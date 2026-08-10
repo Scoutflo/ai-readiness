@@ -23,7 +23,7 @@ set -eu
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 CHARS_PER_TOKEN=4
 
-audit_dirs="aws gcp lgtm grafana sentry datadog elk zenduty pagerduty digitalocean groundcover alert-routing kubernetes"
+audit_dirs="aws gcp lgtm grafana sentry datadog elk zenduty pagerduty digitalocean groundcover alert-routing kubernetes cost"
 
 echo "=== 1. Fixed instruction cost per audit (SKILL.md + references/*.md) ==="
 printf "%-16s %10s %12s\n" "audit" "bytes" "~tokens(est)"
