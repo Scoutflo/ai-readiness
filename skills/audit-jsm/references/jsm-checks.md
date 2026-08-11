@@ -55,11 +55,17 @@ Resolve the teams to audit, then capture per team and account-wide.
 
 ```bash
 set -eu
-JSM_BASE="https://api.atlassian.com/jsm/ops/api/${JSM_CLOUD_ID}/v1"
+JSM_SITE="your-site.atlassian.net"   # jsm.site
+AUTH_USER="${JSM_EMAIL}:${JSM_API_TOKEN}"
+# Resolve CLOUD_ID the same way the doctor gate does (each block is a fresh shell):
+# jsm.cloud_id if configured, else the site's tenant_info edge route. Every path needs it.
+CLOUD_ID="${JSM_CLOUD_ID:-}"
+[ -n "$CLOUD_ID" ] || CLOUD_ID="$(curl -fsS --max-time 10 "https://${JSM_SITE}/_edge/tenant_info" | jq -r '.cloudId')"
+[ -n "$CLOUD_ID" ] || { echo "could not resolve JSM cloud_id (set jsm.cloud_id or check jsm.site)"; exit 1; }
+JSM_BASE="https://api.atlassian.com/jsm/ops/api/${CLOUD_ID}/v1"
 RUN_DATE="$(date -u +%Y-%m-%d)"
 RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/jsm/${RUN_DATE}/raw"
 mkdir -p "$RAW_DIR"
-AUTH_USER="${JSM_EMAIL}:${JSM_API_TOKEN}"
 
 # Teams to audit: jsm.teams from config, else discover. Written to a file the per-team loop
 # reads, so this stays stateless. Replace the discovery line with the configured ids.
@@ -193,7 +199,11 @@ jq '[.[] | select(.status == "active")
 
 ```bash
 set -eu
-JSM_BASE="https://api.atlassian.com/jsm/ops/api/${JSM_CLOUD_ID}/v1"
+JSM_SITE="your-site.atlassian.net"   # jsm.site
+CLOUD_ID="${JSM_CLOUD_ID:-}"
+[ -n "$CLOUD_ID" ] || CLOUD_ID="$(curl -fsS --max-time 10 "https://${JSM_SITE}/_edge/tenant_info" | jq -r '.cloudId')"
+[ -n "$CLOUD_ID" ] || { echo "could not resolve JSM cloud_id (set jsm.cloud_id or check jsm.site)"; exit 1; }
+JSM_BASE="https://api.atlassian.com/jsm/ops/api/${CLOUD_ID}/v1"
 curl -fsS --max-time 30 -u "${JSM_EMAIL}:${JSM_API_TOKEN}" \
   "${JSM_BASE}/alerts?size=100&sort=createdAt&order=desc" \
   | jq '{sampled: (.values | length),
@@ -233,7 +243,11 @@ No analytics API exists; every figure is computed client-side from alert timesta
 
 ```bash
 set -eu
-JSM_BASE="https://api.atlassian.com/jsm/ops/api/${JSM_CLOUD_ID}/v1"
+JSM_SITE="your-site.atlassian.net"   # jsm.site
+CLOUD_ID="${JSM_CLOUD_ID:-}"
+[ -n "$CLOUD_ID" ] || CLOUD_ID="$(curl -fsS --max-time 10 "https://${JSM_SITE}/_edge/tenant_info" | jq -r '.cloudId')"
+[ -n "$CLOUD_ID" ] || { echo "could not resolve JSM cloud_id (set jsm.cloud_id or check jsm.site)"; exit 1; }
+JSM_BASE="https://api.atlassian.com/jsm/ops/api/${CLOUD_ID}/v1"
 AGING_HOURS="4"   # example, tune to your paging SLA
 
 # JSM-030: open alerts never acknowledged. The query language does the filtering server-side.

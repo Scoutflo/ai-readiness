@@ -111,7 +111,13 @@ Count before judging, and declare the path in the terminal output. The unit here
 
 ```bash
 set -eu
-JSM_BASE="https://api.atlassian.com/jsm/ops/api/${JSM_CLOUD_ID}/v1"   # resolved in the gate
+# Each block is a fresh shell, so re-resolve CLOUD_ID exactly as the doctor gate does
+# (the gate's value does not persist here). jsm.cloud_id when set, else the site's tenant_info.
+JSM_SITE="your-site.atlassian.net"   # jsm.site
+CLOUD_ID="${JSM_CLOUD_ID:-}"
+[ -n "$CLOUD_ID" ] || CLOUD_ID="$(curl -fsS --max-time 10 "https://${JSM_SITE}/_edge/tenant_info" | jq -r '.cloudId // empty')"
+[ -n "$CLOUD_ID" ] || { echo "could not resolve JSM cloud_id (set jsm.cloud_id or check jsm.site)"; exit 1; }
+JSM_BASE="https://api.atlassian.com/jsm/ops/api/${CLOUD_ID}/v1"
 SMALL_MAX_OBJECTS="15"    # example, tune to your environment
 MEDIUM_MAX_OBJECTS="60"   # example, tune to your environment
 BATCH_SIZE="10"           # teams per batch on the large path; example, tune it

@@ -255,7 +255,7 @@ Runs on the large path only. State lives under a run-ID-keyed run directory, `./
    fi
 
    export DASHBOARD_UIDS_FILE="${BATCH_FILE}"
-   bash scripts/grafana-audit.sh
+   bash "${CLAUDE_PLUGIN_ROOT}/skills/audit-grafana/scripts/grafana-audit.sh"
    # ... run Phase 3's checks (GRAF-020 to GRAF-028) against this batch's dashboards now ...
 
    while IFS= read -r uid; do
@@ -302,7 +302,7 @@ On the small and medium paths, run the bundled read-only inventory script once, 
 set -eu
 export GRAFANA_URL="https://grafana.example.com"   # grafana.url from ~/.scoutflo/toolkit.yaml
 # GRAFANA_TOKEN must already be exported in this shell; see the doctor gate.
-bash scripts/grafana-audit.sh
+bash "${CLAUDE_PLUGIN_ROOT}/skills/audit-grafana/scripts/grafana-audit.sh"
 RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/grafana/$(date -u +%Y-%m-%d)/raw"
 cat "${RAW_DIR}/summary.txt"
 ```
