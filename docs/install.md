@@ -95,6 +95,37 @@ To force-enable the plugin for every user, put the same `extraKnownMarketplaces`
 
 If your organization sets `strictKnownMarketplaces`, only allowlisted marketplaces can be added. Add the `scoutflo` marketplace entry to that allowlist in the same managed settings file, or installs will be refused.
 
+## Troubleshooting: plugin shows installed but no `/scoutflo:` skills appear
+
+If `/plugin` lists the plugin as installed but typing `/scoutflo:` shows nothing, the plugin files are present but Claude Code hasn't loaded its skills. Work through these in order — most common first (run them in the `claude` terminal CLI):
+
+1. **Activate the skills.** A fresh install often needs one command to load its skills — the plugin shows "installed" but the skills stay hidden until then:
+   ```
+   /reload-plugins
+   ```
+   Then fully restart Claude Code (quit and reopen, not just a new chat).
+
+2. **Check your Claude Code version.** Plugin skill discovery needs a reasonably recent build (~**v2.1.140+**); older versions install a plugin but never load its skills.
+   ```bash
+   claude --version         # if older: npm install -g @anthropic-ai/claude-code, then restart
+   ```
+
+3. **Look for a load error.** Open `/plugin`, and check the **Installed** and **Errors** tabs for the `scoutflo` plugin — a red error there names the cause directly.
+
+4. **Org / managed-settings block (the "personal vs org profile" case).** If you are on a Teams or Enterprise plan, your organization's **managed settings override your personal settings**, so a plugin can show installed from your own config yet have its skills suppressed at the org level. An Owner should check **Admin Settings → Claude Code → Managed settings** for:
+   - `strictKnownMarketplaces` — if set, only allowlisted marketplaces load; add the `scoutflo` marketplace to the allowlist (see [Enterprise](#enterprise) above) or its skills never register.
+   - an `enabledPlugins` entry that denies or omits `scoutflo`.
+
+5. **Clear a stale plugin cache**, then restart:
+   ```bash
+   rm -rf ~/.claude/plugins/cache
+   ```
+
+6. **Still stuck?** Capture a debug log and send it to us (no secrets are printed by this):
+   ```bash
+   claude --debug 2>&1 | grep -i plugin
+   ```
+
 ## Keep reports private
 
 Audit reports contain infrastructure detail: hostnames, namespaces, service names, alert routing. Keep them out of public version control. Add this to the `.gitignore` of any repository where you run audits:
