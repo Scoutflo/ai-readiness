@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.96
+
+**Critical fix: the plugin failed to load any skills on Claude Code older than v2.1.143.** A customer on v2.0.55 saw the plugin "installed" but with zero `/scoutflo:` skills — the `/plugin` Errors tab showed `Unrecognized key(s) in object: 'displayName'. The plugin cannot load with an invalid manifest.`
+
+- **Removed `displayName` from `.claude-plugin/plugin.json`.** That key is valid only on Claude Code **v2.1.143+**; on any older client the runtime rejects the *entire* manifest and loads **none** of the plugin's 35 skills (failing closed while still showing "installed"). `displayName` is optional and falls back to `name`, so removing it costs only the pretty picker label and restores loading on every client. This is the root cause of the "installed but no skills" reports — a plugin defect, not the customer's environment (correcting an earlier diagnosis).
+- **Why it wasn't caught:** `claude plugin validate --strict` on a *modern* CLI (the maintainer's) accepts `displayName`, so the break was invisible to the author while hard-failing older customers.
+- **New CI gate `ci/manifest-compat-check.sh`** (composed into `structure-check.sh`, locked by 3 tests) hard-fails on `displayName` and on any top-level manifest key outside the broadly-compatible baseline set — so a version-gated or typo'd manifest key can never again ship and fail-closed for customers on older clients. Adding a new key now requires a deliberate edit to the gate's allowlist.
+
+Customers who hit this should update the plugin (`claude plugin update scoutflo@scoutflo`) and restart; the skills will load. Manifest + CI only — no skill logic, scoring, or schema change.
+
 ## 0.1.95
 
 Docs: a real customer hit "plugin shows installed but no `/scoutflo:` skills appear" (an org-managed-settings vs personal-settings interaction, not a plugin defect — the plugin's structure and manifests are correct). Added the missing self-serve guidance.

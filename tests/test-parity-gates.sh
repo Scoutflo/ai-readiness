@@ -11,6 +11,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 RED="$ROOT/ci/redaction-parity-check.sh"
 BC="$ROOT/ci/business-context-parity-check.sh"
 ENVL="$ROOT/ci/env-load-parity-check.sh"
+MCOMPAT="$ROOT/ci/manifest-compat-check.sh"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 fail() { echo "FAIL: $1" >&2; exit 1; }
@@ -78,6 +79,24 @@ echo "Test 9: an audit that sources ~/.scoutflo/env PASSES the env-load gate"
 mk; mkdir -p "$WORK/t/skills/audit-foo"
 printf -- '---\nname: audit-foo\ndescription: x\n---\n# audit-foo\n[ -f "$HOME/.scoutflo/env" ] && . "$HOME/.scoutflo/env" || true\n' > "$WORK/t/skills/audit-foo/SKILL.md"
 sh "$ENVL" "$WORK/t" >/dev/null 2>&1 || { sh "$ENVL" "$WORK/t" 2>&1 | head; fail "env-load gate rejected an audit that sources the store"; }
+echo "PASS"
+
+echo "Test 10: manifest-compat gate REJECTS the version-gated 'displayName' key"
+mk; mkdir -p "$WORK/t/.claude-plugin"
+printf '{"name":"scoutflo","displayName":"X","version":"0.0.0"}' > "$WORK/t/.claude-plugin/plugin.json"
+sh "$MCOMPAT" "$WORK/t" >/dev/null 2>&1 && fail "manifest-compat accepted displayName (breaks older Claude Code clients)"
+echo "PASS"
+
+echo "Test 11: manifest-compat gate ACCEPTS a baseline-only manifest, REJECTS an unknown key"
+mk; mkdir -p "$WORK/t/.claude-plugin"
+printf '{"name":"scoutflo","version":"0.0.0","description":"d","keywords":["k"]}' > "$WORK/t/.claude-plugin/plugin.json"
+sh "$MCOMPAT" "$WORK/t" >/dev/null 2>&1 || { sh "$MCOMPAT" "$WORK/t" 2>&1 | head; fail "manifest-compat rejected a clean baseline manifest"; }
+printf '{"name":"scoutflo","version":"0.0.0","madeUpKey":true}' > "$WORK/t/.claude-plugin/plugin.json"
+sh "$MCOMPAT" "$WORK/t" >/dev/null 2>&1 && fail "manifest-compat accepted an unknown non-baseline key"
+echo "PASS"
+
+echo "Test 12: the REAL shipped plugin.json passes manifest-compat"
+sh "$MCOMPAT" "$ROOT" >/dev/null 2>&1 || { sh "$MCOMPAT" "$ROOT" 2>&1 | head; fail "shipped plugin.json fails manifest-compat"; }
 echo "PASS"
 
 echo
