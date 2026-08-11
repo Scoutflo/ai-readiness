@@ -75,9 +75,9 @@ Clears the saved scope; next audit will default to `all`.
 
 ## Integration
 
-- **Called by** `/scoutflo:audit-all` automatically before running audits
-- **Output** `~/.scoutflo/topology.json` (persisted across sessions)
-- **Batching** Applied in `/scoutflo:audit-all` when query loop is reached
+- **Called by each `audit-*` skill's estate-sizing phase** (via the shared [estate-scope-checkpoint](../../report-standard/estate-scope-checkpoint.md) block), not by `audit-all` directly — the pause/scope decision happens per audit as it sizes its estate. You can also run `/scoutflo:checkpoint` directly to set or reset the scope.
+- **Output** `~/.scoutflo/topology.json` (persisted across sessions; the saved scope is reused on the next run)
+- **Batching** Applied within each audit's large-estate path when the object count crosses its threshold
 
 ## Exit codes
 

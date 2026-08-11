@@ -263,7 +263,7 @@ Expected output: `[cost-analysis] Report complete: <audits-dir>/cost-analysis/<d
 **Use cases:**
 - One cross-provider list of cost opportunities with real, provider-sourced savings totals
 - Deduplicates via correlation.json (overlap-flagged entries annotated, kept visible)
-- Skips re-analysis if <24h old + no new findings (zero extra API calls)
+- Always regenerates from the current run's findings (no cache, no 24h skip); it makes zero API calls, so re-running it is effectively free
 
 **Graceful degradation:** If the cost-analysis library is absent (v0.1.66 or earlier), the log notes this and continues — cost analysis is optional. If no audit emitted cost-optimization findings, it exits cleanly with a note.
 

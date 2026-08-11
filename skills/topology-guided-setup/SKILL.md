@@ -1,29 +1,25 @@
 ---
 name: topology-guided-setup
-description: 'Internal harness skill (v0.1.66+): called by /scoutflo:setup-* skills with --topology-guided flag. Uses correlation.json + business-context to make smart fix decisions: detects redundant monitoring (skip or dedup), finds cascade risks (fix root causes first), prevents cascade failures, applies business context (critical services require approval, staging gaps intentional). Estimates tokens, suggests fix order. Wired into: /scoutflo:setup-aws --finding AWS-023 --topology-guided, similar for all setup skills.'
+description: 'Internal harness library (v0.1.66+): an available helper a setup skill can source to make topology-aware fix decisions from correlation.json + business-context — detect redundant monitoring (skip or dedup), find cascade risks (fix root causes first), apply business context (critical services require approval, staging gaps intentional), estimate tokens, and suggest fix order. It exposes shell functions (topology_guided_get_recommendation, topology_guided_should_fix); it is a building block, not yet auto-invoked by the setup-* skills. Not a user-facing command.'
 ---
 
 # Topology-Guided Setup
 
-Internal integration layer for setup skills. When a setup skill runs with `--topology-guided`, it calls this layer to:
+Internal helper **library** for setup skills. It provides shell functions a setup skill can source to make topology-aware fix decisions:
 1. Check if the finding overlaps with others (skip redundant monitoring)
 2. Detect cascade risks (fix root causes first)
 3. Apply business context (critical services require approval)
 4. Estimate tokens + suggest fix order
 
-Not a user-facing skill — called by setup skills under the hood.
+Not a user-facing skill. **Status:** this is an available building block (real, tested functions in `lib/`); the `setup-*` skills do not yet source it automatically. When a setup skill adopts it, it would look like the pattern below.
 
 ## How it works
 
-### User flow
+### Intended integration (not yet wired into the setup-* skills)
 
+A setup skill that adopts this library would source it and consult it per finding:
 ```bash
-/scoutflo:setup-aws --finding AWS-023 --topology-guided
-```
-
-Setup skill does:
-```bash
-. "${SKILLS_LIB}/topology-guided-setup/lib/topology-guided-setup.sh"
+. "${CLAUDE_PLUGIN_ROOT}/skills/topology-guided-setup/lib/topology-guided-setup.sh"
 recommendation=$(topology_guided_get_recommendation "AWS-023" "database-svc" "RDS Backup Not Enabled")
 should_proceed=$(topology_guided_should_fix "AWS-023" "database-svc" "RDS Backup Not Enabled")
 if [ $should_proceed -eq 0 ]; then

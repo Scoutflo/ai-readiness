@@ -1,6 +1,6 @@
 ---
 name: correlation-engine
-description: 'Internal harness skill: after any audit(s) (audit-all, sequential, or targeted 2-3), builds correlation.json that detects: redundant monitoring (AWS + Grafana monitoring same metric), cascade risks (A fails → B disabled → C undetected), business context filtering (staging gaps marked intentional, critical services prioritized). Works incrementally with partial coverage. Wired into audit-all and topology-guided-setup.'
+description: 'Harness skill (run it directly, or let audit-all run it for you): after any audit(s) (audit-all, sequential, or targeted 2-3), builds correlation.json that detects redundant monitoring (AWS + Grafana monitoring same metric), cascade risks (A fails → B disabled → C undetected), and business context filtering (staging gaps marked intentional, critical services prioritized). Works incrementally with partial coverage. Run automatically by audit-all (Phase 3.5); its output is also consumed by rca and the topology-guided-setup helper.'
 ---
 
 # Correlation Engine
@@ -149,11 +149,11 @@ scoutflo-audits/
     ...
 ```
 
-correlation.json schema:
+correlation.json schema (exactly what the lib writes):
 
 ```json
 {
-  "version": "1.0",
+  "version": "2.0",
   "generated_at": "2026-07-30T14:30:00Z",
   "audit_date": "2026-07-30",
   "total_findings_raw": 87,
@@ -162,10 +162,11 @@ correlation.json schema:
   "total_cascades_detected": 5,
   "overlaps": [ {...} ],
   "cascades": [ {...} ],
-  "business_context_applied": true,
-  "confidence": "95%"
+  "method": "same-affected-service overlap grouping + database-to-alerting cascade heuristic; every referenced finding_id exists in this run"
 }
 ```
+
+There is no `confidence` or `business_context_applied` field — the engine does not assign a confidence percentage; it groups by shared `affected` service and joins cascades on shared resources, and `method` states exactly how.
 
 ## When correlation engine runs
 
@@ -179,13 +180,13 @@ correlation.json schema:
 correlation_run 2026-07-30
 ```
 
-## Limitations & Confidence
+## Limitations
 
-- **Confidence: 95%** for overlaps within same audit date
-- **Limitations:**
-  - Cascade detection uses heuristics (database → monitoring → incident response); not exhaustive
-  - Cross-date correlations (audit-aws on day 1 vs audit-grafana on day 5) still work but skip time-based cascade detection
-  - Requires `jq` on PATH
+- **Overlaps** are exact: two findings are grouped only when they name the same `affected` service, so a grouped overlap is a real shared-resource match, not a guess. The engine assigns no confidence percentage.
+- **Cascade detection uses heuristics** (database → monitoring → incident response) and is not exhaustive.
+- **Cross-date correlations** (audit-aws on day 1 vs audit-grafana on day 5) still work but skip time-based cascade detection.
+- Requires `jq` on PATH.
+- Every referenced `finding_id` in the output exists in the current run's findings (no invented references) — that is the grounding guarantee, verified by the `method` note above.
 
 ## See also
 

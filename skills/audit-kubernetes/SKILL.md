@@ -167,7 +167,15 @@ Full check catalog and target profile at the top of [references/kubernetes-check
 
 End-to-end gate: claim end-to-end coverage only when the overall score is at or above 85, every critical service passes every applicable coverage row, and no category was excluded. Below the gate, write "good base posture", never "end to end".
 
-Write `findings.json` first (canonical), then regenerate `report.md`, the history line, and the Slack brief from it. Validate `findings.json` with `report-standard/check-findings.sh` (score reconciles with the scorecard, schema complete) and the report with `report-standard/check-report.sh` (shape).
+Write `findings.json` first (canonical), then regenerate `report.md`, the history line, and the Slack brief from it. Then run the report-standard self-validation, exactly as every other audit does — `check-findings.sh` (score reconciles with the scorecard, schema invariants hold) before `check-report.sh` (shape):
+
+```bash
+set -eu
+RUN_DATE="$(date -u +%Y-%m-%d)"
+OUT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/kubernetes/${RUN_DATE}"
+sh "${CLAUDE_PLUGIN_ROOT}/report-standard/check-findings.sh" "$OUT/findings.json"
+sh "${CLAUDE_PLUGIN_ROOT}/report-standard/check-report.sh" "$OUT/report.md"
+```
 
 ## Metadata Load (v0.1.68+)
 

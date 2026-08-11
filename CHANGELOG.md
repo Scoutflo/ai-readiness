@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.1.97
+
+Fixes a batch of real defects found by an adversarial whole-plugin sweep (each independently verified against the files, then rubric-reviewed for the two scored audits touched).
+
+**High severity:**
+- **`audit-jsm` crashed on the normal run path.** Its inventory, actionability, and aging blocks built `JSM_BASE` from a bare `${JSM_CLOUD_ID}` under `set -eu`, but that variable is never set on the normal path (the gate resolves the value into a locally-scoped `CLOUD_ID` in an already-exited shell, and `jsm.cloud_id` is an optional config value, not an env var). Every affected block aborted with `unbound variable` before any request. Each block now re-resolves `CLOUD_ID` itself (`jsm.cloud_id` else the site's `tenant_info`), matching the doctor gate. `claude plugin validate` missed this because `ci/crossblock-check.sh` whitelists `JSM_CLOUD_ID`.
+- **`cost-analysis` contradicted itself on scoring.** Its intro says "never scores 0–100" (correct — it is a ranked-savings roll-up) but the body still had a Scoring Formula, a "Calculate score (0-100)" step, and `overall_score: 42` examples. Removed all of it; the doc now describes ranking by provider-native dollar savings only.
+- **`topology-guided-setup` claimed wiring that does not exist.** Its description said it is "called by /scoutflo:setup-* skills with --topology-guided" and "Wired into: setup-aws …", but no setup skill references it (same "built-but-never-wired" class as the retracted v0.1.69 pipeline). Corrected to describe it accurately as an available helper library the setup skills can source but do not yet auto-invoke. Also corrected `correlation-engine`'s stale "Internal harness skill / Wired into topology-guided-setup" framing (it is user-runnable and run by audit-all).
+
+**Medium severity:**
+- **`setup-sentry`** cron-monitor enable gate had a jq precedence bug (`index("error") or true` is always true), so it only ever asserted an `ok` check-in existed; now requires all three states as intended.
+- **`audit-grafana`** invoked its bundled script by a cwd-relative path (`bash scripts/grafana-audit.sh`) from blocks that run in the user's workspace; now `${CLAUDE_PLUGIN_ROOT}`-anchored at both call sites.
+- **`audit-kubernetes`** was the only scored audit whose report-standard self-validation was prose, not an executable block; it now runs `check-findings.sh` then `check-report.sh` like the fleet.
+- **`audit-all`** cost roll-up had a stale "skips re-analysis if <24h old" bullet contradicting the same section's "always regenerates, no cache"; removed.
+- **`correlation-engine`** documented schema drifted from the lib (said `version 1.0` + a `confidence: "95%"` field the engine never emits); corrected to the real `version 2.0` shape and removed the invented confidence claim.
+- **`checkpoint`** said it is "called by audit-all automatically"; it is actually called by each `audit-*` skill's estate-sizing phase (audit-all never references it). Corrected.
+- Fixed a v0.1.95 regression in `start`: the "installed skills" note wrongly implied `checkpoint`/`correlation-engine` are never typed; both are directly runnable.
+
+Skills/docs/CI only — no scoring, schema, or gate-logic change. Rubric review: PASS on audit-jsm and audit-kubernetes. All gates green (structure-check, 19 test suites).
+
 ## 0.1.96
 
 **Critical fix: the plugin failed to load any skills on Claude Code older than v2.1.143.** A customer on v2.0.55 saw the plugin "installed" but with zero `/scoutflo:` skills — the `/plugin` Errors tab showed `Unrecognized key(s) in object: 'displayName'. The plugin cannot load with an invalid manifest.`

@@ -589,7 +589,7 @@ MONITOR_SLUG="nightly-data-sync"
 
 curl -fsS --max-time 10 "${API}/organizations/${SENTRY_ORG}/monitors/${MONITOR_SLUG}/checkins/" \
   -H "Authorization: Bearer ${SENTRY_TOKEN}" \
-  | jq -e '[.[].status] as $s | ($s | index("ok")) and ($s | index("error") or true) and ($s | index("in_progress") or true)'
+  | jq -e '[.[].status] as $s | ($s | index("ok")) and ($s | index("error")) and ($s | index("in_progress"))'
 
 curl -fsS --max-time 10 -X PUT "${API}/organizations/${SENTRY_ORG}/monitors/${MONITOR_SLUG}/" \
   -H "Authorization: Bearer ${SENTRY_TOKEN}" -H "Content-Type: application/json" \

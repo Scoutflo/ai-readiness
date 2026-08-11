@@ -59,19 +59,13 @@ Check correlation.json:
   ├─ Mark deduplicated=true with reason
   └─ Keep dedup_count for scoring
 
-Calculate score (0-100):
-  ├─ waste_percent = identifiable_waste / estimated_total_spend
-  ├─ dedup_penalty = overlaps * 10
-  ├─ action_gap_penalty = (no_high_priority_items * 5)
-  └─ score = 100 - (waste_percent * 60) - dedup - actions
-
-Sort findings by ROI:
+Sort findings by ROI (this is a ranked-savings axis, NOT a 0–100 score):
   ├─ If cost_sensitivity=high: sort by annual_savings (highest first)
   └─ If cost_sensitivity=medium/low: sort by monthly_waste
 
 Output:
-  ├─ cost-analysis.json: scored report + findings sorted by priority
-  └─ cost-analysis.jsonl: append one history line (trend tracking)
+  ├─ cost-analysis.json: the deduplicated findings, ranked by savings
+  └─ cost-analysis.jsonl: append one history line (total-savings trend tracking)
 ```
 
 ## Report Structure
@@ -82,7 +76,6 @@ Output:
 {
   "audit_date": "2026-07-30",
   "timestamp": "2026-07-30T15:00:00Z",
-  "overall_score": 42,
   "environment": "production",
   "findings": [
     {
@@ -116,12 +109,12 @@ Output:
   },
   "trend": {
     "last_5_runs": [
-      {"date": "2026-07-26", "overall": 35, "monthly_waste": 580},
-      {"date": "2026-07-27", "overall": 38, "monthly_waste": 550},
-      {"date": "2026-07-30", "overall": 42, "monthly_waste": 440}
+      {"date": "2026-07-26", "monthly_waste": 580},
+      {"date": "2026-07-27", "monthly_waste": 550},
+      {"date": "2026-07-30", "monthly_waste": 440}
     ],
     "direction": "improving",
-    "momentum": "+7 improving"
+    "momentum": "-$140/mo since first run"
   }
 }
 ```
@@ -129,9 +122,9 @@ Output:
 **File:** `scoutflo-audits/cost-analysis.jsonl` (appended each run)
 
 ```jsonl
-{"date":"2026-07-26","overall":35,"monthly_waste":580,"state":"analyzed"}
-{"date":"2026-07-27","overall":38,"monthly_waste":550,"state":"analyzed"}
-{"date":"2026-07-30","overall":42,"monthly_waste":440,"state":"analyzed"}
+{"date":"2026-07-26","monthly_waste":580,"state":"analyzed"}
+{"date":"2026-07-27","monthly_waste":550,"state":"analyzed"}
+{"date":"2026-07-30","monthly_waste":440,"state":"analyzed"}
 ```
 
 ## Deduplication Example
@@ -152,25 +145,14 @@ GCP: "unused resources = $200/mo" [secondary, already counted]
 Cost-analysis: $320 (only count once, mark GCP as deduplicated)
 ```
 
-## Scoring Formula
+## Ranking (not a 0–100 score)
 
-```
-Score = 100 - (waste_percent * 60) - (overlaps * 10) - (missing_actions * 5)
+This roll-up does **not** compute a 0–100 health score — cost is a ranked-savings axis, not a reliability grade, and inventing a "cost score" would be an invented number. It presents the deduplicated findings **ranked by dollar savings**, using `cost_sensitivity` to choose the sort key:
 
-where:
-  waste_percent = identifiable_waste / (identifiable_waste / 0.05)  [assume waste = 5% of spend]
-  overlaps = cost_section findings marked deduplicated=true
-  missing_actions = 1 if no high-priority findings, 0 otherwise
-```
+- `cost_sensitivity: high` → rank by **annual** savings (biggest total impact first).
+- `cost_sensitivity: medium`/`low` → rank by **monthly** waste.
 
-**Example:**
-- Waste: $440/month (6.7% of estimated $6,600 spend)
-- waste_component = 6.7 * 60 / 100 = 4 points
-- Overlaps: 1 deduplicated finding = 10 points
-- Missing actions: 1 high-priority finding exists = 0 points
-- **Score = 100 - 4 - 10 - 0 = 86**
-
-(Higher score = healthier cost posture.)
+The only headline figures are provider-native, copied verbatim: `total_monthly_waste` and `total_annual_impact` (the sum of the ranked findings' own numbers), plus the count by `fix_priority`. Overlaps flagged by `correlation.json` are marked `deduplicated=true` so a dollar is never counted twice. The trend line tracks `monthly_waste` over runs, not a score.
 
 ## Business Context Integration
 
