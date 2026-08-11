@@ -60,7 +60,7 @@ State your installed toolkit version in this orientation (read `version` from `$
 | `/scoutflo:setup-aws` | setup | CloudWatch alarms, SNS routing, log forwarding, account observability |
 | `/scoutflo:audit-cost` | audit | Deep cross-provider cost: rightsizing, idle/unattached, commitment coverage, over-provisioned K8s requests — ranked by provider-native $ savings (never invented) |
 
-More audits are planned. Installed skills always appear in this table.
+More audits are planned. This table lists the commands you invoke directly; a few internal harness skills (e.g. `correlation-engine`'s roll-up, `checkpoint`, `topology-guided-setup`) are called automatically by the skills above rather than typed, so they are described where they are used rather than as separate rows.
 
 ## Where reports land
 

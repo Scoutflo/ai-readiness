@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.95
+
+Docs: a real customer hit "plugin shows installed but no `/scoutflo:` skills appear" (an org-managed-settings vs personal-settings interaction, not a plugin defect — the plugin's structure and manifests are correct). Added the missing self-serve guidance.
+
+- **New Troubleshooting section in [docs/install.md](docs/install.md)** — "plugin shows installed but no skills appear," ordered most-common-first: run `/reload-plugins` + restart (the frequent fresh-install fix, previously undocumented); check `claude --version` (~v2.1.140+ needed for skill discovery); check `/plugin` Errors tab; the org/managed-settings case (managed settings override personal, so `strictKnownMarketplaces` or an `enabledPlugins` policy can leave a plugin "installed" while its skills never load — an Owner allowlists the marketplace); clear a stale plugin cache; and a debug-log capture to send to support.
+- **New FAQ entry** pointing at it, with the org-vs-personal case called out for Teams/Enterprise users.
+- Softened a falsifiable claim in `skills/start` ("Installed skills always appear in this table") to describe that internal harness skills are called automatically rather than typed, so the table only promises the user-invokable commands it actually lists.
+
+Docs only — no skill logic, gate, schema, or scoring change.
+
 ## 0.1.94
 
 Repo-wide documentation quality pass — a parallel audit of all 40+ docs against current (v0.1.93) reality, fixing stale facts, dead references, duplication, and governance violations, and sharpening how the docs communicate what the plugin delivers.
