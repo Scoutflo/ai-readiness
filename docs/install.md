@@ -6,7 +6,7 @@ Three paths: install it yourself, roll it out to a team through a shared reposit
 
 **Two ways to avoid the terminal for the install itself.** (1) The **Team / Enterprise** paths below add the marketplace and enable the plugin through a `settings.json` file — no `/plugin` command anywhere. (2) The **Claude desktop app** has a built-in plugin browser (in the app's UI, not the chat box: the **+** next to the prompt → **Plugins**) that can install and manage plugins — but only from a marketplace that has *already been added*. The desktop app cannot add a brand-new marketplace on its own, so the very first step (`/plugin marketplace add Scoutflo/ai-readiness`, or the `settings.json` entry) still comes from the terminal or a settings file. After that, browsing and installing from the app's UI works.
 
-**Version note.** The `/plugin` commands need a reasonably recent Claude Code (roughly **v2.1.140 or newer**). Check with `claude --version` and update (`npm install -g @anthropic-ai/claude-code`) if it's older, or the commands may not exist yet.
+**Minimum: Claude Code v2.1.140.** This is the floor for the whole plugin — the `/plugin` install commands and the current plugin/marketplace manifest schema both require it, and older clients (anything on the 2.0.x line or earlier) reject the manifest wholesale before any skill loads. Check with `claude --version`; if it is older, update with `npm install -g @anthropic-ai/claude-code` and restart. (This is the single stated minimum; README and the FAQ point back to this line.)
 
 ## Individual
 
@@ -105,7 +105,7 @@ If `/plugin` lists the plugin as installed but typing `/scoutflo:` shows nothing
    ```
    Then fully restart Claude Code (quit and reopen, not just a new chat).
 
-2. **Check your Claude Code version.** Plugin skill discovery needs a reasonably recent build (~**v2.1.140+**); older versions install a plugin but never load its skills.
+2. **Check your Claude Code version.** The plugin's minimum is **Claude Code v2.1.140**; older versions install a plugin but never load its skills (or reject the manifest outright). `claude --version`, then `npm install -g @anthropic-ai/claude-code` and restart if older. A client that is *too* old fails even earlier — at `claude plugin marketplace add` / `plugin install`, with a cryptic schema error (`plugins.N.source: Invalid input`, `Unrecognized key(s) in object`) *before any skill loads* (this hits Anthropic's own marketplace too, so it is a client-version problem, not a Scoutflo one). There is no in-session check for that case — the manifest can't fire a warning on a client that won't parse it — so the fix is always: upgrade Claude Code and retry the add/install. `/scoutflo:doctor` also prints the detected client version and warns if it's below the minimum, for clients new enough to load it.
    ```bash
    claude --version         # if older: npm install -g @anthropic-ai/claude-code, then restart
    ```

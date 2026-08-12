@@ -118,7 +118,7 @@ claude plugin marketplace add Scoutflo/ai-readiness
 claude plugin install scoutflo@scoutflo
 ```
 
-`/plugin marketplace add` and `/plugin install` only work as commands inside the standalone `claude` terminal CLI. They are **not** available as slash commands inside Claude.app's chat window — typing `/plugin ...` there will fail with "isn't available in this environment," which just means you're in the wrong surface for this one step, not that anything is broken. (The `/plugin` commands need a reasonably recent Claude Code — roughly v2.1.140 or newer; run `claude --version` and update if it's older.)
+`/plugin marketplace add` and `/plugin install` only work as commands inside the standalone `claude` terminal CLI. They are **not** available as slash commands inside Claude.app's chat window — typing `/plugin ...` there will fail with "isn't available in this environment," which just means you're in the wrong surface for this one step, not that anything is broken. (The plugin's minimum is Claude Code v2.1.140; run `claude --version` and update if it's older — see [docs/install.md](docs/install.md).)
 
 **Prefer not to touch a terminal at all?** Two options skip it: the **Team / Enterprise** paths in [docs/install.md](docs/install.md) add the marketplace and enable the plugin through a `settings.json` file (no `/plugin` command anywhere), and once the marketplace has been added by *any* of these paths, the Claude desktop app's built-in **plugin browser** (in the app's UI, not the chat box) can install and manage plugins from it. The one thing the desktop app can't do on its own is add a brand-new marketplace — that first step needs either the terminal command above or the `settings.json` entry.
 
@@ -230,7 +230,7 @@ Every `report.md` is validated against a fixed output-conformance standard befor
 ## Requirements
 
 - The `claude` terminal CLI (`npm install -g @anthropic-ai/claude-code`) — the simplest way to do the one-time install, and required if you go the individual-terminal route. (You can avoid the terminal entirely via the Team/Enterprise `settings.json` path, or the desktop app's plugin browser once the marketplace has been added — see [docs/install.md](docs/install.md).)
-- Claude Code (latest), with an active subscription
+- Claude Code v2.1.140 or newer (see [docs/install.md](docs/install.md)), with an active subscription
 - `bash`, `curl`, `jq` on your `PATH`
 - **On Windows: install [Git for Windows](https://git-scm.com/downloads/win)** (select "Add to PATH" during setup) so Claude Code has Git Bash. Every skill runs POSIX `bash`; Claude Code auto-detects Git Bash and, if it is absent, falls back to PowerShell, which cannot run these commands. macOS and Linux already have a POSIX shell. See [docs/install.md](docs/install.md#windows) for the details and how to point Claude Code at a non-standard Git Bash path.
 - The CLI for whatever you're auditing (`kubectl`/`istioctl` for Kubernetes, `doctl` for DigitalOcean, `gcloud` for GCP, `aws` for AWS) — `/scoutflo:doctor` tells you if anything's missing

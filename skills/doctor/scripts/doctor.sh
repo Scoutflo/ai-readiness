@@ -98,6 +98,33 @@ else
   note "doctor: Scoutflo AI Readiness toolkit (version manifest not found; running from a partial install?)"
 fi
 
+# --- Claude Code client version (warn-only, best-effort) ----------------------
+# The plugin's documented minimum. Keep this token in lockstep with README.md,
+# docs/install.md, and docs/faq.md (ci/min-version-consistency-check.sh enforces it).
+# This is warn-only: if doctor is running at all, the client already loaded the
+# plugin, so it is almost certainly fine — the real protection for a too-old
+# client is the marketplace-add/install error + the docs, not this check (a
+# client too old to load the plugin never reaches this line). We still surface it
+# so a borderline client gets an explicit heads-up instead of subtle breakage.
+MIN_CLAUDE_VERSION="2.1.140"
+CLIENT_VER=""
+if command -v claude >/dev/null 2>&1; then
+  CLIENT_VER="$(claude --version 2>/dev/null | sed -n 's/^\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\).*/\1/p' | head -1)"
+elif [ -n "${CLAUDE_CODE_EXECPATH:-}" ] && [ -x "${CLAUDE_CODE_EXECPATH}" ]; then
+  CLIENT_VER="$("${CLAUDE_CODE_EXECPATH}" --version 2>/dev/null | sed -n 's/^\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\).*/\1/p' | head -1)"
+fi
+if [ -z "$CLIENT_VER" ]; then
+  note "doctor: Claude Code client version unknown (\`claude\` not on PATH in this shell); the plugin needs v${MIN_CLAUDE_VERSION}+"
+else
+  # Compare CLIENT_VER >= MIN_CLAUDE_VERSION using sort -V (POSIX-ish; coreutils/BSD both have it).
+  LOWER="$(printf '%s\n%s\n' "$MIN_CLAUDE_VERSION" "$CLIENT_VER" | sort -V | head -1)"
+  if [ "$LOWER" = "$MIN_CLAUDE_VERSION" ] || [ "$CLIENT_VER" = "$MIN_CLAUDE_VERSION" ]; then
+    note "doctor: Claude Code v${CLIENT_VER} (>= v${MIN_CLAUDE_VERSION} minimum)"
+  else
+    note "doctor: WARNING — Claude Code v${CLIENT_VER} is below the plugin minimum v${MIN_CLAUDE_VERSION}; some skills may not load. Update: npm install -g @anthropic-ai/claude-code, then restart."
+  fi
+fi
+
 # --- hard stop: config must exist --------------------------------------------
 
 if [ ! -f "$CONFIG" ]; then
