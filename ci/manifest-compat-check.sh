@@ -49,8 +49,36 @@ for k in $(jq -r 'keys[]' "$M"); do
   esac
 done
 
+# 3. marketplace.json is a manifest too — an old client rejects it the same way
+#    (the customer's screenshots showed mass "plugins.N.source: Invalid input" and
+#    "Unrecognized key(s): displayName" on marketplaces). Guard its keys symmetrically.
+MP="$DIR/.claude-plugin/marketplace.json"
+if [ -f "$MP" ]; then
+  jq -e . "$MP" >/dev/null 2>&1 || { echo "MANIFEST-COMPAT: $MP is not valid JSON"; FAIL=1; }
+  MP_TOP_BASELINE="name owner description plugins \$schema metadata"
+  MP_PLUGIN_BASELINE="name source description category keywords \$schema strict"
+  for k in $(jq -r 'keys[]' "$MP" 2>/dev/null); do
+    case " $MP_TOP_BASELINE " in
+      *" $k "*) : ;;
+      *) echo "MANIFEST-COMPAT: marketplace.json has non-baseline top-level key '$k' — confirm it is not version-gated and add it to MP_TOP_BASELINE if intended."; FAIL=1 ;;
+    esac
+  done
+  # every plugins[] entry
+  n="$(jq '.plugins | length' "$MP" 2>/dev/null || echo 0)"
+  i=0
+  while [ "$i" -lt "${n:-0}" ]; do
+    for k in $(jq -r ".plugins[$i] | keys[]" "$MP" 2>/dev/null); do
+      case " $MP_PLUGIN_BASELINE " in
+        *" $k "*) : ;;
+        *) echo "MANIFEST-COMPAT: marketplace.json plugins[$i] has non-baseline key '$k' — confirm it is not version-gated and add it to MP_PLUGIN_BASELINE if intended."; FAIL=1 ;;
+      esac
+    done
+    i=$((i + 1))
+  done
+fi
+
 if [ "$FAIL" -ne 0 ]; then
   echo "MANIFEST-COMPAT CHECK FAILED"
   exit 1
 fi
-echo "MANIFEST-COMPAT-OK (plugin.json uses only broadly-compatible manifest keys)"
+echo "MANIFEST-COMPAT-OK (plugin.json + marketplace.json use only broadly-compatible manifest keys)"

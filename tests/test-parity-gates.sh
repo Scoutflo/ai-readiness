@@ -12,6 +12,7 @@ RED="$ROOT/ci/redaction-parity-check.sh"
 BC="$ROOT/ci/business-context-parity-check.sh"
 ENVL="$ROOT/ci/env-load-parity-check.sh"
 MCOMPAT="$ROOT/ci/manifest-compat-check.sh"
+MINVER="$ROOT/ci/min-version-consistency-check.sh"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 fail() { echo "FAIL: $1" >&2; exit 1; }
@@ -97,6 +98,28 @@ echo "PASS"
 
 echo "Test 12: the REAL shipped plugin.json passes manifest-compat"
 sh "$MCOMPAT" "$ROOT" >/dev/null 2>&1 || { sh "$MCOMPAT" "$ROOT" 2>&1 | head; fail "shipped plugin.json fails manifest-compat"; }
+echo "PASS"
+
+echo "Test 13: min-version gate PASSES the real repo (one consistent floor, matches doctor.sh)"
+sh "$MINVER" "$ROOT" >/dev/null 2>&1 || { sh "$MINVER" "$ROOT" 2>&1 | head; fail "min-version gate rejects the shipped repo"; }
+echo "PASS"
+
+echo "Test 14: min-version gate REJECTS an inconsistent floor across docs"
+mk; mkdir -p "$WORK/t/skills/doctor/scripts" "$WORK/t/docs"
+printf 'MIN_CLAUDE_VERSION="2.1.140"\n' > "$WORK/t/skills/doctor/scripts/doctor.sh"
+printf 'need Claude Code v2.1.140\n' > "$WORK/t/README.md"
+printf 'need Claude Code v2.1.140\n' > "$WORK/t/docs/install.md"
+printf 'need Claude Code v2.1.999\n' > "$WORK/t/docs/faq.md"   # divergent floor
+sh "$MINVER" "$WORK/t" >/dev/null 2>&1 && fail "min-version gate accepted two different floor tokens"
+echo "PASS"
+
+echo "Test 15: min-version gate REJECTS a docs floor that disagrees with doctor.sh"
+mk; mkdir -p "$WORK/t/skills/doctor/scripts" "$WORK/t/docs"
+printf 'MIN_CLAUDE_VERSION="2.1.140"\n' > "$WORK/t/skills/doctor/scripts/doctor.sh"
+printf 'need Claude Code v2.1.150\n' > "$WORK/t/README.md"
+printf 'need Claude Code v2.1.150\n' > "$WORK/t/docs/install.md"
+printf 'need Claude Code v2.1.150\n' > "$WORK/t/docs/faq.md"   # consistent across docs but != code floor
+sh "$MINVER" "$WORK/t" >/dev/null 2>&1 && fail "min-version gate accepted a docs floor that differs from doctor.sh MIN_CLAUDE_VERSION"
 echo "PASS"
 
 echo

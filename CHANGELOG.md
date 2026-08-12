@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.1.98
+
+Version-compatibility hardening, prompted by the customer whose old client (Claude Code v2.0.55) couldn't load the plugin — it rejected the current manifest/marketplace schema wholesale (the same errors it threw on Anthropic's *own* marketplace). Upgrading to a current Claude Code fixed it. This makes that class of failure explicit and self-serve, across every manifest.
+
+- **One stated minimum: Claude Code v2.1.140.** Consolidated from three inconsistent phrasings ("roughly v2.1.140", "~v2.1.140+", "or newer") to a single canonical token across README, docs/install.md, and docs/faq.md. install.md is the source of truth; the others point to it.
+- **`/scoutflo:doctor` now reports the client version.** It detects the running Claude Code version (`claude --version`, with a `CLAUDE_CODE_EXECPATH` fallback) and prints a row: OK at/above v2.1.140, a **warn-only** note below it (never blocks, never a new exit code), or "unknown" when the binary isn't on the shell's PATH. Best-effort by design — if doctor runs at all, the client already loaded the plugin.
+- **`ci/manifest-compat-check.sh` now also guards `marketplace.json`** (top-level and per-plugin keys), not just plugin.json — the customer's actual errors were marketplace-level (`plugins.N.source: Invalid input`, `Unrecognized key(s): displayName`). A version-gated or typo'd key in either manifest is now caught before it ships and fails-closed for older clients.
+- **New CI gate `ci/min-version-consistency-check.sh`** (composed into structure-check, 3 self-tests): the stated minimum must be one token, identical across the three docs, and equal to `doctor.sh`'s `MIN_CLAUDE_VERSION`. A future floor bump must be made once, consistently, or CI fails.
+- **Honest limit documented:** a client too old to parse the manifest fails at `marketplace add` / `install` *before any skill (including doctor) loads*, so no in-session check can catch it — install.md now says so plainly and points such users at the upgrade command.
+
+Docs/CI/doctor only — no skill logic, scoring, schema, or gate-behavior change to the audits.
+
 ## 0.1.97
 
 Fixes a batch of real defects found by an adversarial whole-plugin sweep (each independently verified against the files, then rubric-reviewed for the two scored audits touched).
