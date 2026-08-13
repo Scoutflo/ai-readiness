@@ -52,6 +52,14 @@ wsum="$(jq '([.score.categories[].weight] + [.score.excluded[]?.weight // 0]) | 
 # 4. overall must equal the weight-normalized sum over INCLUDED categories,
 #    rounded down — excluding any category whose name is in score.excluded
 #    (the standard's renormalization rule). Tolerance 1 for rounding.
+# Guard the arithmetic: without this, a malformed score.overall (missing, string,
+# fractional) or an empty/non-array score.categories makes the reconciliation
+# below misbehave with a cryptic jq error instead of a clear schema failure.
+jq -e '
+  (.score.overall   | type == "number" and . == floor)
+  and (.score.categories | type == "array" and (length > 0))
+' "$F" >/dev/null \
+  || fail "score.overall must be an integer number and score.categories a non-empty array (got overall=$(jq -c '.score.overall' "$F" 2>/dev/null || echo missing), categories=$(jq -c '.score.categories | length' "$F" 2>/dev/null || echo missing))"
 overall="$(jq '.score.overall' "$F")"
 recomp="$(jq '
   (.score.excluded // [] | map(.name)) as $ex

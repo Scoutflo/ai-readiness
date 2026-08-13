@@ -56,7 +56,7 @@ CFG="${SCOUTFLO_CONFIG:-$HOME/.scoutflo/toolkit.yaml}"
 [ -f "$HOME/.scoutflo/env" ] && . "$HOME/.scoutflo/env" || true
 command -v curl >/dev/null || { echo "curl not installed"; exit 1; }
 command -v jq   >/dev/null || { echo "jq not installed"; exit 1; }
-command -v kubectl >/dev/null || { echo "kubectl not installed; cluster-side chain links will be blocked"; exit 1; }
+command -v kubectl >/dev/null || echo "WARN: kubectl missing; only the cluster-side chain links (Alertmanager-in-cluster, port-forward fallback) are blocked — the Prometheus/Alertmanager HTTP checks still run. ALR-010 reachability decides what is actually blocked."
 # For every configured *_env key: presence only, never the value.
 # PROM_TOKEN is optional for open endpoints; SENTRY_TOKEN only if sentry.* is configured.
 ```

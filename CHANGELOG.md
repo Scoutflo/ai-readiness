@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.1.99
+
+A catalog-drift gate plus a skeptical, adversarially-verified improvement sweep that found and fixed one HIGH and several MEDIUM/LOW defects. The headline fix removes a doctor bug that could show a **false green light on a broken credential** — the exact failure mode that bites a customer whose token expired or points at the wrong host.
+
+- **doctor no longer caches/skips credential checks (HIGH).** The v0.1.65 "persistence" layer wrote a hard-coded `pass` after the Grafana live check and then skipped that check for 7 days — so a *failed* Grafana check was cached as passed, and the next run within a week silently dropped its row and could report `PASS` (exit 0) on a still-broken credential. It was wired for Grafana only and had been dead-on-load for eight releases before being activated. Removed entirely (script call sites, the `skip_if_passed` helper, both `lib/` files, and the unit test): doctor is a liveness preflight, so it now **re-verifies every configured integration on every run** — a prior pass is never evidence of a current pass. Same reasoning as the v0.1.82 removal of `cost_analysis_should_skip`. Regression-guarded by a rewritten end-to-end test and a new pressure scenario (`stale-cred-rechecked-every-run.md`).
+- **doctor sources `~/.scoutflo/env` without crashing on a bad line.** The `. ~/.scoutflo/env || note …` graceful-degradation guard was inert under `set -e` (a failing line inside the user-edited file aborted the whole preflight before the `|| note` could run). Now wrapped in `set +eu … set -eu` so a malformed env file degrades to a warning.
+- **`audit-alert-routing` no longer hard-exits when `kubectl` is absent.** It matched neither its own message ("cluster-side chain links will be blocked") nor sibling `audit-lgtm` (which WARNs and continues). A user auditing alert routing purely over the Prometheus/Alertmanager HTTP API no longer has the whole audit killed by a missing `kubectl`; only the cluster-side links are blocked.
+- **`report-standard/check-cost.sh`: annual == monthly×12 now compares to the cent.** Exact string equality falsely rejected correct reports whose fractional-dollar sums hit IEEE-754 noise (e.g. `19.99 * 12 → 239.88000000000002`).
+- **doctor/connect stop sending non-Kubernetes users to `map-topology`.** `map-topology` hard-requires `kubectl` + a `kubernetes.context`; the exit-0 verdict and connect's next-steps now gate that recommendation on a configured `kubernetes` block instead of pointing everyone at a skill that would immediately exit for them.
+- **`report-standard/check-findings.sh` guards its score arithmetic.** A malformed `score.overall` (missing/string/fractional) or empty `score.categories` now fails with a clear schema message instead of a cryptic jq error mid-reconciliation.
+- **Fixed stale cross-references.** `start` and `doctor` pointed users to "connect Step 4c" to learn how to export `SCOUTFLO_AUDIT_DIR`, but that section is about the secret store; both now give the instruction inline.
+
+New CI gate:
+
+- **`ci/catalog-consistency-check.sh`** (composed into `structure-check.sh`; 5 self-tests) — every public, user-runnable skill (all `audit-*`, all `setup-*`, and the user-facing harness skills) must appear in **both** the README catalog and the `/scoutflo:start` catalog, and every catalog reference must resolve to a real skill (no dead commands). The five internal helper skills are an explicit, documented allowlist. This ends the recurring catalog drift hand-fixed in v0.1.89/93/94/97 — a new skill can't ship uncataloged.
+
 ## 0.1.98
 
 Version-compatibility hardening, prompted by the customer whose old client (Claude Code v2.0.55) couldn't load the plugin — it rejected the current manifest/marketplace schema wholesale (the same errors it threw on Anthropic's *own* marketplace). Upgrading to a current Claude Code fixed it. This makes that class of failure explicit and self-serve, across every manifest.

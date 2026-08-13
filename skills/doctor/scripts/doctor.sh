@@ -48,9 +48,6 @@ SLACK_TEST=0
 MAX_TIME="${CURL_MAX_TIME:-10}"  # seconds; example, tune to your network latency
 CONNECT_TIMEOUT="${CURL_CONNECT_TIMEOUT:-5}"  # seconds; example, tune to your network latency
 
-# --- doctor persistence (v0.1.65) -----------------------------------------------
-DOCTOR_LIB_DIR="${SCOUTFLO_SKILLS_DIR:-$(dirname "$0")/../lib}"
-
 usage() {
   echo "usage: doctor.sh [--config FILE] [--out DIR] [--slack-test]"
 }
@@ -82,8 +79,15 @@ note() { printf '%s\n' "$*" >&2; }
 # sources it makes this a no-op.
 SCOUTFLO_ENV="${HOME}/.scoutflo/env"
 if [ -f "$SCOUTFLO_ENV" ]; then
+  # Suspend errexit/nounset while sourcing: this file is user-edited, so a
+  # single failing or unbound line inside it must degrade to a warning, not
+  # abort the whole preflight. (Under `set -e`, a failure inside a sourced file
+  # exits the shell before the `|| note` can run, so the guard was inert.)
+  # A subshell can't be used — the exported *_env vars must land in this shell.
+  set +eu
   # shellcheck disable=SC1090
   . "$SCOUTFLO_ENV" || note "doctor: warning: could not source ${SCOUTFLO_ENV} (continuing with current environment)"
+  set -eu
 fi
 
 # --- version stamp ------------------------------------------------------------
@@ -143,17 +147,6 @@ mkdir -p "$OUT_DIR"
 MATRIX="${OUT_DIR}/matrix.tsv"
 if [ ! -f "$MATRIX" ]; then
   printf 'integration\tcheck\tconfigured\tenv_var\tresult\thttp_code\thint\n' > "$MATRIX"
-fi
-
-# Initialize doctor persistence layer. doctor-integration.sh only forwards to
-# functions defined in doctor-persistence.sh, so both must be sourced, in order.
-if [ -f "${DOCTOR_LIB_DIR}/doctor-persistence.sh" ] && [ -f "${DOCTOR_LIB_DIR}/doctor-integration.sh" ]; then
-  # shellcheck disable=SC1090
-  . "${DOCTOR_LIB_DIR}/doctor-persistence.sh"
-  # shellcheck disable=SC1090
-  . "${DOCTOR_LIB_DIR}/doctor-integration.sh"
-  doctor_integration_init
-  note "doctor: persistence initialized (v0.1.65)"
 fi
 
 # --- config parsing: yq fast path, sed fallback -------------------------------
@@ -280,8 +273,6 @@ live_check() {
 
 # token_gate <integration> <check...>: when TOKEN_STATE=missing, records the
 # env-missing row plus one blocked row per named check and returns 1.
-# Also checks doctor persistence skip logic: if a check passed previously and skip_until
-# is in the future, skip the live check (doctor-state.json).
 token_gate() {
   tg_int="$1"; shift
   if [ "$TOKEN_STATE" = "missing" ]; then
@@ -295,25 +286,6 @@ token_gate() {
     row "$tg_int" env yes "$TOKEN_VAR" pass - -
   fi
   return 0
-}
-
-# skip_if_passed <check-id> <check-name>: check doctor persistence for skip logic.
-# Returns 0 (skip) if the check passed previously and skip_until is in the future.
-# Returns 1 (do not skip) otherwise. If doctor state unavailable, returns 1 (run check).
-skip_if_passed() {
-  skip_check_id="$1"
-  skip_check_name="$2"
-
-  if ! command -v doctor_integration_should_skip >/dev/null 2>&1; then
-    return 1  # doctor state unavailable, do not skip
-  fi
-
-  if doctor_integration_should_skip "$skip_check_id"; then
-    note "doctor: skipping ${skip_check_name} (passed previously, will recheck in 7 days)"
-    return 0  # skip this check
-  fi
-
-  return 1  # do not skip, run the check
 }
 
 # --- required binaries ----------------------------------------------------------
@@ -341,14 +313,8 @@ else
   GRAFANA_URL="${GRAFANA_URL%/}"
   resolve_token grafana
   if token_gate grafana health identity; then
-    if ! skip_if_passed "grafana-health" "Grafana health check"; then
-      live_check grafana health   "${GRAFANA_URL}/api/health" "${TOKEN_VAR:-none}" "$TOKEN"
-      doctor_integration_save_result "grafana-health" "Grafana health check" "pass"
-    fi
-    if ! skip_if_passed "grafana-identity" "Grafana identity check"; then
-      live_check grafana identity "${GRAFANA_URL}/api/org"    "${TOKEN_VAR:-none}" "$TOKEN"
-      doctor_integration_save_result "grafana-identity" "Grafana identity check" "pass"
-    fi
+    live_check grafana health   "${GRAFANA_URL}/api/health" "${TOKEN_VAR:-none}" "$TOKEN"
+    live_check grafana identity "${GRAFANA_URL}/api/org"    "${TOKEN_VAR:-none}" "$TOKEN"
   fi
 fi
 
