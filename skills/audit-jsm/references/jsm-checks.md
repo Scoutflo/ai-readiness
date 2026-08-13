@@ -36,6 +36,7 @@ One permanent ID per check. IDs never change or get reused; retired checks keep 
 | JSM-021 | Coverage/health | Critical services from topology each covered by a team and a routing path | high |
 | JSM-022 | Coverage/health | Teams audited named; teams not audited named as uncovered, not silently dropped | medium |
 | JSM-023 | Coverage/health | Stale or disabled integrations identified as drift | low |
+| JSM-024 | Coverage/health | Teams are visible in the account (zero teams visible to this key is `blocked`, not a plain fail — a likely token role/visibility gap: the paging config lives in teams the key cannot see; widen the token to a read/observer JSM Operations role on the teams) | high |
 | JSM-030 | Actionability | Open alerts unacknowledged past the aging threshold | high |
 | JSM-031 | Actionability | MTTA (createdAt to ackTime) against target where humans acked | medium |
 | JSM-032 | Actionability | Share of alerts closed with no acknowledgement (auto-close-heavy = noise proxy) | medium |
@@ -67,10 +68,19 @@ RUN_DATE="$(date -u +%Y-%m-%d)"
 RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/jsm/${RUN_DATE}/raw"
 mkdir -p "$RAW_DIR"
 
-# Teams to audit: jsm.teams from config, else discover. Written to a file the per-team loop
-# reads, so this stays stateless. Replace the discovery line with the configured ids.
+# Discover every team this key can see — the DISCOVERED set and the coverage denominator —
+# then resolve the AUDITED set. Both are materialized as id files that the empty/hidden-teams
+# guardrail reads (mirrors audit-elk's spaces-discovered.txt / spaces.txt), so the run can never
+# score a confident 0/100 when the key simply cannot see the teams.
 curl -fsS --max-time 30 -u "$AUTH_USER" "${JSM_BASE}/teams?size=100" \
-  | jq -r '.values[]? | "\(.id)\t\(.name)"' > "${RAW_DIR}/teams.tsv"
+  | jq -r '.values[]? | "\(.id)\t\(.name)"' > "${RAW_DIR}/teams-all.tsv"
+cut -f1 "${RAW_DIR}/teams-all.tsv" | sort -u > "${RAW_DIR}/teams-discovered.txt"
+# AUDITED = jsm.teams when set (validate each id against teams-discovered.txt; a configured team
+# the key cannot see is a scope gap, reported `skipped`, never silently dropped), else all
+# discovered. With no jsm.teams configured, audit all discovered:
+cp "${RAW_DIR}/teams-all.tsv" "${RAW_DIR}/teams.tsv"
+cut -f1 "${RAW_DIR}/teams.tsv" | sort -u > "${RAW_DIR}/teams-audited.txt"
+echo "teams discovered: $(tr '\n' ' ' < "${RAW_DIR}/teams-discovered.txt")"
 echo "teams to audit:"; cat "${RAW_DIR}/teams.tsv"
 
 # Account-wide captures (not team-scoped).

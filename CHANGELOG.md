@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.100
+
+Ports audit-elk's space-visibility guardrail (ELK-033) to the two other scope-partitioned audits, `audit-jsm` and `audit-zenduty`. This closes the same bug class that caused the customer's ELK "confident wrong `0/100`": a token that can see only a subset of the partitioned estate — Kibana spaces there, JSM/Zenduty **teams** here — makes a fully-configured account look empty and scores it a confident zero.
+
+- **`audit-jsm` + `audit-zenduty` now trip an empty/hidden-teams guardrail** after team discovery. **Case A** (the audited set is empty but other teams were discovered) re-scopes — an interactive pick-list, or "audit all discovered" on a scheduled run — instead of reporting an empty estate. **Case B** (zero teams visible to the key anywhere) treats it as a token role/visibility gap, not an empty estate: it blocks the three team-scoped categories (JSM: Alert delivery, Alert noise, Coverage/health; Zenduty: Escalation, Alert noise, Coverage/hygiene), keeps the team-independent **Actionability** category (the account-level alert/incident stream) included so at least one category remains scorable, renormalizes, and emits a new visibility finding — **never a confident `0/100`, a vacuous-high, or an end-to-end claim.** If the alert/incident stream is also unreadable, it emits no confident score at all and reports the visibility gap as the outcome.
+- **New findings `JSM-024` and `ZD-024`** (Coverage, high) name the gap and the fix (widen the token's team visibility). The inventory step now materializes `teams-discovered.txt` / `teams-audited.txt` (mirroring audit-elk's `spaces-discovered.txt` / `spaces.txt`); a configured `jsm.teams` / `zenduty.teams` entry the key cannot see is reported `skipped`, never silently dropped.
+- Pressure scenarios added for both (`zero-teams-visible-not-scored.md`), a Common Failure Modes row each, and the Case-B scorecard proven to reconcile against `check-findings.sh`. Both skills re-reviewed against the maintainer rubric: **GATE PASS**.
+
+Docs/scoring-behavior change to two audits — no schema change, no new CI gate.
+
 ## 0.1.99
 
 A catalog-drift gate plus a skeptical, adversarially-verified improvement sweep that found and fixed one HIGH and several MEDIUM/LOW defects. The headline fix removes a doctor bug that could show a **false green light on a broken credential** — the exact failure mode that bites a customer whose token expired or points at the wrong host.
