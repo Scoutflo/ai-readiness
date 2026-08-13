@@ -35,6 +35,7 @@ One permanent ID per check. IDs never change or get reused; retired checks keep 
 | ZD-021 | Coverage/hygiene | Critical services from topology each covered by a team, service, and escalation path | high |
 | ZD-022 | Coverage/hygiene | Teams audited named; teams not audited named as uncovered, not silently dropped | medium |
 | ZD-023 | Coverage/hygiene | No integration on the deprecated "API-Integration" ingestion type (stopped 2025-05-15) | medium |
+| ZD-024 | Coverage/hygiene | Teams are visible in the account (zero teams visible to this key is `blocked`, not a plain fail — a likely token permission/visibility gap: the paging config lives in teams the key cannot see; widen the token to a Bot Token with view-only team access) | high |
 | ZD-030 | Actionability | Unacknowledged incidents older than the aging threshold | high |
 | ZD-031 | Actionability | MTTA against target from analytics `mtta_seconds` where humans acked | medium |
 | ZD-032 | Actionability | MTTR against target from `mttr_seconds`, with the acked/resolved share | medium |
@@ -62,9 +63,19 @@ AUTH="Authorization: Token ${ZENDUTY_TOKEN}"
 # Normalize a list response (bare array or {results:[...]}) to an array.
 norm() { jq 'if type=="array" then . else (.results // []) end'; }
 
-# Teams to audit (jsm.teams-style: zenduty.teams from config, else discover). unique_id is the scope key.
+# Discover every team this key can see — the DISCOVERED set and the coverage denominator —
+# then resolve the AUDITED set. Both are materialized as unique_id files that the empty/hidden-
+# teams guardrail reads (mirrors audit-elk's spaces-discovered.txt / spaces.txt), so the run can
+# never score a confident 0/100 when the key simply cannot see the teams. unique_id is the scope key.
 curl -fsS --max-time 30 -H "$AUTH" "${ZD_API}/account/teams/" | norm \
-  | jq -r '.[] | "\(.unique_id)\t\(.name)"' > "${RAW_DIR}/teams.tsv"
+  | jq -r '.[] | "\(.unique_id)\t\(.name)"' > "${RAW_DIR}/teams-all.tsv"
+cut -f1 "${RAW_DIR}/teams-all.tsv" | sort -u > "${RAW_DIR}/teams-discovered.txt"
+# AUDITED = zenduty.teams when set (validate each unique_id against teams-discovered.txt; a
+# configured team the key cannot see is a scope gap, reported `skipped`, never silently dropped),
+# else all discovered. With no zenduty.teams configured, audit all discovered:
+cp "${RAW_DIR}/teams-all.tsv" "${RAW_DIR}/teams.tsv"
+cut -f1 "${RAW_DIR}/teams.tsv" | sort -u > "${RAW_DIR}/teams-audited.txt"
+echo "teams discovered: $(tr '\n' ' ' < "${RAW_DIR}/teams-discovered.txt")"
 echo "teams to audit:"; cat "${RAW_DIR}/teams.tsv"
 
 # Account-wide: global alert routers and their rulesets (v2).

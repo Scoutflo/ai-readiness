@@ -178,6 +178,38 @@ fi
 
 The large-path phases then run against the scoped set; the report names anything scoped out.
 
+### Empty / hidden-teams guardrail
+
+The scope checkpoint above narrows a *large* estate. This guardrail catches the opposite and more dangerous case — an account that looks **empty** because the key cannot see the teams that hold the paging config. It is the JSM analog of audit-elk's space-visibility trip-wire: auditing a token that sees no teams and reporting a confident `0/100` is the same wrong answer as auditing only the `default` Kibana space. Phase 2 materializes `teams-discovered.txt` (every team this key can see) and `teams-audited.txt` (the audited set); after they exist:
+
+```bash
+set -eu
+RUN_DATE="$(date -u +%Y-%m-%d)"
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/jsm/${RUN_DATE}/raw"
+# Teams discovered by the key vs audited this run. Any discovered team we did NOT audit?
+UNAUDITED="$(comm -23 "${RAW_DIR}/teams-discovered.txt" "${RAW_DIR}/teams-audited.txt" 2>/dev/null | tr '\n' ' ')"
+UNAUDITED_TRIM="$(printf '%s' "$UNAUDITED" | tr -d '[:space:]')"
+ZERO_TEAMS=0; [ -s "${RAW_DIR}/teams-audited.txt" ] || ZERO_TEAMS=1
+if [ "$ZERO_TEAMS" -eq 1 ]; then
+  if [ -n "$UNAUDITED_TRIM" ]; then
+    # Case A: nothing in the audited set, but other teams exist — the paging config is likely there.
+    echo "[guard] 0 teams in the audited set, but these teams were discovered and not audited: ${UNAUDITED}"
+    echo "[guard] pausing to re-scope rather than reporting an empty estate"
+  else
+    # Case B: zero teams visible to this key anywhere. Either the account truly has none, or the
+    # token's JSM Operations role cannot view any team. Do NOT score a confident 0/100 or a
+    # vacuous-high across the team-scoped categories — this is the JSM-024 visibility trip-wire.
+    echo "[guard] 0 teams visible across the account — possible token role/visibility gap (JSM-024)"
+    echo "[guard] widen the token to a read/observer JSM Operations role on the teams (see /scoutflo:connect) if teams exist"
+  fi
+fi
+```
+
+Behavior this enforces (Phase 8 honors it):
+
+- **Case A** (zero in the audited set, other teams discovered): in an interactive run, present the discovered teams (id, name) as a numbered pick-list, validate the choice against `teams-discovered.txt`, write it into the audit scope (`jsm.teams` / `checkpoint_save_scope`), and re-size against the chosen team(s). In a non-interactive or scheduled run (`audit-all`, `schedule-audits`), take the safe default — audit **all discovered** teams — so the picker never hangs.
+- **Case B** (zero teams visible anywhere): exclude the three team-scoped categories — **Alert delivery and escalation, Alert noise, Coverage and health** — as `blocked`, and renormalize per [severity-and-scoring.md](../../report-standard/severity-and-scoring.md); emit finding **JSM-024** with the visibility-gap reason; and **never** write a confident `0/100`, a vacuously-high score, or an end-to-end claim. Keep **Actionability** *included*: JSM-030 to JSM-032 read the account-level alert stream (open/aging alerts, MTTA, close-without-ack), which does not depend on any team being visible, so the category is still assessable — and keeping it in means at least one scored category remains (excluding all four leaves nothing to score and `check-findings.sh` rejects an all-excluded scorecard). If team discovery itself failed (a 401/403 on `GET /v1/teams`), say discovery was unavailable as the reason. If the alert stream is *also* empty or unreadable so Actionability cannot be assessed either, emit no confident score at all — report the visibility gap (JSM-024) as the outcome, exactly as audit-elk does when space discovery is unavailable.
+
 ## Phase 1: Service context and teams
 
 If `./scoutflo-audits/topology.md` exists, load it; its service list is the critical-service list and its names are canonical in findings, the coverage matrix, and `affected` arrays. Resolve the teams to audit from `jsm.teams` (discover from `GET /v1/teams` when omitted) and state them in the report. If topology.md does not exist, infer critical services from team and integration names, note the inference, and suggest `/scoutflo:map-topology`.
@@ -331,6 +363,7 @@ All thresholds and windows named in the checks are example values; tune them to 
 | Actionability figure fabricated or implied as vendor analytics | There is no analytics API; compute MTTA and acked/auto-closed share client-side from timestamps and state the 20k-alert window |
 | Alert sweep trusted beyond the retrieval cap | `offset + size` must stay below 20000; state the bound wherever a count depends on it |
 | Only one team audited, others silently missed | Policies and heartbeats are team-scoped; iterate `jsm.teams` and name every team audited and skipped in the denominators |
+| Zero teams visible, scored a confident 0/100 | The token's role sees no team, so the team-scoped categories look empty — this is a visibility gap, not an empty estate. Trip the empty/hidden-teams guardrail (JSM-024): block Delivery/Noise/Coverage-health, keep Actionability, never a confident 0/100 |
 | Notification policy count scored as noise control | Judge the action objects (dedup, suppress, auto-close), not the number of policies |
 | Blanket `suppress: true` policy read as noise reduction | A broad `suppress` filter masks real alerts; review the filter before crediting it |
 | Empty-schedule routing join filed as healthy | A routing rule that notifies a schedule with no rotation pages nobody; resolve the schedule before crediting delivery |
