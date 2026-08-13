@@ -13,6 +13,7 @@ BC="$ROOT/ci/business-context-parity-check.sh"
 ENVL="$ROOT/ci/env-load-parity-check.sh"
 MCOMPAT="$ROOT/ci/manifest-compat-check.sh"
 MINVER="$ROOT/ci/min-version-consistency-check.sh"
+CATALOG="$ROOT/ci/catalog-consistency-check.sh"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 fail() { echo "FAIL: $1" >&2; exit 1; }
@@ -120,6 +121,45 @@ printf 'need Claude Code v2.1.150\n' > "$WORK/t/README.md"
 printf 'need Claude Code v2.1.150\n' > "$WORK/t/docs/install.md"
 printf 'need Claude Code v2.1.150\n' > "$WORK/t/docs/faq.md"   # consistent across docs but != code floor
 sh "$MINVER" "$WORK/t" >/dev/null 2>&1 && fail "min-version gate accepted a docs floor that differs from doctor.sh MIN_CLAUDE_VERSION"
+echo "PASS"
+
+echo "Test 16: catalog-consistency gate PASSES the real repo (every public skill is in README + start)"
+sh "$CATALOG" "$ROOT" >/dev/null 2>&1 || { sh "$CATALOG" "$ROOT" 2>&1 | head; fail "catalog gate rejects the shipped repo"; }
+echo "PASS"
+
+# Shared fixture builder for the catalog tests: a mini repo with two public
+# skills (an audit + a harness) and one internal helper, plus matching catalogs.
+mk_catalog_repo() {
+  mk; mkdir -p "$WORK/t/skills/audit-foo" "$WORK/t/skills/rca" "$WORK/t/skills/checkpoint" "$WORK/t/skills/start"
+  for s in audit-foo rca checkpoint start; do
+    printf -- '---\nname: %s\ndescription: x\n---\n# %s\n' "$s" "$s" > "$WORK/t/skills/$s/SKILL.md"
+  done
+  # start catalog + README both name the two public skills; checkpoint (internal) omitted
+  printf '# start\nRun scoutflo:audit-foo, scoutflo:rca, scoutflo:start.\n' > "$WORK/t/skills/start/SKILL.md"
+  printf '# README\nCatalog: scoutflo:audit-foo, scoutflo:rca, scoutflo:start.\n' > "$WORK/t/README.md"
+}
+
+echo "Test 17: catalog gate PASSES a consistent mini repo (internal helper correctly omitted)"
+mk_catalog_repo
+sh "$CATALOG" "$WORK/t" >/dev/null 2>&1 || { sh "$CATALOG" "$WORK/t" 2>&1 | head; fail "catalog gate rejected a consistent repo"; }
+echo "PASS"
+
+echo "Test 18: catalog gate REJECTS a public skill missing from README"
+mk_catalog_repo
+printf '# README\nCatalog: scoutflo:audit-foo, scoutflo:start.\n' > "$WORK/t/README.md"  # rca dropped
+sh "$CATALOG" "$WORK/t" >/dev/null 2>&1 && fail "catalog gate accepted a public skill (rca) missing from README"
+echo "PASS"
+
+echo "Test 19: catalog gate REJECTS a public skill missing from the start catalog"
+mk_catalog_repo
+printf '# start\nRun scoutflo:audit-foo, scoutflo:start.\n' > "$WORK/t/skills/start/SKILL.md"  # rca dropped
+sh "$CATALOG" "$WORK/t" >/dev/null 2>&1 && fail "catalog gate accepted a public skill (rca) missing from start"
+echo "PASS"
+
+echo "Test 20: catalog gate REJECTS a dangling catalog entry (command with no skill)"
+mk_catalog_repo
+printf '# README\nCatalog: scoutflo:audit-foo, scoutflo:rca, scoutflo:start, scoutflo:ghost.\n' > "$WORK/t/README.md"
+sh "$CATALOG" "$WORK/t" >/dev/null 2>&1 && fail "catalog gate accepted a dangling entry (scoutflo:ghost)"
 echo "PASS"
 
 echo

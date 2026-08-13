@@ -66,7 +66,7 @@ if [ -n "$RD" ]; then
 elif [ "$EFFSRC" = "default (launch directory)" ]; then
   echo "  This is the default and is fine to start. Optional: if you want one durable"
   echo "  history that follows you across folders, export SCOUTFLO_AUDIT_DIR to a fixed"
-  echo "  absolute path once (see connect Step 4c). Otherwise, just run from the same"
+  echo "  absolute path once (add it to your shell profile, e.g. ~/.zshrc). Otherwise, just run from the same"
   echo "  folder each time and reports accumulate here with full run-to-run history."
 fi
 
@@ -154,7 +154,7 @@ slack            webhook-post  yes         SCOUTFLO_SLACK_WEBHOOK  skipped  -  t
 
 Close with a verdict:
 
-- Exit 0: "Ready. Run /scoutflo:map-topology, then /scoutflo:audit-all."
+- Exit 0: "Ready." Then, only if a `kubernetes` block is configured: "Run /scoutflo:map-topology (it needs kubectl + a kubernetes.context), then /scoutflo:audit-all." Otherwise send them straight to audit: "Run /scoutflo:audit-all, or a single audit like /scoutflo:audit-grafana." Never point a non-Kubernetes user at map-topology — it is Kubernetes-only and will exit on a missing kubectl/context.
 - Exit 1: no `~/.scoutflo/toolkit.yaml` yet — run `/scoutflo:connect` first, then rerun doctor.
 - Exit 2 or 3: name the affected skills, fix, then rerun doctor. Exit 2 wording names the env var ("audit-sentry will not run until SENTRY_TOKEN is set"); exit 3 wording quotes the live evidence ("grafana failed its live check: http_code 000, curl exit 7 - host unreachable"), never the env var. Never advise starting an audit over a failed row, and never downgrade a doctor failure into a finding.
 

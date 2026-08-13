@@ -38,10 +38,15 @@ actual_m="$(jq -r '[.findings[].estimated_monthly_savings_usd | select(. != null
 if [ "$declared_m" != "$actual_m" ]; then
   fail "summary.monthly_savings_identified_usd=$declared_m != sum of native per-finding figures=$actual_m (the total must sum ONLY provider-native figures, nothing recomputed or invented)"
 fi
-# 2b. annual = monthly * 12.
-declared_a="$(jq -r '.summary.annual_savings_identified_usd // 0' "$F")"
-expect_a="$(jq -rn --argjson m "$actual_m" '$m * 12')"
-[ "$declared_a" = "$expect_a" ] || fail "summary.annual_savings_identified_usd=$declared_a != monthly*12=$expect_a"
+# 2b. annual = monthly * 12, compared to the cent. Exact string equality would
+#     falsely reject correct reports whose fractional-dollar sums land on IEEE-754
+#     representation noise (e.g. 19.99 * 12 -> 239.88000000000002 != "239.88").
+jq -e '
+  ([.findings[].estimated_monthly_savings_usd | select(. != null)] | add // 0) as $m
+  | ((.summary.annual_savings_identified_usd // 0) - ($m * 12)) as $d
+  | (if $d < 0 then -$d else $d end) < 0.01
+' "$F" >/dev/null \
+  || fail "summary.annual_savings_identified_usd=$(jq -r '.summary.annual_savings_identified_usd // 0' "$F") != monthly*12=$(jq -rn --argjson m "$actual_m" '$m * 12') (must match to the cent)"
 # 2c. any finding with a non-null dollar figure MUST name a savings_source (proof
 #     it came from a provider API), and vice-versa a source with no figure is odd.
 nosrc="$(jq -r '.findings[] | select(.estimated_monthly_savings_usd != null and ((.savings_source // "") == "")) | .id' "$F")"

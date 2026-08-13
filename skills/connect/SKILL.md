@@ -285,7 +285,7 @@ echo "doctor_exit=$?"
 
 When doctor exits 0:
 
-1. Run `/scoutflo:map-topology` to build your service map.
+1. If you connected Kubernetes, run `/scoutflo:map-topology` to build your service map (it needs `kubectl` and a `kubernetes.context`; skip this step if you don't run Kubernetes).
 2. Run `/scoutflo:audit-all` (or a single audit such as `/scoutflo:audit-grafana`) for your first scored report.
 
 On any other exit: fix the failing rows using the hint column (exit 1: config missing — rerun this skill; exit 2: export the named variable per Step 4; exit 3: recheck that provider's host and token per Step 3), then rerun `/scoutflo:doctor`.
