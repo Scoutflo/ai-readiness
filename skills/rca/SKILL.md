@@ -1,66 +1,79 @@
 ---
 name: rca
-description: Answer "why is <resource/service> failing / at risk — give me the RCA" by correlating across every Scoutflo audit report, the service topology, and business context, and return an evidence-cited root-cause analysis with a confidence level and an explicit list of what could not be determined. Read-only; it reasons over findings.json, correlation.json, topology-export.json, and business_context.json that audits already produced — it never calls a provider and never invents a cause. Use when the user asks why something is failing/degraded/at risk, asks for an RCA or root cause, or asks what a finding's blast radius or upstream cause is. Do not use to run a fresh audit (use audit-* / audit-all first to produce the reports this reads), to change anything (this is analysis only), or to invent a cause when the evidence is thin (it says so instead).
+description: Answer "why is <resource/service> failing / at risk — give me the RCA" with a live, evidence-cited root cause. It uses your existing audit reports as REFERENCE (what's known, where to look), the service topology as the BLAST-RADIUS MAP (every attached resource/service, who calls whom, what monitors it), and then makes strictly READ-ONLY live calls (kubectl get/describe/events/logs) on the failing resource and its attached suspects to confirm the current truth. Every claim cites its source and is tagged [report@date] or [live@now]; it never invents a cause, and it degrades to a report-only answer when it has no live access. Use when the user asks why something is failing/degraded/at risk, asks for an RCA or root cause, or asks for a finding's blast radius or upstream cause. Do not use to change anything (analysis only, read-only), or to invent a cause when signal is thin (it says so instead).
 ---
 
-# rca — evidence-grounded root-cause analysis across your reports
+# rca — live, evidence-grounded root-cause analysis
 
-When someone asks *"why is EC2 `web-3` failing — give me the RCA?"*, this skill turns that question into a grounded answer built from what the Scoutflo audits already found: every finding that names that resource across all providers, the service graph around it (who it calls, who calls it, what monitors it), the correlation engine's cause→effect chains, and which services your business context says are critical. It returns a root-cause analysis where **every claim cites the finding, report, or topology edge it came from**, carries a **confidence level**, and ends with an explicit **"what I could not determine"** — because a confident-but-wrong root cause is worse than an honest "the signal points here, but X is unconfirmed."
+When someone asks *"why is pod `checkout-abc` failing — give me the RCA?"*, this skill answers it the way an SRE would: the audit reports tell it **what's already known and where to look**, the topology graph tells it **the blast radius and every resource/service attached to the target**, and then it **goes and looks live** — read-only `kubectl` calls on the failing resource and its attached suspects — to gather the current, detailed truth. It returns a root cause where **every clause cites its evidence and its freshness** (`[report@<date>]` vs `[live@<now>]`), carries a **confidence level**, and ends with an explicit **"what I could not determine"**.
 
-**It reasons over existing artifacts; it does not audit.** It reads the `findings.json`, `correlation.json`, `topology-export.json`, and `business_context.json` that prior audit runs produced. If those don't exist for the resource in question, it says exactly which audit to run first rather than guessing. It never calls a live provider and never changes anything.
+**Reports are a reference, not the answer.** The old failure mode was answering purely from a possibly-stale `findings.json` and stopping at "insufficient signal". Now reports are the *prior* (they narrow where to look and supply posture context like "no memory limit"); topology is the *map* (the attached set to investigate); and the **live probe is the evidence** that names or rejects a cause. When there is no live access (no `kubectl`, no context, a cloud surface), rca still answers from reports alone — clearly banner-labelled `[report-only, as of <date>]` — so it always works, just less completely.
 
 ## The one hard rule: never invent a cause
 
-The RCA is assembled **only** from evidence present in the reports and topology. A hypothesis with no supporting finding or edge is labelled a hypothesis, not a cause, and only offered when it is the natural next thing to check — never stated as fact. If the evidence is too thin to name a root cause, the answer is *"insufficient signal — here is what's known and here is exactly what to collect next,"* not a fabricated chain. This is the same discipline the toolkit enforces on scores (`check-findings.sh`) and dollars (`check-cost.sh`): an unverified answer is worse than an honest gap, because an RCA gets acted on in an incident.
+The RCA is assembled **only** from evidence actually observed — a report finding, a topology edge, a correlation cascade, or a live probe result. A branch of the k8s failure taxonomy may be named a **cause** only when its specific observed field is present (see [live-evidence/references/k8s-liveness-probes.md](../live-evidence/references/k8s-liveness-probes.md)); a bare symptom (`restartCount > 0` during a normal rollout) is labelled a symptom, never a verdict. A blocked / RBAC-denied / null probe is an honest **gap** (`verdict=unknown`), never read as "healthy" and never a guess. If signal is too thin, the answer is *"insufficient signal — here is what's known and exactly what to collect next,"* not a fabricated chain. This is the same discipline the toolkit enforces on scores (`check-findings.sh`) and dollars (`check-cost.sh`).
 
-- ❌ `Root cause: the RDS failover misfired and cascaded to checkout.` (no finding or edge establishes a failover event)
-- ✅ `Most likely root cause (confidence: medium): checkout has no alert coverage (GRAF-091, DD-033) AND its datastore payments-db has no backup (AWS-030); an incident on payments-db would go undetected. Not confirmed: whether payments-db is currently unhealthy — no live health signal is in these reports; run /scoutflo:audit-aws to confirm the datastore's current state.`
+- ❌ `Root cause: the pod is crash-looping.` (CrashLoopBackOff is the *backoff*, not the reason; no terminated reason/exit code cited)
+- ✅ `Most likely root cause (confidence: high): pod checkout-abc's app container was OOMKilled (exitCode 137) 4 times in 20m [live@2026-08-14T09:12Z], and K8S-004 says its Deployment has no memory limit [report@2026-08-10]; the container exceeds the node default and is killed. Blast radius: orders-api CALLS checkout (topology, conf 9, observed).`
 
 ## Doctor gate
 
-This skill needs only local artifacts and `jq`; it makes no provider calls, so there is no credential to check. It stops only if the reports it needs are absent.
+rca needs `jq` and **either** local reports **or** live cluster access. It sources the home-anchored secret store (so any provider token needed for a non-k8s probe is seen) and the shared read-only live-evidence library, then decides which mode is available. It never blocks on the live branch — a live miss simply routes to report-only.
 
 ```bash
 set -eu
 command -v jq >/dev/null || { echo "missing binary: jq"; exit 1; }
+# Source the secret store the same way doctor/audits do (degrade, never abort).
+SCOUTFLO_ENV="${HOME}/.scoutflo/env"
+if [ -f "$SCOUTFLO_ENV" ]; then set +eu; . "$SCOUTFLO_ENV" || echo "rca: warning: could not source $SCOUTFLO_ENV"; set -eu; fi
+# Redaction + live-evidence libraries (read-only; the live path is guarded there).
+. "${CLAUDE_PLUGIN_ROOT}/skills/redaction/lib/redaction.sh" 2>/dev/null || true
+. "${CLAUDE_PLUGIN_ROOT}/skills/live-evidence/lib/live-evidence.sh"
 AUD="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}"
-[ -d "$AUD" ] || { echo "no ./scoutflo-audits yet — run /scoutflo:audit-all (or a specific audit-*) first so there are findings to analyze"; exit 1; }
-n="$(find "$AUD" -name findings.json 2>/dev/null | wc -l | tr -d ' ')"
-[ "$n" -gt 0 ] || { echo "no findings.json under $AUD — run an audit first; this skill analyzes existing reports, it does not audit"; exit 1; }
-echo "doctor gate: pass ($n report file(s) available to correlate)"
+KUBE_CONTEXT="$(sed -n 's/^[[:space:]]*context:[[:space:]]*//p' "${SCOUTFLO_CONFIG:-$HOME/.scoutflo/toolkit.yaml}" 2>/dev/null | head -1)"
+REPORTS=0; [ -d "$AUD" ] && REPORTS="$(find "$AUD" -name findings.json 2>/dev/null | wc -l | tr -d ' ')"
+LIVE=0; le_can_probe "$KUBE_CONTEXT" >/dev/null 2>&1 && LIVE=1
+if [ "$REPORTS" -eq 0 ] && [ "$LIVE" -eq 0 ]; then
+  echo "no reports under $AUD and no live cluster access — run /scoutflo:audit-all (or a specific audit) first, or configure kubernetes.context so rca can probe live"; exit 1
+fi
+echo "doctor gate: pass (reports=${REPORTS}, live=$([ "$LIVE" -eq 1 ] && echo yes || echo no))"
 ```
 
 ## Live-safety gate
 
-There is nothing live to be unsafe with — this skill is strictly read-only over local files. State it, so a reader is never unsure:
+The report path is read-only over local files. The live path makes read-only calls only (`get`/`describe`/`list`/`logs`/`events`, guarded by the live-evidence lib and `ci/liveness-readonly-check.sh`) — it changes nothing. When the live branch is active, positively identify the cluster before probing, exactly as audit-kubernetes does, and pin `--context` explicitly (never the ambient kube-context — the same service name can exist in many clusters):
 
 ```bash
 set -eu
-echo "rca reads local report artifacts only (findings.json / correlation.json / topology-export.json / business_context.json)."
-echo "It calls no provider, changes nothing, and produces an analysis — not an action."
-echo "live-safety gate: pass (read-only analysis)"
+KUBE_CONTEXT="my-cluster"   # kubernetes.context (the doctor gate confirmed live access; report-only mode skips this block)
+SERVER="$(kubectl --context "$KUBE_CONTEXT" config view --minify -o jsonpath='{.clusters[0].cluster.server}' 2>/dev/null)"
+VER="$(kubectl --context "$KUBE_CONTEXT" version -o json 2>/dev/null | jq -r '.serverVersion.gitVersion // "unknown"')"
+echo "live target: context=${KUBE_CONTEXT} server=${SERVER} k8s=${VER}"
+echo "live-safety gate: pass — read-only probes only; confirm this is the cluster the target lives in"
 ```
 
-## Inputs it reads (and what each contributes)
+## Inputs and what each contributes
 
-| Artifact | Where | What RCA takes from it |
+| Input | Role | What rca takes from it |
 | --- | --- | --- |
-| Per-audit `findings.json` | `./scoutflo-audits/<target>/<date>/findings.json` (and `kubernetes/<ctx>/<date>/`) | every finding whose `affected[]` or `title` names the target — the direct symptoms, across all providers |
-| `correlation.json` | `./scoutflo-audits/correlation.json` | `overlaps` (same service flagged by multiple stacks) and `cascades` (`root_cause` → `effects` chains) — the cross-report causal links |
-| `topology-export.json` | `./scoutflo-audits/topology-export.json` | the service graph: `relationships[]` (`CALLS`, `ROUTES_TO`, `DEPLOYED_AS`, `MONITORED_BY`, `PART_OF`) with `confidence` — who depends on the target and what observes it |
-| `business_context.json` | `~/.scoutflo/business_context.json` | `critical_dependencies`, `environment`, per-service SLA — whether the target (or a neighbor) is business-critical, which raises the RCA's priority and changes the recommended response |
+| Per-audit `findings.json` (`./scoutflo-audits/<target>/<date>/`) | **reference (prior)** | findings naming the target — the posture context (e.g. "no memory limit") and known symptoms, each tagged `[report@<run_date>]` with its age |
+| `topology-export.json` | **blast-radius map** | `relationships[]` classified into identity / dependency / observation edges — the full attached set, who to probe, and who breaks downstream |
+| Live probes (`live-evidence` lib) | **evidence (current truth)** | the target's and suspects' real state now: restarts, OOM/exit codes, events, probe failures, redacted logs — tagged `[live@<now>]` |
+| `correlation.json` | cross-report links | precomputed `overlaps` + `cascades` (`root_cause`→`effects`) |
+| `business_context.json` (`~/.scoutflo/`) | priority | `critical_dependencies`, `environment`, SLA — raises urgency and calibrates language |
 
-Each input is optional and the analysis degrades honestly: no topology → RCA says "dependency graph unavailable, run /scoutflo:map-topology for blast-radius"; no correlation.json → it correlates findings directly by shared `affected` and says cascades weren't precomputed.
+## Phase 1: Resolve the target (identity only)
 
-## Phase 1: Resolve the target
+Resolve the user's term (a pod name, service, resource id, or finding id) to two things: the tokens it appears under in findings, and the **concrete object + context to probe**. Use ONLY identity signal for this — topology `DEPLOYED_AS` (service→workload) / `PART_OF`, pod `ownerReferences` (pod→ReplicaSet→Deployment, via `probe_owner`), and the pod-name hash suffix. Pin the context from `kubernetes.context` (never ambient). Report what matched and under which names. If nothing matches and there is no live handle, say so and list the closest names — never proceed on a guess. Identity edges resolve the target; they are **never** treated as a cause.
 
-Take the resource/service the user named (an id like `i-0abc…`, a name like `web-3`, a service like `checkout`, or a finding id like `AWS-030`) and resolve it to the tokens it appears under. Search all findings for that string in `affected[]`, `title`, and `id`; search topology `services[].name`/`resources[].name`. Report what matched and under which names (a resource often appears as an id in AWS findings and a service name in topology). If nothing matches, say so and list the closest names found — never proceed on a guess about which resource was meant.
+## Phase 2: Gather the report signal (reference)
+
+Assemble every finding whose `affected[]`/`title`/`id` names the target, grouped by provider, each tagged `[report@<run_date>]`. Compute each report's age from its run date; if the newest is older than the freshness horizon (default **24h**, `business_context`-tunable), treat its facts as *reference, not current truth* and plan to re-probe live. This is the "where to look / what's known" layer, not the verdict.
 
 ```bash
 set -eu
 AUD="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}"
-TARGET="web-3"   # the resource/service/finding-id the user asked about
-# Every finding that names the target, across every provider report:
+TARGET="checkout"   # the resource/service/finding-id the user asked about
 find "$AUD" -name findings.json 2>/dev/null | while read -r f; do
   jq -r --arg t "$TARGET" '.findings[]
     | select(( ((.affected // []) | join(" ")) + " " + (.title // "") + " " + (.id // "") ) | test($t; "i"))
@@ -69,125 +82,120 @@ find "$AUD" -name findings.json 2>/dev/null | while read -r f; do
 done
 ```
 
-## Phase 2: Gather the direct signal (symptoms)
+## Phase 3: Topology — full blast radius + ranked suspects
 
-From Phase 1, assemble every finding that names the target: its own findings (what's directly wrong with it) plus their severities and areas. This is the symptom set — what the reports directly observe about the target. Group by provider so the reader sees, e.g., "AWS says no backup; Grafana says no alert rule; Sentry says no error tracking."
+Read `topology-export.json` and classify **every** edge touching the target by role — the fix for treating all edges as "upstream cause". Enumerate the complete attached set, then rank which to probe live.
 
-## Phase 3: Walk the topology (blast radius + upstream)
+- **Identity / resolution** — `DEPLOYED_AS` (service→workload), `PART_OF`, `ROUTES_TO` where `to` is a workload. Resolve the probe target; **never a candidate cause.**
+- **Dependency** — `CALLS` (service→service), external `ServiceEntry`. Direction is load-bearing: for `A -CALLS-> B`, if the target is `A` then `B` is an **upstream SUSPECT** (a failing dependency can be the cause); if the target is `B` then `A` is **downstream BLAST RADIUS** (breaks if the target is down), never a cause.
+- **Observation** — `MONITORED_BY` / `SENDS_METRICS_TO|LOGS_TO|TRACES_TO`. Tells you which backend holds the target's signal; a **missing** observation edge is itself a root-cause-class answer ("a crash here would have paged no one").
 
-If `topology-export.json` exists, read `relationships[]` to place the target in the graph:
-- **Upstream (possible causes):** what the target `CALLS` / is `ROUTES_TO` from / `DEPLOYED_AS` — a failing dependency is a candidate root cause.
-- **Downstream (blast radius):** what `CALLS` the target — who breaks if the target is down.
-- **Observation:** what `MONITORED_BY` edges exist — if none, that itself explains "why didn't we know," a common real root cause.
-
-Carry each edge's `confidence`; a low-confidence or `asserted` (vs `observed`) edge is a weaker link and the RCA says so.
+Build a ranked upstream-suspect list (edge `confidence` × observed-vs-asserted × whether a finding already names the neighbor × business-criticality × hop-proximity). Treat `topology-export.json` as a possibly-stale **hypothesis source** (tag `[topology@<generated_at>]`): it says *where to look*; the live probe confirms or exonerates. State plainly "topology may be incomplete; only topology-named suspects were probed" so a missing edge is never read as exoneration.
 
 ```bash
 set -eu
 AUD="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}"
-TOPO="$AUD/topology-export.json"
-TARGET="checkout"
-[ -f "$TOPO" ] || { echo "no topology-export.json — dependency graph unavailable; run /scoutflo:map-topology for blast-radius analysis"; exit 0; }
-# The export exists in two real shapes under the same schema version: the spec's
-# nested `relationships[]` ({from:{name},to:{name},relation,assertion_type}) and
-# the generated `edges[]` ({from,to,type,confidence,verified}). Normalize BOTH to
-# a common {from,to,rel,conf} before matching, and guard nulls so a partial
-# export never crashes the walk.
+TOPO="$AUD/topology-export.json"; TARGET="checkout"
+[ -f "$TOPO" ] || { echo "no topology-export.json — attached set unknown; run /scoutflo:map-topology. Probing the named target only."; exit 0; }
+# Normalize both real shapes (nested relationships[] and generated edges[]) to {from,to,rel,conf},
+# then classify by role so identity edges resolve and only dependency edges generate suspects.
 jq -r --arg t "$TARGET" '
   (( .relationships // [] ) | map({from: .from.name, to: .to.name, rel: .relation, conf: (.confidence // "?")}))
   + (( .edges // [] )       | map({from: .from,      to: .to,      rel: .type,     conf: (.confidence // "?")}))
-  | .[]
-  | select(.from == $t or .to == $t)
-  | "\(.from) -\(.rel)-> \(.to)  (conf \(.conf))"' "$TOPO"
+  | .[] | select(.from == $t or .to == $t)
+  | (if   (.rel|test("DEPLOYED_AS|PART_OF"))                 then "identity   "
+     elif (.rel|test("CALLS|ROUTES_TO|ServiceEntry"))        then (if .from==$t then "suspect(up)" else "blast(down)" end)
+     elif (.rel|test("MONITORED_BY|SENDS_"))                 then "observation"
+     else "other      " end) as $role
+  | "\($role)\t\(.from) -\(.rel)-> \(.to)  (conf \(.conf))"' "$TOPO" | sort
 ```
 
-## Phase 4: Walk the correlation chains
+## Phase 4: Live verification — the actual RCA (read-only)
 
-If `correlation.json` exists, use it to connect the target to causes and effects the single-report view can't see:
-- **Cascades:** if the target (or an upstream dependency) is a cascade `root_cause`, its `effects` are the downstream failures it explains — this is the strongest cause→effect signal available. If the target appears as an `effect`, walk back to the `root_cause` — that is a candidate root cause with an evidence trail.
-- **Overlaps:** if the target is in an `overlap` group, multiple stacks flag it — corroborating evidence that the symptom is real and where the authoritative fix belongs.
+If the doctor live branch is up, this is where the cause is established. Probe the resolved **target** first, then the **top-ranked suspects** from Phase 3 (start with the highest-ranked few; go deeper while the incident is unexplained — do not stop at an arbitrary cap, but pause via the shared scope checkpoint before a wide fan-out on a large graph). Apply the failure taxonomy: name a cause only when its specific field is present; a null/blocked probe is a gap.
 
 ```bash
 set -eu
-AUD="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}"
-CORR="$AUD/correlation.json"
-TARGET="checkout"
-[ -f "$CORR" ] || { echo "no correlation.json — correlating findings directly by shared resource instead; cascades not precomputed"; exit 0; }
-# Is the target a cascade root (explains effects) or an effect (walk back to root)?
-# Field names match what correlation-engine emits: root_cause has
-# {finding_id, title, target, shared_resources}; each effect has
-# {finding_id, title, target, condition} — neither carries `affected`.
+. "${CLAUDE_PLUGIN_ROOT}/skills/redaction/lib/redaction.sh" 2>/dev/null || true
+. "${CLAUDE_PLUGIN_ROOT}/skills/live-evidence/lib/live-evidence.sh"
+KUBE_CONTEXT="my-cluster"   # kubernetes.context, resolved in the doctor gate
+NS="platform"; POD="checkout-abc"     # resolved in Phase 1
+if le_can_probe "$KUBE_CONTEXT" >/dev/null 2>&1; then
+  probe_pod_status "$KUBE_CONTEXT" "$NS" "$POD"                # phase, restartCount, waiting/terminated reason+exitCode
+  probe_events     "$KUBE_CONTEXT" "$NS" "$POD"                # FailedScheduling/BackOff/Unhealthy/Failed
+  probe_logs_previous "$KUBE_CONTEXT" "$NS" "$POD" "" 50       # dead container's last logs, redacted + capped
+  # then, for each ranked upstream suspect workload, the same probes (bounded, highest-rank first)
+else
+  echo "[live] no cluster access for context '$KUBE_CONTEXT' — report-only mode; live confirmation deferred"
+fi
+```
+
+Tag every observation `[live@<now>]`. When a live result contradicts a report (e.g. report said 0 restarts, live shows 42), **live wins** and the delta is stated — it is high-value output. The exact fields and the taxonomy (CrashLoopBackOff+terminated reason, OOMKilled/137, ImagePullBackOff, Unhealthy probe, Pending/Unschedulable, benign-rollout) are in [live-evidence/references/k8s-liveness-probes.md](../live-evidence/references/k8s-liveness-probes.md).
+
+## Phase 5: Walk the correlation chains
+
+If `correlation.json` exists, connect the target to cause→effect chains the single-report view can't see.
+
+```bash
+set -eu
+AUD="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}"; CORR="$AUD/correlation.json"; TARGET="checkout"
+[ -f "$CORR" ] || { echo "no correlation.json — correlating findings directly by shared resource; cascades not precomputed"; exit 0; }
 jq -r --arg t "$TARGET" '
   (.cascades // [])[]
   | select((.root_cause.title + " " + ((.root_cause.shared_resources // []) | join(" "))) | test($t;"i")
            or (any(.effects[]?; .title | test($t;"i"))))
-  | "ROOT: \(.root_cause.finding_id) \(.root_cause.title)  (shared: \((.root_cause.shared_resources // []) | join(",")))\n  EFFECTS: \([.effects[]? | "\(.finding_id) \(.title)"] | join(" | "))"' "$CORR"
+  | "ROOT: \(.root_cause.finding_id) \(.root_cause.title)\n  EFFECTS: \([.effects[]? | "\(.finding_id) \(.title)"] | join(" | "))"' "$CORR"
 ```
 
-## Phase 5: Weigh by business context
+## Phase 6: Weigh by business context
 
-Read `~/.scoutflo/business_context.json`. If the target or a downstream neighbor is in `critical_dependencies`, the RCA leads with that (the blast radius hits something the business cares about, so the recommended response is more urgent). Use `environment` to calibrate severity language (a staging-only chain is real but not an incident). Never invent criticality the context doesn't state; absence of context means "criticality unknown," said plainly.
+Read `~/.scoutflo/business_context.json`. If the target or a downstream neighbor is in `critical_dependencies`, lead with that (the blast radius hits something the business cares about). Use `environment` to calibrate severity language (a staging-only chain is real but not an incident). Never invent criticality the context doesn't state.
 
-## Phase 6: Assemble the evidence-cited RCA
+## Phase 7: Assemble the evidence-cited RCA
 
-Produce the answer in this shape. Every factual clause carries its source in parentheses (`finding-id`, `topology edge`, or `correlation cascade-id`). The confidence and gaps are mandatory.
+Open with a one-line **mode banner** so freshness is unmissable: `[live-verified @ <now>]` or `[report-only, as of <date>]`. Every factual clause carries its provenance tag. Confidence is a joint function of source **and** recency: a live-confirmed cause matching a report finding is highest; a report-only inference on a stale report is low.
 
 ```markdown
-## RCA: <target> — <one-line verdict>
+## RCA: <target> — <one-line verdict>   [live-verified @ <ts> | report-only, as of <date>]
 
 **Most likely root cause (confidence: high | medium | low):**
-<1–3 sentences naming the probable root cause, each clause citing its evidence —
-e.g. "checkout has no alert rule (GRAF-091) or Datadog monitor (DD-033), and its
-datastore payments-db has no backup (AWS-030); topology shows checkout
-DEPLOYED_AS the workload that CALLS payments-db (topology, conf 9)">
+<1–3 sentences, each clause tagged [live@ts] / [report@date] / [topology@gen] / [correlation] / [hypothesis]>
 
-**How it fails (the chain):**
-<root → effect walk, each step cited. If from a correlation cascade, name the
-cascade. If assembled directly, say so.>
+**How it fails (the chain):** <root → effect walk, each step cited>
 
-**Blast radius (who else is affected):**
-<downstream services from topology that CALL the target, with business-critical
-ones flagged from business_context; "unknown — no topology" if absent>
+**Blast radius (who else is affected):** <downstream services from dependency edges only, business-critical ones flagged; "unknown — no topology" if absent>
 
 **Evidence:**
-- <finding-id>: <title> (<provider report>, severity)
-- <topology edge> (confidence n)
-- <correlation overlap/cascade id>
+- [live@ts] <probe result, e.g. "app container OOMKilled exitCode 137, 4 restarts/20m">
+- [report@date] <finding-id: title (provider, severity)>
+- [topology@gen] <edge, confidence n, observed/asserted>
 
 **What I could NOT determine (do this to confirm):**
-<explicit gaps — e.g. "no live health signal for payments-db in these reports;
-run /scoutflo:audit-aws to confirm its current state" — and, if signal was thin,
-say the root cause is a hypothesis, not established>
+<explicit gaps: blocked probes, suspects not reached, stale reports not re-probed; if signal was thin, say the cause is a hypothesis, not established>
 
-**Recommended next step:**
-<the single highest-value action, pointing at a setup-* fix or an audit to run,
-ordered by the business criticality from Phase 5>
+**Recommended next step:** <highest-value action — a setup-* fix (with anchor) or the next probe/audit — ordered by business criticality>
 ```
 
-If Phases 2–4 found no finding, edge, or cascade naming the target: do **not** synthesize a cause. Emit the "insufficient signal" form — what was searched, what exists, and which audit to run so there is something to analyze.
+If neither reports, topology, correlation, nor live probes yield a cause: do **not** synthesize one. Emit the "insufficient signal" form — what was searched, what was probed and found clean, and exactly what to collect next.
 
 ## Common Failure Modes
 
 | Failure | Prevention |
 | --- | --- |
-| Inventing a plausible root cause with no finding/edge behind it | Every clause cites a finding-id / topology edge / cascade id; no citation → it's a labelled hypothesis or a stated gap, never a fact |
-| Stating a cause when the reports only show a symptom | Phase 3/4 must find an upstream dependency or a cascade root; absent that, the answer is "symptom observed, upstream cause unconfirmed" |
-| Treating a stale report as current truth | Cite each report's run date; if the newest naming the target is old, say the RCA reflects that run, not now |
-| Ignoring that the target isn't monitored at all | A missing `MONITORED_BY` edge / no telemetry finding is itself a root-cause-class answer ("you wouldn't have detected this") — surface it |
-| Over-claiming blast radius from names | Downstream only from real topology `CALLS`/`ROUTES_TO` edges, never inferred from similar names; "unknown" when topology is absent |
-| Running a provider call to "check" during analysis | This skill is read-only over local artifacts; if live confirmation is needed it names the audit to run, it does not call the provider itself |
+| Inventing a cause with no report/edge/probe behind it | Every clause cites evidence with a provenance tag; no citation → labelled hypothesis or a stated gap, never a fact |
+| Treating an identity edge as a cause (`DEPLOYED_AS`) | Identity edges (DEPLOYED_AS/PART_OF) only *resolve* the target; only dependency edges (CALLS/ROUTES_TO) generate suspects |
+| Edge-direction inversion (blaming blast radius, exonerating the real upstream) | Direction is load-bearing: for A-CALLS->B, B is the suspect when target==A, A is downstream when target==B |
+| Reading a null / blocked / RBAC-denied probe as "healthy" | A failed probe is a gap with verdict=unknown and a stated next step, never a pass |
+| Naming a cause from a benign symptom (restarts during a rollout) | A taxonomy branch requires its specific observed field (terminated reason/exit code, event); restartCount alone is a symptom |
+| Trusting the ambient kube-context | Every live call pins `--context` from `kubernetes.context`; the live-safety gate prints server+context to confirm the cluster |
+| Presenting a stale report as current | Tag every fact with its date; if the live branch is up, re-probe and prefer live, stating the delta; if down, lower confidence and list a live re-probe as the top gap |
+| Topology staleness masking a real dependency | Topology is a hypothesis source; the live probe confirms; rca states "topology may be incomplete; only topology-named suspects were probed" |
+| Leaking a secret via `logs --previous` | Log slices pass through the redaction filter, are `--tail` capped, and are never written raw to a report or brief |
 
-## Maturity note (v0.1.85)
+## Maturity note (v0.1.101)
 
-The RCA flow is provider-agnostic by construction — it reads the common
-`findings.json` / `correlation.json` / `topology-export.json` schema every audit
-emits, so it works for any provider's findings. It is **live-proven end to end on
-an AWS finding** (the EC2/datastore case). GCP/Kubernetes/others use the identical
-mechanism and are expected to work, but treat a first RCA on a not-yet-proven
-provider as "verify the citations against the reports yourself" until this note
-is updated. The grounding guarantees (every claim cited, confidence stated, gaps
-explicit, no invented cause) hold for every provider regardless.
+rca is now **live-first**: reports are reference, topology is the blast-radius map, and read-only live probes are the evidence. It is live-provable end to end on a Kubernetes workload (the pod-down case: OOMKilled/CrashLoopBackOff/ImagePull/Unschedulable, correlated with posture findings). The offline `[report-only, as of <date>]` path is preserved for cloud surfaces and no-credential runs. Non-k8s providers currently use the report + topology path; their live probes land in later phases via the same shared `live-evidence` library and the identical never-invent, read-only, provenance-tagged discipline.
 
 ---
 
-**v0.1.85** — New: turns "why is X failing, give me the RCA" into an evidence-cited, confidence-scored root-cause analysis correlated across every audit report + topology + business context. Read-only; never invents a cause.
+**v0.1.101** — rca becomes live-first: uses reports as reference + topology as the blast-radius map, then makes strictly read-only live calls (via the shared `live-evidence` lib) to confirm the current cause. Edge semantics fixed (identity vs dependency vs observation); every fact tagged `[report@date]`/`[live@now]`; degrades to report-only without cluster access; never invents a cause.
