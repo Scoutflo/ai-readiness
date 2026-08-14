@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.1.101
+
+Makes `/scoutflo:rca` a **live-first** root-cause tool. This is the direct fix for the customer feedback that RCA "from report data is nothing": rca resolved a failing pod to its Deployment and then stopped at "insufficient signal" because it only ever reasoned over local report files and never looked at the live cluster.
+
+- **rca now uses reports as *reference*, topology as the *blast-radius map*, and strictly read-only *live calls* as the evidence.** It resolves the target, enumerates the full attached set from topology, then probes the failing resource and its ranked upstream suspects live (`kubectl get`/`describe`/`events`/`logs --previous`) to name an accurate, cited cause — CrashLoopBackOff, OOMKilled/exit 137, ImagePull, failed probes, Unschedulable — correlated with the posture findings (e.g. "no memory limit"). Every fact is tagged `[report@<date>]` or `[live@<now>]`; a live reading that contradicts a stale report wins, and the delta is stated.
+- **Topology edge semantics fixed.** rca no longer lumps every edge into "upstream = cause." Edges are classified by role: **identity** (`DEPLOYED_AS`/`PART_OF` — resolve the target, never blame it), **dependency** (`CALLS`/`ROUTES_TO` — direction-aware: upstream is a suspect, downstream is blast radius), and **observation** (`MONITORED_BY` — where the signal lives; a missing edge is itself a root-cause-class answer).
+- **New shared read-only library `skills/live-evidence/`** (k8s liveness probes + failure-taxonomy) reused by rca now and audit-kubernetes later. Every kubectl call routes through a guarded wrapper (read verbs only; `--context` always pinned, never ambient; `--request-timeout` bounded); log slices pass through the redaction filter and are `--tail` capped, never written raw.
+- **New CI gate `ci/liveness-readonly-check.sh`** (in structure-check) mechanically proves the library can only ever make read-only calls — it rejects any mutating verb, any raw kubectl bypassing the wrapper, and any `get secret -o yaml|json`. Safety by construction, not by prose.
+- **Never-invent, preserved and extended to live data:** a taxonomy branch is named a cause only when its specific observed field is present (`restartCount` alone is a symptom, not a verdict); a blocked/RBAC-denied probe is an honest gap, never "healthy." **Runs-anywhere preserved:** with no cluster access (cloud surface, no `kubectl`), rca degrades to a `[report-only, as of <date>]` answer.
+- Pressure scenarios added (`live-first-topology-driven.md`: reported pod case, identity-edge-not-a-cause, edge-direction, report-only fallback, benign-restart symptom, live/report delta) and the stale "never calls a provider" scenario corrected. rca re-reviewed against the maintainer rubric: **GATE PASS**.
+
+This is Phase 1 of the RCA redesign (k8s live verification). Phase 2 (audit-kubernetes captures the same liveness as a non-scored section) and Phase 3 (other providers) build on the same library.
+
 ## 0.1.100
 
 Ports audit-elk's space-visibility guardrail (ELK-033) to the two other scope-partitioned audits, `audit-jsm` and `audit-zenduty`. This closes the same bug class that caused the customer's ELK "confident wrong `0/100`": a token that can see only a subset of the partitioned estate — Kibana spaces there, JSM/Zenduty **teams** here — makes a fully-configured account look empty and scores it a confident zero.
