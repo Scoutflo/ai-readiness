@@ -35,7 +35,7 @@ State your installed toolkit version in this orientation (read `version` from `$
 | `/scoutflo:business-context` | harness | Capture SLAs, critical services, per-environment rules, and exclusions into `business_context.md`; every audit reads it to tune severity and scope |
 | `/scoutflo:audit-all` | harness | Run every configured audit, then correlate across them, into one combined report and brief |
 | `/scoutflo:correlation-engine` | harness | Cross-audit correlation: redundant monitoring, cascade risks, business-context filtering (also run automatically by `audit-all`) |
-| `/scoutflo:rca` | harness | Ask "why is X failing — give me the RCA": evidence-cited root cause correlated across all reports + topology + business context, with confidence and honest gaps |
+| `/scoutflo:rca` | harness | Ask "why is X failing — give me the RCA": uses reports as reference and topology as the blast-radius map, then makes read-only live checks to name an evidence-cited root cause with confidence and honest gaps; degrades to report-only without cluster access |
 | `/scoutflo:schedule-audits` | harness | Recurring audits via GitHub Actions, cron, or a Claude cloud schedule |
 | `/scoutflo:audit-lgtm` | audit | Scored audit of Prometheus, LGTM, and VictoriaMetrics stacks (this is your **Prometheus** audit; pair with `audit-alert-routing` for the Prometheus→Alertmanager paging path) |
 | `/scoutflo:setup-lgtm` | setup | Guided hardening for findings from `audit-lgtm` |
@@ -72,9 +72,11 @@ Every audit run writes its reports and runtime data under one reports directory:
     history.jsonl          # one line per run; reports render the score trend from it
     <YYYY-MM-DD>/          # run date, UTC
       findings.json        # machine-readable: score, severities, evidence
-      report.md            # human-readable: summary, scorecard, findings, actions
+      report.md            # human-readable: at-a-glance dashboard, scorecard, findings, actions
+      report.html          # standalone visual dashboard (score donut, bars) — open in a browser
   all/                     # combined summaries from /scoutflo:audit-all
   topology.md              # your service map, written by /scoutflo:map-topology
+  topology-export.json     # machine-readable topology (the blast-radius graph source)
   exemptions.yaml          # your accepted-risk suppressions (optional, you own it)
 ```
 

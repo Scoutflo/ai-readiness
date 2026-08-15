@@ -11,7 +11,7 @@ Audit, harden, and monitor your infrastructure and observability stacks from ins
 
 ## How it works (end to end)
 
-The flow is: **set up once → audit (read-only) → understand across everything → optionally fix (only with your yes).** Every audit writes a `findings.json` (the machine-readable source of truth) and a human `report.md`; the correlation engine, cost roll-up, and RCA all read those artifacts — they never re-call your providers.
+The flow is: **set up once → audit (read-only) → understand across everything → optionally fix (only with your yes).** Every audit writes a `findings.json` (the machine-readable source of truth), a human `report.md`, and a standalone `report.html` dashboard; the correlation engine and cost roll-up read those artifacts without re-calling your providers, while RCA uses them as reference and adds strictly read-only live checks to pin the current cause (degrading to report-only when it has no cluster access).
 
 ```mermaid
 flowchart TD
@@ -86,14 +86,16 @@ Green = read-only (safe, changes nothing) · amber = write, gated behind your co
 
 ## What's new (latest release)
 
+- **Reports are now visual, not walls of text.** Every audit report opens with an **At a glance** dashboard (a score bar, a trend sparkline, checks-passed, a severity histogram, and a "start here" pointer to the highest-value fix) and ships a standalone **`report.html`** dashboard next to `report.md` — a self-contained file (score donut, colored severity bars, sortable scorecard and findings) you open in any browser. All rendered deterministically from `findings.json`, so a visual can never disagree with the numbers.
+- **`/scoutflo:rca` is now live-first.** Ask *"why is `<service>` failing?"* and it uses your reports as reference and the topology as a blast-radius map, then makes strictly read-only live checks (pod status, restarts, OOM/exit codes, events, recent logs) to name an evidence-cited root cause — every fact tagged whether it came from a report or a live check. It never invents a cause and degrades to a report-only answer when it has no cluster access.
+- **Team-scoped audits never score a confident wrong `0/100` on a hidden scope.** `audit-jsm` and `audit-zenduty` (like `audit-elk` with Kibana spaces) now treat "the key can see no teams" as a visibility gap, not an empty estate.
 - **ELK audits discover your Kibana spaces — never assume `default`.** `audit-elk` enumerates every space your key can see (`GET /api/spaces/space`) and audits where your rules actually live, so a stack whose alerting sits in a non-default space is no longer reported as an empty `0/100`. When zero rules are visible it says so honestly (a possible key-visibility gap: widen the key to `spaces:["*"]` read) instead of a confident wrong score. The `/scoutflo:connect` recipe now grants the correct Kibana feature privileges at all spaces.
 - **A token you added is picked up in the same session.** Every audit now sources `~/.scoutflo/env` at its doctor gate, exactly as `/scoutflo:doctor` does — so a credential added mid-session works immediately, no new terminal. A new FAQ entry spells out where the token value goes (`~/.scoutflo/env`, keyed by the `*_env` name — not into `toolkit.yaml`).
 - **Prometheus is first-class discoverable.** `audit-lgtm` is your Prometheus audit (scrape targets, rules, TSDB cardinality, retention); pair it with `audit-alert-routing` for the Prometheus→Alertmanager paging path. Both name Prometheus explicitly so "audit my Prometheus" finds them.
-- **`/scoutflo:rca` — ask questions about your reports.** *"Why is `<service>` failing — give me the RCA?"* correlates every finding naming that resource across all stacks, the service topology, and business context into an **evidence-cited** root cause with a confidence level and an explicit "what I couldn't determine." Read-only; it never invents a cause — thin signal means it tells you which audit to run, not a guess.
 - **`/scoutflo:audit-cost` — deep, per-resource cloud cost.** Queries each provider's own cost APIs (AWS Compute Optimizer / Cost Explorer, GCP Recommender, Datadog usage, Kubernetes requests-vs-usage, DigitalOcean billing) for ranked savings opportunities. Never invents a dollar figure — every number is copied verbatim from the provider or reported as a presence fact.
 - **Business context as a source of truth** — `/scoutflo:business-context` captures SLAs per service, per-environment access/SLA, critical services, exclusions, and your own custom rules into one `business_context.md`; every audit reads it to tune severity and scope.
 - **Large-estate scope checkpoint** — audits pause on a big estate and let you scope before spending tokens, instead of grinding everything.
-- **Self-policing quality** — the numbers in every report reconcile with their own scorecard, secrets are never emitted, and each audit's behavior is enforced by CI gates (9 structure/parity gates + report self-validation, 19 test suites) so quality can't silently regress.
+- **Self-policing quality** — the numbers in every report reconcile with their own scorecard, secrets are never emitted, and each audit's behavior is enforced by a suite of structure and behavioral-parity CI gates plus report self-validation and a growing set of test suites, so quality can't silently regress.
 
 See [CHANGELOG.md](CHANGELOG.md) for the current version and full release history.
 
@@ -208,7 +210,7 @@ Secrets live only in environment variables you export yourself. `~/.scoutflo/too
 
 ## Reading a report
 
-Every audit run writes two files:
+Every audit run writes three files:
 
 ```
 ./scoutflo-audits/
@@ -216,14 +218,15 @@ Every audit run writes two files:
     history.jsonl              # one line per run — reports render the score trend from it
     <YYYY-MM-DD>/
       findings.json            # machine-readable: score, severities, evidence
-      report.md                # human-readable: summary, scorecard, findings, next actions
+      report.md                # human-readable: at-a-glance dashboard, scorecard, findings, next actions
+      report.html              # standalone visual dashboard — open in any browser
 ```
 
-`report.md` opens with an executive summary and a score out of 100, then a weighted scorecard by category, a findings table (every finding has a severity, real evidence, and a direct pointer to the setup skill that fixes it), and a "next safe actions" list ordered so you can start at row 1 with nothing to prepare first. Re-run the same audit later and it shows you the delta — what got fixed, what's new, how the score moved.
+`report.md` opens with an **At a glance** dashboard (a score bar, a trend sparkline, checks-passed, a severity histogram, and a "start here" pointer to the highest-value fix), then an executive summary and a score out of 100, a weighted scorecard by category, a findings section (every finding has a severity, real evidence, and a direct pointer to the setup skill that fixes it), and a "next safe actions" list ordered so you can start at row 1 with nothing to prepare first. `report.html` is a self-contained visual version of the same data (score donut, severity bars, sortable scorecard and findings) that opens in any browser. Re-run the same audit later and it shows you the delta — what got fixed, what's new, how the score moved.
 
 A score of 85+ with full coverage of every critical service earns the "end-to-end" label; below that, the honest phrasing is "good base coverage" — this toolkit never inflates a partial setup into a false "you're covered."
 
-Every `report.md` is validated against a fixed output-conformance standard before it is written, so the structure — summary, scorecard, findings table, next safe actions, evidence — is the same run to run and across every stack.
+Every `report.md` is validated against a fixed output-conformance standard before it is written, so the structure — at-a-glance dashboard, summary, scorecard, findings, next safe actions, evidence — is the same run to run and across every stack.
 
 **Keep `./scoutflo-audits/` out of version control** — reports describe your real infrastructure. Add it to `.gitignore` before your first run (see [docs/install.md](docs/install.md) for the exact snippet).
 

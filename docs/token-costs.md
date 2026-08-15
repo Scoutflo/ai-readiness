@@ -6,7 +6,7 @@ Scoutflo AI Readiness audit runs use Claude models via Claude Code on your machi
 
 ## Approximate baseline costs (Haiku 4.5)
 
-These are **order-of-magnitude baseline figures** to help you plan, not a guaranteed per-run price — actual consumption scales with your estate size (an audit that pages through thousands of rules costs more than the small/medium samples below). The plugin ships **15 scored audit skills** plus `audit-cost` and `audit-all`; the table below samples a representative subset. Your own numbers are reproducible — see [Reproducing these numbers](#reproducing-these-numbers).
+These are **order-of-magnitude baseline figures** to help you plan, not a guaranteed per-run price — actual consumption scales with your estate size (an audit that pages through thousands of rules costs more than the small/medium samples below). The plugin ships **14 scored audit skills** plus `audit-cost` (ranked-savings, not scored) and `audit-all`; the table below samples a representative subset. Your own numbers are reproducible — see [Reproducing these numbers](#reproducing-these-numbers).
 
 ### Per-Audit Token Consumption (representative sample)
 
@@ -22,7 +22,7 @@ These are **order-of-magnitude baseline figures** to help you plan, not a guaran
 | `audit-sentry` | Small | ~25K | ~13K | ~38K | ~$0.030 |
 | **Average** | **~45K per audit** | — | — | — | **~$0.047** |
 
-`audit-cost` (deep per-resource cost) and `/scoutflo:rca` (root-cause across your reports) consume on the same order as an audit; `rca` is typically cheaper since it reasons over reports already on disk rather than making fresh provider calls.
+`audit-cost` (deep per-resource cost) and `/scoutflo:rca` (root-cause analysis) consume on the same order as an audit. `rca` reads reports already on disk as reference and then makes bounded, read-only live checks to confirm the current cause, so its cost depends on how many live probes it runs; with no cluster access it degrades to a report-only answer, which is the cheapest path.
 
 ### Full Suite (all configured audits)
 
@@ -256,20 +256,21 @@ the fixed floor before any of your live data is read. Regenerate these anytime w
 | Audit | Fixed instructions (bytes) | ~tokens (est) |
 | --- | --- | --- |
 | audit-cost | 172,136 | ~43,000 |
-| audit-aws | 122,560 | ~30,600 |
-| audit-lgtm | 112,341 | ~28,100 |
-| audit-gcp | 98,356 | ~24,600 |
-| audit-sentry | 93,360 | ~23,300 |
-| audit-alert-routing | 92,511 | ~23,100 |
-| audit-digitalocean | 83,779 | ~20,900 |
-| audit-grafana | 76,462 | ~19,100 |
-| audit-pagerduty | 61,005 | ~15,300 |
-| audit-elk | 58,848 | ~14,700 |
-| audit-zenduty | 53,176 | ~13,300 |
-| audit-groundcover | 53,327 | ~13,300 |
-| audit-datadog | 49,551 | ~12,400 |
-| audit-kubernetes | 26,690 | ~6,700 |
-| **All 14** | **1,154,102** | **~288,500** |
+| audit-aws | 122,703 | ~30,700 |
+| audit-lgtm | 112,484 | ~28,100 |
+| audit-gcp | 98,499 | ~24,600 |
+| audit-sentry | 93,503 | ~23,400 |
+| audit-alert-routing | 92,805 | ~23,200 |
+| audit-digitalocean | 83,922 | ~21,000 |
+| audit-grafana | 76,695 | ~19,200 |
+| audit-pagerduty | 61,148 | ~15,300 |
+| audit-jsm | 59,137 | ~14,800 |
+| audit-elk | 58,991 | ~14,700 |
+| audit-zenduty | 58,401 | ~14,600 |
+| audit-groundcover | 53,470 | ~13,400 |
+| audit-datadog | 49,694 | ~12,400 |
+| audit-kubernetes | 27,130 | ~6,800 |
+| **All 15** | **1,220,718** | **~305,000** |
 
 Plus the shared report standard loaded once per run: ~70,300 bytes (~17,600 tokens est).
 
@@ -278,7 +279,7 @@ Plus the shared report standard loaded once per run: ~70,300 bytes (~17,600 toke
 `/scoutflo:audit-all` runs everything configured. If you only care about three
 stacks, run those three skills directly. Because the fixed instruction cost is
 per-audit, a targeted subset cuts that floor proportionally — e.g. `audit-datadog`
-alone carries ~11,800 fixed instruction tokens versus ~228,900 for all 13. The
+alone carries ~12,400 fixed instruction tokens versus ~305,000 for all 15. The
 audits also do not filter their own live queries (they aim for full breadth), so
 **running fewer audits — not filtering within an audit — is the real cost lever.**
 

@@ -178,6 +178,40 @@ sh "${CLAUDE_PLUGIN_ROOT}/report-standard/render-report-viz.sh" html "$OUT/findi
 sh "${CLAUDE_PLUGIN_ROOT}/report-standard/check-report.sh" "$OUT/report.md"
 ```
 
+Compute the delta against the previous run date per the [report standard](../../report-standard/README.md); on the first run state "first run, no delta". After the report is written, close with the run-completion message per the report standard ([report-template.md](../../report-standard/report-template.md#run-completion-message-what-the-skill-says-in-chat-when-the-run-finishes)): the one-line score headline (with movement and the "good base posture" / not-end-to-end label), the top fixes by `points_recoverable`, the **absolute** `report.md` path, the OS-specific open command, and the leak-safe share pointer (the Slack brief). Then send the Slack brief — titles only, never evidence values, no namespaces or object names:
+
+```bash
+set -eu
+TARGET_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/kubernetes"
+RUN_DATE="$(date -u +%Y-%m-%d)"
+OUT="${TARGET_DIR}/${RUN_DATE}"
+# slack.webhook_env names the webhook variable; skip when unset.
+if [ -n "${SCOUTFLO_SLACK_WEBHOOK:-}" ]; then
+  OUT_ABS="$(cd "$OUT" && pwd)"   # absolute path: the brief must be openable from anywhere
+  SCORE="$(jq -r '.score.overall' "$OUT/findings.json")"
+  E2E="$(jq -r 'if .score.end_to_end then "end-to-end" else "not end-to-end" end' "$OUT/findings.json")"
+  COUNTS="$(jq -r '.severity_counts | "\(.critical) critical, \(.high) high, \(.medium) medium, \(.low) low"' "$OUT/findings.json")"
+  TOP="$(jq -r '[.findings[] | "\(.id) \(.title)"] | .[0:5] | join("\n")' "$OUT/findings.json")"
+  # Date-named run dirs only (the previous run's baseline for movement + delta).
+  PREV="$(find "$TARGET_DIR" -mindepth 1 -maxdepth 1 -type d -name '[0-9]*-[0-9]*-[0-9]*' | sort | tail -2 | head -1)"
+  MOVE=""; DELTA="first run"
+  if [ -n "$PREV" ] && [ "$PREV" != "$OUT" ]; then
+    MOVE="$(jq -rn --argjson prev "$(jq '.score.overall' "$PREV/findings.json")" --argjson cur "$SCORE" \
+      '(($cur - $prev) | if . >= 0 then "(+\(.))" else "(\(.))" end)')"
+    DELTA="$(jq -rn --slurpfile p "$PREV/findings.json" --slurpfile c "$OUT/findings.json" '
+      [$p[0].findings[].id] as $b | [$c[0].findings[].id] as $n |
+      "\(($b - $n) | length) fixed, \(($n - $b) | length) new, \(($n - ($n - $b)) | length) unchanged"')"
+  fi
+  jq -n --arg head "audit-kubernetes ${RUN_DATE}: ${SCORE}/100${MOVE:+ $MOVE}, ${E2E}. ${COUNTS}." \
+        --arg top "$TOP" --arg delta "$DELTA" --arg path "$OUT_ABS/report.md" \
+        '{text: ($head + "\nTop findings:\n" + $top + "\nDelta: " + $delta + "\nReport: " + $path)}' \
+    | curl -fsS --max-time 10 -H 'Content-Type: application/json' -d @- "$SCOUTFLO_SLACK_WEBHOOK" \
+    || echo "Slack brief failed to send; audit result unaffected"
+fi
+```
+
+When invoked by `audit-all`, skip the Slack brief; the orchestrator sends exactly one combined message. Keep `./scoutflo-audits/` out of public version control; reports describe your infrastructure.
+
 ## Metadata Load (v0.1.68+)
 
 This skill reads the optional business-context SSOT to honor your guardrails:
