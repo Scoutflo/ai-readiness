@@ -174,6 +174,7 @@ set -eu
 RUN_DATE="$(date -u +%Y-%m-%d)"
 OUT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/kubernetes/${RUN_DATE}"
 sh "${CLAUDE_PLUGIN_ROOT}/report-standard/check-findings.sh" "$OUT/findings.json"
+sh "${CLAUDE_PLUGIN_ROOT}/report-standard/render-report-viz.sh" html "$OUT/findings.json" "$OUT/report.html" "$(dirname "$OUT")/history.jsonl"
 sh "${CLAUDE_PLUGIN_ROOT}/report-standard/check-report.sh" "$OUT/report.md"
 ```
 

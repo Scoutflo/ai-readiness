@@ -275,6 +275,7 @@ jq -e '.schema == "scoutflo-findings/v1" and .target == "elk" and (.findings | t
   "$OUT/findings.json" >/dev/null && echo "findings.json valid"
 grep -q '^# ' "$OUT/report.md" && echo "report.md present"
 sh "${CLAUDE_PLUGIN_ROOT}/report-standard/check-findings.sh" "$OUT/findings.json"
+sh "${CLAUDE_PLUGIN_ROOT}/report-standard/render-report-viz.sh" html "$OUT/findings.json" "$OUT/report.html" "$(dirname "$OUT")/history.jsonl"
 sh "${CLAUDE_PLUGIN_ROOT}/report-standard/check-report.sh" "$OUT/report.md"
 ```
 

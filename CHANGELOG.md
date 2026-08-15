@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.1.102
+
+Makes the audit reports visual and data-dense instead of walls of text — feedback that the reports were "just a lot of text." Every audit now opens with an at-a-glance dashboard and ships a standalone HTML dashboard alongside `report.md`.
+
+- **New `## At a glance` section at the top of every report** (now required by `check-report.sh`): a Unicode score bar, a trend sparkline from `history.jsonl`, checks-passed, a severity histogram, and a "Start here →" pointer to the highest-`points_recoverable` fix — so the headline reads in five seconds without prose.
+- **New standalone `report.html` dashboard** written next to `report.md`: a self-contained file (inline CSS, SVG score donut, colored severity chips, score-bar scorecard, sortable findings table) that opens in any browser — no server, no build, no external assets.
+- **Scorecard score bars and an optional Mermaid blast-radius graph** (from `topology-export.json`) for the visual topology view.
+- **New generator `report-standard/render-report-viz.sh`** renders all of the above **deterministically from the canonical `findings.json`** (+ `history.jsonl`, `topology-export.json`), so a visual can never disagree with the numbers the way hand-written prose can. Modes: `at-a-glance`, `scorecard`, `mermaid-topo`, `html`. Renders only structured fields (scores, counts, titles, ids, points) — never evidence values or secrets; the HTML carries the same "keep within your team" privacy caveat as `report.md`.
+- Wired into all **14 scored audits'** Phase 8 (audit-cost keeps its own ranked-savings report). `check-report.sh` requires the At-a-glance section and warns when the `report.html` sidecar is missing; `report-template.md` documents the section, the generator step, and the artifact. New `tests/test-report-viz.sh` (7 tests) covers rendering, self-containment, and empty-estate degradation.
+
+Everything renders where markdown already renders (GitHub, VS Code, Claude, any viewer) plus the browser dashboard — no new runtime dependency.
+
 ## 0.1.101
 
 Makes `/scoutflo:rca` a **live-first** root-cause tool. This is the direct fix for the customer feedback that RCA "from report data is nothing": rca resolved a failing pod to its Deployment and then stopped at "insufficient signal" because it only ever reasoned over local report files and never looked at the live cluster.
