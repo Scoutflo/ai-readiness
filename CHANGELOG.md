@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.1.103
+
+One exhaustive, adversarially-verified pass over **everything a user sees** (all 35 skills' output, the generated report.md/report.html/Slack brief, the start/connect/doctor flows, and the docs), fixing the complete set of user-facing quality gaps in a single batch rather than a trickle. 20 verified issues, all fixed.
+
+**Consistency — every audit now ends the same way:**
+- **`audit-kubernetes` finally has a run-completion message and a Slack brief.** It was the one scored audit that ended with no score headline, no clickable report path, no open command, and no titles-only brief. Now matches every sibling.
+- **The three "thin" Slack briefs (`audit-grafana`, `audit-sentry`, `audit-alert-routing`) are now as rich as the others** — score with movement, end-to-end label, severity counts, top-5 titles, and the fixed/new/unchanged delta line. Previously the Slack message you got depended on which audit ran; `audit-grafana`'s prose even promised a delta its script never produced.
+
+**`report.html` dashboard fixes:**
+- Findings table now orders by severity then points (was alphabetical, so a `low` sorted above `medium`); includes `info` findings to match `report.md` and its own info chip; and the tab/heading reads a human name (**"Grafana audit — …"**) instead of the raw `audit-grafana` slug.
+
+**Docs corrected to match reality (v0.1.102):**
+- README: RCA no longer described as "never re-calls your providers" (it's live-first now); "What's new" refreshed to the report-visuals + live-first-rca releases; "Reading a report" now says three files (adds `report.html` + the At-a-glance dashboard); self-policing counts de-numbered so they can't drift.
+- `start`: reports tree adds `report.html` + `topology-export.json`; rca catalog row describes live-first behavior. `map-topology`: every audit loads topology (was "5 audits"). `doctor`: AWS is now documented in the checks/interpretation tables and the emitted check-name list is complete. `connect`: the credential-reuse scan now includes `DIGITALOCEAN_ACCESS_TOKEN`.
+- `docs/token-costs.md`: regenerated the fixed-instruction table from `tests/measure-efficiency.sh` (which was itself missing `audit-jsm` and hardcoded "ALL 13" — now dynamic); corrected "15 scored audits" → 14, the cost-lever prose, and the stale "rca makes no fresh provider calls" claim.
+
+Docs/output-consistency only — no audit scoring, schema, or gate-behavior change. Gates: leak CLEAN, structure-check OK (13 checks), run-tests 20 suites, plugin validate --strict; all modified audits dash-clean.
+
 ## 0.1.102
 
 Makes the audit reports visual and data-dense instead of walls of text — feedback that the reports were "just a lot of text." Every audit now opens with an at-a-glance dashboard and ships a standalone HTML dashboard alongside `report.md`.

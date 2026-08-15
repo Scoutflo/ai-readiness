@@ -342,12 +342,23 @@ OUT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/alert-routing/$(date -u +%Y-%m-%d)
 # slack.webhook_env names the webhook variable; skip when unset.
 if [ -n "${SCOUTFLO_SLACK_WEBHOOK:-}" ]; then
   OUT_ABS="$(cd "$OUT" && pwd)"   # absolute path: the brief must be openable from anywhere
+  TARGET_DIR="$(dirname "$OUT")"
   SCORE="$(jq -r '.score.overall' "$OUT/findings.json")"
+  E2E="$(jq -r 'if .score.end_to_end then "end-to-end" else "not end-to-end" end' "$OUT/findings.json")"
   COUNTS="$(jq -r '.severity_counts | "\(.critical) critical, \(.high) high, \(.medium) medium, \(.low) low"' "$OUT/findings.json")"
-  TOP="$(jq -r '[.findings[] | "\(.id) \(.title)"] | .[0:3] | join("\n")' "$OUT/findings.json")"
-  jq -n --arg head "audit-alert-routing $(date -u +%Y-%m-%d): ${SCORE}/100. ${COUNTS}." \
-        --arg top "$TOP" --arg path "$OUT_ABS/report.md" \
-        '{text: ($head + "\nTop findings:\n" + $top + "\nReport: " + $path)}' \
+  TOP="$(jq -r '[.findings[] | "\(.id) \(.title)"] | .[0:5] | join("\n")' "$OUT/findings.json")"
+  PREV="$(find "$TARGET_DIR" -mindepth 1 -maxdepth 1 -type d -name '[0-9]*-[0-9]*-[0-9]*' | sort | tail -2 | head -1)"
+  MOVE=""; DELTA="first run"
+  if [ -n "$PREV" ] && [ "$PREV" != "$OUT" ]; then
+    MOVE="$(jq -rn --argjson prev "$(jq '.score.overall' "$PREV/findings.json")" --argjson cur "$SCORE" \
+      '(($cur - $prev) | if . >= 0 then "(+\(.))" else "(\(.))" end)')"
+    DELTA="$(jq -rn --slurpfile p "$PREV/findings.json" --slurpfile c "$OUT/findings.json" '
+      [$p[0].findings[].id] as $b | [$c[0].findings[].id] as $n |
+      "\(($b - $n) | length) fixed, \(($n - $b) | length) new, \(($n - ($n - $b)) | length) unchanged"')"
+  fi
+  jq -n --arg head "audit-alert-routing ${RUN_DATE:-$(date -u +%Y-%m-%d)}: ${SCORE}/100${MOVE:+ $MOVE}, ${E2E}. ${COUNTS}." \
+        --arg top "$TOP" --arg delta "$DELTA" --arg path "$OUT_ABS/report.md" \
+        '{text: ($head + "\nTop findings:\n" + $top + "\nDelta: " + $delta + "\nReport: " + $path)}' \
     | curl -fsS --max-time 10 -H 'Content-Type: application/json' -d @- "$SCOUTFLO_SLACK_WEBHOOK" \
     || echo "Slack brief failed to send; audit result unaffected"
 fi

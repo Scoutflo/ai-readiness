@@ -152,7 +152,7 @@ Before asking you to create or paste anything, the agent runs this **presence-on
 for V in GRAFANA_TOKEN PROM_TOKEN LOKI_TOKEN TEMPO_TOKEN MIMIR_TOKEN VM_TOKEN \
          DATADOG_API_KEY DATADOG_APP_KEY SENTRY_TOKEN PAGERDUTY_TOKEN \
          KIBANA_API_KEY JSM_EMAIL JSM_API_TOKEN ZENDUTY_TOKEN GROUNDCOVER_API_KEY \
-         SCOUTFLO_SLACK_WEBHOOK; do
+         DIGITALOCEAN_ACCESS_TOKEN SCOUTFLO_SLACK_WEBHOOK; do
   if [ -n "$(printenv "$V" 2>/dev/null || true)" ]; then echo "$V = already set"; else echo "$V = not set"; fi
 done
 ```

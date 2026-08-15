@@ -23,7 +23,8 @@ set -eu
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 CHARS_PER_TOKEN=4
 
-audit_dirs="aws gcp lgtm grafana sentry datadog elk zenduty pagerduty digitalocean groundcover alert-routing kubernetes cost"
+audit_dirs="aws gcp lgtm grafana sentry datadog elk jsm zenduty pagerduty digitalocean groundcover alert-routing kubernetes cost"
+n_audits="$(echo $audit_dirs | wc -w | tr -d ' ')"
 
 echo "=== 1. Fixed instruction cost per audit (SKILL.md + references/*.md) ==="
 printf "%-16s %10s %12s\n" "audit" "bytes" "~tokens(est)"
@@ -40,7 +41,7 @@ EOF
   printf "%-16s %10s %12s\n" "$d" "$b" "$((b / CHARS_PER_TOKEN))"
 done
 echo "--------------------------------------------------"
-printf "%-16s %10s %12s\n" "ALL 13" "$total_bytes" "$((total_bytes / CHARS_PER_TOKEN))"
+printf "%-16s %10s %12s\n" "ALL $n_audits" "$total_bytes" "$((total_bytes / CHARS_PER_TOKEN))"
 
 echo
 echo "=== 2. Shared framing loaded once per run (report standard) ==="
@@ -48,11 +49,11 @@ rs_bytes=$(find "$ROOT/report-standard" -name '*.md' 2>/dev/null | xargs wc -c 2
 printf "report-standard: %s bytes (~%s tokens est)\n" "$rs_bytes" "$((rs_bytes / CHARS_PER_TOKEN))"
 
 echo
-echo "=== 3. Targeted-audit lever: run one audit vs all 13 (fixed instructions) ==="
+echo "=== 3. Targeted-audit lever: run one audit vs all $n_audits (fixed instructions) ==="
 one_datadog=$(find "$ROOT/skills/audit-datadog" -name '*.md' | xargs wc -c | tail -1 | awk '{print $1}')
-printf "one targeted audit (datadog): ~%s tokens vs the 13-audit set ~%s tokens\n" \
-  "$((one_datadog / CHARS_PER_TOKEN))" "$((total_bytes / CHARS_PER_TOKEN))"
-printf "=> running the 3 audits you care about instead of all 13 cuts fixed instruction cost by roughly the ratio of their sizes.\n"
+printf "one targeted audit (datadog): ~%s tokens vs the %s-audit set ~%s tokens\n" \
+  "$((one_datadog / CHARS_PER_TOKEN))" "$n_audits" "$((total_bytes / CHARS_PER_TOKEN))"
+printf "=> running the 3 audits you care about instead of all %s cuts fixed instruction cost by roughly the ratio of their sizes.\n" "$n_audits"
 
 echo
 echo "=== 4. Roll-up phases are pure shell/jq: zero model tokens (always regenerate) ==="

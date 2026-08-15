@@ -154,6 +154,9 @@ EOF
     [ -f "$F" ] || { echo "no such file: $F" >&2; exit 1; }
     SKILL="$(jq -r '.skill // "audit"' "$F")"; TARGET="$(jq -r '.target // "target"' "$F")"
     RUNDATE="$(jq -r '.run_date // ""' "$F")"; OVERALL="$(jq -r '.score.overall // 0' "$F")"
+    # Human display name: strip the 'audit-' lane prefix and title-case the words
+    # (so the tab/heading read "Grafana audit — <target>", not the raw "audit-grafana" slug).
+    DISPLAY="$(printf '%s' "$SKILL" | sed 's/^audit-//' | awk -F- '{for(i=1;i<=NF;i++){$i=toupper(substr($i,1,1)) substr($i,2)}}1' OFS=' ') audit"
     read -r SC SH SM SL SI <<EOF
 $(jq -r '.severity_counts | "\(.critical//0) \(.high//0) \(.medium//0) \(.low//0) \(.info//0)"' "$F")
 EOF
@@ -168,7 +171,7 @@ EOF
     cat <<HTMLHEAD
 <!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Scoutflo AI Readiness — ${SKILL} — ${TARGET}</title>
+<title>Scoutflo AI Readiness — ${DISPLAY} — ${TARGET}</title>
 <style>
 :root{color-scheme:light dark}
 body{font:15px/1.5 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;margin:0;background:#f7f8fa;color:#1a202c}
@@ -186,7 +189,7 @@ th{cursor:pointer;user-select:none;color:#4a5568}
 .bar{height:100%;border-radius:4px}
 .footer{color:#a0aec0;font-size:12px;text-align:center;margin:24px 0}
 </style></head><body><div class="wrap">
-<div class="card"><h1>${SKILL} — ${TARGET}</h1><div class="sub">Scoutflo AI Readiness · ${RUNDATE} (UTC)</div>
+<div class="card"><h1>${DISPLAY} — ${TARGET}</h1><div class="sub">Scoutflo AI Readiness · ${RUNDATE} (UTC)</div>
 <div class="top" style="margin-top:16px">
 <svg width="130" height="130" viewBox="0 0 130 130" role="img" aria-label="score ${OVERALL} of 100">
 <circle cx="65" cy="65" r="54" fill="none" stroke="#e2e8f0" stroke-width="14"/>
@@ -221,9 +224,15 @@ HTMLMID
 <div class="card"><h1 style="font-size:16px">Findings</h1>
 <table id="find"><thead><tr><th onclick="sortT(this,0)">Severity</th><th onclick="sortT(this,1)">Finding</th><th onclick="sortT(this,2,1)">Points</th><th>Ref</th></tr></thead><tbody>
 HTMLFIND
-    jq -r '.findings[]? | select(.severity!="info") | [.severity,.title,(.points_recoverable//0|tostring),.id] | @tsv' "$F" \
-    | sort -t"$(printf '\t')" -k1,1 \
-    | while IFS="$(printf '\t')" read -r sev title pts id; do
+    # Order matches report.md: severity (critical->info) then points_recoverable
+    # descending. A sort key (severity rank, then -points) is emitted, sorted
+    # numerically, then dropped. All severities including info are shown, so the
+    # table matches report.md and the info chip's count.
+    jq -r '.findings[]?
+      | ({critical:0,high:1,medium:2,low:3,info:4}[.severity] // 5) as $r
+      | [($r|tostring), (((.points_recoverable//0) * -1)|tostring), .severity, ((.points_recoverable//0)|tostring), .title, .id] | @tsv' "$F" \
+    | sort -t"$(printf '\t')" -k1,1n -k2,2n \
+    | while IFS="$(printf '\t')" read -r rank negpts sev pts title id; do
         case "$sev" in critical) sd="#c53030";; high) sd="#dd6b20";; medium) sd="#d69e2e";; low) sd="#3182ce";; *) sd="#a0aec0";; esac
         # escape HTML-special chars in the model-authored title
         et="$(printf '%s' "$title" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g')"
