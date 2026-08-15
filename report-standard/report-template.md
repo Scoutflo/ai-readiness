@@ -2,7 +2,9 @@
 
 `report.md` is the human-readable half of an audit run. It is generated from the same data as `findings.json` and must never disagree with it. Sections appear in the order below; empty sections state why they are empty rather than disappearing.
 
-**Output conformance (enforced).** Every generated `report.md` must pass [`check-report.sh`](check-report.sh), which validates this skeleton: the header table, the canonical `**Score: <n>/100**` line, and the required section spine (Executive summary, Scorecard, Findings, Next safe actions, Evidence appendix) in order. Each audit skill runs it on its own `report.md` in its final phase before declaring the run done, so rendered output cannot silently drift from this template. Run it directly with `sh report-standard/check-report.sh path/to/report.md`; it exits non-zero and lists each violation when a report drifts. A report that does not match this template is a bug, not a style choice.
+**Output conformance (enforced).** Every generated `report.md` must pass [`check-report.sh`](check-report.sh), which validates this skeleton: the header table, the canonical `**Score: <n>/100**` line, and the required section spine (**At a glance**, Executive summary, Scorecard, Findings, Next safe actions, Evidence appendix) in order. It also warns when the standalone `report.html` dashboard is missing next to `report.md`.
+
+**Visuals are generated, never hand-written.** [`render-report-viz.sh`](render-report-viz.sh) renders the At-a-glance block, the scorecard bars, an optional Mermaid blast-radius graph, and the standalone `report.html` dashboard — all computed from the canonical `findings.json` (+ `history.jsonl` for the trend, `topology-export.json` for the graph), so a visual can never drift from the numbers. In Phase 8, after `findings.json` is written and `check-findings.sh` passes, each audit runs the generator to write `report.html` and to produce the At-a-glance block it pastes into `report.md`, then runs `check-report.sh`. Each audit skill runs it on its own `report.md` in its final phase before declaring the run done, so rendered output cannot silently drift from this template. Run it directly with `sh report-standard/check-report.sh path/to/report.md`; it exits non-zero and lists each violation when a report drifts. A report that does not match this template is a bug, not a style choice.
 
 ## Skeleton
 
@@ -16,6 +18,19 @@
 | Toolkit version | <x.y.z> |
 | Skill | <skill name> |
 | Critical services | <n> (from topology.md | inferred live) |
+
+## At a glance
+
+<Rendered from findings.json by `render-report-viz.sh`, never hand-written, so
+the visuals can never disagree with the numbers. Paste the output of
+`sh report-standard/render-report-viz.sh at-a-glance <findings.json> <history.jsonl>`
+verbatim: the **Score: n/100** bar, the trend sparkline, checks-passed, the
+severity histogram table, and the "Start here →" top lever (highest
+points_recoverable). Optionally follow it with the Mermaid blast-radius graph
+from `render-report-viz.sh mermaid-topo <topology-export.json> <service>` when a
+topology export exists. The same generator writes the standalone `report.html`
+dashboard (score donut, severity bars, sortable scorecard + findings) next to
+report.md.>
 
 ## Executive summary
 
