@@ -298,18 +298,31 @@ Expected output: one `[redaction] pass complete:` line per existing roll-up file
 Write `./scoutflo-audits/all/<YYYY-MM-DD>/report.md`. It summarizes and links; it does not restate evidence. Sections, in order:
 
 1. **Header**: date (UTC), toolkit version, audits run as `<n> of <m> configured`.
-2. **Scores**: one row per completed target: score, severity counts, estate size and sizing path (from the Phase 3 roll-up; `estate not recorded` when the audit did not emit one), delta versus that target's previous run (`+9`, `-3`, or `first run`), the score trend from its `history.jsonl` (last five runs, oldest first; `no history yet` when the ledger is missing), and the relative path to its full `report.md`. One score line per target, never a combined average: an average hides a failing stack behind a healthy one.
-3. **Blocked audits**: one row per blocked audit with reason and fix pointer. Omit the section only when nothing was blocked, and then state "No audits blocked."
-4. **Regressions**: the Phase 3 regressions list, one row per regressed finding with its target, ID, severity, and title, ordered highest severity first. State "No regressions this run." when the list is empty. This section always precedes Top findings; regressions are the highest-signal state in the lifecycle model and are named before anything else.
-5. **Topology Readiness (combined)**: one row per completed target, its "`<r> of <n> critical services sync-ready`" headline from the Phase 3 topology-readiness roll-up, and a link to that target's own Scoutflo Topology Readiness section for the per-service detail. A target whose roll-up line read `readiness not recorded` gets that exact phrase in its row, not a blank or a guess.
+2. **At a glance (all stacks)**: paste the output of `sh "${CLAUDE_PLUGIN_ROOT}/report-standard/render-report-viz.sh" rollup "<audits-dir>" "<run-date>"` — a gate-count meter (stacks passing the 85 gate / total) and a worst-first per-stack score-bar table, so a leader sees estate health and which stack to send the team to first at a glance. Never a combined average (that hides a failing stack behind a healthy one); this only visualizes the per-target scores.
+3. **Scores**: one row per completed target: score, severity counts, estate size and sizing path (from the Phase 3 roll-up; `estate not recorded` when the audit did not emit one), delta versus that target's previous run (`+9`, `-3`, or `first run`), the score trend from its `history.jsonl` (last five runs, oldest first; `no history yet` when the ledger is missing), and the relative path to its full `report.md`. One score line per target, never a combined average: an average hides a failing stack behind a healthy one.
+4. **Blocked audits**: one row per blocked audit with reason and fix pointer. Omit the section only when nothing was blocked, and then state "No audits blocked."
+5. **Regressions**: the Phase 3 regressions list, one row per regressed finding with its target, ID, severity, and title, ordered highest severity first. State "No regressions this run." when the list is empty. This section always precedes Top findings; regressions are the highest-signal state in the lifecycle model and are named before anything else.
+6. **Topology Readiness (combined)**: one row per completed target, its "`<r> of <n> critical services sync-ready`" headline from the Phase 3 topology-readiness roll-up, and a link to that target's own Scoutflo Topology Readiness section for the per-service detail. A target whose roll-up line read `readiness not recorded` gets that exact phrase in its row, not a blank or a guess.
 
    | Target | Sync-ready | Detail |
    | --- | --- | --- |
    | `<target>` | `<r> of <n> critical services sync-ready` or `readiness not recorded` | link to that target's `report.md#scoutflo-topology-readiness` |
 
-6. **Top findings**: the Phase 3 list with each finding's target added.
-7. **Suppressed**: the Phase 3 suppressed-findings roll-up, one line per target plus the `total suppressed across all targets` line. State "No findings suppressed via exemptions this run." when the total is `0`.
-8. **Next safe actions**: the highest-severity findings across all targets, each row pointing at its finding ID and its remediation pointer (a `setup-*` skill anchor), verification-only steps before mutating ones. No timelines, no effort estimates. When a finding's own `remediation` field is empty, look its ID up in [finding-remediation-map.json](../../docs/finding-remediation-map.json) (`.mappings["<ID>"]` → `setup_skill` + `anchor`); the map is generated from the setup skills' own fix sections and CI-validated, so every pointer resolves. An ID absent from both the finding and the map gets "no setup pointer; see the finding's recommendation" — never an invented anchor.
+7. **Cross-stack correlation**: paste the output of `sh "${CLAUDE_PLUGIN_ROOT}/report-standard/render-report-viz.sh" overlaps "<audits-dir>/correlation.json"` — the redundant-monitoring overlaps (one service flagged by two or more stacks) and any cascade chains that the Phase 3.5 correlation engine already computed into `correlation.json`. This is the only cross-stack synthesis in the run; it renders the engine's output verbatim and never re-derives or re-scores correlation. It degrades to "No cross-stack overlaps or cascades detected this run" when the engine found none, and to a run-`/scoutflo:audit-all` note when `correlation.json` is absent.
+8. **Top findings**: the Phase 3 list with each finding's target added.
+9. **Suppressed**: the Phase 3 suppressed-findings roll-up, one line per target plus the `total suppressed across all targets` line. State "No findings suppressed via exemptions this run." when the total is `0`.
+10. **Next safe actions**: the highest-severity findings across all targets, each row pointing at its finding ID and its remediation pointer (a `setup-*` skill anchor), verification-only steps before mutating ones. No timelines, no effort estimates. When a finding's own `remediation` field is empty, look its ID up in [finding-remediation-map.json](../../docs/finding-remediation-map.json) (`.mappings["<ID>"]` → `setup_skill` + `anchor`); the map is generated from the setup skills' own fix sections and CI-validated, so every pointer resolves. An ID absent from both the finding and the map gets "no setup pointer; see the finding's recommendation" — never an invented anchor.
+
+Render the two deterministic sections first (read-only; both derive only from artifacts already on disk — the per-target `findings.json` files and the Phase 3.5 `correlation.json`), then compose the report around them:
+
+```bash
+set -eu
+AUDITS_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}"   # report-standard output root
+RUN_DATE="$(date -u +%F)"        # UTC run date
+VIZ="${CLAUDE_PLUGIN_ROOT}/report-standard/render-report-viz.sh"
+sh "$VIZ" rollup   "$AUDITS_DIR" "$RUN_DATE"             # -> paste as the "At a glance (all stacks)" section
+sh "$VIZ" overlaps "$AUDITS_DIR/correlation.json"        # -> paste as the "Cross-stack correlation" section
+```
 
 Verify the write with an asserted command, not a glance:
 

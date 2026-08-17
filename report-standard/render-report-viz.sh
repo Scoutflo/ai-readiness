@@ -253,8 +253,81 @@ HTMLFOOT
     echo "wrote $OUT"
     ;;
 
+  overlaps)
+    # Render the cross-stack correlation the engine already computed (overlaps =
+    # the same service flagged by 2+ stacks; cascades = root_cause -> effects).
+    # This data is written to correlation.json every audit-all run and shown to a
+    # human nowhere; this only renders it (never re-derives or re-scores it).
+    C="${1:?correlation.json}"
+    echo "## Cross-stack correlation"
+    echo
+    if [ ! -f "$C" ]; then
+      echo "_No \`correlation.json\` — cross-stack correlation runs in \`/scoutflo:audit-all\` (needs two or more audits)._"
+      exit 0
+    fi
+    NOVL="$(jq '(.overlaps // []) | length' "$C" 2>/dev/null || echo 0)"
+    NCAS="$(jq '(.cascades // []) | length' "$C" 2>/dev/null || echo 0)"
+    if [ "${NOVL:-0}" -eq 0 ] && [ "${NCAS:-0}" -eq 0 ]; then
+      echo "No cross-stack overlaps or cascades detected this run — each finding is scoped to a single stack."
+      exit 0
+    fi
+    if [ "${NOVL:-0}" -gt 0 ]; then
+      echo "**Redundant monitoring — one service flagged by multiple stacks. Review whether the coverage overlaps and consolidate the paging path:**"
+      echo
+      echo "| Service | Stacks | Findings | Consolidation review |"
+      echo "| --- | --- | ---: | --- |"
+      jq -r '.overlaps[]? | [ .service, ((.targets // []) | join(", ")), ((.findings // []) | length | tostring), (.recommendation // "-") ] | @tsv' "$C" \
+      | while IFS="$(printf '\t')" read -r svc stacks nf rec; do
+          echo "| \`${svc}\` | ${stacks} | ${nf} | ${rec} |"
+        done
+      echo
+      # Per-overlap finding detail, so the reader sees exactly what each stack flagged.
+      jq -r '.overlaps[]? | "- **\(.service)** — flagged by \((.targets // []) | length) stacks:\n" + ((.findings // []) | map("  - \(.target): \(.finding_id) [\(.severity)] \(.title)") | join("\n"))' "$C"
+      echo
+    fi
+    if [ "${NCAS:-0}" -gt 0 ]; then
+      echo "**Cascade chains — a root cause with the downstream failures it explains:**"
+      echo
+      jq -r '.cascades[]? | "- ROOT \(.root_cause.finding_id) \(.root_cause.title)\n  → effects: " + ((.effects // []) | map("\(.finding_id) \(.title)") | join(" | "))' "$C"
+    else
+      echo "_No cross-stack cascade chains detected this run._"
+    fi
+    ;;
+
+  rollup)
+    # Combined "At a glance" for audit-all: gate-count meter + worst-first per-stack
+    # score bars, read from every target's findings.json for the run date. Never a
+    # mean (an average hides a failing stack behind a healthy one).
+    D="${1:?audits-dir}"; RD="${2:?run-date}"
+    echo "## At a glance (all stacks)"
+    echo
+    ROWS=""; total=0; passing=0
+    for f in "$D"/*/"$RD"/findings.json; do
+      [ -f "$f" ] || continue
+      tgt="$(jq -r '.target // "?"' "$f" 2>/dev/null)"
+      case "$tgt" in all|"?") continue;; esac
+      sc="$(jq -r '.score.overall // 0' "$f" 2>/dev/null)"
+      case "$sc" in *[!0-9]*) sc=0;; esac
+      total=$((total + 1)); [ "$sc" -ge "$GATE" ] && passing=$((passing + 1))
+      ROWS="${ROWS}${sc}	${tgt}
+"
+    done
+    if [ "$total" -eq 0 ]; then echo "_No completed audits for ${RD}._"; exit 0; fi
+    echo "**Stacks passing the ${GATE} gate: ${passing}/${total}**  \`$(viz_bar "$passing" "$total" 12)\`"
+    echo
+    echo "| Stack | Score | | |"
+    echo "| --- | ---: | --- | --- |"
+    printf '%s' "$ROWS" | sort -n | while IFS="$(printf '\t')" read -r sc tgt; do
+      [ -n "$tgt" ] || continue
+      [ "$sc" -ge "$GATE" ] && flag="" || flag="← below gate"
+      echo "| \`${tgt}\` | ${sc}/100 | \`$(viz_bar "$sc" 100 12)\` | ${flag} |"
+    done
+    echo
+    echo "_Worst-first — send the team to the top row. Never a combined average: one score line per stack._"
+    ;;
+
   *)
-    echo "usage: render-report-viz.sh {at-a-glance|scorecard|mermaid-topo|html} ..." >&2
+    echo "usage: render-report-viz.sh {at-a-glance|scorecard|mermaid-topo|html|overlaps|rollup} ..." >&2
     exit 2
     ;;
 esac

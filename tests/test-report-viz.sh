@@ -69,5 +69,35 @@ sh "$VIZ" at-a-glance "$WORK/empty.json" >/dev/null 2>&1 || fail "at-a-glance cr
 sh "$VIZ" html "$WORK/empty.json" "$WORK/e.html" >/dev/null 2>&1 || fail "html crashed on empty estate"
 echo "PASS"
 
+echo "Test 8: overlaps renders the cross-stack correlation from correlation.json"
+cat > "$WORK/corr.json" <<'EOF'
+{"overlaps":[{"overlap_id":"OVL-checkout","type":"redundant_monitoring","service":"checkout","targets":["datadog","grafana","lgtm"],"findings":[{"target":"datadog","finding_id":"DD-033","title":"no monitor","severity":"high"},{"target":"grafana","finding_id":"GRAF-091","title":"no rule","severity":"high"}],"recommendation":"consolidate the paging path"}],"cascades":[]}
+EOF
+OV="$(sh "$VIZ" overlaps "$WORK/corr.json")"
+printf '%s' "$OV" | grep -q '## Cross-stack correlation' || fail "no correlation heading"
+printf '%s' "$OV" | grep -q 'checkout' || fail "overlap service not rendered"
+printf '%s' "$OV" | grep -q 'datadog, grafana, lgtm' || fail "overlap stacks not joined"
+printf '%s' "$OV" | grep -q 'DD-033' || fail "per-overlap finding detail missing"
+printf '%s' "$OV" | grep -qi 'no cross-stack cascade' || fail "empty-cascade line missing"
+echo "PASS"
+
+echo "Test 9: overlaps degrades cleanly when nothing correlates / file absent"
+printf '%s' "$(sh "$VIZ" overlaps "$WORK/none.json")" | grep -qi 'correlation.json' || fail "missing-file degrade wrong"
+echo '{"overlaps":[],"cascades":[]}' > "$WORK/empty-corr.json"
+printf '%s' "$(sh "$VIZ" overlaps "$WORK/empty-corr.json")" | grep -qi 'No cross-stack overlaps' || fail "empty-overlaps degrade wrong"
+echo "PASS"
+
+echo "Test 10: rollup renders a gate-count meter + worst-first per-stack bars (no average)"
+for pair in grafana:82 aws:20 sentry:91; do
+  n="${pair%%:*}"; s="${pair##*:}"; mkdir -p "$WORK/roll/$n/2026-08-16"
+  printf '{"schema":"scoutflo-findings/v1","skill":"audit-%s","target":"%s","run_date":"2026-08-16","generated_at":"x","score":{"overall":%s,"categories":[],"excluded":[]},"severity_counts":{"critical":0,"high":0,"medium":0,"low":0,"info":0},"findings":[]}' "$n" "$n" "$s" > "$WORK/roll/$n/2026-08-16/findings.json"
+done
+RU="$(sh "$VIZ" rollup "$WORK/roll" 2026-08-16)"
+printf '%s' "$RU" | grep -q 'Stacks passing the 85 gate: 1/3' || fail "gate count wrong (want 1/3)"
+printf '%s' "$RU" | grep -qi 'never a combined average' || fail "missing no-average note"
+# worst-first: aws (20) must appear before sentry (91)
+printf '%s' "$RU" | awk '/`aws`/{a=NR} /`sentry`/{s=NR} END{exit !(a<s)}' || fail "rollup not worst-first ordered"
+echo "PASS"
+
 echo
 echo "=== report-viz self-test passed ==="
