@@ -86,9 +86,13 @@ else
 fi
 echo "target project: ${GCP_PROJECT}"
 echo "ambient gcloud project (printed for awareness, never used): $(gcloud config get-value project 2>/dev/null || echo unset)"
-PROJECT_ID="$(gcloud projects describe "$GCP_PROJECT" --format='value(projectId)')"
-[ "$PROJECT_ID" = "$GCP_PROJECT" ] || { echo "live-safety gate failed: gcloud resolved '${PROJECT_ID}', config names '${GCP_PROJECT}'"; exit 1; }
-echo "project id confirmed: ${PROJECT_ID}"
+# Reachability + identity echo. `gcloud projects describe X` echoes back the id you passed, so
+# comparing projectId to GCP_PROJECT is tautological — it "confirms" any valid project. The real
+# gate is: the call SUCCEEDS (this identity can actually read the project) AND you eyeball the
+# human name + number below to confirm it is the project you intend, not merely a reachable one.
+DESC="$(gcloud projects describe "$GCP_PROJECT" --format='value(projectId,projectNumber,name)' 2>/dev/null)" \
+  || { echo "live-safety gate failed: cannot read project '${GCP_PROJECT}' — wrong id, or the identity lacks resourcemanager.projects.get"; exit 1; }
+echo "target project — confirm id, number, and name are the one you intend: ${DESC}"
 ```
 
 The assertion is the gate: `projects describe` either returns a project id equal to `gcp.project`, or the block exits nonzero and stops the run. Never proceed on "probably the right project". If the printed identity line is not the one your team intends for audits, stop and report the mismatch even though the project-id assertion passed; identity and project are two separate checks. The ambient gcloud project is printed only so a drift is visible; no command in this audit reads it, every command names `--project "${GCP_PROJECT}"` explicitly, and pointing the audit somewhere else is an edit to `toolkit.yaml`, never a `gcloud config set`.
@@ -191,6 +195,30 @@ fi
 ```
 
 The large-path phases then run against the scoped set; the report names anything scoped out.
+
+### Empty / hidden-alerting guardrail
+
+The scope checkpoint above narrows a *large* estate. This guardrail catches the opposite and more dangerous case for GCP's project/metrics-scope partitioning: an estate that looks like it has **no alerting** because the alerting lives in a project this identity or metrics scope cannot see. It is the GCP analog of audit-elk's space-visibility trip-wire (ELK-033) and the JSM/Zenduty team-visibility guardrails: scoring a confident `0/100` because the Monitoring API returned zero policies is the same wrong answer as auditing only the `default` Kibana space. GCP centralizes alerting in a **metrics-scope scoping project** that monitors many others, so a scoping-project audit — or an identity scoped to a subset of projects — can legitimately read the API and see **none of this project's own alerting objects** while the real alerting is elsewhere. After Phase 2 materializes `alert-policies.jsonl` and `channels.json`:
+
+```bash
+set -eu
+GCP_PROJECT="your-project-id"   # gcp.project
+RUN_DATE="$(date -u +%Y-%m-%d)"
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/gcp/${RUN_DATE}/raw"
+POL="$(jq -s 'length' "${RAW_DIR}/alert-policies.jsonl" 2>/dev/null || echo 0)"
+CHAN="$(jq 'length' "${RAW_DIR}/channels.json" 2>/dev/null || echo 0)"
+if [ "${POL:-0}" -eq 0 ] && [ "${CHAN:-0}" -eq 0 ]; then
+  # Both alerting lists empty despite a readable Monitoring API (Phase 2 returned 200, not 401/403).
+  echo "[guard] 0 alert policies AND 0 notification channels in ${GCP_PROJECT} despite a readable Monitoring API — possible metrics-scope / project-visibility gap (GCP-007)"
+  echo "[guard] alerting may live in the metrics-scope scoping project that monitors this one, or this identity sees only a subset of projects — do NOT score a confident 0/100"
+fi
+```
+
+Behavior this enforces (Phase 11 honors it):
+
+- **Alerting-object-dependent categories excluded** — **Alert routing and delivery, Uptime and availability, Alert quality, and Dashboards and correlation** are marked `blocked` with the visibility-gap reason and renormalized per [severity-and-scoring.md](../../report-standard/severity-and-scoring.md); emit finding **GCP-007** naming the gap and the fix (confirm the metrics-scope *scoping* project that owns the alerting, and this identity's project access — recipe in `/scoutflo:connect`). **Never** write a confident `0/100`, a vacuously-high score, or an end-to-end claim.
+- **Keep the resource-signal categories included** — **Compute VM coverage, GKE coverage, Logs as a signal, and Load balancer coverage** assess the estate's own posture (Ops Agent presence, GKE component enablement, logs-based metrics, health-check attachment) from resource inventory that does not depend on the scoping project's alerting objects, so at least one scored category remains (excluding all of them leaves nothing to score and `check-findings.sh` rejects an all-excluded scorecard).
+- If those resource categories are **also** empty — the project is a pure monitoring hub with no resources of its own, or the identity can see nothing — emit **no confident score at all** and report GCP-007 as the outcome, exactly as audit-elk does when space discovery is unavailable. A `401`/`403` from Phase 2 is a *privilege* finding, not this trip-wire (that path never reaches here).
 
 ## Phase 1: Service context
 

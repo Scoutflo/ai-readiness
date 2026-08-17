@@ -232,8 +232,8 @@ GCP_PROJECT="your-project-id"   # gcp.project
 TARGET_HOST="www.example.com"
 TARGET_PATH="/healthz"
 CHECK_NAME="checkout production uptime"   # name it for the service and environment
-UPTIME_PERIOD="60s"    # example, tune to your traffic
-UPTIME_TIMEOUT="10s"   # example
+UPTIME_PERIOD=1        # example: MINUTES between checks. gcloud --period is an integer count of minutes (default 1) — NOT a duration string like "60s", which current gcloud rejects. Tune to your traffic.
+UPTIME_TIMEOUT=10      # example: SECONDS to wait for the request. gcloud --timeout is an integer count of seconds (default 60) — NOT a duration string like "10s".
 gcloud monitoring uptime create "$CHECK_NAME" --project "$GCP_PROJECT" \
   --resource-type=uptime-url --resource-labels="host=${TARGET_HOST},project_id=${GCP_PROJECT}" \
   --protocol=https --port=443 --path="$TARGET_PATH" --period="$UPTIME_PERIOD" --timeout="$UPTIME_TIMEOUT"
