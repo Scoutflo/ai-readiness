@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.1.107
+
+Puts **AKS clusters on equal footing with EKS and GKE**, and closes the pressure-scenario coverage gap the AKS review surfaced. Doc-wiring half of the Azure-provider workstream — the `audit-azure` / `setup-azure` skills and the AKS control-plane checks land later, once the companion `Azure-setup` validation harness locks the live API surface. No scored behavior changes; existing EKS/GKE paths are untouched.
+
+**AKS support across the fleet:**
+- **`connect` documents fetching a managed-cluster context for all three clouds.** New "Fetching a cluster context (managed clusters)" section shows `aws eks update-kubeconfig`, `gcloud container clusters get-credentials`, and `az aks get-credentials` (non-admin form — audits run as your RBAC-limited identity, never `--admin`). AKS with Microsoft Entra (Azure AD) integration also gets the `kubelogin` note: `az aks install-cli` then `kubelogin convert-kubeconfig -l azurecli`. Local-account (cert) AKS needs no kubelogin. Once the context exists, the audits treat AKS like any other context — no per-provider handling.
+- **`audit-kubernetes` doctor gate gains a conditional `kubelogin` probe.** If the configured context authenticates through a `kubelogin` exec plugin (Entra-integrated AKS) and `kubelogin` isn't installed, the gate now stops with `az aks install-cli` guidance instead of failing later with a cryptic exec-plugin error. Proven to **skip** cert/local-account AKS *and* EKS/GKE contexts (GKE's `gke-gcloud-auth-plugin` exec command does not false-trigger). Common Failure Modes row added.
+- **`map-topology` prerequisites** now point managed-cluster users to the connect credential-fetch step and note the AKS/kubelogin case; once the context exists it maps AKS unchanged.
+- In-cluster AKS posture (pod security, RBAC, network policies, resilience) already worked via `audit-kubernetes` the moment a context exists — its description already named AKS — so no check changed.
+
+**Pressure-scenario floor (governance gate):** the AKS review found `ci/skill-completeness-check.sh` required only **one** scenario *file* per audit skill and checked setup scenarios **not at all**, while the maintainer rubric (I4) asks for **at least 3** for every non-harness skill — a mismatch that let `audit-kubernetes` carry 1 scenario and `setup-kubernetes` 0. CI and the rubric now agree:
+- **The gate counts *scenarios*, not files, and requires ≥3 for both the audit and setup lanes** (except the `audit-all` orchestrator). A scenario is one `**Expected behavior:**` block, counted across every `.md` in the dir — so one-file-per-scenario (most skills) and several-packed-in-one-file (`audit-cost` carries 6 in one file) both count honestly. The audit lane already sits at 3–7 and every setup skill but one already had ≥3, so the floor codifies the real norm.
+- **`audit-kubernetes` 1 → 4 scenarios** (Entra-AKS/kubelogin doctor-gate stop; RBAC severity from *who* holds a wildcard grant, not binding count; single-replica-with-PDB is not a K8S-005 finding) and **`setup-kubernetes` 0 → 3** (the announce/confirm/one-object-at-a-time protocol vs a blanket "apply everything"; removing a wildcard RBAC binding only after its scoped replacement is applied and verified; default-deny NetworkPolicy with its allow-list in the same apply). Each authored against the current SKILL.md and adversarially verified as accurate — no fabricated commands, labels, or IDs.
+- **Gate self-test extended 5 → 9 cases** so the floor can't silently regress (a 2-scenario skill is rejected; ≥3 packed in one file is accepted; both lanes covered).
+
+Gates: leak CLEAN, structure-check (13 checks), run-tests (20 suites, completeness self-test now 9 cases), plugin validate --strict; touched blocks dash-clean; kubelogin probe proven against synthetic AKS contexts + a real Scoutflo GKE context; delta rubric-reviewed GATE PASS.
+
 ## 0.1.105
 
 Fixes the GCP plugin skills from a researched + adversarially-verified assessment (the companion GCP-setup harness improvements — SDK bump, Cloud Monitoring coverage, Managed-Prometheus/App Hub — are the separate platform-integration track and are handled there, against live `scoutflo-external`).

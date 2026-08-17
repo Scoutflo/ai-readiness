@@ -805,6 +805,30 @@ kubectl config get-contexts
 
 Write the exact context name into `kubernetes.context`. Every kubectl command in this toolkit passes `--context` explicitly, so the config value is the single source of truth; your shell's current context is never trusted.
 
+### Fetching a cluster context (managed clusters)
+
+If a managed cluster's context is not in your kubeconfig yet, fetch it once with the provider's CLI. Each command adds a context to your local kubeconfig — a local file change, not a change to the cluster — and every audit still pins `--context`, so nothing trusts the ambient default. EKS, GKE, and AKS are handled the same way:
+
+```bash
+# EKS
+aws eks update-kubeconfig --name <cluster> --region <region>
+# GKE
+gcloud container clusters get-credentials <cluster> --region <region> --project <project>
+# AKS — non-admin form runs as your own RBAC-limited identity; never use --admin for audits
+az aks get-credentials --resource-group <rg> --name <cluster>
+```
+
+Use `--zone` in place of `--region` for a zonal GKE cluster or a zonal AKS node scope. Then run `kubectl config get-contexts`, copy the exact name that was added, and write it into `kubernetes.context`.
+
+**AKS with Microsoft Entra (Azure AD) integration** needs `kubelogin` for kubectl to obtain a token — without it, later commands fail with a cryptic exec-plugin error. Install it once, then convert the fetched context to use your Azure CLI login:
+
+```bash
+az aks install-cli                          # installs kubelogin (and kubectl) if missing
+kubelogin convert-kubeconfig -l azurecli    # only for Entra-integrated AKS contexts
+```
+
+AKS clusters configured for local accounts (certificate-based kubeconfig) work with plain `kubectl` and do not need `kubelogin`. Once the context exists, `audit-kubernetes` and `map-topology` treat AKS like any other context — no per-provider handling.
+
 ### Read-only RBAC for audits
 
 Audits need get and list on workload objects, nothing more. The built-in `view` ClusterRole covers it. If your everyday context carries admin rights, point the toolkit at a dedicated read-only identity instead. Example binding for your cluster admin to review and apply (applying it is a cluster change):

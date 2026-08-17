@@ -37,6 +37,8 @@ Keep `./scoutflo-audits/` out of public version control. The map names your name
 
 Credentials: none beyond your kubeconfig. The kubeconfig user needs `get` and `list` on namespaces, pods, services, endpoints, deployments, statefulsets, daemonsets, and ingresses, plus the `networking.istio.io` resources when the mesh path runs. This is the read-only tier; no elevated access, no secrets, no `*_env` variables.
 
+Managed clusters (EKS, GKE, AKS) whose context is not yet in your kubeconfig: fetch it once with the provider CLI as shown in `/scoutflo:connect` (Kubernetes → Fetching a cluster context). AKS with Microsoft Entra integration also needs `kubelogin` (`az aks install-cli`). Once the context exists this skill maps it unchanged — AKS is just another context.
+
 If `/scoutflo:doctor` is set up, run it first; it validates the same context this skill depends on.
 
 ## Phase 0: Preflight and live-safety gate

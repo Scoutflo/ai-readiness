@@ -46,6 +46,16 @@ done
 KUBE_CONTEXT="my-cluster"   # kubernetes.context
 kubectl config get-contexts -o name | grep -qx "$KUBE_CONTEXT" \
   || { echo "context '$KUBE_CONTEXT' not in kubeconfig; run kubectl config get-contexts, fix kubernetes.context"; exit 1; }
+# Entra-integrated AKS contexts authenticate through a kubelogin exec plugin. If
+# this context needs it and it is missing, say so plainly now instead of failing
+# below with a cryptic exec error. A cert/local-account AKS context (no
+# exec.command) or an EKS/GKE context (whose exec.command is aws / gke-gcloud-auth-plugin,
+# not kubelogin) falls through and skips this. This mirrors the /scoutflo:doctor probe.
+EXEC_CMD="$(kubectl config view --minify --context "$KUBE_CONTEXT" -o jsonpath='{.users[*].user.exec.command}' 2>/dev/null || true)"
+case "$EXEC_CMD" in
+  *kubelogin*) command -v kubelogin >/dev/null \
+    || { echo "context '$KUBE_CONTEXT' uses the kubelogin exec plugin (Entra-integrated AKS) but kubelogin is not installed; run: az aks install-cli"; exit 1; } ;;
+esac
 kubectl --context "$KUBE_CONTEXT" auth can-i get pods -A >/dev/null 2>&1 \
   || { echo "context reaches no cluster or lacks read RBAC; bind the view ClusterRole (connect references/providers.md)"; exit 1; }
 echo "doctor gate: pass"
@@ -260,6 +270,7 @@ When context is available, apply it per [BUSINESS-CONTEXT-INTEGRATION-v0168.md](
 | Reading Secret values | This audit lists Secret names/types only; `kubectl get secret -o yaml` is on the forbidden list |
 | An RBAC `Forbidden` recorded as a pass | A denied `view` on a resource is `blocked` for that check, named with the exact resource, never silent success |
 | A single replica with a PDB flagged as unresilient | K8S-005 fails only when single-replica AND no PDB; either replicas>1 or a PDB present is a pass |
+| Entra-integrated AKS context failing with a cryptic exec-plugin error | The doctor gate detects a `kubelogin` exec context and stops with `az aks install-cli` guidance before any check runs; cert/local-account AKS and EKS/GKE contexts skip the probe |
 
 ---
 

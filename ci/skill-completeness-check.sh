@@ -31,7 +31,22 @@ FAIL=0
 # ~2.4KB) — those are gated on structure, not size.
 MIN_PROVIDER_BODY_BYTES=8000
 
+# Minimum pressure scenarios (I4) for a non-orchestrator audit skill. The whole
+# audit lane already sits at 3-7; a lone scenario (the pre-fix audit-kubernetes)
+# is thin coverage the maintainer rubric (I4) rejects, and the old "any *.md"
+# check let it through. A "scenario" is one `**Expected behavior:**` block — the
+# mandatory core of a pressure scenario — counted across every .md in the dir, so
+# one-file-per-scenario (most audits) and several-packed-in-one-file (audit-cost)
+# both count honestly, without forcing a particular file layout.
+MIN_SCENARIOS=3
+
 has() { grep -qiE "$2" "$1"; }   # has <file> <regex>
+
+# scenario_count <dir> — number of pressure scenarios (Expected-behavior blocks).
+scenario_count() {
+  [ -d "$1" ] || { echo 0; return; }
+  grep -rhoiE '\*\*expected behavior' "$1" 2>/dev/null | wc -l | tr -d ' '
+}
 
 for d in "$SKILLS"/*/; do
   name="$(basename "$d")"
@@ -65,8 +80,9 @@ for d in "$SKILLS"/*/; do
       has "$f" "Common Failure Modes"       || { echo "SKILL-COMPLETENESS: $name (audit) missing a 'Common Failure Modes' section"; FAIL=1; }
       [ -d "${d}references" ] && [ -n "$(find "${d}references" -name '*.md' 2>/dev/null)" ] \
         || { echo "SKILL-COMPLETENESS: $name (audit) has no references/*.md check catalog"; FAIL=1; }
-      [ -d "$DIR/tests/pressure-scenarios/$name" ] && [ -n "$(find "$DIR/tests/pressure-scenarios/$name" -name '*.md' 2>/dev/null)" ] \
-        || { echo "SKILL-COMPLETENESS: $name (audit) has no tests/pressure-scenarios/$name/*.md (I4 is mandatory)"; FAIL=1; }
+      scen=$(scenario_count "$DIR/tests/pressure-scenarios/$name")
+      [ "$scen" -ge "$MIN_SCENARIOS" ] \
+        || { echo "SKILL-COMPLETENESS: $name (audit) has $scen pressure scenario(s) (< $MIN_SCENARIOS); I4 wants >= $MIN_SCENARIOS. Add scenarios (one '**Expected behavior:**' block each) under tests/pressure-scenarios/$name/"; FAIL=1; }
       ;;
     setup-*)
       # A setup mutates live resources: it must carry the confirm-then-verify
@@ -77,6 +93,12 @@ for d in "$SKILLS"/*/; do
       has "$f" "[Ll]ive-safety gate"        || { echo "SKILL-COMPLETENESS: $name (setup) has no Live-safety gate"; FAIL=1; }
       grep -q "disable-model-invocation: true" "$f" || { echo "SKILL-COMPLETENESS: $name (setup) must set 'disable-model-invocation: true' in frontmatter (setups never auto-run)"; FAIL=1; }
       has "$f" "Common Failure Modes"       || { echo "SKILL-COMPLETENESS: $name (setup) missing a 'Common Failure Modes' section"; FAIL=1; }
+      # I4 applies to setup too (non-harness). The old gate never checked setup
+      # scenarios, so setup-kubernetes shipped with zero; a confirm-then-verify
+      # mutation skill needs its disruptive-ordering traps pinned by scenarios.
+      scen=$(scenario_count "$DIR/tests/pressure-scenarios/$name")
+      [ "$scen" -ge "$MIN_SCENARIOS" ] \
+        || { echo "SKILL-COMPLETENESS: $name (setup) has $scen pressure scenario(s) (< $MIN_SCENARIOS); I4 wants >= $MIN_SCENARIOS. Add scenarios (one '**Expected behavior:**' block each) under tests/pressure-scenarios/$name/"; FAIL=1; }
       ;;
     *)
       # Harness/guide lane: no provider gates, but a shipped skill still needs
