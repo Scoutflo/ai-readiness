@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.105
+
+Fixes the GCP plugin skills from a researched + adversarially-verified assessment (the companion GCP-setup harness improvements — SDK bump, Cloud Monitoring coverage, Managed-Prometheus/App Hub — are the separate platform-integration track and are handled there, against live `scoutflo-external`).
+
+- **`audit-gcp` gains the empty/hidden-scope guardrail (new `GCP-007`)** — the GCP analog of ELK-033 / JSM-024 / ZD-024, mandated by the v0.1.104 scope-partitioned-provider standard. GCP centralizes alerting in a metrics-scope *scoping* project, so a scoping-project audit (or an identity scoped to a subset of projects) can read the Monitoring API and see **zero of this project's own alert policies + channels** while the real alerting lives elsewhere. Previously that scored a **confident wrong `0/100`** (GCP-001 critical cascading down). Now: 0 policies AND 0 channels despite a `200` blocks the alerting-dependent categories (Alert routing, Uptime, Alert quality, Dashboards) with a visibility-gap reason and renormalizes, keeps the resource-signal categories (Compute/GKE/Logs/LB) scorable, emits `GCP-007`, and never writes a confident zero. A `401`/`403` stays a privilege finding. Pressure scenario added; Case-B scorecard proven to reconcile against `check-findings.sh`.
+- **`setup-gcp` uptime-check command fixed** — it passed REST duration strings `--period="60s"` / `--timeout="10s"` that current gcloud rejects. Corrected to the CLI-native integers `--period` (minutes, default 1) / `--timeout` (seconds, default 60), **verified live against gcloud 580.0.0** on the build machine. The origin comment in `gcp-checks.md` §14 is corrected so the wrong pattern can't be reintroduced.
+- **`gcp-checks.md` §4 pagination** — `notificationChannels` and `snoozes` now use the same `nextPageToken` loop `alertPolicies` already uses, so GCP-001/005/006 can't judge a silently truncated first page.
+- **`audit-gcp` live-safety gate de-tautologized** — `gcloud projects describe X` echoes the id you pass, so comparing it to the config proved nothing; reworded to its real job (reachability + a name/number echo the operator confirms, with ambient-project drift awareness).
+
+Plugin GCP skills only — no scoring-model, schema, or gate change. Gates: leak CLEAN, structure-check OK (13 checks), run-tests 20 suites, plugin validate --strict; all touched blocks dash-clean; delta rubric-checked GATE PASS.
+
 ## 0.1.104
 
 Surfaces cross-stack synthesis in the `audit-all` combined report — the one report-side item that cleared a skeptical "is it worth building" bar (everything else was pivot-to-integrations). The correlation engine already computes overlaps and cascades on every `audit-all` run; until now that data was written to `correlation.json` and shown to a human nowhere.

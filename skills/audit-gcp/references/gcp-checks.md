@@ -37,6 +37,7 @@ One permanent ID per check. IDs never change or get reused; retired checks keep 
 | GCP-004 | Alert routing and delivery | Delivery proven by an observed Monitoring-generated notification | high |
 | GCP-005 | Alert routing and delivery | No disabled or unverified channels still referenced by policies | medium |
 | GCP-006 | Alert routing and delivery | Active snoozes reviewed; none silently muting a critical policy | medium |
+| GCP-007 | Alert routing and delivery | Alerting objects (policies AND channels) are visible in this project (zero of BOTH despite a readable Monitoring API is `blocked`, not a plain fail — a likely metrics-scope/project-visibility gap: alerting may live in the scoping project that monitors this one, or the identity sees only a subset of projects; confirm the metrics-scope scoping project and project access) | critical |
 | GCP-010 | Uptime and availability | Every active public serving endpoint has an uptime check | high |
 | GCP-011 | Uptime and availability | Every uptime check has an alert policy on its check_passed metric | high |
 | GCP-012 | Uptime and availability | SSL-expiry visibility for HTTPS endpoints | medium |
@@ -111,16 +112,34 @@ while :; do
 done
 wc -l "${RAW_DIR}/alert-policies.jsonl"
 
-# Notification channels: REST, redacted at capture (label keys only, never values).
-curl -fsS --max-time 30 -H "Authorization: Bearer ${TOKEN}" \
-  "${MON_API}/projects/${GCP_PROJECT}/notificationChannels?pageSize=500" \
-  | jq '[.notificationChannels[]? | {name, type, displayName, enabled, verificationStatus,
-      label_keys: ((.labels // {}) | keys)}]' > "${RAW_DIR}/channels.json"
+# Notification channels: REST, PAGINATED (same nextPageToken loop as alert policies —
+# a first page at the full pageSize hides the rest, and GCP-001/005 must not judge a
+# truncated page). Redacted at capture (label keys only, never values). Emitted as a
+# JSON array so downstream checks read it unchanged.
+: > "${RAW_DIR}/channels.jsonl"
+PAGE=""
+while :; do
+  RESP="$(curl -fsS --max-time 30 -H "Authorization: Bearer ${TOKEN}" \
+    "${MON_API}/projects/${GCP_PROJECT}/notificationChannels?pageSize=500${PAGE:+&pageToken=${PAGE}}")"
+  printf '%s\n' "$RESP" | jq -c '.notificationChannels[]? | {name, type, displayName, enabled, verificationStatus,
+      label_keys: ((.labels // {}) | keys)}' >> "${RAW_DIR}/channels.jsonl"
+  PAGE="$(printf '%s' "$RESP" | jq -r '.nextPageToken // empty')"
+  [ -n "$PAGE" ] || break
+done
+jq -s '.' "${RAW_DIR}/channels.jsonl" > "${RAW_DIR}/channels.json"
 
-# Snoozes: REST (the gcloud group is newer; the REST surface is the pinned path).
-curl -fsS --max-time 30 -H "Authorization: Bearer ${TOKEN}" \
-  "${MON_API}/projects/${GCP_PROJECT}/snoozes?pageSize=500" \
-  | jq '[.snoozes[]? | {name, displayName, interval, criteria}]' > "${RAW_DIR}/snoozes.json"
+# Snoozes: REST, PAGINATED (same loop; GCP-006 must not miss a muting snooze on page 2).
+# The gcloud group is newer; the REST surface is the pinned path. Emitted as a JSON array.
+: > "${RAW_DIR}/snoozes.jsonl"
+PAGE=""
+while :; do
+  RESP="$(curl -fsS --max-time 30 -H "Authorization: Bearer ${TOKEN}" \
+    "${MON_API}/projects/${GCP_PROJECT}/snoozes?pageSize=500${PAGE:+&pageToken=${PAGE}}")"
+  printf '%s\n' "$RESP" | jq -c '.snoozes[]? | {name, displayName, interval, criteria}' >> "${RAW_DIR}/snoozes.jsonl"
+  PAGE="$(printf '%s' "$RESP" | jq -r '.nextPageToken // empty')"
+  [ -n "$PAGE" ] || break
+done
+jq -s '.' "${RAW_DIR}/snoozes.jsonl" > "${RAW_DIR}/snoozes.json"
 
 # GA gcloud surfaces. If `gcloud monitoring uptime` is missing on your version, use
 # GET ${MON_API}/projects/${GCP_PROJECT}/uptimeCheckConfigs instead.
@@ -393,8 +412,8 @@ Assemble one row per critical service from the raw captures; re-fetch any cell y
 Conservative starting defaults, not prescriptions. Observe each workload's baseline before trusting any threshold; a threshold nobody derived is a page nobody believes.
 
 ```bash
-UPTIME_PERIOD="60s"            # example check period
-UPTIME_TIMEOUT="10s"           # example
+UPTIME_PERIOD=1                # example: uptime-check period. gcloud `uptime create --period` is an integer count of MINUTES (default 1), NOT a duration string like "60s". (The duration-string windows below are alert-policy condition durations, which DO take "300s"-style strings — different surface.)
+UPTIME_TIMEOUT=10              # example: uptime-check request timeout. gcloud `uptime create --timeout` is an integer count of SECONDS (default 60), NOT a duration string like "10s".
 UPTIME_FAIL_WINDOW="180s"      # example: alert when checks fail for this long
 SSL_EXPIRY_DAYS="21"           # example: alert when the cert expires within this many days
 CPU_WARN_PCT="80"              # example warning tier, tune to your baseline
