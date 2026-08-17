@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.104
+
+Surfaces cross-stack synthesis in the `audit-all` combined report — the one report-side item that cleared a skeptical "is it worth building" bar (everything else was pivot-to-integrations). The correlation engine already computes overlaps and cascades on every `audit-all` run; until now that data was written to `correlation.json` and shown to a human nowhere.
+
+- **New `## Cross-stack correlation` section in the combined report** — renders the **redundant-monitoring overlaps** (one service flagged by two or more stacks, e.g. *checkout-edge-api* covered by datadog + grafana + groundcover + lgtm and paged by none) with each stack's findings, plus any **cascade chains**. It's the only cross-stack view in the run; it renders `correlation.json` verbatim and never re-derives or re-scores it. Degrades to "No cross-stack overlaps detected this run" when empty. This directly informs the consolidation / alert-fatigue call.
+- **New `## At a glance (all stacks)` block in the combined report** — a gate-count meter (stacks passing the 85 gate / total) and a **worst-first** per-stack score-bar table, so a leader sees estate health and which stack to send the team to first. Never a combined average (that hides a failing stack behind a healthy one).
+- **Two new `render-report-viz.sh` modes** (`overlaps`, `rollup`) produce both deterministically from artifacts already on disk (`correlation.json`, the per-target `findings.json`). Wired into `audit-all` Phase 4. 3 new tests (real-data overlaps, empty/missing degrade, worst-first rollup).
+
+Deliberately **not** built (per the same exploration's own reasoning, to avoid churn before the integrations work): a standalone combined `report.html` dashboard (L effort, reopens a rendering-consistency maintenance obligation, forwarding breaks its drill-down links — build only if an exec asks) and a remediation-queue restructure of the combined "Next safe actions" (a non-urgent refinement of an existing section). `audit-all` output only — no per-audit, scoring, schema, or gate-behavior change.
+
 ## 0.1.103
 
 One exhaustive, adversarially-verified pass over **everything a user sees** (all 35 skills' output, the generated report.md/report.html/Slack brief, the start/connect/doctor flows, and the docs), fixing the complete set of user-facing quality gaps in a single batch rather than a trickle. 20 verified issues, all fixed.
