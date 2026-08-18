@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.1.108
+
+Adds **Azure as a full cloud provider** — driven by a customer running AKS on Azure — with every API fact live-confirmed against a Scoutflo-internal subscription before any skill cites it (a companion `Azure-setup` validation harness, sibling of `GCP-setup`, is the SSOT).
+
+- **New `audit-azure`** — read-only scored audit of Azure observability: action groups + alert routing/delivery (AZR-001/060), metric / scheduled-query(log) / activity-log alerts (AZR-002/003/004), VM & VMSS coverage (AZR-010), **AKS control-plane** (AZR-030 Container Insights `addonProfiles.omsagent.enabled`, AZR-031 managed Prometheus `azureMonitorProfile.metrics.enabled`, AZR-032 diagnostic settings), Log Analytics (AZR-040), App Gateway / Load Balancer (AZR-050), and the **AZR-007 empty/hidden-scope guardrail** (0 action groups AND 0 metric alerts despite a 200 → visibility gap, never a confident 0 — the Azure twin of GCP-007/ELK-033, and it *fired correctly on real data* during validation). Plus a **non-scored Cost & Resource Optimization** section (`AZR-OPT-NNN`) modelled on audit-aws. Every api-version is one confirmed on a live 200 read.
+- **New `setup-azure`** — confirm-then-verify hardening of the Azure Monitoring plane (action groups, metric/log/activity alerts, AKS monitoring, diagnostic settings), each fix announced with its exact command + rollback. Bakes in a real validation finding: a Contributor identity **cannot create role assignments**, so RBAC-granting fixes are announced as plan-with-named-owner and note they need `User Access Administrator`/Owner — never a silent self-grant.
+- **Azure in the central `audit-cost`** — a new `COST-AZ-NNN` provider (`references/azure-cost.md`) on the confirmed Cost Management Query **REST** API (`2023-11-01`, 429-backoff; the `az costmanagement query` CLI does not exist) + Azure Advisor, wired into the doctor/provider matrix, the live-safety identity preamble, and the cost roll-up. Never-invent-a-dollar throughout.
+- **AKS across the fleet** (shipped in 0.1.107) means in-cluster posture already works via `audit-kubernetes`; `audit-azure` adds the cloud/control-plane half.
+- Catalog wired: `connect` Step 1 + CLI install (`az`, `az aks install-cli` for Entra/kubelogin), `/scoutflo:start`, and README.
+
+Validated live via a disposable create→validate→**delete** Entra AKS (torn down, ~cents): AKS monitoring-on props, the Entra/`kubelogin` exec flow, the Log Analytics data-plane query, and the cost read path all confirmed. Gates: leak CLEAN, structure-check (13 checks), run-tests (20 suites), plugin validate --strict; audit-azure + setup-azure each carry ≥3 pressure scenarios. Rubric-reviewed: `setup-azure` GATE PASS; `audit-azure` FAIL→fixed — the review caught a real AZR-007 raw-file bug (guardrail read `.jsonl`/`jq -s` while the inventory writes `.json` arrays, so it would have false-tripped on every run), a missing large-path worklist mechanism, and internal-reference removal; all three fixed and re-gated green.
+
 ## 0.1.107
 
 Puts **AKS clusters on equal footing with EKS and GKE**, and closes the pressure-scenario coverage gap the AKS review surfaced. Doc-wiring half of the Azure-provider workstream — the `audit-azure` / `setup-azure` skills and the AKS control-plane checks land later, once the companion `Azure-setup` validation harness locks the live API surface. No scored behavior changes; existing EKS/GKE paths are untouched.

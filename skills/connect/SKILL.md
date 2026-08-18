@@ -1,6 +1,6 @@
 ---
 name: connect
-description: Guided credential setup; creates minimal-scope tokens per tier for Grafana, Sentry, PagerDuty, Datadog, ELK/Kibana, JSM Operations, Zenduty, Groundcover, Prometheus, Loki, Tempo, Mimir, VictoriaMetrics, DigitalOcean, GCP, AWS, Kubernetes, and Slack, and writes ~/.scoutflo/toolkit.yaml. Use when the user wants to connect or onboard the toolkit, add an integration, rotate a token, or set up credentials, including the audit-brief Slack webhook. Do not use for alert-delivery webhooks (Grafana contact points, Alertmanager receivers; use setup-grafana or setup-lgtm) or to verify reachability (use doctor).
+description: Guided credential setup; creates minimal-scope tokens per tier for Grafana, Sentry, PagerDuty, Datadog, ELK/Kibana, JSM Operations, Zenduty, Groundcover, Prometheus, Loki, Tempo, Mimir, VictoriaMetrics, DigitalOcean, GCP, Azure, AWS, Kubernetes, and Slack, and writes ~/.scoutflo/toolkit.yaml. Use when the user wants to connect or onboard the toolkit, add an integration, rotate a token, or set up credentials, including the audit-brief Slack webhook. Do not use for alert-delivery webhooks (Grafana contact points, Alertmanager receivers; use setup-grafana or setup-lgtm) or to verify reachability (use doctor).
 ---
 
 # Connect: Credential and Config Setup
@@ -29,13 +29,14 @@ Two hard rules for this whole flow:
 - Admin access to each provider you connect (you create the tokens in their UIs).
 - Write access to `~/.scoutflo/`.
 
-Most integrations (Grafana, Prometheus, Loki, Tempo, Mimir, VictoriaMetrics, Sentry, Datadog, PagerDuty, ELK, JSM, Zenduty, Groundcover) are reached over HTTPS with a token, so they need only `curl` + `jq` — no vendor CLI. Only Kubernetes and AWS/GCP/DigitalOcean lean on a CLI. If you connect one of those and don't have its CLI yet (`doctor` will name exactly which is missing), install it first:
+Most integrations (Grafana, Prometheus, Loki, Tempo, Mimir, VictoriaMetrics, Sentry, Datadog, PagerDuty, ELK, JSM, Zenduty, Groundcover) are reached over HTTPS with a token, so they need only `curl` + `jq` — no vendor CLI. Only Kubernetes and AWS/GCP/Azure/DigitalOcean lean on a CLI. If you connect one of those and don't have its CLI yet (`doctor` will name exactly which is missing), install it first:
 
 | CLI | Needed for | Install |
 | --- | --- | --- |
 | `kubectl` | Kubernetes | https://kubernetes.io/docs/tasks/tools/ — macOS: `brew install kubectl` |
 | `aws` (v2) | AWS | https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html — macOS: `brew install awscli` |
 | `gcloud` | GCP | https://cloud.google.com/sdk/docs/install — macOS: `brew install --cask google-cloud-sdk` |
+| `az` | Azure | https://learn.microsoft.com/cli/azure/install-azure-cli — macOS: `brew install azure-cli`; for Entra-integrated AKS also `az aks install-cli` (kubelogin) |
 | `doctl` | DigitalOcean | https://docs.digitalocean.com/reference/doctl/how-to/install/ |
 
 **Already have MCP servers for these providers?** You still record hosts/tokens here the same way, and `doctor` still validates reachability. The toolkit uses **both** CLI/HTTP and MCP and picks per operation — reads go over the fast direct path, and a connected MCP tool is used when it is the equivalent read route (or the only reachable one), or for a write whose typed MCP tool is the safer path. You are never asked to choose, and a stack with only CLIs or only MCP servers both work. Read-only discipline and every safety rule are unchanged. See [docs/skill-authoring-conventions.md](../../docs/skill-authoring-conventions.md#integration-access-per-operation-transport-selection-clihttp-and-mcp).
@@ -71,7 +72,7 @@ Ask which integrations to configure as a plain numbered list in a normal chat me
 | Sentry | audit-sentry, setup-sentry | `sentry:` | `SENTRY_TOKEN` | read scopes for audits; write scopes for setup |
 | PagerDuty | audit-pagerduty | `pagerduty:` | `PAGERDUTY_TOKEN` | read-only REST key for audits |
 | Datadog | audit-datadog | `datadog:` | `DATADOG_API_KEY` + `DATADOG_APP_KEY` | scoped read-only app key for audits |
-| Cost (cross-provider) | audit-cost | (reuses `aws:`, `gcp:`, `datadog:`, `digitalocean:`, `kubernetes:` blocks) | none of its own | reuses each provider's read creds; add the optional cost scope per provider (AWS Compute Optimizer/Cost Explorer read; GCP Recommender viewer; Datadog `usage_read`) to get provider-native dollar figures |
+| Cost (cross-provider) | audit-cost | (reuses `aws:`, `gcp:`, `azure:`, `datadog:`, `digitalocean:`, `kubernetes:` blocks) | none of its own | reuses each provider's read creds; add the optional cost scope per provider (AWS Compute Optimizer/Cost Explorer read; GCP Recommender viewer; Azure `Cost Management Reader` + Advisor via `Reader`; Datadog `usage_read`) to get provider-native dollar figures |
 | ELK / Kibana | audit-elk | `elk:` | `KIBANA_API_KEY` | read-only Kibana **feature** privileges (Stack Rules, Rules Settings, Actions & Connectors) at `spaces:["*"]` — not ES cluster/index privileges; the audit auto-discovers spaces. Minting via `POST /_security/api_key`? Use the `role_descriptors` recipe in [references/providers.md](references/providers.md#or-mint-it-directly-via-the-elasticsearch-api-curl) |
 | JSM Operations | audit-jsm | `jsm:` | `JSM_EMAIL` + `JSM_API_TOKEN` | Atlassian API token over Basic auth; read-only by GET-only use |
 | Zenduty | audit-zenduty | `zenduty:` | `ZENDUTY_TOKEN` | `Authorization: Token` API key; Bot Token (Beta) for least privilege, read-only by GET-only use |
@@ -83,6 +84,7 @@ Ask which integrations to configure as a plain numbered list in a normal chat me
 | VictoriaMetrics | audit-lgtm, setup-lgtm | `victoriametrics:` | `VM_TOKEN` (optional) | URL; `vmalert_url` when you run vmalert |
 | DigitalOcean | audit-digitalocean, setup-digitalocean | `digitalocean:` | `DIGITALOCEAN_ACCESS_TOKEN` | read-only token; `doctl` honors it natively |
 | GCP | audit-gcp, setup-gcp | `gcp:` | none (gcloud login) or `GOOGLE_APPLICATION_CREDENTIALS` | `project` in config; `gcloud` identity or a service-account key file, `monitoring.viewer` for audits |
+| Azure | audit-azure, setup-azure | `azure:` | none (`az login`) or a service principal | `subscription_id` in config; `az` identity, `Monitoring Reader`+`Reader` for audits; setup that grants RBAC also needs `User Access Administrator`/Owner (Contributor alone cannot create role assignments) |
 | AWS | audit-aws, setup-aws | `aws:` | none (credential chain) or `AWS_ROLE_ARN` | `account_id`+`region` in config; active credential chain or assumed role, read-only policy for audits |
 | Kubernetes | map-topology, audit-kubernetes, audit-lgtm, setup-lgtm | `kubernetes:` | none (kubeconfig context) | read-only context for audits |
 | Slack | the per-run brief from every audit skill | `slack:` | `SCOUTFLO_SLACK_WEBHOOK` | the webhook URL is itself the secret |

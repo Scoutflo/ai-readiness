@@ -1,6 +1,6 @@
 ---
 name: audit-cost
-description: Read-only DEEP, per-resource cloud cost audit across AWS, GCP, Kubernetes, Datadog, and DigitalOcean; queries each provider's own cost-recommendation surfaces live (AWS Compute Optimizer / Cost Explorer / Cost Optimization Hub, GCP Recommender, Datadog usage, Kubernetes requests-vs-usage, DigitalOcean billing), ranks opportunities by provider-native dollar savings, and writes a ranked-savings findings.json (scoutflo-cost/v1) + report.md. It never invents a dollar figure and never mutates anything. Use when the user asks for a cost audit, cost optimization, rightsizing, idle/unattached/over-provisioned resources, commitment (RI/SP/CUD) coverage, or "where am I wasting money". Do not use to change resources (each finding is report-only), for reliability/alerting scoring (use audit-aws/audit-gcp/etc), or to re-aggregate prior findings (this queries providers live; prior audit cost findings are cross-reference only).
+description: Read-only DEEP, per-resource cloud cost audit across AWS, GCP, Azure, Kubernetes, Datadog, and DigitalOcean; queries each provider's own cost-recommendation surfaces live (AWS Compute Optimizer / Cost Explorer / Cost Optimization Hub, GCP Recommender, Azure Cost Management + Advisor, Datadog usage, Kubernetes requests-vs-usage, DigitalOcean billing), ranks opportunities by provider-native dollar savings, and writes a ranked-savings findings.json (scoutflo-cost/v1) + report.md. It never invents a dollar figure and never mutates anything. Use when the user asks for a cost audit, cost optimization, rightsizing, idle/unattached/over-provisioned resources, commitment (RI/SP/CUD) coverage, or "where am I wasting money". Do not use to change resources (each finding is report-only), for reliability/alerting scoring (use audit-aws/audit-gcp/etc), or to re-aggregate prior findings (this queries providers live; prior audit cost findings are cross-reference only).
 ---
 
 # audit-cost
@@ -29,6 +29,7 @@ This audit reads cost-recommendation and inventory surfaces for every **configur
 | --- | --- | --- | --- |
 | AWS | `aws.profile`/chain, `aws.region`, `aws.cost_checks` | Compute Optimizer / Cost Explorer / Cost Optimization Hub / Trusted Advisor read | `ec2/elbv2/s3/rds Describe*`/`List*` |
 | GCP | `gcp.project`, `gcp.credentials_env`, `gcp.cost_checks` | Recommender viewer (`roles/recommender.*Viewer`) + Recommender API enabled | `compute.*.list` |
+| Azure | `azure.subscription_id`, `azure.cost_checks` | Cost Management Query (`Cost Management Reader`) + Advisor (`Reader`) — REST `2023-11-01`, 429-backoff (no `az costmanagement query` CLI) | Resource Graph + `az … list/show` |
 | Datadog | `datadog.*`, `datadog.cost_checks` | `usage_read`/`billing_read` | (usage API only; no cheaper fallback) |
 | Kubernetes | `kubernetes.context` | metrics source: metrics-server (`kubectl top`) or Prometheus | `get` on workloads/PVCs/PVs |
 | DigitalOcean | `digitalocean.*` | (none — billing/list only) | `doctl ... list` / monitoring read |
@@ -59,13 +60,15 @@ Print every target this run will read from, and confirm before the first call. T
 ```bash
 set -eu
 # For each configured provider, print the exact identity this run will use.
-# AWS: sts identity + region. GCP: project + active account. K8s: context + server. DO: account. Datadog: site.
+# AWS: sts identity + region. GCP: project + active account. Azure: subscription/tenant/user. K8s: context + server. DO: account. Datadog: site.
 # (Each provider block in references/<prov>-cost.md prints its own identity preamble; this gate is the summary.)
 echo "audit-cost will READ the following targets (nothing is modified):"
 # AWS
 if command -v aws >/dev/null; then aws sts get-caller-identity --output text --query '[Account,Arn]' 2>/dev/null | sed 's/^/  aws: /' || true; fi
 # GCP
 if command -v gcloud >/dev/null; then gcloud config get-value project 2>/dev/null | sed 's/^/  gcp project: /' || true; fi
+# Azure
+if command -v az >/dev/null; then az account show --query '{sub:id,tenant:tenantId,user:user.name}' -o tsv 2>/dev/null | sed 's/^/  azure: /' || true; fi
 echo "live-safety gate: pass — confirm these are the accounts you intend to audit for cost"
 ```
 
@@ -129,6 +132,7 @@ For each **configured and in-scope** provider, run its catalog. Each reference i
 | --- | --- | --- |
 | AWS | [references/aws-cost.md](references/aws-cost.md) | `COST-AWS-NNN` |
 | GCP | [references/gcp-cost.md](references/gcp-cost.md) | `COST-GCP-NNN` |
+| Azure | [references/azure-cost.md](references/azure-cost.md) | `COST-AZ-NNN` |
 | Kubernetes | [references/kubernetes-cost.md](references/kubernetes-cost.md) | `COST-K8S-NNN` |
 | Datadog | [references/datadog-cost.md](references/datadog-cost.md) | `COST-DD-NNN` |
 | DigitalOcean | [references/digitalocean-cost.md](references/digitalocean-cost.md) | `COST-DO-NNN` |
@@ -182,7 +186,7 @@ Every finding is report-only (cost changes are out of scope for automation here 
 
 ## Maturity note (v0.1.79)
 
-The **AWS** cost phase is proven live end to end: a real run against a live account produced a validated `scoutflo-cost/v1` `findings.json` + ranked `report.md` (unattached EBS with per-volume ages, 117 no-lifecycle S3 buckets, 0% RI/SP commitment coverage from Cost Explorer, gp2→gp3 candidates) and correctly reported **zero native-dollar figures** because Compute Optimizer was not enrolled — the honest presence-fact path, no invented number. The **GCP** phase is authored and wired but its live proof is pending a credential-identity check (the run must confirm the intended principal before reading). **Kubernetes, Datadog, and DigitalOcean** are authored to the same contract and reference depth but **not yet proven live end to end** — built one at a time with proof, per the toolkit's build-with-evidence rule. Every phase carries no invented number by construction, so all are safe to run; treat GCP/K8s/DD/DO output as authored-not-yet-live-verified until this note is updated.
+The **AWS** cost phase is proven live end to end: a real run against a live account produced a validated `scoutflo-cost/v1` `findings.json` + ranked `report.md` (unattached EBS with per-volume ages, 117 no-lifecycle S3 buckets, 0% RI/SP commitment coverage from Cost Explorer, gp2→gp3 candidates) and correctly reported **zero native-dollar figures** because Compute Optimizer was not enrolled — the honest presence-fact path, no invented number. The **GCP** phase is authored and wired but its live proof is pending a credential-identity check (the run must confirm the intended principal before reading). The **Azure** phase is authored and wired, and its cost READ PATHS were confirmed live (Cost Management Query REST `2023-11-01` responded — throttled 429, endpoint+version valid — and Resource Graph `2022-10-01` returned records), but a full ranked-savings `findings.json` run against a real Azure estate is **not yet proven end to end**. **Kubernetes, Datadog, and DigitalOcean** are authored to the same contract and reference depth but **not yet proven live end to end** — built one at a time with proof, per the toolkit's build-with-evidence rule. Every phase carries no invented number by construction, so all are safe to run; treat GCP/K8s/DD/DO output as authored-not-yet-live-verified until this note is updated.
 
 ---
 

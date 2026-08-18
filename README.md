@@ -141,7 +141,7 @@ For team-wide or org-wide rollout instead of one person at a time, see [docs/ins
 1. **`/scoutflo:connect`** — tell it which integrations you use (Grafana, Sentry, PagerDuty, Datadog, ELK/Kibana, JSM Operations, Zenduty, groundcover, Prometheus, DigitalOcean, GCP, AWS, whatever applies). For each one it shows you the exact click-path to create a minimal-scope, read-only credential in that provider's own UI, and the exact command to export it in your own shell. It never asks you to paste a token into the chat, and never runs that command for you.
 2. **`/scoutflo:doctor`** — validates every credential you just set up with one cheap, read-only call per integration. Tells you exactly what's broken and how to fix it if anything is.
 3. **`/scoutflo:map-topology`** (recommended, one time) — builds a real map of your services from Kubernetes/Istio. Once this exists, every audit report uses your actual service names instead of generic ones.
-4. **Run your first audit** — pick whichever matches what you connected: `/scoutflo:audit-lgtm` (this is also your **Prometheus** audit — backend health, scrape targets, rules, cardinality; pair with `/scoutflo:audit-alert-routing` for the Prometheus→Alertmanager paging path), `/scoutflo:audit-grafana`, `/scoutflo:audit-sentry`, `/scoutflo:audit-pagerduty`, `/scoutflo:audit-datadog`, `/scoutflo:audit-elk`, `/scoutflo:audit-jsm`, `/scoutflo:audit-zenduty`, `/scoutflo:audit-groundcover`, `/scoutflo:audit-alert-routing`, `/scoutflo:audit-digitalocean`, `/scoutflo:audit-gcp`, or `/scoutflo:audit-aws`. Or run everything you've configured at once with `/scoutflo:audit-all`.
+4. **Run your first audit** — pick whichever matches what you connected: `/scoutflo:audit-lgtm` (this is also your **Prometheus** audit — backend health, scrape targets, rules, cardinality; pair with `/scoutflo:audit-alert-routing` for the Prometheus→Alertmanager paging path), `/scoutflo:audit-grafana`, `/scoutflo:audit-sentry`, `/scoutflo:audit-pagerduty`, `/scoutflo:audit-datadog`, `/scoutflo:audit-elk`, `/scoutflo:audit-jsm`, `/scoutflo:audit-zenduty`, `/scoutflo:audit-groundcover`, `/scoutflo:audit-alert-routing`, `/scoutflo:audit-digitalocean`, `/scoutflo:audit-gcp`, `/scoutflo:audit-azure`, or `/scoutflo:audit-aws`. Or run everything you've configured at once with `/scoutflo:audit-all`.
 5. **Read the report** in `./scoutflo-audits/<target>/<date>/report.md` — a scored, evidence-backed breakdown of what's healthy and what isn't, with a direct pointer to the fix for each finding.
 
 That's it — nothing else is required to get real value out of this.
@@ -191,6 +191,7 @@ Secrets live only in environment variables you export yourself. `~/.scoutflo/too
 | `/scoutflo:audit-alert-routing` | Proves an alert actually reaches a human — rule → Alertmanager → receiver, live — and scores **alert noise / alert fatigue**: flapping, permanently-firing rules, missing `for` debounce, missing grouping or inhibition, duplicate delivery, resolve noise |
 | `/scoutflo:audit-digitalocean` | App Platform, managed databases, uptime checks, alert routing |
 | `/scoutflo:audit-gcp` | Cloud Monitoring, uptime checks, GKE telemetry, logging, load-balancer health |
+| `/scoutflo:audit-azure` | Azure Monitor alerts + action groups, AKS (Container Insights, managed Prometheus), Log Analytics, VM/VMSS, App Gateway/LB; non-scored Azure cost |
 | `/scoutflo:audit-aws` | CloudWatch alarms, SNS routing, EC2/ECS/EKS/Lambda/RDS health, uptime, log forwarding — plus a separate, non-scored **Cost & Resource Optimization** report sourced from AWS's own Compute Optimizer / Cost Explorer / Trusted Advisor |
 | `/scoutflo:audit-cost` | Deep, cross-provider cloud cost — rightsizing, idle/unattached resources, commitment coverage, over-provisioned Kubernetes requests — ranked by each provider's **own** dollar figures (never invented). A separate ranked-savings report, not a 0–100 score |
 
@@ -203,6 +204,7 @@ Secrets live only in environment variables you export yourself. `~/.scoutflo/too
 | `/scoutflo:setup-sentry` | Projects, environments, privacy scrubbing, alert routing, monitors |
 | `/scoutflo:setup-digitalocean` | Alert destinations, uptime checks, App Platform and database alerting |
 | `/scoutflo:setup-gcp` | Notification channels, uptime checks, alert policies, dashboards |
+| `/scoutflo:setup-azure` | Action groups, metric/log/activity alerts, AKS monitoring, diagnostic settings |
 | `/scoutflo:setup-aws` | CloudWatch alarms, SNS routing, log forwarding, account-level observability. Never automates a cost-driven change (resize/delete) — Cost & Resource Optimization findings are always plan-only, a decision for you to make deliberately |
 | `/scoutflo:setup-kubernetes` | Pod Security Admission labels, RBAC tightening, network policies, resource limits, and PodDisruptionBudgets — each announced and confirmed before it's applied |
 
