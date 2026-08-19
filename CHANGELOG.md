@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.113
+
+Self-consistency fix in the self-test mechanism, found by running its own `integration` and `live` layers end-to-end for the first time (they were built in 0.1.111 but never exercised until now).
+
+- **`tests/selftest/run.sh` `live` layer** leak-scanned the *whole* audit dir — including `raw/` — which contradicts the contract documented in `report-standard/secret-redaction.md` (leak-scan is a repo-hygiene + **deliverable** gate; the local `raw/` holds customer-inherent data by design — e.g. filesystem paths inside the customer's own VCS commit messages — and is out of scope). It now leak-scans the **four deliverables only** (`findings.json`, `report.md`, `inventory.json`, `report.html`), so it no longer false-alarms on customer-authored free text in `raw/`. Verified against the 11 real sandbox outputs: 12/12 pass, including sentry (deliverables clean; the pre-fix `raw/` emails + commit-message paths are correctly out of scope).
+- **All five self-test layers now proven end-to-end:** mechanical, validators (32/0/1), capstone (3/0), integration (Docker ClickStack spin/probe/teardown, 3/0), live (12/0).
+
+Gates: leak CLEAN, structure-check (13), run-tests (21 suites), plugin validate --strict.
+
 ## 0.1.112
 
 Closes the last item the rigorous test found: **audit-sentry's `raw/` dump left operator emails in it.** On a live run against org `scoutfloai`, a leak-scan of the whole audit dir (deliverables + `raw/`) tripped the email regex on customer-inherent operator addresses the Sentry API returns — `createdBy.email` / `owner` in per-project `rules.json` and `metric-alerts.json`, and commit-author emails in `releases.json`. No secret leaked (0 DSNs, 0 webhook URLs, 0 token/secret assignments; `keys.json` was already reduced to `{name,isActive,rateLimit}`) and every shareable deliverable was individually clean — the gap was structured PII in the intermediate dump.

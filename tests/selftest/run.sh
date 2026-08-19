@@ -330,10 +330,18 @@ layer_live() {
       if sh "$RS/check-findings.sh" "$_f" >/dev/null 2>&1; then
         [ -f "$_d/report.md" ] && sh "$RS/check-report.sh" "$_d/report.md" >/dev/null 2>&1
         _rc=$?
-        sh "$CI/leak-scan.sh" "$_d" >/dev/null 2>&1; _lc=$?
+        # leak-scan the DELIVERABLES only. Per report-standard/secret-redaction.md,
+        # the local raw/ dump holds customer-inherent data by design (e.g. filesystem
+        # paths inside the customer's own VCS commit messages) and is out of
+        # leak-scan's scope; the four deliverables are the leak-clean contract.
+        _dv="$WORK/deliv-$(printf '%s' "$_tag" | tr -c 'A-Za-z0-9' '_')"; rm -rf "$_dv"; mkdir -p "$_dv"
+        for _a in findings.json report.md inventory.json report.html; do
+          [ -f "$_d/$_a" ] && cp "$_d/$_a" "$_dv/"
+        done
+        sh "$CI/leak-scan.sh" "$_dv" >/dev/null 2>&1; _lc=$?
         { [ "$_rc" = 0 ] && [ "$_lc" = 0 ]; } \
-          && rec live "validate: $_tag" "findings+report+leak ok" "ok" PASS \
-          || rec live "validate: $_tag" "findings+report+leak ok" "report=$_rc leak=$_lc" FAIL
+          && rec live "validate: $_tag" "findings+report+leak ok (deliverables)" "ok" PASS \
+          || rec live "validate: $_tag" "findings+report+leak ok (deliverables)" "report=$_rc leak=$_lc" FAIL
       else
         rec live "validate: $_tag" "findings ok" "check-findings failed" FAIL
       fi
