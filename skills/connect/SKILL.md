@@ -69,6 +69,7 @@ Ask which integrations to configure as a plain numbered list in a normal chat me
 | Mimir | audit-lgtm, setup-lgtm | `mimir:` | `MIMIR_TOKEN` (optional) | URL; `tenant_id` when multi-tenant |
 | VictoriaMetrics | audit-lgtm, setup-lgtm | `victoriametrics:` | `VM_TOKEN` (optional) | URL; `vmalert_url` when you run vmalert |
 | Kubernetes | map-topology, audit-lgtm, setup-lgtm | `kubernetes:` | none (kubeconfig context) | read-only context for audits |
+| GitHub | map-repos | `github:` | `GITHUB_TOKEN` | fine-grained PAT with Contents:Read + Metadata:Read, or classic `repo` read on private repos |
 | Slack | the per-run brief from every audit skill | `slack:` | `SCOUTFLO_SLACK_WEBHOOK` | the webhook URL is itself the secret |
 
 ## Step 2: Gather the configuration

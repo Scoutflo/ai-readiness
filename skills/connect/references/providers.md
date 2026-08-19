@@ -26,6 +26,7 @@ Skim this table to see everything you need before opening any provider UI. Full 
 | [Prometheus + Alertmanager](#prometheus-and-alertmanager) | URL reachability, optional bearer token | No scopes to grant unless behind an auth proxy | Just the URL, if reachable without auth |
 | [Loki / Tempo / Mimir / VictoriaMetrics](#loki-tempo-mimir-victoriametrics) | URL, optional tenant + token | No scopes to grant unless behind an auth proxy | Just the URL, plus `tenant_id` for Mimir |
 | [Kubernetes](#kubernetes) | kubeconfig context | Built-in `view` ClusterRole | A dedicated read-only context, not your admin one |
+| [GitHub](#github) | Personal access token | Classic `repo` (read) on private repos, or fine-grained `Contents:Read` + `Metadata:Read` | Settings > Developer settings > Personal access tokens |
 | [Slack](#slack) | Incoming webhook | The webhook URL is itself the secret | Create a Slack app > Incoming Webhooks |
 
 ## Grafana
@@ -727,6 +728,46 @@ kubectl --context "${KUBE_CONTEXT}" auth can-i get pods \
 # Expect: PASS. FAIL with the underlying output showing "no" means the RBAC
 # binding is missing; an error naming the context means the context name in
 # the config does not exist in your kubeconfig.
+```
+
+## GitHub
+
+### Config
+
+```yaml
+github:
+  org: your-org                             # GitHub org or user login
+  token_env: GITHUB_TOKEN                   # env var holding the personal access token
+  tier: read-only                           # tier of the token behind token_env: read-only or elevated
+```
+
+### Scopes per tier
+
+| Tier | Used by | Token type |
+| --- | --- | --- |
+| Read-only | map-repos | Fine-grained PAT with `Contents: Read-only` and `Metadata: Read-only` on the target org/repos, or a classic PAT with the `repo` scope (read) if any target repo is private. Public-only repos need no scope on a classic PAT. |
+
+map-repos never writes to GitHub; there is no elevated tier for this integration.
+
+### Where to click
+
+1. Sign in to GitHub.
+2. Settings > Developer settings > Personal access tokens > Fine-grained tokens (recommended) or Tokens (classic).
+3. Fine-grained: set Resource owner to your org, Repository access to the repos map-repos should see (or "All repositories"), and under Repository permissions set `Contents` and `Metadata` to Read-only. Classic: check the `repo` scope only if any target repo is private.
+4. Set an expiry (90 days is an example, tune to your rotation policy). Copy the token once; it is not shown again.
+
+### Export and verify
+
+```bash
+# YOU run this in your own terminal; an agent never executes this line.
+printf 'GITHUB_TOKEN: ' && read -rs GITHUB_TOKEN && export GITHUB_TOKEN && printf '\n'
+
+GITHUB_ORG="your-org"   # github.org
+code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 -H "Authorization: Bearer ${GITHUB_TOKEN}" "https://api.github.com/orgs/${GITHUB_ORG}")
+[ "$code" = "200" ] && echo PASS || echo "FAIL: got $code"
+# Expect: PASS. 404 here is normal for a personal account rather than an org --
+# map-repos falls back to the /users/{login} path automatically. 401 means the
+# token is wrong or expired.
 ```
 
 ## Slack
