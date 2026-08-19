@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.112
+
+Closes the last item the rigorous test found: **audit-sentry's `raw/` dump left operator emails in it.** On a live run against org `scoutfloai`, a leak-scan of the whole audit dir (deliverables + `raw/`) tripped the email regex on customer-inherent operator addresses the Sentry API returns — `createdBy.email` / `owner` in per-project `rules.json` and `metric-alerts.json`, and commit-author emails in `releases.json`. No secret leaked (0 DSNs, 0 webhook URLs, 0 token/secret assignments; `keys.json` was already reduced to `{name,isActive,rateLimit}`) and every shareable deliverable was individually clean — the gap was structured PII in the intermediate dump.
+
+- **audit-sentry Phase 1** now runs a redaction pass after collection (both the small/medium path and the large-org worklist): `jq 'walk(if type=="object" and has("email") then .email=null else . end)'` across `raw/`. It nulls every operator email while preserving every field a check reads — `createdBy` stays a non-null object so **SNTRY-001**'s `createdBy == null` test is intact, and names/ids/slugs/counts are untouched. Verified: a mock `raw/` with `createdBy.email` goes from leak-scan **FOUND → CLEAN**, SNTRY-001 still fires, rule names survive.
+- **report-standard/secret-redaction.md** gains a *"`raw/` working dir and the scope of `ci/leak-scan.sh`"* section: leak-scan is a repo-hygiene + shareable-deliverable gate (the four deliverables are the leak-clean contract); an audit's local `raw/` holds customer data by design; audits strip **structured** PII at capture (Sentry emails here, GCP `mutatedBy` already), while a value a customer embedded in **free text** — a path inside their own commit message — is their data, not a secret of ours, and is left intact rather than mangled. Pointing leak-scan at a customer's `raw/` will surface such values; that is expected, not a leak.
+
+Pressure scenario added (`audit-sentry/raw-dump-strips-operator-emails.md`). Gates: leak CLEAN, structure-check (13), run-tests (21 suites), plugin validate --strict.
+
+(Also confirmed already-shipped in 0.1.111 and not re-touched: the **AWS-042** ground-rule mislabel — `SKILL.md:114` reads `AWS-001` and AWS-042 means only Synthetics canaries everywhere; and the **render-report-viz at-a-glance severity tie-break** — `render-report-viz.sh:93` sorts by points then severity, with a CI test asserting a critical wins an equal-points tie.)
+
 ## 0.1.111
 
 A rigorous end-to-end test pass — every audit run against **real live data** (11 providers reachable this run), the report-standard validators hit with 30+ adversarial fixtures, and the cross-cutting skills (correlation, cost roll-up, audit-all, rca) exercised over the real multi-provider findings — then every defect it surfaced fixed and locked behind a permanent regression. Ships a **reusable local self-test mechanism** so this is repeatable anytime. Every audit that could reach live data passed; the defects below were all on error/diagnostic paths or reference queries — none affected the read-only lane, the score reconciliation, or produced a fabricated finding.

@@ -49,3 +49,30 @@ and a future secret-bearing check inherits it). `ci/redaction-parity-check.sh`
 checks this is present; `ci/leak-scan.sh` separately catches secrets committed to
 the repo. Together: nothing leaks at author time (leak-scan) or run time
 (redaction discipline + filter).
+
+## The `raw/` working dir and the scope of `ci/leak-scan.sh`
+
+`ci/leak-scan.sh` is a **repo-hygiene gate**: its job is to keep secrets and
+machine-identifying values out of the *committed repository* and out of the
+*shareable deliverables* an audit produces (`findings.json`, `report.md`,
+`report.html`, `inventory.json`). Those four are the leak-clean contract — they
+must pass leak-scan on every run.
+
+An audit's `raw/` dump is different. It is **local-only working data** that, by
+design, holds the customer's own environment: their resource ids, service names,
+and — unavoidably — operator identifiers and free-text fields the provider API
+returns. Two rules keep it sane:
+
+1. **Strip structured PII at capture.** Secret values (DSNs, tokens, webhook URLs,
+   auth headers) are never written at all. Structured operator identifiers that a
+   check does not read — e.g. Sentry `createdBy.email`/`owner`/commit-author
+   emails, GCP alert-policy `creationRecord`/`mutationRecord.mutatedBy` — are
+   nulled/stripped at capture (a `jq` pass on the raw files), so the common PII a
+   leak-scan would flag never lands.
+2. **Free-text customer data is out of scope, not a leak.** A value the customer
+   embedded in a free-text field — a filesystem path inside *their own* VCS commit
+   message, a hostname in a description — is their data, not a secret of ours, and
+   cannot be stripped without destroying the evidence the check relies on. Running
+   `ci/leak-scan.sh` over an audit's local `raw/` dir will therefore surface such
+   values; that is expected and is **not** a leak of anything sensitive. Point the
+   gate at the deliverable set (or the repo), never at a customer's `raw/`.

@@ -74,7 +74,7 @@ Load `./scoutflo-audits/topology.md` if it exists; its service list is your crit
 - Conservative posture wins ties: privacy-sensitive telemetry without a recorded decision is a finding, email-only routing is a temporary path, a monitor without observed check-ins is unproven.
   - ❌ `Routing validated-live: the rule has a Slack action configured.`
   - ✅ `Routing configured: the Slack action references integration id 42, which is absent from integrations.json; unproven until it appears active (SNTRY-005 partial).`
-- Never print, store, or write a DSN, token, webhook URL, or auth header anywhere: not in terminal output, not in the raw dump, not in evidence. The inventory script strips DSNs at capture.
+- Never print, store, or write a DSN, token, webhook URL, or auth header anywhere: not in terminal output, not in the raw dump, not in evidence. The keys pull strips DSNs at capture, and the Phase 1 redaction pass nulls operator emails (`createdBy.email`, `owner`, commit-author) across the raw dump. A value a customer embedded in free text — a path inside their own commit message — is their data, not a secret of ours; see [report-standard/secret-redaction.md](../../report-standard/secret-redaction.md) on the `raw/` working-dir scope of `ci/leak-scan.sh`.
 
 ## Estate sizing
 
@@ -235,6 +235,23 @@ for p in $(jq -r '.[].slug' "${RAW_DIR}/projects.json"); do
   [ -s "${d}/keys.json" ] || echo '[]' > "${d}/keys.json"
   fetch_all "${API}/projects/${SENTRY_ORG}/${p}/uptime/"       > "${d}/uptime.json" \
     || echo '[]' > "${d}/uptime.json"
+done
+
+# --- Redact operator PII from the raw dump (runs on every path once RAW_DIR is
+# populated; the large-path worklist in references/api-checks.md applies the same
+# step). Sentry returns operator emails in structured fields — rule/alert
+# `createdBy.email`, `owner`, release commit-author emails — but NO check reads an
+# email (SNTRY-001 reads `createdBy == null`; ownership is by team; releases by
+# commit COUNT and source-map resolution). Null every `.email` key so a leak-scan
+# of the audit dir stays clean without touching a field any check needs:
+# `createdBy` stays a non-null object, and names/ids/slugs/counts are untouched.
+# Paths a customer embedded in FREE TEXT (e.g. inside their own commit messages in
+# releases.json) are their data, not a secret of ours, and can't be stripped
+# without destroying the commit evidence — see report-standard/secret-redaction.md
+# on the raw/ working-dir scope of ci/leak-scan.sh.
+find "${RAW_DIR}" -name '*.json' -type f | while read -r rf; do
+  jq 'walk(if type == "object" and has("email") then .email = null else . end)' "$rf" > "${rf}.red" 2>/dev/null \
+    && mv "${rf}.red" "$rf" || rm -f "${rf}.red"
 done
 
 for f in projects teams integrations releases monitors; do

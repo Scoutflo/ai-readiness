@@ -220,6 +220,13 @@ pending=$(awk -F'\t' '$2 == "pending"' "${WORKLIST}" | wc -l | tr -d ' ')
 mkdir -p "${RAW_DIR}/projects"
 cp "${RUN_DIR}/raw/projects.json" "${RAW_DIR}/projects.json"
 cp -R "${RUN_DIR}/raw/projects/." "${RAW_DIR}/projects/"
+# Apply the same operator-PII redaction the small/medium path runs (SKILL.md Phase 1):
+# null every `.email` key across the merged raw dump so a leak-scan of the audit dir
+# stays clean. No check reads an email, so nothing a check needs is touched.
+find "${RAW_DIR}" -name '*.json' -type f | while read -r rf; do
+  jq 'walk(if type == "object" and has("email") then .email = null else . end)' "$rf" > "${rf}.red" 2>/dev/null \
+    && mv "${rf}.red" "$rf" || rm -f "${rf}.red"
+done
 echo "merged $(find "${RAW_DIR}/projects" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ') project directories into ${RAW_DIR}"
 ```
 
