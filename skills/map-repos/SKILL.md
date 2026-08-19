@@ -124,13 +124,19 @@ There is no code to run in this phase — it is a conversation, not a command bl
 
 ## Phase 4: Write repo-map.md and repo-map.json
 
-Compose both files in a temp location first; Phase 5 needs the old and new versions to compute the re-run delta.
+Before composing anything, back up any existing `repo-map.json` so the re-run delta below has the pre-overwrite version to compare against. Compose both files in a temp location next; Phase 5 needs the old and new versions to compute the re-run delta.
 
 ```bash
 set -eu
 OUT_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}"
 TMP="${TMPDIR:-/tmp}/map-repos-write"
 mkdir -p "$TMP" "$OUT_DIR"
+
+# Back up any previously written repo-map.json before it gets overwritten below.
+# On a first run there is nothing to back up, which is expected, not an error.
+OUT="${OUT_DIR}/repo-map.json"
+[ -f "$OUT" ] && cp "$OUT" "${TMP}/repo-map.prev.json" && echo "previous map saved" || echo "first run"
+
 GENERATED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
 # MAPPINGS_JSON and UNRESOLVED_JSON are produced by Phase 3's confirmation loop
@@ -167,7 +173,7 @@ cp "${TMP}/repo-map.new.md" "${OUT_DIR}/repo-map.md"
 echo "wrote: ${OUT_DIR}/repo-map.json and ${OUT_DIR}/repo-map.md"
 ```
 
-Expected: `wrote: .../repo-map.json and .../repo-map.md`, and `jq empty` above exits 0 before either file is copied into place — an invalid JSON compose is caught before it overwrites anything.
+Expected: either `previous map saved` or `first run` printed before anything is written, then `wrote: .../repo-map.json and .../repo-map.md`, and `jq empty` above exits 0 before either file is copied into place — an invalid JSON compose is caught before it overwrites anything, and by the time it does overwrite, the previous version (if any) is already safe in `${TMP}/repo-map.prev.json`.
 
 ## Phase 5: Verify and summarize
 
@@ -186,15 +192,7 @@ Expected: `mapped: N services, unresolved: M`, and both `jq -e` assertions exit 
 
 ### Re-run delta: carry forward, never silently drop or rewrite
 
-If `repo-map.json` already exists from a previous run, copy it aside before Phase 4 writes anything, then feed it into Phase 3: every service already in the old file's `mappings` is proposed to the user as already-confirmed and kept exactly as-is (same `repository_id`, same `confirmed_at`) unless live GitHub evidence now contradicts it.
-
-```bash
-set -eu
-OUT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/repo-map.json"
-TMP="${TMPDIR:-/tmp}/map-repos-write"
-mkdir -p "$TMP"
-[ -f "$OUT" ] && cp "$OUT" "${TMP}/repo-map.prev.json" && echo "previous map saved" || echo "first run"
-```
+Phase 4 already backed up any pre-existing `repo-map.json` to `${TMP}/repo-map.prev.json` before it wrote the new file, so that previous version is available here even though `${OUT_DIR}/repo-map.json` itself now holds the new content. Feed `${TMP}/repo-map.prev.json` (when it exists — a `first run` means there is nothing to feed) into Phase 3: every service already in that old file's `mappings` is proposed to the user as already-confirmed and kept exactly as-is (same `repository_id`, same `confirmed_at`) unless live GitHub evidence now contradicts it.
 
 A contradiction is: the repo behind a confirmed `repository_id` is now archived, or a fresh lookup by that same id returns a different `owner`/`name` than last recorded (a rename or transfer — expected and fine, update the label) or 404s entirely (the repo was deleted or the token lost access — flag it, do not drop the mapping silently). Name the exact contradiction to the user in Phase 3 rather than auto-resolving it; a customer-confirmed fact is never silently rewritten without them seeing why.
 
