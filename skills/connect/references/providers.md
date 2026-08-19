@@ -787,6 +787,58 @@ code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "${VM_URL}/health")
 
 Run only the checks for the stores you configured. These health paths vary by deployment: behind a gateway or path prefix, `/ready` may 404 while queries work fine. Verify the health path against your deployment, and treat a successful real query as the authoritative signal.
 
+## ClickStack (ClickHouse + HyperDX)
+
+ClickStack stores telemetry in ClickHouse and fronts it with HyperDX. `audit-clickstack` needs a **read-only ClickHouse user** and a **HyperDX API key**; both are read-only.
+
+### Config
+
+```yaml
+clickstack:
+  clickhouse_url: https://your-clickhouse-host:8123
+  clickhouse_user: scoutflo_ro
+  clickhouse_password_env: CH_KEY
+  hyperdx_url: https://your-hyperdx-host:8080
+  hyperdx_api_key_env: HDX_API_KEY
+```
+
+### Create a read-only ClickHouse user
+
+Run as a ClickHouse admin (this is a cluster change; apply it deliberately). It grants `SELECT` on the telemetry database and the `system` tables the audit reads, and nothing else:
+
+```sql
+CREATE USER scoutflo_ro IDENTIFIED WITH sha256_password BY '<strong-password>';
+GRANT SELECT ON default.* TO scoutflo_ro;   -- use your telemetry database name if not `default`
+GRANT SELECT ON system.* TO scoutflo_ro;
+```
+
+Then export the password into the variable your config names:
+
+```bash
+export CH_KEY='<strong-password>'
+```
+
+### Create a HyperDX API key
+
+In HyperDX, open Team Settings and create an API key (read scope is enough for the audit's `GET /api/alerts`, `/api/dashboards`, `/api/sources`). Export it:
+
+```bash
+export HDX_API_KEY='<your-hyperdx-api-key>'
+```
+
+### Verify
+
+```bash
+CH_URL="https://your-clickhouse-host:8123"; CH_USER="scoutflo_ro"   # clickstack.clickhouse_url / _user
+curl -sS --max-time 10 -H "X-ClickHouse-User: ${CH_USER}" -H "X-ClickHouse-Key: ${CH_KEY}" \
+  "${CH_URL}/?query=SELECT%201" | grep -qx 1 && echo "ClickHouse PASS" || echo "ClickHouse FAIL — check url/user/CH_KEY"
+# HyperDX: /api/alerts is auth-gated (401 without a key). The exact API-key header
+# varies by HyperDX version — confirm it against your instance (Authorization: Bearer <key>
+# or x-api-key: <key>); a 200 with the key configured is the authoritative signal.
+```
+
+The external `default` ClickHouse user requires a password, so the audit always uses its own scoped `scoutflo_ro` user, never `default`.
+
 ## Kubernetes
 
 ### Config

@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.110
+
+Adds **ClickStack** (ClickHouse + HyperDX + OpenTelemetry) as a new provider — driven by a customer running it (Zepto's ClickHouse-observability signal). Every API/schema fact was **live-validated** against a real ClickStack instance (the official all-in-one, ClickHouse 26.5.6, spun up locally and torn down) before any skill cites it.
+
+- **New `audit-clickstack`** — read-only scored audit: telemetry-table **coverage** (CS-010), **ingestion freshness** (CS-011, `max(Timestamp)` lag — a table that exists but is stale is a broken pipeline, not "covered"), per-table **retention TTL** (CS-020), **ClickHouse health** (CS-030, `system.parts`/`replicas`/`errors`/`mutations`), **HyperDX alerting reaches a human** (CS-040, an alert wired to no receiver doesn't count), **dashboards/sources** (CS-041), **security posture** (CS-050, default-user password required, `plaintext_password` flagged, TLS), and the **CS-007 empty/hidden-scope guardrail** (reachable ClickHouse with zero telemetry rows, or HyperDX with zero alerts, is a visibility/ingestion gap, never a confident 0 — the ClickStack twin of GCP-007/AZR-007). Reads via a read-only ClickHouse user over HTTP :8123 + HyperDX `GET /api/*`.
+- **New `setup-clickstack`** — confirm-then-verify fixes: set retention TTL (announcing the part-rewrite blast radius), create a least-privilege read-only ClickHouse user, create a HyperDX alert wired to a receiver, harden `plaintext_password` auth.
+- **`connect`** gains a ClickStack tier (read-only ClickHouse user + HyperDX API key) with a full credential recipe; `/scoutflo:start` + README catalogs updated.
+- Every claim traces to the live validation; the exact HyperDX `/api/alerts|dashboards|sources` JSON field names are authored **confirm-against-your-instance** (the endpoints + auth are confirmed, the response shapes need a keyed run to lock). Inherits the new **Inventory** section from day one.
+
+Gates: leak CLEAN, structure-check (13 checks incl. COVERAGE + CATALOG + remediation-map + CROSSBLOCK), run-tests (20 suites), plugin validate --strict; each new skill carries ≥3 pressure scenarios; authored via author→adversarial-verify (which caught + fixed a real defect: an `otel_%` LIKE pattern that dropped `hyperdx_sessions`). Rubric-reviewed: `setup-clickstack` GATE PASS; `audit-clickstack` FAIL→fixed — the review caught two structural gaps the mechanical gates can't see (no Scoutflo Topology Readiness section — the only audit missing it; and a declared large path with no durable worklist), both added and re-gated green.
+
 ## 0.1.109
 
 Adds the **Inventory** deliverable — the AI Readiness POC's alert/asset-inventory that customers ask for (PlatinumRX's "alert inventory", Flexprice's "verified infrastructure inventory", NorthLadder, Frontier). Until now the audits told you *where the gaps are* (findings); they now also give you the complete *current-state catalog of what exists*.

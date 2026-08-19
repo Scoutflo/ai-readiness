@@ -179,6 +179,7 @@ Secrets live only in environment variables you export yourself. `~/.scoutflo/too
 | Skill | What it covers |
 | --- | --- |
 | `/scoutflo:audit-lgtm` | **Prometheus**, Loki, Tempo, Mimir, VictoriaMetrics, and Alertmanager stack health — scrape targets, rule evaluation, TSDB cardinality, retention (for Prometheus **alert routing**, pair with `audit-alert-routing`) |
+| `/scoutflo:audit-clickstack` | **ClickStack** (ClickHouse + HyperDX + OpenTelemetry) — telemetry coverage, ingestion freshness, retention TTL, ClickHouse DB/parts/replica health, HyperDX alerting + dashboards, security posture |
 | `/scoutflo:audit-grafana` | Dashboard truthfulness, alert-rule wiring, query hygiene, datasource health |
 | `/scoutflo:audit-sentry` | Org and project config, privacy scrubbing, alert-rule tiers, releases, monitors |
 | `/scoutflo:audit-pagerduty` | Paging health: services, escalation policies, on-call coverage, alert grouping and noise, incident aging — plus a vendor-analytics-backed **actionability** section (auto-resolved share, MTTA, sleep-hour interruptions) when your plan and key allow |
@@ -200,6 +201,7 @@ Secrets live only in environment variables you export yourself. `~/.scoutflo/too
 | Skill | What it fixes |
 | --- | --- |
 | `/scoutflo:setup-lgtm` | Alert receivers/routing, retention, HA, exposure, service-label alignment |
+| `/scoutflo:setup-clickstack` | ClickHouse retention TTL, read-only audit user, HyperDX alerts, auth hardening |
 | `/scoutflo:setup-grafana` | Datasources, dashboards, contact points, notification policies, alert rules |
 | `/scoutflo:setup-sentry` | Projects, environments, privacy scrubbing, alert routing, monitors |
 | `/scoutflo:setup-digitalocean` | Alert destinations, uptime checks, App Platform and database alerting |
