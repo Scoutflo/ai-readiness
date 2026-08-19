@@ -309,19 +309,21 @@ Write `./scoutflo-audits/all/<YYYY-MM-DD>/report.md`. It summarizes and links; i
    | `<target>` | `<r> of <n> critical services sync-ready` or `readiness not recorded` | link to that target's `report.md#scoutflo-topology-readiness` |
 
 7. **Cross-stack correlation**: paste the output of `sh "${CLAUDE_PLUGIN_ROOT}/report-standard/render-report-viz.sh" overlaps "<audits-dir>/correlation.json"` — the redundant-monitoring overlaps (one service flagged by two or more stacks) and any cascade chains that the Phase 3.5 correlation engine already computed into `correlation.json`. This is the only cross-stack synthesis in the run; it renders the engine's output verbatim and never re-derives or re-scores correlation. It degrades to "No cross-stack overlaps or cascades detected this run" when the engine found none, and to a run-`/scoutflo:audit-all` note when `correlation.json` is absent.
-8. **Top findings**: the Phase 3 list with each finding's target added.
-9. **Suppressed**: the Phase 3 suppressed-findings roll-up, one line per target plus the `total suppressed across all targets` line. State "No findings suppressed via exemptions this run." when the total is `0`.
-10. **Next safe actions**: the highest-severity findings across all targets, each row pointing at its finding ID and its remediation pointer (a `setup-*` skill anchor), verification-only steps before mutating ones. No timelines, no effort estimates. When a finding's own `remediation` field is empty, look its ID up in [finding-remediation-map.json](../../docs/finding-remediation-map.json) (`.mappings["<ID>"]` → `setup_skill` + `anchor`); the map is generated from the setup skills' own fix sections and CI-validated, so every pointer resolves. An ID absent from both the finding and the map gets "no setup pointer; see the finding's recommendation" — never an invented anchor.
+8. **Estate inventory (all stacks)**: paste the output of `sh "${CLAUDE_PLUGIN_ROOT}/report-standard/render-report-viz.sh" inventory-rollup "<audits-dir>" "<run-date>"` — the cross-stack current-state catalog (each stack's object totals by kind), read from every audit's `inventory.json`. This is the estate-level AI Readiness inventory deliverable: what you actually have configured, next to what's failing. It renders the per-stack `inventory.json` verbatim and never re-derives it; it degrades to "No `inventory.json` for `<run-date>`" when no audit emitted one.
+9. **Top findings**: the Phase 3 list with each finding's target added.
+10. **Suppressed**: the Phase 3 suppressed-findings roll-up, one line per target plus the `total suppressed across all targets` line. State "No findings suppressed via exemptions this run." when the total is `0`.
+11. **Next safe actions**: the highest-severity findings across all targets, each row pointing at its finding ID and its remediation pointer (a `setup-*` skill anchor), verification-only steps before mutating ones. No timelines, no effort estimates. When a finding's own `remediation` field is empty, look its ID up in [finding-remediation-map.json](../../docs/finding-remediation-map.json) (`.mappings["<ID>"]` → `setup_skill` + `anchor`); the map is generated from the setup skills' own fix sections and CI-validated, so every pointer resolves. An ID absent from both the finding and the map gets "no setup pointer; see the finding's recommendation" — never an invented anchor.
 
-Render the two deterministic sections first (read-only; both derive only from artifacts already on disk — the per-target `findings.json` files and the Phase 3.5 `correlation.json`), then compose the report around them:
+Render the three deterministic sections first (read-only; all derive only from artifacts already on disk — the per-target `findings.json` and `inventory.json` files and the Phase 3.5 `correlation.json`), then compose the report around them:
 
 ```bash
 set -eu
 AUDITS_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}"   # report-standard output root
 RUN_DATE="$(date -u +%F)"        # UTC run date
 VIZ="${CLAUDE_PLUGIN_ROOT}/report-standard/render-report-viz.sh"
-sh "$VIZ" rollup   "$AUDITS_DIR" "$RUN_DATE"             # -> paste as the "At a glance (all stacks)" section
-sh "$VIZ" overlaps "$AUDITS_DIR/correlation.json"        # -> paste as the "Cross-stack correlation" section
+sh "$VIZ" rollup           "$AUDITS_DIR" "$RUN_DATE"     # -> paste as the "At a glance (all stacks)" section
+sh "$VIZ" overlaps         "$AUDITS_DIR/correlation.json" # -> paste as the "Cross-stack correlation" section
+sh "$VIZ" inventory-rollup "$AUDITS_DIR" "$RUN_DATE"     # -> paste as the "Estate inventory (all stacks)" section
 ```
 
 Verify the write with an asserted command, not a glance:

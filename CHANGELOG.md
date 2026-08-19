@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.1.109
+
+Adds the **Inventory** deliverable — the AI Readiness POC's alert/asset-inventory that customers ask for (PlatinumRX's "alert inventory", Flexprice's "verified infrastructure inventory", NorthLadder, Frontier). Until now the audits told you *where the gaps are* (findings); they now also give you the complete *current-state catalog of what exists*.
+
+- **Every scored audit emits `inventory.json`** (`scoutflo-inventory/v1`) and a `## Inventory` section in its `report.md` — one row per configured object (alert rule, monitor, action group, contact point, dashboard, resource…) with its `kind`, what it `covers`, `severity`, `routes_to`, and `enabled` state. A disabled or unrouted object still appears (that it exists but is off/unwired is exactly the fact the inventory surfaces).
+- **`audit-all` gains an `## Estate inventory (all stacks)` rollup** — the cross-stack current-state catalog (each stack's object totals by kind), so the POC deliverable set is complete end to end: **topology · inventory · findings · cost · RCA**.
+- New `report-standard/inventory-schema.md`; new `render-report-viz.sh` **`inventory`** + **`inventory-rollup`** modes (deterministic renderers); `report-template.md` documents the `## Inventory` parallel section.
+- Built entirely from the **raw pull each audit already captures** (read-only, no new live calls), reconciles `counts.total` with `items`, **never invents** a row, **never enters the 0-100 score**, and is secret-safe (redacted at capture). An empty estate renders honestly and pairs with the empty/hidden-scope guardrail.
+
+`check-report.sh` now reconciles a sibling `inventory.json` (schema, `counts.total == items | length`, and `counts.by_kind` == the kind histogram) and requires the `## Inventory` section whenever an inventory is emitted, so the catalog can't silently drift or go missing.
+
+Rolled across all 15 scored audits (grafana reference + 14 via a fanned-out authoring pass, each mapping its own object kinds) + `audit-all`. Gates: leak CLEAN, structure-check (13 checks incl. CROSSBLOCK), run-tests (20 suites), plugin validate --strict; delta-reviewed GATE PASS (secret-safety + count reconciliation + accurate kinds empirically confirmed); new pressure scenario on the reference audit.
+
 ## 0.1.108
 
 Adds **Azure as a full cloud provider** — driven by a customer running AKS on Azure — with every API fact live-confirmed against a Scoutflo-internal subscription before any skill cites it (a companion `Azure-setup` validation harness, sibling of `GCP-setup`, is the SSOT).

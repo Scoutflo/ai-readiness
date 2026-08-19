@@ -18,7 +18,8 @@ Run this standalone, from `/scoutflo:audit-all`, or on a schedule via `/scoutflo
 Outputs, per the [report standard](../../report-standard/README.md):
 
 - `./scoutflo-audits/groundcover/<YYYY-MM-DD>/findings.json` per the [findings schema](../../report-standard/findings-schema.md), finding IDs `GC-NNN`
-- `./scoutflo-audits/groundcover/<YYYY-MM-DD>/report.md` per the [report template](../../report-standard/report-template.md)
+- `./scoutflo-audits/groundcover/<YYYY-MM-DD>/report.md` per the [report template](../../report-standard/report-template.md), including the `## Inventory` section (the `render-report-viz.sh inventory` output)
+- `./scoutflo-audits/groundcover/<YYYY-MM-DD>/inventory.json` per the [inventory schema](../../report-standard/inventory-schema.md) (`scoutflo-inventory/v1`): the complete Phase-2 catalog — one item per monitor, workflow, and recurring silence (`kind`: `monitor`, `workflow`, `silence`) — each with `kind`, `covers`, `enabled`, `severity`, and `routes_to` for alerting objects. Built from the raw pull, never invented; redacted at capture, never a secret value.
 - One appended line in `./scoutflo-audits/groundcover/history.jsonl`
 - One Slack brief, when `slack.webhook_env` is configured
 
@@ -234,11 +235,16 @@ set -eu
 RUN_DATE="$(date -u +%Y-%m-%d)"
 OUT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/groundcover/${RUN_DATE}"
 mkdir -p "$OUT"
-# ... write findings.json and report.md per the report standard, then verify:
+# ... write findings.json, inventory.json, and report.md per the report standard, then verify:
 jq -e '.schema == "scoutflo-findings/v1" and .target == "groundcover" and (.findings | type == "array")' \
   "$OUT/findings.json" >/dev/null && echo "findings.json valid"
 grep -q '^# ' "$OUT/report.md" && echo "report.md present"
 sh "${CLAUDE_PLUGIN_ROOT}/report-standard/check-findings.sh" "$OUT/findings.json"
+# Inventory (scoutflo-inventory/v1): the complete Phase-2 catalog of what exists,
+# built from the raw pull (never invented, redacted). counts.total must reconcile
+# with items; the ## Inventory section of report.md IS this render.
+jq -e '.schema == "scoutflo-inventory/v1" and .target == "groundcover" and (.items | type == "array") and (.counts.total == (.items | length))' "$OUT/inventory.json" >/dev/null && echo "inventory.json valid"
+sh "${CLAUDE_PLUGIN_ROOT}/report-standard/render-report-viz.sh" inventory "$OUT/inventory.json" >/dev/null && echo "inventory section renders"
 sh "${CLAUDE_PLUGIN_ROOT}/report-standard/render-report-viz.sh" html "$OUT/findings.json" "$OUT/report.html" "$(dirname "$OUT")/history.jsonl"
 sh "${CLAUDE_PLUGIN_ROOT}/report-standard/check-report.sh" "$OUT/report.md"
 ```

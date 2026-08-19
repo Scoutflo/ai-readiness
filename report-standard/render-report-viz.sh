@@ -326,8 +326,68 @@ HTMLFOOT
     echo "_Worst-first — send the team to the top row. Never a combined average: one score line per stack._"
     ;;
 
+  inventory)
+    # Complete current-state catalog from inventory.json (scoutflo-inventory/v1):
+    # "what exists," parallel to Findings ("the gaps"). One table per kind. Renders
+    # only structured fields (name/covers/severity/routes_to/enabled) — never a
+    # secret value; the inventory.json is already redacted at capture.
+    INV="${1:?inventory.json}"
+    echo "## Inventory"
+    echo
+    if [ ! -f "$INV" ]; then
+      echo "_No \`inventory.json\` for this run._"
+      exit 0
+    fi
+    TGT="$(jq -r '.target // "target"' "$INV" 2>/dev/null)"
+    TOT="$(jq -r '.counts.total // (.items | length) // 0' "$INV" 2>/dev/null)"
+    case "$TOT" in *[!0-9]*) TOT=0;; esac
+    if [ "$TOT" -eq 0 ]; then
+      echo "No objects found in \`${TGT}\` this run — the estate is empty here, or (see the empty/hidden-scope guardrail) this identity cannot see them. This is the full catalog, not the gaps (those are in Findings)."
+      exit 0
+    fi
+    echo "Complete current-state catalog of what \`${TGT}\` has configured (${TOT} objects). This is what exists; the gaps are in Findings above."
+    echo
+    jq -r '[.items[].kind] | unique[]' "$INV" 2>/dev/null | while IFS= read -r kind; do
+      [ -n "$kind" ] || continue
+      n="$(jq --arg k "$kind" '[.items[] | select(.kind == $k)] | length' "$INV" 2>/dev/null)"
+      label="$(printf '%s' "$kind" | tr '_' ' ')"
+      echo "**${label} (${n})**"
+      echo
+      echo "| name | covers | severity | routes to | enabled |"
+      echo "| --- | --- | --- | --- | --- |"
+      jq -r --arg k "$kind" '.items[] | select(.kind == $k) | [ .name, (.covers // "-"), (.severity // "-"), (.routes_to // "-"), (if .enabled == false then "no" else "yes" end) ] | @tsv' "$INV" 2>/dev/null \
+      | while IFS="$(printf '\t')" read -r nm cov sev rt en; do
+          echo "| \`${nm}\` | ${cov} | ${sev} | ${rt} | ${en} |"
+        done
+      echo
+    done
+    ;;
+
+  inventory-rollup)
+    # audit-all estate inventory: per-stack object counts by kind, from every
+    # target's inventory.json for the run date.
+    D="${1:?audits-dir}"; RD="${2:?run-date}"
+    echo "## Estate inventory (all stacks)"
+    echo
+    found=0
+    for f in "$D"/*/"$RD"/inventory.json; do [ -f "$f" ] && found=1; done
+    if [ "$found" -eq 0 ]; then echo "_No \`inventory.json\` for ${RD}._"; exit 0; fi
+    echo "Everything the configured stacks have, by type — the current-state catalog across the estate."
+    echo
+    echo "| Stack | Total | By kind |"
+    echo "| --- | ---: | --- |"
+    for f in "$D"/*/"$RD"/inventory.json; do
+      [ -f "$f" ] || continue
+      tgt="$(jq -r '.target // "?"' "$f" 2>/dev/null)"
+      case "$tgt" in all|"?") continue;; esac
+      tot="$(jq -r '.counts.total // (.items|length) // 0' "$f" 2>/dev/null)"
+      bk="$(jq -r '(.counts.by_kind // {}) | to_entries | map("\(.key): \(.value)") | join(", ")' "$f" 2>/dev/null)"
+      echo "| \`${tgt}\` | ${tot} | ${bk:--} |"
+    done
+    ;;
+
   *)
-    echo "usage: render-report-viz.sh {at-a-glance|scorecard|mermaid-topo|html|overlaps|rollup} ..." >&2
+    echo "usage: render-report-viz.sh {at-a-glance|scorecard|mermaid-topo|html|overlaps|rollup|inventory|inventory-rollup} ..." >&2
     exit 2
     ;;
 esac

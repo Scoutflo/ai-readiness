@@ -97,6 +97,26 @@ REPORT_DIR="$(dirname "$REPORT")"
 [ -f "$REPORT_DIR/report.html" ] \
   || echo "REPORT-WARN: no report.html next to $REPORT — run render-report-viz.sh html to emit the standalone dashboard (see report-template.md)"
 
+# 8. Inventory conformance. When the audit emitted an inventory.json sibling
+#    (scoutflo-inventory/v1), reconcile it and require the ## Inventory section,
+#    so the catalog cannot silently drift or go missing. Skipped for reports that
+#    carry no inventory (the audit-all combined report, audit-cost).
+INV="$REPORT_DIR/inventory.json"
+if [ -f "$INV" ]; then
+  grep -qxF '## Inventory' "$REPORT" \
+    || fail "inventory.json exists but report.md has no '## Inventory' section (render it with render-report-viz.sh inventory)"
+  if command -v jq >/dev/null 2>&1; then
+    jq -e '.schema == "scoutflo-inventory/v1"
+           and (.items | type == "array")
+           and (.counts.total == (.items | length))
+           and (([.items[].kind] | group_by(.) | map({(.[0]): length}) | add // {}) == (.counts.by_kind // {}))' \
+      "$INV" >/dev/null 2>&1 \
+      || fail "inventory.json does not reconcile (needs schema scoutflo-inventory/v1, counts.total == items length, and counts.by_kind == the kind histogram); regenerate it, never hand-edit"
+  else
+    echo "REPORT-WARN: jq not available; skipped inventory.json reconciliation for $INV"
+  fi
+fi
+
 if [ "$FAIL" -eq 0 ]; then
   echo "REPORT-OK: $REPORT conforms to report-template.md"
 else

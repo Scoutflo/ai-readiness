@@ -134,6 +134,22 @@ topology-readiness.md ("When the export is missing or does not match the
 audit target") with its one-line unlock — never a bare "unavailable",
 never a guess. Blocking gaps reference finding IDs where one exists.>
 
+## Inventory
+
+<The complete current-state catalog of what the target has configured — the
+"here is everything you have" list, parallel to Findings (the gaps). Generated
+from `inventory.json` (`scoutflo-inventory/v1`, see
+[inventory-schema.md](inventory-schema.md)) via
+`render-report-viz.sh inventory <inventory.json>`; never hand-write it —
+regenerate, the same rule as findings. One table per object kind
+(name · covers · severity · routes to · enabled). A disabled or unrouted object
+still appears — that it exists but is off or unwired is exactly the fact the
+inventory surfaces. An empty estate renders an honest "no objects found" line,
+paired with the empty/hidden-scope guardrail (genuinely empty vs. can't-see-it).
+`/scoutflo:audit-all` renders the cross-stack `## Estate inventory (all stacks)`
+rollup via `render-report-viz.sh inventory-rollup`. This is the AI Readiness
+POC's alert/asset-inventory deliverable; it never enters the 0-100 score.>
+
 ## <Provider-specific parallel section, when the skill defines one>
 
 <Optional. An audit skill may define its own named section here for a

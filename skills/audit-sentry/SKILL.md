@@ -356,18 +356,23 @@ Write both artifacts to `./scoutflo-audits/sentry/<YYYY-MM-DD>/` and verify:
 set -eu
 OUT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/sentry/$(date -u +%Y-%m-%d)"
 mkdir -p "$OUT"
-# ... write findings.json and report.md per the report standard, then verify:
+# ... write findings.json, inventory.json, and report.md per the report standard, then verify:
 jq -e '.schema == "scoutflo-findings/v1" and (.findings | type == "array")' \
   "$OUT/findings.json" >/dev/null && echo "findings.json valid"
 grep -q '^# ' "$OUT/report.md" && echo "report.md present"
 # Output conformance: the emitted report.md must match report-standard/report-template.md.
 # This catches header/score-line/section drift before the run is declared done.
 sh "${CLAUDE_PLUGIN_ROOT}/report-standard/check-findings.sh" "$OUT/findings.json"
+# Inventory (scoutflo-inventory/v1): the complete Phase-1 catalog of what exists,
+# built from the raw pull (never invented, redacted). counts.total must reconcile
+# with items; the ## Inventory section of report.md IS this render.
+jq -e '.schema == "scoutflo-inventory/v1" and (.items | type == "array") and (.counts.total == (.items | length))' "$OUT/inventory.json" >/dev/null && echo "inventory.json valid"
+sh "${CLAUDE_PLUGIN_ROOT}/report-standard/render-report-viz.sh" inventory "$OUT/inventory.json" >/dev/null && echo "inventory section renders"
 sh "${CLAUDE_PLUGIN_ROOT}/report-standard/render-report-viz.sh" html "$OUT/findings.json" "$OUT/report.html" "$(dirname "$OUT")/history.jsonl"
 sh "${CLAUDE_PLUGIN_ROOT}/report-standard/check-report.sh" "$OUT/report.md"
 ```
 
-`findings.json` uses prefix `SNTRY`, IDs from the [check catalog](references/api-checks.md#check-catalog), evidence quoting re-fetched API responses, and a `remediation` pointer into `setup-sentry` on every finding. `report.md` follows the [template](../../report-standard/report-template.md): executive summary, scorecard, findings table, the Phase 8 coverage matrix, next safe actions ordered severity-then-safety, delta against the previous run (or "first run, no delta"), evidence appendix. The end-to-end gate is 85 with zero exclusions and every critical service passing every coverage row; below it, write "good base coverage", never "end to end". Keep `./scoutflo-audits/` out of public version control.
+`findings.json` uses prefix `SNTRY`, IDs from the [check catalog](references/api-checks.md#check-catalog), evidence quoting re-fetched API responses, and a `remediation` pointer into `setup-sentry` on every finding. `report.md` follows the [template](../../report-standard/report-template.md): executive summary, scorecard, findings table, the Phase 8 coverage matrix, the `## Inventory` section (the `render-report-viz.sh inventory` output), next safe actions ordered severity-then-safety, delta against the previous run (or "first run, no delta"), evidence appendix. `inventory.json` follows the [inventory schema](../../report-standard/inventory-schema.md) (`scoutflo-inventory/v1`): the complete Phase-1 catalog — one item per project, alert rule (issue and metric), integration, and cron/uptime monitor — each with its `kind` (`project`, `alert_rule`, `integration`, `monitor`), `covers` (the topology service it applies to, or `-`), `enabled`, `severity` (the object's own, or null), and `routes_to` for alerting objects. Built from the raw pull, never invented; redacted at capture, never a secret value. The end-to-end gate is 85 with zero exclusions and every critical service passing every coverage row; below it, write "good base coverage", never "end to end". Keep `./scoutflo-audits/` out of public version control.
 
 After the report is written, close with the run-completion message per the report standard ([report-template.md](../../report-standard/report-template.md#run-completion-message-what-the-skill-says-in-chat-when-the-run-finishes)): the one-line score headline, the top fixes by points_recoverable, the **absolute** report path, the OS-specific open command, and the leak-safe share pointer (Slack brief).
 

@@ -28,7 +28,8 @@ Run standalone, from `/scoutflo:audit-all`, or on a schedule via `/scoutflo:sche
 Outputs, per the [report standard](../../report-standard/README.md):
 
 - `./scoutflo-audits/alert-routing/<YYYY-MM-DD>/findings.json` per the [findings schema](../../report-standard/findings-schema.md)
-- `./scoutflo-audits/alert-routing/<YYYY-MM-DD>/report.md` per the [report template](../../report-standard/report-template.md)
+- `./scoutflo-audits/alert-routing/<YYYY-MM-DD>/report.md` per the [report template](../../report-standard/report-template.md), including the `## Inventory` section (the `render-report-viz.sh inventory` output)
+- `./scoutflo-audits/alert-routing/<YYYY-MM-DD>/inventory.json` per the [inventory schema](../../report-standard/inventory-schema.md) (`scoutflo-inventory/v1`): the complete Phase-1 catalog — one item per alert rule, Alertmanager receiver, route, and silence — each with its `kind` (`alert_rule`, `receiver`, `route`, `silence`), `covers` (the topology service the alert maps to), `enabled`, `severity` (the object's own, or null), and `routes_to` for alerting objects. Built from the raw pull, never invented; redacted at capture, never a secret value.
 - One Slack brief, when `slack.webhook_env` is configured
 
 ## Doctor gate
@@ -322,13 +323,18 @@ set -eu
 RUN_DATE="$(date -u +%Y-%m-%d)"
 OUT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/alert-routing/${RUN_DATE}"
 mkdir -p "$OUT"
-# ... write findings.json and report.md per the report standard, then verify:
+# ... write findings.json, inventory.json, and report.md per the report standard, then verify:
 jq -e '.schema == "scoutflo-findings/v1" and (.findings | type == "array")' \
   "$OUT/findings.json" >/dev/null && echo "findings.json valid"
 grep -q '^# ' "$OUT/report.md" && echo "report.md present"
 # Output conformance: the emitted report.md must match report-standard/report-template.md.
 # This catches header/score-line/section drift before the run is declared done.
 sh "${CLAUDE_PLUGIN_ROOT}/report-standard/check-findings.sh" "$OUT/findings.json"
+# Inventory (scoutflo-inventory/v1): the complete Phase-1 catalog of what exists,
+# built from the raw pull (never invented, redacted). counts.total must reconcile
+# with items; the ## Inventory section of report.md IS this render.
+jq -e '.schema == "scoutflo-inventory/v1" and (.items | type == "array") and (.counts.total == (.items | length))' "$OUT/inventory.json" >/dev/null && echo "inventory.json valid"
+sh "${CLAUDE_PLUGIN_ROOT}/report-standard/render-report-viz.sh" inventory "$OUT/inventory.json" >/dev/null && echo "inventory section renders"
 sh "${CLAUDE_PLUGIN_ROOT}/report-standard/render-report-viz.sh" html "$OUT/findings.json" "$OUT/report.html" "$(dirname "$OUT")/history.jsonl"
 sh "${CLAUDE_PLUGIN_ROOT}/report-standard/check-report.sh" "$OUT/report.md"
 ls -l "$OUT"

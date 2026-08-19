@@ -478,7 +478,8 @@ Mechanics follow [severity-and-scoring.md](../../report-standard/severity-and-sc
 Write both artifacts to `./scoutflo-audits/grafana/<YYYY-MM-DD>/`:
 
 - `findings.json` per the [schema](../../report-standard/findings-schema.md): prefix `GRAF`, IDs from the [check catalog](references/api-checks.md#check-catalog), evidence quoting real command output, every finding with a `remediation` pointer into `setup-grafana`, and `estate.objects`/`estate.path` set to the count and path chosen in [Estate sizing](#estate-sizing).
-- `report.md` per the [template](../../report-standard/report-template.md): executive summary, scorecard, findings table, the Phase 7 coverage matrix, next safe actions ordered severity-then-safety, delta against the previous run (or "first run, no delta"), evidence appendix.
+- `report.md` per the [template](../../report-standard/report-template.md): executive summary, scorecard, findings table, the Phase 7 coverage matrix, the `## Inventory` section (the `render-report-viz.sh inventory` output), next safe actions ordered severity-then-safety, delta against the previous run (or "first run, no delta"), evidence appendix.
+- `inventory.json` per the [inventory schema](../../report-standard/inventory-schema.md) (`scoutflo-inventory/v1`): the complete Phase-1 catalog — one item per datasource, dashboard, alert rule, contact point, and notification policy — each with its `kind`, `covers` (the topology service or dashboard folder), `enabled`, `severity` (the object's own, or null), and `routes_to` for alerting objects. Built from the raw pull, never invented; redacted at capture, never a secret value.
 
 Emit, verify, brief:
 
@@ -486,10 +487,18 @@ Emit, verify, brief:
 set -eu
 OUT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/grafana/$(date -u +%Y-%m-%d)"
 mkdir -p "$OUT"
-# ... write findings.json and report.md per the report standard, then verify:
+# ... write findings.json, inventory.json, and report.md per the report standard, then verify:
 jq -e '.schema == "scoutflo-findings/v1" and .target == "grafana"
        and (.findings | type == "array")' "$OUT/findings.json" >/dev/null \
   && echo "findings.json valid"
+# Inventory (scoutflo-inventory/v1): the complete Phase-1 catalog of what exists,
+# built from the raw pull (never invented, redacted). counts.total must reconcile
+# with items; the ## Inventory section of report.md IS this render.
+jq -e '.schema == "scoutflo-inventory/v1" and .target == "grafana"
+       and (.items | type == "array") and (.counts.total == (.items | length))' \
+  "$OUT/inventory.json" >/dev/null && echo "inventory.json valid"
+sh "${CLAUDE_PLUGIN_ROOT}/report-standard/render-report-viz.sh" inventory "$OUT/inventory.json" >/dev/null \
+  && echo "inventory section renders"
 jq -e '.estate.path == "small" or .estate.path == "medium" or .estate.path == "large"' \
   "$OUT/findings.json" >/dev/null && echo "estate sizing recorded"
 grep -q '^# ' "$OUT/report.md" && echo "report.md present"
