@@ -1,6 +1,6 @@
 # repo-map.json schema
 
-`"version": "scoutflo-repo-map/v1"`. One object, two top-level keys.
+`"version": "scoutflo-repo-map/v1"`. One object with four top-level keys: `version`, `generated_at`, `mappings`, and `unresolved_services`.
 
 ```json
 {
