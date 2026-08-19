@@ -168,3 +168,51 @@ echo "wrote: ${OUT_DIR}/repo-map.json and ${OUT_DIR}/repo-map.md"
 ```
 
 Expected: `wrote: .../repo-map.json and .../repo-map.md`, and `jq empty` above exits 0 before either file is copied into place — an invalid JSON compose is caught before it overwrites anything.
+
+## Phase 5: Verify and summarize
+
+The write is unverified until re-read:
+
+```bash
+set -eu
+OUT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/repo-map.json"
+[ -f "$OUT" ] || { echo "repo-map.json was not written"; exit 1; }
+jq -e '.version == "scoutflo-repo-map/v1"' "$OUT" >/dev/null || { echo "repo-map.json missing or invalid version"; exit 1; }
+jq -r '"mapped: \(.mappings | length) services, unresolved: \(.unresolved_services | length)"' "$OUT"
+jq -e '[.mappings[] | (.repository_id | type == "string")] | all' "$OUT" >/dev/null || { echo "a mapping is missing a string repository_id"; exit 1; }
+```
+
+Expected: `mapped: N services, unresolved: M`, and both `jq -e` assertions exit 0. If the repository_id assertion fails, a mapping was written with the wrong identity shape — stop and fix Phase 4 before reporting success.
+
+### Re-run delta: carry forward, never silently drop or rewrite
+
+If `repo-map.json` already exists from a previous run, copy it aside before Phase 4 writes anything, then feed it into Phase 3: every service already in the old file's `mappings` is proposed to the user as already-confirmed and kept exactly as-is (same `repository_id`, same `confirmed_at`) unless live GitHub evidence now contradicts it.
+
+```bash
+set -eu
+OUT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/repo-map.json"
+TMP="${TMPDIR:-/tmp}/map-repos-write"
+mkdir -p "$TMP"
+[ -f "$OUT" ] && cp "$OUT" "${TMP}/repo-map.prev.json" && echo "previous map saved" || echo "first run"
+```
+
+A contradiction is: the repo behind a confirmed `repository_id` is now archived, or a fresh lookup by that same id returns a different `owner`/`name` than last recorded (a rename or transfer — expected and fine, update the label) or 404s entirely (the repo was deleted or the token lost access — flag it, do not drop the mapping silently). Name the exact contradiction to the user in Phase 3 rather than auto-resolving it; a customer-confirmed fact is never silently rewritten without them seeing why.
+
+Close by telling the user, in the terminal:
+
+- Path written (`repo-map.md` and `repo-map.json`), org/user resolved.
+- Services mapped, services unresolved, by name.
+- Any re-run contradictions found and how they were resolved.
+- The follow-up: re-run whenever a service or repo changes.
+
+## Common Failure Modes
+
+| Failure | Prevention |
+| --- | --- |
+| A single strong-looking name match written without asking | Never auto-accept, even one obvious candidate — always show evidence and wait for explicit confirmation (Phase 3) |
+| `github.org` is actually a personal account, not an org | Fall back from `/orgs/{login}` to `/users/{login}` on a 404, in both Phase 0 and the listing cookbook, and say which path resolved |
+| Corroborating evidence fetched for every repo in the org, not just top candidates | Bound README/manifest calls to the top 3 ranked candidates per service; never fetch evidence for the full repo list |
+| A repo renamed or transferred between runs silently breaks a confirmed mapping | Key every mapping on `repository_id`, never on `owner`/`name`; a rename only updates the label, it never invalidates the mapping |
+| A repo deleted or access lost between runs, and the mapping is dropped without telling the user | Flag a 404-on-recheck as a contradiction in Phase 5's re-run delta; never silently remove a previously confirmed mapping |
+| No `topology.md` exists yet, so the skill guesses services from repo names | Ask the user directly for their service list; never invert the evidence direction by inferring services from GitHub |
+| A secret token value ends up in `evidence[]` or the terminal | `evidence` entries are derived facts (name similarity strings, README excerpts, manifest names) never raw command output containing the `Authorization` header; presence-check `GITHUB_TOKEN`, never print it |
