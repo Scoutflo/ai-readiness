@@ -2,11 +2,11 @@
 # Generic leak scan: machine paths, emails, 12-digit cloud account ids,
 # private IPs, inline tokens. Literal-identifier scanning happens in the
 # maintainers' private pre-push hook; this is the public backstop.
-# ci/ and tests/selftest/ are excluded for the same reason: they are the
-# scanners' own scaffolding and legitimately embed leak-shaped TEST VECTORS
-# (this pattern's example strings; selftest's vf_leak positive fixtures). Those
-# vectors are fabricated, never real secrets — see tests/selftest/run.sh, which
-# writes each vector to a temp dir and runs THIS script against it.
+# ci/ is excluded because it is the scanners' own scaffolding and legitimately
+# embeds leak-shaped TEST VECTORS (this pattern's example strings). A directory
+# named selftest is also excluded: the maintainer's LOCAL test harness (kept
+# outside this repo) writes fabricated leak vectors to temp dirs, so excluding an
+# adjacent selftest/ keeps a scan clean. These vectors are never real secrets.
 set -eu
 DIR="${1:-.}"
 FAIL=0

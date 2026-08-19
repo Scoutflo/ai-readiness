@@ -13,9 +13,11 @@ sh ci/run-tests.sh .
 claude plugin validate . --strict
 ```
 
-`ci/structure-check.sh` composes nine checks: anchor, cross-block, coverage,
-remediation-map, **skill-completeness**, and the four behavioral-parity gates
-(scope-checkpoint, redaction-parity, business-context-parity, **env-load-parity**).
+`ci/structure-check.sh` composes 13 checks: anchor, cross-block, coverage,
+remediation-map, **skill-completeness**, the four behavioral-parity gates
+(scope-checkpoint, redaction-parity, business-context-parity, **env-load-parity**),
+and manifest-compat, min-version-consistency, catalog-consistency, and
+liveness-readonly.
 `ci/run-tests.sh` executes
 every `tests/*.sh` and `skills/*/tests/*.sh` under `/bin/sh` (and rejects dead
 bats-syntax files that cannot run). All four run in CI on every push/PR — a

@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.114
+
+Moved the self-test harness **out of the repo**. `tests/selftest/` was a maintainer's personal build/test mechanism — run every time we build the plugin or add a skill — not customer-facing plugin content, so it should never have shipped in the public repo (it was added in 0.1.111, wired to CI in 0.1.111, fixed in 0.1.113). It now lives local-only outside the repo and runs unchanged against a `sre-toolkit` checkout (`SRE_TOOLKIT_ROOT` override, else the sibling `../sre-toolkit`).
+
+- Removed `tests/selftest/` and the `tests/test-selftest.sh` CI wrapper → `run-tests` is back to **20 suites**; dropped its `.gitignore` entry.
+- `ci/leak-scan.sh` still excludes a `selftest/` directory (comment updated to note the harness is now the maintainer's local, out-of-repo tool) so an adjacent harness's fabricated leak vectors never trip a scan.
+- Fixed stale `AGENTS.md`: `ci/structure-check.sh` composes **13** checks, not nine — the four newer gates (manifest-compat, min-version-consistency, catalog-consistency, liveness-readonly) were missing from that sentence.
+
+Gates: leak CLEAN, structure-check (13), run-tests (20 suites), plugin validate --strict.
+
 ## 0.1.113
 
 Self-consistency fix in the self-test mechanism, found by running its own `integration` and `live` layers end-to-end for the first time (they were built in 0.1.111 but never exercised until now).

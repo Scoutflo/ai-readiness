@@ -3,6 +3,3 @@ scoutflo-audits/
 
 # OS noise
 .DS_Store
-
-# self-test run artifact (regenerated each run)
-tests/selftest/last-run.md
