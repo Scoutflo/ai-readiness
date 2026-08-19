@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.1.56
+
+New skill: **`map-repos`**, a `map-*` sibling to `map-topology` that maps your
+services to their GitHub repositories.
+
+- **New skill `map-repos`.** Reads your service list from `topology.md` (or
+  asks directly if it doesn't exist yet), lists repos in your configured
+  GitHub org or user account via a read-only PAT, ranks candidates by name
+  similarity, and corroborates the top few with README and package-manifest
+  evidence. Every service is confirmed by you before anything is written —
+  even a single obvious-looking match — and the result lands in
+  `repo-map.md` and `repo-map.json`, independent of `topology.md`/
+  `topology-export.json`.
+- **New `github:` config block** in `toolkit.yaml.example`, wired into
+  `/scoutflo:doctor` and `/scoutflo:connect` with org-then-user fallback for
+  personal GitHub accounts.
+- **Re-run behavior.** Confirmed mappings carry forward by the repo's
+  immutable numeric id, survive renames/transfers silently (label-only
+  update), and flag (never silently drop) a repo that 404s on recheck.
+
 ## 0.1.55
 
 Two things: a permanent CI gate for the cross-block-state bug class (so it can
