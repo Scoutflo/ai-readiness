@@ -25,7 +25,7 @@ flowchart TD
     end
 
     subgraph AUDIT["② Audit — read-only, scored 0–100, changes nothing"]
-        aud["14 audit skills: lgtm · grafana · sentry · pagerduty · datadog<br/>elk · jsm · zenduty · groundcover · alert-routing<br/>kubernetes · digitalocean · gcp · aws"]
+        aud["16 audit skills: lgtm · grafana · sentry · pagerduty · datadog<br/>elk · jsm · zenduty · groundcover · alert-routing<br/>kubernetes · digitalocean · gcp · aws · azure · clickstack"]
         cost["/scoutflo:audit-cost<br/>deep per-resource cost, ranked savings"]
     end
 
@@ -38,7 +38,7 @@ flowchart TD
     end
 
     subgraph FIX["④ Fix — only with your explicit yes"]
-        setup["7 setup skills: lgtm · grafana · sentry<br/>digitalocean · gcp · aws · kubernetes<br/>announce → confirm → apply → re-verify"]
+        setup["9 setup skills: lgtm · grafana · sentry · digitalocean<br/>gcp · aws · kubernetes · azure · clickstack<br/>announce → confirm → apply → re-verify"]
     end
 
     start --> connect --> doctor

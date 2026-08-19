@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.115
+
+Doc freshness. The README architecture (Mermaid) diagram still read **"14 audit skills / 7 setup skills"** and omitted **Azure** and **ClickStack** — the two providers added in 0.1.108 and 0.1.110. Updated to **16 audit / 9 setup**, with `azure` + `clickstack` added to both boxes. (The `catalog-consistency` gate validates the README *catalog list* — already current — but not this hand-drawn diagram, so it went stale silently.)
+
+Verified in the same pass that nothing else is behind: `plugin.json`/CHANGELOG at the current version, no doc pinned to a stale "current version", no dangling references to the relocated self-test harness, and `docs/skill-authoring-conventions.md` provider mentions are illustrative (not a catalog). `docs/token-costs.md` remains a representative measured sample (azure/clickstack rows omitted rather than fabricated — never invent a number).
+
+Gates: leak CLEAN, structure-check (13), run-tests (20 suites), plugin validate --strict.
+
 ## 0.1.114
 
 Moved the self-test harness **out of the repo**. `tests/selftest/` was a maintainer's personal build/test mechanism — run every time we build the plugin or add a skill — not customer-facing plugin content, so it should never have shipped in the public repo (it was added in 0.1.111, wired to CI in 0.1.111, fixed in 0.1.113). It now lives local-only outside the repo and runs unchanged against a `sre-toolkit` checkout (`SRE_TOOLKIT_ROOT` override, else the sibling `../sre-toolkit`).
