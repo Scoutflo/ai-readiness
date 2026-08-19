@@ -30,7 +30,25 @@ done
 echo "repos listed: $(wc -l < "$OUT" | tr -d ' ')"
 ```
 
-Expected: one JSON object per line in `$OUT`, `repos listed: N` matching the org's/user's actual repo count. Each object already carries the repo's immutable numeric `id` — no separate "fetch repo by id" call is ever needed; the listing call is the only source of identity.
+Expected: one JSON object per line in `$OUT`, `repos listed: N` matching the org's/user's actual repo count. Each object already carries the repo's immutable numeric `id` — this listing call is the only source of identity when mapping candidates for the first time, no separate per-repo call is needed for that. A targeted by-id lookup is still useful later, for re-checking one already-confirmed id on a re-run — see the next section.
+
+## Fetch a repo by its immutable id
+
+Used by Phase 5's re-run delta to re-check one already-confirmed `repository_id`, not for initial candidate discovery (the listing call above covers that). Unlike the listing call, this finds the repo even if it was transferred out of the configured org/user entirely — a transfer would simply be absent from that org's/user's listing, but this call still reaches it by id (or gets a real 404 if it was deleted or access was lost).
+
+```bash
+set -eu
+REPOSITORY_ID="812345678"      # an already-confirmed repository_id from a prior repo-map.json
+resp=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 -H "Authorization: Bearer ${GITHUB_TOKEN}" "https://api.github.com/repositories/${REPOSITORY_ID}")
+if [ "$resp" = "200" ]; then
+  curl -fsS --max-time 10 -H "Authorization: Bearer ${GITHUB_TOKEN}" "https://api.github.com/repositories/${REPOSITORY_ID}" \
+    | jq -c '{id: .id, name: .name, owner: .owner.login, full_name: .full_name, archived: .archived}'
+else
+  echo "repo ${REPOSITORY_ID}: ${resp} (404 means deleted or access lost; treat as a contradiction to flag, never as a silent drop)"
+fi
+```
+
+Expected: a single JSON object with the current `name`/`owner`/`archived` state on `200` (compare against the last-recorded label to detect a rename or transfer), or the `repo <id>: 404 ...` line on failure.
 
 ## Fetch a repo's README (first section only)
 

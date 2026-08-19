@@ -105,6 +105,8 @@ jq -c --arg ns "$ns" '
 
 Expected: a JSON array of candidate repos for `SERVICE`, highest score first, empty array when nothing matches by name at all — an empty result is not a failure, it means Phase 3 asks the user for the repo directly with no ranked suggestion.
 
+Each candidate's `id` field here is a JSON number, straight from the listing call. When Phase 4 writes a confirmed mapping, stringify it as `repository_id` (e.g. `.id | tostring`) — the export schema and Phase 5's verification both require a string, never a number, so a confirmed candidate is never passed through as-is.
+
 ### Corroborate the top candidates only
 
 For only the top 3 ranked candidates per service (fewer if the ranked list is shorter), run the cookbook's README and manifest-name blocks and attach whatever they return to that candidate's evidence. Never fetch corroborating evidence for every repo in the org — that is the estate-sizing discipline this skill needs instead of a worklist: the expensive calls are bounded to `services × 3`, not `services × total repos`, so no large-path batching machinery is ever required here.
@@ -192,9 +194,9 @@ Expected: `mapped: N services, unresolved: M`, and both `jq -e` assertions exit 
 
 ### Re-run delta: carry forward, never silently drop or rewrite
 
-Phase 4 already backed up any pre-existing `repo-map.json` to `${TMP}/repo-map.prev.json` before it wrote the new file, so that previous version is available here even though `${OUT_DIR}/repo-map.json` itself now holds the new content. Feed `${TMP}/repo-map.prev.json` (when it exists — a `first run` means there is nothing to feed) into Phase 3: every service already in that old file's `mappings` is proposed to the user as already-confirmed and kept exactly as-is (same `repository_id`, same `confirmed_at`) unless live GitHub evidence now contradicts it.
+This is why Phase 4 backs up any pre-existing `repo-map.json` to `${TMP}/repo-map.prev.json` before it writes the new one: on a re-run, Phase 3 reads that prior file's `mappings` (before Phase 4 ever runs) and proposes every service already in it to the user as already-confirmed, kept exactly as-is (same `repository_id`, same `confirmed_at`) unless a fresh lookup contradicts it. This check needs the cookbook's [fetch a repo by id](references/github-queries.md#fetch-a-repo-by-its-immutable-id) call, not the org-wide listing — a rename or transfer changes what the listing shows for that id, but a repo transferred *out* of the configured org/user entirely would simply be absent from that listing, indistinguishable from deletion; the by-id call still finds it (or gets a real 404) either way.
 
-A contradiction is: the repo behind a confirmed `repository_id` is now archived, or a fresh lookup by that same id returns a different `owner`/`name` than last recorded (a rename or transfer — expected and fine, update the label) or 404s entirely (the repo was deleted or the token lost access — flag it, do not drop the mapping silently). Name the exact contradiction to the user in Phase 3 rather than auto-resolving it; a customer-confirmed fact is never silently rewritten without them seeing why.
+A contradiction is: the repo behind a confirmed `repository_id` is now archived, or the by-id lookup returns a different `owner`/`name` than last recorded (a rename or transfer — expected and fine, update the label) or 404s entirely (the repo was deleted or the token lost access — flag it, do not drop the mapping silently). Name the exact contradiction to the user in Phase 3 rather than auto-resolving it; a customer-confirmed fact is never silently rewritten without them seeing why.
 
 Close by telling the user, in the terminal:
 
