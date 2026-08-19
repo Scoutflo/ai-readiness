@@ -65,6 +65,7 @@ if ! kubectl --context "$KUBE_CONTEXT" auth can-i get pods -A >/dev/null 2>&1; t
   case "$EXEC_CMD" in
     *gke-gcloud-auth-plugin*) echo "context '$KUBE_CONTEXT' (GKE) could not authenticate — the gke-gcloud-auth-plugin credential is likely expired, not an RBAC gap; run: gcloud auth login (then gcloud container clusters get-credentials <cluster> to refresh the token), then retry"; exit 1 ;;
     *aws*)                    echo "context '$KUBE_CONTEXT' (EKS) could not authenticate — the aws exec-plugin credential is likely expired, not an RBAC gap; run: aws sso login (or otherwise refresh your AWS credentials), then retry"; exit 1 ;;
+    *kubelogin*)              echo "context '$KUBE_CONTEXT' (Entra AKS) could not authenticate — the kubelogin credential is likely expired, not an RBAC gap; run: az login to refresh it (or az aks install-cli if kubelogin is missing), then retry"; exit 1 ;;
     *)                        echo "context reaches no cluster or lacks read RBAC; bind the view ClusterRole (connect references/providers.md)"; exit 1 ;;
   esac
 fi

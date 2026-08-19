@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.116
+
+Closes the one non-blocking advisory from the rubric review of the fix sweep (all 9 changed skills gated PASS). `audit-kubernetes`'s doctor-gate *failure* branch named the reauth path for GKE (`gke-gcloud-auth-plugin` → `gcloud auth login`) and EKS (`aws` → `aws sso login`) but not **AKS** (`kubelogin`) — so an Entra-integrated AKS context with an *installed* kubelogin binary but an *expired token* fell through to the generic "bind the view ClusterRole" message (the up-front kubelogin check only catches a *missing* binary, not an expired token). Added the `*kubelogin*` arm → `az login` to refresh, matching the GKE/EKS branches and the parity `map-topology` preflight (which already had it). The `gke-eks-exec-plugin-expiry-not-rbac` pressure scenario now covers all three exec plugins.
+
+Gates: leak CLEAN, structure-check (13), run-tests (20 suites), plugin validate --strict.
+
 ## 0.1.115
 
 Doc freshness. The README architecture (Mermaid) diagram still read **"14 audit skills / 7 setup skills"** and omitted **Azure** and **ClickStack** — the two providers added in 0.1.108 and 0.1.110. Updated to **16 audit / 9 setup**, with `azure` + `clickstack` added to both boxes. (The `catalog-consistency` gate validates the README *catalog list* — already current — but not this hand-drawn diagram, so it went stale silently.)
