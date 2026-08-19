@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.1.111
+
+A rigorous end-to-end test pass — every audit run against **real live data** (11 providers reachable this run), the report-standard validators hit with 30+ adversarial fixtures, and the cross-cutting skills (correlation, cost roll-up, audit-all, rca) exercised over the real multi-provider findings — then every defect it surfaced fixed and locked behind a permanent regression. Ships a **reusable local self-test mechanism** so this is repeatable anytime. Every audit that could reach live data passed; the defects below were all on error/diagnostic paths or reference queries — none affected the read-only lane, the score reconciliation, or produced a fabricated finding.
+
+**New: `tests/selftest/` — a reusable, layered self-test.** One entrypoint (`sh tests/selftest/run.sh`), an honest PASS/FAIL/SKIP matrix (`last-run.md`), hermetic-by-default:
+
+- `mechanical` (the repo gates) · `validators` (adversarial fixtures for check-findings / check-report / leak-scan / render-report-viz — every invalid class plus the specific bugs below) · `capstone` (correlation + cost libs over a synthetic multi-audit set) · `integration` (spins ClickStack in Docker, probes, tears down — opt-in) · `live` (doctor + validate your real audit outputs — opt-in).
+- The hermetic layers run in CI (`tests/test-selftest.sh`; run-tests is now 21 suites). `PLAYBOOK.md` is the Claude recipe for the LLM-driven full live sweep. Every bug found this pass is now a permanent fixture — it cannot silently regress.
+
+**Fixes the test found:**
+
+- **audit-all** — the aggregation loops globbed `*/<date>/findings.json`, which after Phase 3.6 includes `cost-analysis/` (target `null`, no score): the top-findings and checks-passed steps crashed (exit 5) and four roll-ups leaked spurious `null:` rows. Every loop now skips non-per-audit dirs, mirroring the render-viz guard.
+- **rca** — the Phase-5 cascade-walk `jq` had an operator-precedence bug (`|` binds looser than `or`) that crashed the "target is an effect" case; parenthesized so the pipe stays local.
+- **check-findings.sh** — a null/missing `.score` crashed with exit 5 instead of the documented exit 1; and a malformed (string/fractional) `overall` leaked a raw shell-arithmetic error and skipped the drift summary. Both now fail cleanly at exit 1 (null-safe iteration + a short-circuiting shape guard).
+- **render-report-viz.sh** — the at-a-glance "Start here" lever ignored severity on a points tie (a critical could hide under an equal-points medium); `overlaps` rejected a directory argument (false "no correlation.json"); `inventory`/`overlaps` didn't escape `|` in a value, so a pipe in a name broke the markdown table. All fixed.
+- **ci/leak-scan.sh** — the 12-digit account-id rule false-positived on long decimals and all-digit UUID segments; tightened the boundary (still catches standalone ids + ARNs, still exempts the `123456789012` placeholder). `tests/selftest/` is excluded, exactly like `ci/`, because it holds deliberate fabricated leak vectors.
+- **audit-azure** — the cost pack's `AZR-OPT-NNN` id failed the mandatory findings-id gate (one-hyphen rule) and would have been rejected on every run → renamed `AZROPT`; three `az monitor diagnostic-settings` reads used the ARM-envelope `.value[]?` on the CLI's bare array → `.[]?` (a real "0 settings" gap had been mislabeled "blocked").
+- **audit-datadog** — DD-012 treated `renotify_interval=0` (disabled) as unbounded and over-reported; the cost `top_avg_metrics` call 400'd every run (missing required `month`); Slack-liveness used a deprecated endpoint that 404s (now falls back to the `broken_at_handle` signal).
+- **audit-groundcover** — the per-monitor config `GET` returns YAML (not JSON) and omits the keyed fields on SaaS → uses `POST /api/monitors/summary/query` as the config+runtime source.
+- **audit-kubernetes / map-topology** — a GKE/EKS exec-plugin credential-expiry was misdiagnosed as an RBAC gap (only AKS's kubelogin was special-cased); the gate now names `gcloud auth login` / `aws sso login` (still fails closed).
+- **audit-gcp** — the alert-policies raw capture retained GCP operator emails (`mutatedBy`), tripping leak-scan on the run's own `raw/` output; stripped at capture, matching the channels pull.
+- **audit-aws** — an `AWS-042` example was mislabeled (that case is `AWS-001`; `AWS-042` is Synthetics canaries).
+- **doctor** — the Datadog cost-permission probe overclaimed `pass` on `usage_read` when the cost trend needs `billing_read`; hint corrected. Documentation drift in the correlation-engine and cost-analysis descriptions aligned to the shipping libs.
+
+12 pressure scenarios added/updated (one per behavioral change). Gates: leak CLEAN, structure-check (13), run-tests (21 suites), plugin validate --strict. Every fix was verified by re-running the exact failing case against real data; the report-standard / leak-scan / render-viz fixes are also permanently locked by the new self-test.
+
 ## 0.1.110
 
 Adds **ClickStack** (ClickHouse + HyperDX + OpenTelemetry) as a new provider — driven by a customer running it (Zepto's ClickHouse-observability signal). Every API/schema fact was **live-validated** against a real ClickStack instance (the official all-in-one, ClickHouse 26.5.6, spun up locally and torn down) before any skill cites it.

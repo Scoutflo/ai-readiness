@@ -25,47 +25,57 @@ For a **deep, live, per-resource** cost analysis (querying Cost Explorer / Compu
 
 **Stage 1: Individual Audits (Existing, No Change)**
 
-Each audit (audit-aws, audit-gcp, audit-datadog, etc) already produces:
+Each audit (audit-aws, audit-gcp, audit-datadog, etc) already writes its
+cost-optimization findings into the normal `findings[]` array, tagged
+`area: "cost-optimization"` (IDs like `AWSOPT-*`, `DDOPT-*`). A provider-native
+dollar figure rides in `estimated_monthly_savings_usd` when the audit copied one
+verbatim; a presence-fact finding leaves it `null`:
 
 ```json
 {
   "target": "aws",
-  "findings": [...],
-  "cost_section": {
-    "captured_at": "2026-07-30T14:30:00Z",
-    "data_source": "AWS Cost Explorer + Compute Optimizer",
-    "findings": [
-      {"id": "COST-AWS-001", "type": "stopped_instances", "monthly_cost": 320},
-      {"id": "COST-AWS-002", "type": "underutilized_rds", "monthly_cost": 120}
-    ],
-    "total_identifiable_waste": 440
-  }
+  "findings": [
+    {
+      "id": "AWSOPT-001",
+      "title": "3 stopped EC2 instances still billing for EBS",
+      "area": "cost-optimization",
+      "affected": ["ec2/i-0abc", "ec2/i-0def"],
+      "estimated_monthly_savings_usd": 320
+    },
+    {
+      "id": "AWSOPT-002",
+      "title": "RDS instance under 20% utilization",
+      "area": "cost-optimization",
+      "affected": ["rds/prod-db-1"],
+      "estimated_monthly_savings_usd": null
+    }
+  ]
 }
 ```
 
-**This data is already fresh.** No cost-analysis API calls needed; just read these sections.
+**This data is already fresh.** No cost-analysis API calls needed; this skill just
+reads every audit's `area: "cost-optimization"` findings.
 
 **Stage 2: Cost-Analysis Aggregates (This Skill)**
 
 ```
-For each audit findings.json:
-  ├─ Extract cost_section
-  └─ Add source target metadata
+For each audit findings.json (skips the all/ and cost-analysis/ dirs):
+  ├─ Select findings where area == "cost-optimization"
+  └─ Tag each with its source_target
 
-Merge all cost_sections → one array
+Merge all cost findings → one array
 
 Check correlation.json:
-  ├─ Any findings marked as overlaps?
-  ├─ Mark deduplicated=true with reason
-  └─ Keep dedup_count for scoring
+  ├─ Any finding ID in an overlap group?
+  ├─ Mark deduplicated=true with the overlap recommendation
+  └─ Keep it visible (annotated, never dropped)
 
-Sort findings by ROI (this is a ranked-savings axis, NOT a 0–100 score):
-  ├─ If cost_sensitivity=high: sort by annual_savings (highest first)
-  └─ If cost_sensitivity=medium/low: sort by monthly_waste
+Rank by provider-native savings (a ranked-savings axis, NOT a 0–100 score):
+  └─ estimated_monthly_savings_usd, largest first; presence facts (null) after
 
 Output:
-  ├─ cost-analysis.json: the deduplicated findings, ranked by savings
-  └─ cost-analysis.jsonl: append one history line (total-savings trend tracking)
+  ├─ cost-analysis/<date>/findings.json: the deduplicated findings, ranked by savings
+  └─ cost-analysis.jsonl: append one history line (monthly_savings_identified trend)
 ```
 
 ## Report Structure
@@ -75,46 +85,47 @@ Output:
 ```json
 {
   "audit_date": "2026-07-30",
-  "timestamp": "2026-07-30T15:00:00Z",
+  "generated_at": "2026-07-30T15:00:00Z",
   "environment": "production",
+  "cost_sensitivity": "medium",
   "findings": [
     {
-      "id": "COST-AWS-001",
-      "title": "Stopped instances not terminated",
-      "type": "stopped_instances",
-      "source": "aws",
-      "monthly_cost": 320,
+      "id": "AWSOPT-001",
+      "title": "3 stopped EC2 instances still billing for EBS",
+      "source_target": "aws",
+      "affected": ["ec2/i-0abc", "ec2/i-0def"],
+      "estimated_monthly_savings_usd": 320,
       "roi_annual": 3840,
-      "fix_priority": "high",
-      "effort_minutes": 5
+      "imported_at": "2026-07-30T15:00:00Z",
+      "deduplicated": false,
+      "dedup_reason": "No overlap"
     },
     {
-      "id": "COST-AWS-002",
-      "title": "3 RDS instances <20% utilization",
-      "type": "underutilized_rds",
-      "source": "aws",
-      "monthly_cost": 120,
-      "roi_annual": 1440,
-      "fix_priority": "medium",
-      "effort_minutes": 15
+      "id": "DDOPT-002",
+      "title": "High-cardinality custom metrics dominate ingestion",
+      "source_target": "datadog",
+      "affected": ["go_gc_heap_allocs_by_size_bytes.bucket"],
+      "estimated_monthly_savings_usd": null,
+      "roi_annual": null,
+      "imported_at": "2026-07-30T15:00:00Z",
+      "deduplicated": false,
+      "dedup_reason": "No overlap"
     }
   ],
   "summary": {
     "total_findings": 2,
-    "total_monthly_waste": 440,
-    "total_annual_impact": 5280,
-    "high_priority": 1,
-    "medium_priority": 1,
-    "low_priority": 0
+    "findings_with_native_savings_figure": 1,
+    "presence_fact_findings": 1,
+    "monthly_savings_identified": 320,
+    "annual_savings_identified": 3840,
+    "deduplicated_overlaps": 0
   },
+  "note": "Savings totals sum only provider-native recommendation figures (Compute Optimizer, Cost Explorer, Datadog usage). Presence-fact findings carry no invented dollar value.",
   "trend": {
     "last_5_runs": [
-      {"date": "2026-07-26", "monthly_waste": 580},
-      {"date": "2026-07-27", "monthly_waste": 550},
-      {"date": "2026-07-30", "monthly_waste": 440}
-    ],
-    "direction": "improving",
-    "momentum": "-$140/mo since first run"
+      {"date": "2026-07-27", "monthly_savings_identified": 550, "state": "analyzed"},
+      {"date": "2026-07-30", "monthly_savings_identified": 320, "state": "analyzed"}
+    ]
   }
 }
 ```
@@ -122,9 +133,8 @@ Output:
 **File:** `scoutflo-audits/cost-analysis.jsonl` (appended each run)
 
 ```jsonl
-{"date":"2026-07-26","monthly_waste":580,"state":"analyzed"}
-{"date":"2026-07-27","monthly_waste":550,"state":"analyzed"}
-{"date":"2026-07-30","monthly_waste":440,"state":"analyzed"}
+{"date":"2026-07-27","total_findings":3,"monthly_savings_identified":550,"state":"analyzed"}
+{"date":"2026-07-30","total_findings":2,"monthly_savings_identified":320,"state":"analyzed"}
 ```
 
 ## Deduplication Example
@@ -147,32 +157,31 @@ Cost-analysis: $320 (only count once, mark GCP as deduplicated)
 
 ## Ranking (not a 0–100 score)
 
-This roll-up does **not** compute a 0–100 health score — cost is a ranked-savings axis, not a reliability grade, and inventing a "cost score" would be an invented number. It presents the deduplicated findings **ranked by dollar savings**, using `cost_sensitivity` to choose the sort key:
+This roll-up does **not** compute a 0–100 health score — cost is a ranked-savings axis, not a reliability grade, and inventing a "cost score" would be an invented number. It presents the deduplicated findings **ranked by provider-native monthly savings** (`estimated_monthly_savings_usd`, largest first); presence-fact findings with no figure (`null`) sort to the end. Each finding also carries a derived `roi_annual` (its monthly figure × 12), so ranking by monthly or annual savings yields the same order. `cost_sensitivity` is read from business context and recorded in the output, but the current roll-up does not re-sort by it.
 
-- `cost_sensitivity: high` → rank by **annual** savings (biggest total impact first).
-- `cost_sensitivity: medium`/`low` → rank by **monthly** waste.
-
-The only headline figures are provider-native, copied verbatim: `total_monthly_waste` and `total_annual_impact` (the sum of the ranked findings' own numbers), plus the count by `fix_priority`. Overlaps flagged by `correlation.json` are marked `deduplicated=true` so a dollar is never counted twice. The trend line tracks `monthly_waste` over runs, not a score.
+The only headline figures are provider-native, copied verbatim: `monthly_savings_identified` and `annual_savings_identified` (the sum of the ranked findings' own `estimated_monthly_savings_usd` / `roi_annual`), plus the `findings_with_native_savings_figure` vs `presence_fact_findings` split. Overlaps flagged by `correlation.json` are marked `deduplicated=true` so a dollar is never counted twice. The trend line tracks `monthly_savings_identified` over runs, not a score.
 
 ## Business Context Integration
 
-**Cost Sensitivity: high** → Sort findings by ROI (annual savings) first
-**Cost Sensitivity: medium** → Sort by monthly impact
-**Cost Sensitivity: low** → Show impact but don't re-prioritize
+Business context is read from `~/.scoutflo/business_context.json` (the derived SSOT
+projection), falling back to the legacy `topology.json` `business_context` block, then
+to safe defaults. It contributes:
 
-Example from `topology.json`:
+- `environment` and `cost_sensitivity` — recorded verbatim in the roll-up's top-level
+  fields for context. The current roll-up always ranks by provider-native monthly
+  savings; `cost_sensitivity` is captured but does not change that ordering.
+- `critical_dependencies` — loaded for downstream consumers; the roll-up does not
+  re-weight dollar figures by it.
+
+Example `business_context.json` (or the same keys under the legacy `topology.json`
+`business_context` block):
 ```json
 {
-  "business_context": {
-    "environment": "production",
-    "cost_sensitivity": "high",
-    "team": "platform",
-    "critical_dependencies": ["payment-svc"]
-  }
+  "environment": "production",
+  "cost_sensitivity": "high",
+  "critical_dependencies": ["payment-svc"]
 }
 ```
-
-→ cost-analysis sorts by annual ROI, shows token cost for each fix.
 
 ## Run behavior — always regenerate, zero API calls
 
@@ -186,14 +195,12 @@ Because it makes no API calls, there is nothing to cache: the token cost is only
 
 **If correlation.json not available:**
 - Still aggregates findings from all audits
-- Skips deduplication pass
-- Falls back to default scoring
-- Logs: `[cost-analysis] Correlation data not available; scoring without dedup`
+- Skips the deduplication pass (findings pass through unannotated)
+- No score is involved either way — this roll-up never scores
 
 **If no business_context set:**
-- Uses safe defaults (production / medium / 99.9 / [])
-- Still sorts by monthly impact
-- Logs: `[cost-analysis] Using safe defaults for business context`
+- Uses safe defaults (production, medium cost sensitivity, no critical dependencies)
+- Still ranks by provider-native monthly savings
 
 **If no audit findings available:**
 - Exits gracefully
@@ -201,7 +208,7 @@ Because it makes no API calls, there is nothing to cache: the token cost is only
 
 ## See also
 
-- `/scoutflo:audit-all` — Phase 4: runs cost-analysis after correlation-engine
+- `/scoutflo:audit-all` — Phase 3.6: runs cost-analysis after correlation-engine
 - `/scoutflo:correlation-engine` — detects overlaps + cascades
-- `/scoutflo:business-context` — sets team/env/cost sensitivity
-- Individual skills (audit-aws, audit-gcp, etc) — produce cost_section in findings.json
+- `/scoutflo:business-context` — sets env / cost sensitivity / critical dependencies
+- Individual skills (audit-aws, audit-gcp, etc) — produce `area: "cost-optimization"` findings in findings.json

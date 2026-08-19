@@ -7,7 +7,7 @@ description: 'Harness skill (run it directly, or let audit-all run it for you): 
 
 After you run any audit (full audit-all, or sequential audits over days, or targeted 2-3 audits), the correlation engine analyzes findings across all skills to detect overlaps, cascade risks, and apply business context intelligence.
 
-Output: `scoutflo-audits/<date>/correlation.json` — machine-readable deduplication + prioritization.
+Output: `scoutflo-audits/correlation.json` — machine-readable deduplication + prioritization. It is written once at the audit-dir root (not under a per-date subdir); the per-audit `findings.json` files it reads are target-first (`<target>/<date>/findings.json`).
 
 ## How it works
 
@@ -138,15 +138,16 @@ Setup skill reads correlation.json:
 
 ```
 scoutflo-audits/
-  <date>/
-    correlation.json     ← machine-readable overlaps + cascades
-    aws/
+  correlation.json       ← machine-readable overlaps + cascades (audit-dir root)
+  aws/
+    <date>/
       findings.json
       report.md
-    grafana/
+  grafana/
+    <date>/
       findings.json
       report.md
-    ...
+  ...
 ```
 
 correlation.json schema (exactly what the lib writes):

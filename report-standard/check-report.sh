@@ -22,7 +22,7 @@ fail() { echo "REPORT-FAIL: $1"; FAIL=1; }
 first="$(grep -m1 -E '.' "$REPORT" || true)"
 case "$first" in
   '# '*) : ;;
-  *) fail "first content line must be a '# ' H1 title, found: ${first%%$(printf '\n')*}" ;;
+  *) fail "first content line must be a '# ' H1 title, found: $first" ;;
 esac
 
 # 2. Header table: the four required rows must all be present.

@@ -461,7 +461,11 @@ else
       else
         row datadog monitors-read yes "$DD_APP_VAR" fail "$DDM_CODE" "$(http_hint "$DDM_CODE")"
       fi
-      # Informational cost probe. A missing usage_read/billing_read scope never fails
+      # Informational cost probe. This hits /api/v1/usage/summary, which needs
+      # usage_read only; a pass therefore confirms usage_read, NOT billing_read.
+      # The audit's estimated/historical cost-trend call (/api/v2/usage/estimated_cost)
+      # additionally needs billing_read and can still 403 on a usage_read-only key —
+      # the pass hint says so rather than overclaiming. A missing scope never fails
       # doctor; audit-datadog reads this row to run the non-scored cost section or
       # report it excluded with the reason.
       DD_COST_CHECKS="$(cfg datadog cost_checks)"
@@ -473,7 +477,7 @@ else
           -H "DD-API-KEY: ${DD_API_KEY}" -H "DD-APPLICATION-KEY: ${DD_APP_KEY}" \
           "https://${DD_HOST}/api/v1/usage/summary?start_month=$(date -u +%Y-%m-01T00 2>/dev/null)")" || true
         if [ "$DDC_CODE" = "200" ]; then
-          row datadog cost-permissions yes "$DD_APP_VAR" pass "$DDC_CODE" "-"
+          row datadog cost-permissions yes "$DD_APP_VAR" pass "$DDC_CODE" "usage_read confirmed via /api/v1/usage/summary only; the estimated/historical cost trend (/api/v2/usage/estimated_cost) also needs billing_read and can still 403 — audit-datadog degrades that part gracefully"
         else
           row datadog cost-permissions yes "$DD_APP_VAR" skipped "${DDC_CODE:-000}" "usage_read/billing_read not confirmed (HTTP ${DDC_CODE:-000}); audit-datadog will report the cost section excluded with this reason, not fail"
         fi
@@ -963,7 +967,7 @@ else
     elif [ "$K_LINE" = "no" ]; then
       row kubernetes rbac yes - fail - "context reaches the cluster but lacks read RBAC; bind the view ClusterRole per connect references/providers.md"
     else
-      row kubernetes rbac yes - fail - "context error: ${K_LINE}; run kubectl config get-contexts and fix kubernetes.context"
+      row kubernetes rbac yes - fail - "context error: ${K_LINE}; run kubectl config get-contexts and fix kubernetes.context — a GKE/EKS context failing here often needs exec-plugin reauth (gcloud auth login / aws sso login), not an RBAC change"
     fi
   fi
 fi

@@ -46,7 +46,7 @@ actual="$(jq -cS '[.findings[].severity]
 [ "$declared" = "$actual" ] || fail "severity_counts $declared != actual histogram $actual"
 
 # 3. Category weights (included + excluded) must sum to 100.
-wsum="$(jq '([.score.categories[].weight] + [.score.excluded[]?.weight // 0]) | add // 0' "$F")"
+wsum="$(jq '([.score.categories[]?.weight] + [.score.excluded[]?.weight // 0]) | add // 0' "$F")"
 [ "$wsum" = "100" ] || fail "category weights (incl+excl) sum to $wsum, expected 100"
 
 # 4. overall must equal the weight-normalized sum over INCLUDED categories,
@@ -55,23 +55,28 @@ wsum="$(jq '([.score.categories[].weight] + [.score.excluded[]?.weight // 0]) | 
 # Guard the arithmetic: without this, a malformed score.overall (missing, string,
 # fractional) or an empty/non-array score.categories makes the reconciliation
 # below misbehave with a cryptic jq error instead of a clear schema failure.
-jq -e '
+# Set `overall` numerically up front (a non-number becomes -1) so every later
+# integer comparison (the delta below, the end_to_end gate) stays safe even when
+# the file is malformed — a string overall must never reach shell arithmetic.
+overall="$(jq -r '(.score.overall | if type=="number" then . else -1 end)' "$F")"
+if jq -e '
   (.score.overall   | type == "number" and . == floor)
   and (.score.categories | type == "array" and (length > 0))
-' "$F" >/dev/null \
-  || fail "score.overall must be an integer number and score.categories a non-empty array (got overall=$(jq -c '.score.overall' "$F" 2>/dev/null || echo missing), categories=$(jq -c '.score.categories | length' "$F" 2>/dev/null || echo missing))"
-overall="$(jq '.score.overall' "$F")"
-recomp="$(jq '
-  (.score.excluded // [] | map(.name)) as $ex
-  | (.score.categories | map(select(.name as $n | ($ex | index($n)) | not))) as $inc
-  | if ($inc | length) == 0 then null
-    else (($inc | map(.weight * .score) | add) / ($inc | map(.weight) | add)) | floor
-    end' "$F")"
-if [ "$recomp" = "null" ]; then
-  fail "no included categories to recompute overall from (all excluded?)"
+' "$F" >/dev/null; then
+  recomp="$(jq '
+    (.score.excluded // [] | map(.name)) as $ex
+    | (.score.categories | map(select(.name as $n | ($ex | index($n)) | not))) as $inc
+    | if ($inc | length) == 0 then null
+      else (($inc | map(.weight * .score) | add) / ($inc | map(.weight) | add)) | floor
+      end' "$F")"
+  if [ "$recomp" = "null" ]; then
+    fail "no included categories to recompute overall from (all excluded?)"
+  else
+    d=$(( overall > recomp ? overall - recomp : recomp - overall ))
+    [ "$d" -le 1 ] || fail "overall=$overall does not reconcile with scorecard (categories -> $recomp, delta $d > 1); overall must be the weight-normalized sum over included categories, rounded down"
+  fi
 else
-  d=$(( overall > recomp ? overall - recomp : recomp - overall ))
-  [ "$d" -le 1 ] || fail "overall=$overall does not reconcile with scorecard (categories -> $recomp, delta $d > 1); overall must be the weight-normalized sum over included categories, rounded down"
+  fail "score.overall must be an integer number and score.categories a non-empty array (got overall=$(jq -c '.score.overall' "$F" 2>/dev/null || echo missing), categories=$(jq -c '.score.categories | length' "$F" 2>/dev/null || echo missing))"
 fi
 
 # 5. Each included category: score 0-100, checks_passed <= checks_total,
@@ -79,7 +84,7 @@ fi
 #    category, checked via exclusion above.)
 badcat="$(jq -r '
   (.score.excluded // [] | map(.name)) as $ex
-  | .score.categories[]
+  | .score.categories[]?
   | select(.name as $n | ($ex | index($n)) | not)
   | select((.score < 0) or (.score > 100) or (.weight <= 0) or ((.checks_passed // 0) > (.checks_total // 0)))
   | .name' "$F")"

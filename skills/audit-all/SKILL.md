@@ -76,6 +76,10 @@ RUN_DATE="$(date -u +%F)"        # UTC run date; matches each audit's directory 
 
 for f in "$AUDITS_DIR"/*/"$RUN_DATE"/findings.json; do
   [ -e "$f" ] || continue
+  # Skip the roll-up dirs (cost-analysis/, all/): their findings.json is not the
+  # per-audit schema (no .target, no .score, severity-less findings). Mirrors the
+  # render-report-viz.sh guard (case "$tgt" in all|"?").
+  case "$(jq -r '.target // "?"' "$f" 2>/dev/null)" in all|"?") continue ;; esac
   jq -r '"\(.target): \(.score.overall)/100 | critical=\(.severity_counts.critical) high=\(.severity_counts.high) medium=\(.severity_counts.medium) low=\(.severity_counts.low) info=\(.severity_counts.info)"' "$f"
 done
 ```
@@ -90,7 +94,11 @@ AUDITS_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}"   # report-standard output
 RUN_DATE="$(date -u +%F)"        # UTC run date; matches each audit's directory name
 
 jq -rs '
-  [.[].findings[]]
+  # Skip the roll-up dirs (cost-analysis/, all/): their findings.json has no
+  # .target and carries severity-less findings, which would make the rank lookup
+  # index the object with null and crash. Same guard as the viz rollup (target
+  # null/all → skip).
+  [.[] | select(.target != null and .target != "all") | .findings[]]
   | map(. + {rank: {"critical":0,"high":1,"medium":2,"low":3,"info":4}[.severity]})
   | sort_by(.rank) | .[:5][]
   | "\(.id) [\(.severity)] \(.title)"
@@ -106,6 +114,8 @@ RUN_DATE="$(date -u +%F)"        # UTC run date; matches each audit's directory 
 
 for f in "$AUDITS_DIR"/*/"$RUN_DATE"/findings.json; do
   [ -e "$f" ] || continue
+  # Skip the roll-up dirs (cost-analysis/, all/): not the per-audit schema.
+  case "$(jq -r '.target // "?"' "$f" 2>/dev/null)" in all|"?") continue ;; esac
   jq -r '"\(.target): " + (if .estate then "\(.estate.objects) objects, \(.estate.path) path" else "estate not recorded" end)' "$f"
 done
 ```
@@ -146,6 +156,8 @@ RUN_DATE="$(date -u +%F)"        # UTC run date; matches each audit's directory 
 
 for f in "$AUDITS_DIR"/*/"$RUN_DATE"/findings.json; do
   [ -e "$f" ] || continue
+  # Skip the roll-up dirs (cost-analysis/, all/): not the per-audit schema.
+  case "$(jq -r '.target // "?"' "$f" 2>/dev/null)" in all|"?") continue ;; esac
   jq -r '.target as $t | .findings[] | select(.lifecycle == "regressed") | "\($t): \(.id) [\(.severity)] \(.title)"' "$f"
 done
 ```
@@ -162,6 +174,8 @@ RUN_DATE="$(date -u +%F)"        # UTC run date; matches each audit's directory 
 TOTAL=0
 for f in "$AUDITS_DIR"/*/"$RUN_DATE"/findings.json; do
   [ -e "$f" ] || continue
+  # Skip the roll-up dirs (cost-analysis/, all/): not the per-audit schema.
+  case "$(jq -r '.target // "?"' "$f" 2>/dev/null)" in all|"?") continue ;; esac
   t=$(jq -r '.target' "$f")
   n=$(jq -r '[.findings[] | select(.lifecycle == "suppressed")] | length' "$f")
   echo "${t}: ${n} suppressed via exemptions"
@@ -181,6 +195,8 @@ RUN_DATE="$(date -u +%F)"        # UTC run date; matches each audit's directory 
 
 for f in "$AUDITS_DIR"/*/"$RUN_DATE"/findings.json; do
   [ -e "$f" ] || continue
+  # Skip the roll-up dirs (cost-analysis/, all/): not the per-audit schema.
+  case "$(jq -r '.target // "?"' "$f" 2>/dev/null)" in all|"?") continue ;; esac
   t=$(jq -r '.target' "$f")
   REPORT="$(dirname "$f")/report.md"
   if [ -f "$REPORT" ]; then
@@ -338,6 +354,8 @@ REPORT="${AUDITS_DIR}/all/${RUN_DATE}/report.md"
 n=0
 for f in "$AUDITS_DIR"/*/"$RUN_DATE"/findings.json; do
   [ -e "$f" ] || continue
+  # Skip the roll-up dirs (cost-analysis/, all/): they have no per-target score row.
+  case "$(jq -r '.target // "?"' "$f" 2>/dev/null)" in all|"?") continue ;; esac
   t=$(jq -r '.target' "$f")
   grep -q "| ${t} " "${REPORT}" || { echo "score row missing for ${t}"; exit 1; }
   n=$((n + 1))
@@ -370,6 +388,8 @@ RUN_DATE="$(date -u +%F)"        # UTC run date
 
 REGRESSIONS="$(for f in "$AUDITS_DIR"/*/"$RUN_DATE"/findings.json; do
   [ -e "$f" ] || continue
+  # Skip the roll-up dirs (cost-analysis/, all/): not the per-audit schema.
+  case "$(jq -r '.target // "?"' "$f" 2>/dev/null)" in all|"?") continue ;; esac
   jq -r '.target as $t | .findings[] | select(.lifecycle == "regressed") | "\($t): \(.id) \(.title)"' "$f"
 done)"
 [ -n "$REGRESSIONS" ] || REGRESSIONS="none"
@@ -377,6 +397,8 @@ done)"
 SUPPRESSED_TOTAL=0
 for f in "$AUDITS_DIR"/*/"$RUN_DATE"/findings.json; do
   [ -e "$f" ] || continue
+  # Skip the roll-up dirs (cost-analysis/, all/): not the per-audit schema.
+  case "$(jq -r '.target // "?"' "$f" 2>/dev/null)" in all|"?") continue ;; esac
   n=$(jq -r '[.findings[] | select(.lifecycle == "suppressed")] | length' "$f")
   SUPPRESSED_TOTAL=$((SUPPRESSED_TOTAL + n))
 done
@@ -385,6 +407,9 @@ CHECKS_PASSED=0
 CHECKS_TOTAL=0
 for f in "$AUDITS_DIR"/*/"$RUN_DATE"/findings.json; do
   [ -e "$f" ] || continue
+  # Skip the roll-up dirs (cost-analysis/, all/): no .score.categories to sum —
+  # iterating .score.categories[] on the null-score roll-up crashes under set -e.
+  case "$(jq -r '.target // "?"' "$f" 2>/dev/null)" in all|"?") continue ;; esac
   p=$(jq -r '[.score.categories[].checks_passed] | add // 0' "$f")
   t=$(jq -r '[.score.categories[].checks_total] | add // 0' "$f")
   CHECKS_PASSED=$((CHECKS_PASSED + p))

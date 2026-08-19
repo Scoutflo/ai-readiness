@@ -57,8 +57,17 @@ case "$EXEC_CMD" in
   *kubelogin*) command -v kubelogin >/dev/null \
     || { echo "context '$KUBE_CONTEXT' uses the kubelogin exec plugin (Entra-integrated AKS) but kubelogin is not installed; run: az aks install-cli"; exit 1; } ;;
 esac
-kubectl --context "$KUBE_CONTEXT" auth can-i get pods -A >/dev/null 2>&1 \
-  || { echo "context reaches no cluster or lacks read RBAC; bind the view ClusterRole (connect references/providers.md)"; exit 1; }
+if ! kubectl --context "$KUBE_CONTEXT" auth can-i get pods -A >/dev/null 2>&1; then
+  # A failed can-i on an exec-plugin context is usually an EXPIRED CREDENTIAL, not a
+  # missing RBAC binding — so name the reauth path per exec plugin BEFORE the generic
+  # RBAC message (mirrors the kubelogin branch above). Only a non-exec context falls
+  # through to the RBAC fallback.
+  case "$EXEC_CMD" in
+    *gke-gcloud-auth-plugin*) echo "context '$KUBE_CONTEXT' (GKE) could not authenticate — the gke-gcloud-auth-plugin credential is likely expired, not an RBAC gap; run: gcloud auth login (then gcloud container clusters get-credentials <cluster> to refresh the token), then retry"; exit 1 ;;
+    *aws*)                    echo "context '$KUBE_CONTEXT' (EKS) could not authenticate — the aws exec-plugin credential is likely expired, not an RBAC gap; run: aws sso login (or otherwise refresh your AWS credentials), then retry"; exit 1 ;;
+    *)                        echo "context reaches no cluster or lacks read RBAC; bind the view ClusterRole (connect references/providers.md)"; exit 1 ;;
+  esac
+fi
 echo "doctor gate: pass"
 ```
 
@@ -277,6 +286,7 @@ When context is available, apply it per [BUSINESS-CONTEXT-INTEGRATION-v0168.md](
 | An RBAC `Forbidden` recorded as a pass | A denied `view` on a resource is `blocked` for that check, named with the exact resource, never silent success |
 | A single replica with a PDB flagged as unresilient | K8S-005 fails only when single-replica AND no PDB; either replicas>1 or a PDB present is a pass |
 | Entra-integrated AKS context failing with a cryptic exec-plugin error | The doctor gate detects a `kubelogin` exec context and stops with `az aks install-cli` guidance before any check runs; cert/local-account AKS and EKS/GKE contexts skip the probe |
+| A GKE/EKS exec-plugin credential expiry mis-reported as an RBAC gap | On a failed `auth can-i`, the doctor gate branches on the exec command first: `gke-gcloud-auth-plugin` → `gcloud auth login` / token refresh, `aws` → `aws sso login` / credential refresh; only a non-exec context falls through to the "bind the view ClusterRole" RBAC message |
 
 ---
 

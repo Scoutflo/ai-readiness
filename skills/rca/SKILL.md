@@ -142,8 +142,12 @@ AUD="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}"; CORR="$AUD/correlation.json"; TA
 [ -f "$CORR" ] || { echo "no correlation.json — correlating findings directly by shared resource; cascades not precomputed"; exit 0; }
 jq -r --arg t "$TARGET" '
   (.cascades // [])[]
-  | select((.root_cause.title + " " + ((.root_cause.shared_resources // []) | join(" "))) | test($t;"i")
-           or (any(.effects[]?; .title | test($t;"i"))))
+  # Parenthesize the root-string test so the `|` stays LOCAL to that clause. Without
+  # the extra parens `|` binds looser than `or`, so `.` inside any(.effects[]?; …)
+  # would be the concatenated STRING (indexing a string with "effects" → crash),
+  # breaking the "target is an effect" case.
+  | select( ( ( .root_cause.title + " " + ((.root_cause.shared_resources // []) | join(" ")) ) | test($t;"i") )
+            or (any(.effects[]?; .title | test($t;"i"))) )
   | "ROOT: \(.root_cause.finding_id) \(.root_cause.title)\n  EFFECTS: \([.effects[]? | "\(.finding_id) \(.title)"] | join(" | "))"' "$CORR"
 ```
 

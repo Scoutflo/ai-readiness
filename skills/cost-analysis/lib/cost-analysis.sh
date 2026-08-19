@@ -1,7 +1,10 @@
 #!/bin/sh
 # cost-analysis.sh
-# Aggregates cost findings from all audit skills, deduplicates via correlation,
-# and produces scored 0-100 report. Avoids re-analysis within 24h with history-driven skip logic.
+# Aggregates cost-optimization findings from all audit skills and deduplicates them
+# via correlation.json into one non-scored cross-provider roll-up. There is NO 0-100
+# score (cost is a ranked-savings axis, not a health grade — see cost_analysis_build_report)
+# and NO skip/cache: it re-reads only the current run's local findings.json (zero API
+# calls), so every invocation ALWAYS regenerates (the 24h skip was removed — see below).
 
 set -eu
 

@@ -6,8 +6,8 @@ Runnable, read-only checks for every surface the [audit-groundcover](../SKILL.md
 
 - Base is `https://api.groundcover.com` (override via `groundcover.api_url`). groundcover's monitors and workflows are its alerting layer, built on Keep.
 - Auth is `Authorization: Bearer <key>` on a service-account API key, plus `X-Backend-Id: <backend>` (from `groundcover.backend_id`) on multi-backend accounts. Presence-check `GROUNDCOVER_API_KEY` only; never echo, log, or write it. Bind the key to a **Viewer**-role service account for a true read-only tier.
-- Every command here is read-only: a GET, or one of the two documented read-by-query POSTs — `POST /api/monitors/list` and `POST /api/workflows/list`, which return data and change nothing. The forbidden-verb list is section 13.
-- **Confirmed vs capability-gated.** The monitor config surface (list, per-monitor config, workflows, recurring silences) is confirmed in groundcover's docs. The per-monitor **runtime state** source (firing history, last evaluation error, live silence flags) is NOT confirmed in public docs: probe it once (section 7), and if it is absent or errors, mark the checks that depend on it `not-in-scope` with that reason. Never guess a monitor's live state.
+- Every command here is read-only: a GET, or one of the documented read-by-query POSTs — `POST /api/monitors/list`, `POST /api/monitors/summary/query`, and `POST /api/workflows/list`, which return data and change nothing. The forbidden-verb list is section 13.
+- **Confirmed vs capability-gated.** The monitor list, workflows, and recurring silences are confirmed in groundcover's docs. On SaaS the per-monitor **config + runtime state** (severity, isPaused, state, silenced, pendingFor, lastEvaluationError, alertingCount) comes from `POST /api/monitors/summary/query`, confirmed live (HTTP 200). The per-monitor `GET /api/monitors/{uuid}` returns **YAML** (never pipe it to jq) and its config surface is thin — no `notificationSettings`/`autoResolve`/`customResolveThreshold` — so the fields it alone carries are best-effort enrichment (and `model.thresholds` there is an array). When `summary/query` is not 200, or a config field is genuinely absent, mark the dependent checks (GC-002/003/004/005/010-013, GC-022/023) `not-in-scope` with that reason. Never guess a monitor's live state.
 - `curl -fsS --max-time 30` with the auth header is the default. Where the status code is the evidence, `-f` is dropped and `-w '%{http_code}'` captures it. A list response may be a bare array or wrapped (`{monitors: [...]}` / `{results: [...]}`); the commands normalize both.
 - Thresholds and windows are examples; tune to your workloads. Named defaults live in section 12.
 
@@ -45,7 +45,7 @@ What 100/100 means per category; the checks above are this profile made executab
 
 ## 4. Inventory (all categories)
 
-List monitors, pull each monitor's config, the workflows, and recurring silences. Probe the runtime-state endpoint once.
+List monitors, pull each monitor's config and runtime state (`POST /api/monitors/summary/query`), the workflows, and recurring silences.
 
 ```bash
 set -eu
@@ -65,21 +65,62 @@ curl -fsS --max-time 30 -H "$AUTH" -H "Content-Type: application/json" \
   | jq '[.[] | {uuid, title, type}]' > "${RAW_DIR}/monitors.json"
 echo "monitors: $(jq 'length' "${RAW_DIR}/monitors.json")"
 
-# Per-monitor config — the tuning fields the checks key off. Throttle defensively (section 9).
+# Primary config + runtime source. On SaaS (api.groundcover.com) POST /api/monitors/summary/query
+# returns rich JSON — verified HTTP 200 — with per monitor: uuid, title, severity, isPaused, state,
+# silenced, interval.for, lastEvaluationError, alertingCount. It is a documented read-by-query POST
+# and changes nothing (section 13). This is the reliable source because the per-monitor
+# GET /api/monitors/{uuid} returns YAML, NOT JSON — piping it to jq fails "parse error: Invalid
+# literal at line 1" — and that YAML config surface omits notificationSettings / autoResolve /
+# customResolveThreshold entirely (0/69 observed live), so the config+runtime checks key off
+# summary/query, not the GET.
 mkdir -p "${RAW_DIR}/monitors"
-for UUID in $(jq -r '.[].uuid' "${RAW_DIR}/monitors.json"); do
-  curl -fsS --max-time 30 -H "$AUTH" "${GC_API}/api/monitors/${UUID}" \
-    | jq '{uuid, title, isPaused, autoResolve, noDataState, executionErrorState, severity, category,
-        pendingFor: (.evaluationInterval.pendingFor // null),
-        customResolveThreshold: (.model.thresholds.customResolveThreshold // null),
-        renotificationInterval: (.notificationSettings.renotificationInterval // null),
-        disableRenotification: (.notificationSettings.disableRenotification // null),
-        statusFilters: (.notificationSettings.statusFilters // null),
-        method: (.notificationSettings.method // null),
-        connectedApps: (.notificationSettings.connectedApps // [])}' \
-    > "${RAW_DIR}/monitors/${UUID}.json"
-  sleep 0.3   # no documented rate limit; throttle defensively
-done
+RS_CODE="$(curl -s -o "${RAW_DIR}/monitor-state.json" -w '%{http_code}' --max-time 30 -H "$AUTH" \
+  -H "Content-Type: application/json" -X POST "${GC_API}/api/monitors/summary/query" --data '{}' || echo 000)"
+echo "summary/query: HTTP ${RS_CODE} (200 = config+runtime available; else GC-022/GC-023 not-in-scope)"
+echo "$RS_CODE" > "${RAW_DIR}/monitor-state.http"
+
+# Per-monitor files the section 5-8 checks read, built from summary/query: pendingFor from
+# interval.for, plus isPaused / severity / state / silenced / lastEvaluationError.
+if [ "$RS_CODE" = "200" ]; then
+  jq -c 'if type=="array" then . else (.monitors // .results // .summaries // []) end
+      | .[] | select(.uuid != null)
+      | {uuid, title, severity, isPaused, state,
+         silenced: (.silenced // null),
+         pendingFor: (.interval.for // null),
+         lastEvaluationError: (.lastEvaluationError // null),
+         alertingCount: (.alertingCount // null)}' "${RAW_DIR}/monitor-state.json" \
+  | while IFS= read -r rec; do
+      printf '%s\n' "$rec" > "${RAW_DIR}/monitors/$(printf '%s' "$rec" | jq -r '.uuid').json"
+    done
+fi
+
+# Optional enrichment: the fields summary/query does NOT carry (autoResolve, customResolveThreshold,
+# noDataState, executionErrorState, notificationSettings.*) live only in the per-monitor GET, which
+# is YAML — so parse it with a YAML tool (yq) into JSON first, NEVER pipe it to jq. model.thresholds
+# there is an ARRAY, so hysteresis is read across the array, never as .model.thresholds.customResolveThreshold.
+# Skipped cleanly when yq is absent; any field still null afterwards is genuinely not exposed and its
+# check (GC-002/003/004/005/010-013) is not-in-scope-from-this-endpoint (sections 5-6), never a blanket finding.
+if command -v yq >/dev/null 2>&1; then
+  for UUID in $(jq -r '.[].uuid' "${RAW_DIR}/monitors.json"); do
+    F="${RAW_DIR}/monitors/${UUID}.json"
+    [ -f "$F" ] || jq -n --arg u "$UUID" '{uuid:$u}' > "$F"
+    curl -fsS --max-time 30 -H "$AUTH" "${GC_API}/api/monitors/${UUID}" | yq -o=json '.' 2>/dev/null \
+      | jq --slurpfile base "$F" '
+          ($base[0]) + {
+            autoResolve: .autoResolve, noDataState: .noDataState,
+            executionErrorState: .executionErrorState, category: .category,
+            customResolveThreshold: ([ (.model.thresholds // [])[]?.customResolveThreshold // empty ] | first // null),
+            renotificationInterval: .notificationSettings.renotificationInterval,
+            disableRenotification: .notificationSettings.disableRenotification,
+            statusFilters: .notificationSettings.statusFilters,
+            method: .notificationSettings.method,
+            connectedApps: .notificationSettings.connectedApps }' > "${F}.tmp" \
+      && mv "${F}.tmp" "$F" || rm -f "${F}.tmp"
+    sleep 0.3   # no documented rate limit; throttle defensively
+  done
+else
+  echo "yq absent: per-monitor YAML config not parsed; GC-002/003/004/005/010-013 not-in-scope-from-this-endpoint (summary/query does not carry those fields)"
+fi
 
 # Workflows (destination liveness).
 curl -fsS --max-time 30 -H "$AUTH" -H "Content-Type: application/json" \
@@ -93,12 +134,8 @@ curl -fsS --max-time 30 -H "$AUTH" "${GC_API}/api/monitors/recurring-silences" \
       | [.[] | {id, recurrenceType, timezone, comment, matcher_count: ((.matchers // []) | length)}]' \
   > "${RAW_DIR}/recurring-silences.json" 2>/dev/null || echo '[]' > "${RAW_DIR}/recurring-silences.json"
 
-# Runtime-state capability probe (UNCONFIRMED endpoint). Record availability; do NOT depend on it
-# unless it returns 200. If it 404s or errors, GC-022/GC-023 are not-in-scope.
-RS_CODE="$(curl -s -o "${RAW_DIR}/monitor-state.json" -w '%{http_code}' --max-time 20 -H "$AUTH" \
-  -H "Content-Type: application/json" -X POST "${GC_API}/api/monitors/summary/query" --data '{}' || echo 000)"
-echo "runtime-state probe: HTTP ${RS_CODE} (200 = available; anything else = GC-022/GC-023 not-in-scope)"
-echo "$RS_CODE" > "${RAW_DIR}/monitor-state.http"
+# (Runtime + config state was already pulled above via POST /api/monitors/summary/query into
+# monitor-state.json / monitor-state.http; GC-022/GC-023 gate on that HTTP 200 in section 7.)
 
 # Self-hosted detection + Alertmanager fallback. When GC_API is a non-cloud host (self-hosted),
 # the /api/monitors/* paths can 404 even after the base authenticates (verified live 2026-07-26):
@@ -124,7 +161,7 @@ case "$GC_API" in
 esac
 ```
 
-Expected: `monitors.json`, per-monitor config files, `workflows.json`, `recurring-silences.json`, and the runtime-state probe result. A 401 is a bad key; a 403 is missing Viewer access or a missing `backend_id`. On a self-hosted host where the monitors API 404s, the config-level monitor checks (GC-001 to GC-023) are `not-in-scope` with that reason and the firing-state signal comes from `am-firing.json` (the Alertmanager fallback) rather than a fabricated "no monitors" result.
+Expected: `monitors.json`, `monitor-state.json` (from `summary/query`) plus the per-monitor files derived from it, `workflows.json`, and `recurring-silences.json`. A 401 is a bad key; a 403 is missing Viewer access or a missing `backend_id`. The per-monitor `GET /api/monitors/{uuid}` is YAML, so it is parsed with a YAML tool (never piped to jq) and only enriches config-only fields. On a self-hosted host where the monitors API 404s, the config-level monitor checks (GC-001 to GC-023) are `not-in-scope` with that reason and the firing-state signal comes from `am-firing.json` (the Alertmanager fallback) rather than a fabricated "no monitors" result.
 
 ## 5. Monitor firing hygiene (GC-001 to GC-005)
 
@@ -132,26 +169,47 @@ Expected: `monitors.json`, per-monitor config files, `workflows.json`, `recurrin
 set -eu
 RUN_DATE="$(date -u +%Y-%m-%d)"
 RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/groundcover/${RUN_DATE}/raw"
+# GC-002/003/004/005 key off config fields (customResolveThreshold, autoResolve, noDataState,
+# executionErrorState) that /api/monitors/summary/query does NOT carry — they exist only when the
+# per-monitor YAML config was parsed in section 4. When a field is null on EVERY monitor it was not
+# exposed this run, so its check is not-in-scope-from-this-endpoint, never a blanket finding.
+field_present() { jq -s --arg f "$1" -e 'any(.[]; .[$f] != null)' "${RAW_DIR}"/monitors/*.json >/dev/null 2>&1; }
 
-# GC-001: pendingFor 0s or empty = fires on the first breach (no debounce).
+# GC-001: pendingFor 0s or empty = fires on the first breach (no debounce). Always from summary/query.
 jq -s '[.[] | select((.pendingFor // "0s") == "0s" or .pendingFor == "" or .pendingFor == null)
     | {uuid, title, pendingFor}]' "${RAW_DIR}"/monitors/*.json
 # Judgment: a binary up/down monitor may fire immediately; a threshold on a spiky metric needs
 # pendingFor. Judge by monitor type and intent, not blindly.
 
 # GC-002: no customResolveThreshold (no hysteresis) — flag monitors that sit near a boundary.
-jq -s '[.[] | select(.customResolveThreshold == null) | {uuid, title}]' "${RAW_DIR}"/monitors/*.json
+if field_present customResolveThreshold; then
+  jq -s '[.[] | select(.customResolveThreshold == null) | {uuid, title}]' "${RAW_DIR}"/monitors/*.json
+else
+  echo "GC-002 not-in-scope-from-this-endpoint: customResolveThreshold not exposed (no per-monitor YAML config parsed)"
+fi
 # Not every monitor needs hysteresis; pair with flapping evidence where the runtime state is readable.
 
 # GC-003: autoResolve false/unset on a monitor whose condition can clear.
-jq -s '[.[] | select(.autoResolve != true) | {uuid, title, autoResolve}]' "${RAW_DIR}"/monitors/*.json
+if field_present autoResolve; then
+  jq -s '[.[] | select(.autoResolve != true) | {uuid, title, autoResolve}]' "${RAW_DIR}"/monitors/*.json
+else
+  echo "GC-003 not-in-scope-from-this-endpoint: autoResolve not exposed (no per-monitor YAML config parsed)"
+fi
 
 # GC-004: noDataState Alerting = pages on empty results. Default NoData is quiet.
-jq -s '[.[] | select(.noDataState == "Alerting") | {uuid, title, noDataState}]' "${RAW_DIR}"/monitors/*.json
+if field_present noDataState; then
+  jq -s '[.[] | select(.noDataState == "Alerting") | {uuid, title, noDataState}]' "${RAW_DIR}"/monitors/*.json
+else
+  echo "GC-004 not-in-scope-from-this-endpoint: noDataState not exposed (no per-monitor YAML config parsed)"
+fi
 # Judgment: Alerting-on-no-data is correct for a heartbeat-style monitor, noisy for a sampled metric.
 
 # GC-005: executionErrorState Alerting = the query's own failures page. Default OK is quiet.
-jq -s '[.[] | select(.executionErrorState == "Alerting") | {uuid, title, executionErrorState}]' "${RAW_DIR}"/monitors/*.json
+if field_present executionErrorState; then
+  jq -s '[.[] | select(.executionErrorState == "Alerting") | {uuid, title, executionErrorState}]' "${RAW_DIR}"/monitors/*.json
+else
+  echo "GC-005 not-in-scope-from-this-endpoint: executionErrorState not exposed (no per-monitor YAML config parsed)"
+fi
 # A flaky query set to Alerting-on-error pages on its own breakage; OK at scale can also hide a
 # genuinely broken monitor. Report the distribution, not just one side.
 ```
@@ -162,28 +220,36 @@ jq -s '[.[] | select(.executionErrorState == "Alerting") | {uuid, title, executi
 set -eu
 RUN_DATE="$(date -u +%Y-%m-%d)"
 RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/groundcover/${RUN_DATE}/raw"
+# GC-010..013 all key off notificationSettings, which /api/monitors/summary/query does NOT carry —
+# it exists only when the per-monitor YAML config was parsed in section 4. When no monitor has any
+# notification field, these are not-in-scope-from-this-endpoint, never blanket findings.
+notif_present() { jq -s -e 'any(.[]; [.renotificationInterval,.disableRenotification,.statusFilters,.method,.connectedApps] | any(. != null))' "${RAW_DIR}"/monitors/*.json >/dev/null 2>&1; }
 
-# GC-010: no renotificationInterval and disableRenotification not true = default re-notify cadence;
-# a very short interval is a repeat-page storm on a long-lived issue.
-jq -s '[.[] | select(.disableRenotification != true and (.renotificationInterval == null))
-    | {uuid, title, renotificationInterval, disableRenotification}]' "${RAW_DIR}"/monitors/*.json
+if notif_present; then
+  # GC-010: no renotificationInterval and disableRenotification not true = default re-notify cadence;
+  # a very short interval is a repeat-page storm on a long-lived issue.
+  jq -s '[.[] | select(.disableRenotification != true and (.renotificationInterval == null))
+      | {uuid, title, renotificationInterval, disableRenotification}]' "${RAW_DIR}"/monitors/*.json
 
-# GC-011: statusFilters includes Resolved (doubles message volume) on churny monitors.
-jq -s '[.[] | select((.statusFilters // []) | index("Resolved")) | {uuid, title, statusFilters}]' \
-  "${RAW_DIR}"/monitors/*.json
-# Resolved notifications are often intentional; flag them on high-churn monitors, not universally.
+  # GC-011: statusFilters includes Resolved (doubles message volume) on churny monitors.
+  jq -s '[.[] | select((.statusFilters // []) | index("Resolved")) | {uuid, title, statusFilters}]' \
+    "${RAW_DIR}"/monitors/*.json
+  # Resolved notifications are often intentional; flag them on high-churn monitors, not universally.
 
-# GC-012: method noNotifications (silent) where a monitor should page, or connectedApps route-bypass.
-jq -s '{no_notify: [.[] | select(.method == "noNotifications") | {uuid, title}],
-    route_bypass: [.[] | select(.method == "connectedApps") | {uuid, title}]}' "${RAW_DIR}"/monitors/*.json
-# noNotifications on a monitor meant to page is a silent gap. connectedApps at scale fragments
-# delivery control that notification routes would centralize; count the route-bypass share.
+  # GC-012: method noNotifications (silent) where a monitor should page, or connectedApps route-bypass.
+  jq -s '{no_notify: [.[] | select(.method == "noNotifications") | {uuid, title}],
+      route_bypass: [.[] | select(.method == "connectedApps") | {uuid, title}]}' "${RAW_DIR}"/monitors/*.json
+  # noNotifications on a monitor meant to page is a silent gap. connectedApps at scale fragments
+  # delivery control that notification routes would centralize; count the route-bypass share.
 
-# GC-013: a paging monitor that resolves to no destination.
-jq -s '[.[] | select(.method == "connectedApps" and ((.connectedApps // []) | length) == 0)
-    | {uuid, title}]' "${RAW_DIR}"/monitors/*.json
-# method connectedApps with an empty connectedApps list detects but pages nobody (GC-013 high).
-# For method notificationRoutes, confirm at least one route matches (see section 8's route note).
+  # GC-013: a paging monitor that resolves to no destination.
+  jq -s '[.[] | select(.method == "connectedApps" and ((.connectedApps // []) | length) == 0)
+      | {uuid, title}]' "${RAW_DIR}"/monitors/*.json
+  # method connectedApps with an empty connectedApps list detects but pages nobody (GC-013 high).
+  # For method notificationRoutes, confirm at least one route matches (see section 8's route note).
+else
+  echo "GC-010..013 not-in-scope-from-this-endpoint: notificationSettings not exposed by /api/monitors/summary/query (no per-monitor YAML config parsed)"
+fi
 ```
 
 ## 7. Monitor health and silences (GC-020 to GC-023)
@@ -204,7 +270,7 @@ jq '[.[] | select(.matcher_count == 0 or .matcher_count == null) | {id, recurren
 # A recurring silence with no/blank matchers (matches everything) on a permanent schedule is a
 # standing blackout (GC-021 high). A narrow, commented maintenance-window silence is fine.
 
-# GC-022 + GC-023: runtime state — ONLY when the probe in section 4 returned 200.
+# GC-022 + GC-023: runtime state — ONLY when the summary/query pull in section 4 returned 200.
 if [ "$(cat "${RAW_DIR}/monitor-state.http" 2>/dev/null)" = "200" ]; then
   # Field names are unconfirmed in public docs; adapt to the observed response shape.
   jq '{stuck_firing: [.. | objects | select(.state? == "firing" and (.lastResolved? == null))
@@ -268,7 +334,7 @@ For each critical service from `./scoutflo-audits/topology.md`, resolve its moni
 
 ## 13. Forbidden commands
 
-This is an audit: read-only, no exceptions. The only POSTs allowed are the two documented read-by-query calls: `POST /api/monitors/list` and `POST /api/workflows/list` (plus the capability-probe `POST /api/monitors/summary/query`, which is a read if it exists). Never run:
+This is an audit: read-only, no exceptions. The only POSTs allowed are the documented read-by-query calls: `POST /api/monitors/list`, `POST /api/monitors/summary/query` (the primary config + runtime read), and `POST /api/workflows/list`. Never run:
 
 - Any `POST`/`PUT`/`DELETE` that creates or edits a monitor (`/api/monitors/{uuid}` write), a silence (`/api/monitors/silences`, `/api/monitors/recurring-silences`), a notification route, a destination, or a workflow.
 - Any workflow-run or test-notification trigger.

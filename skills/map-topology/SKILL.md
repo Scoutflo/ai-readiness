@@ -59,7 +59,20 @@ kubectl config get-contexts -o name | grep -qx "${KUBE_CONTEXT}" \
 echo "config context:  ${KUBE_CONTEXT}"
 echo "current default: $(kubectl config current-context 2>/dev/null || echo '(none)')"
 kubectl --context "${KUBE_CONTEXT}" cluster-info | head -n 1
-kubectl --context "${KUBE_CONTEXT}" auth can-i list services -A
+
+# A GKE/EKS/AKS context authenticates through an exec plugin; an expired credential
+# fails with a cryptic exec error, not an RBAC one. Detect the plugin so a failed
+# reachability check names the REAUTH path instead of a generic "fix kubernetes.context"
+# (mirrors the audit-kubernetes doctor gate / the /scoutflo:doctor probe).
+EXEC_CMD="$(kubectl config view --minify --context "${KUBE_CONTEXT}" -o jsonpath='{.users[*].user.exec.command}' 2>/dev/null || true)"
+if kubectl --context "${KUBE_CONTEXT}" auth can-i list services -A; then :; else
+  case "${EXEC_CMD}" in
+    *gke-gcloud-auth-plugin*) echo "context ${KUBE_CONTEXT} (GKE) could not authenticate — the gke-gcloud-auth-plugin credential is likely expired; run: gcloud auth login (then gcloud container clusters get-credentials <cluster> to refresh), not a kubernetes.context change"; exit 1 ;;
+    *aws*)                    echo "context ${KUBE_CONTEXT} (EKS) could not authenticate — the aws exec-plugin credential is likely expired; run: aws sso login (or otherwise refresh your AWS credentials), not a kubernetes.context change"; exit 1 ;;
+    *kubelogin*)              echo "context ${KUBE_CONTEXT} (Entra AKS) could not authenticate — refresh the kubelogin credential (re-run az login), or run az aks install-cli if kubelogin is missing"; exit 1 ;;
+    *)                        echo "context ${KUBE_CONTEXT} reaches no cluster or lacks read RBAC; verify kubernetes.context and that your kubeconfig user can list services"; exit 1 ;;
+  esac
+fi
 ```
 
 Expected: the `can-i` line prints `yes` and `cluster-info` shows the API endpoint of the cluster you intend to map. If the endpoint is not the cluster you expect, stop and fix `kubernetes.context` before scanning anything. A default context that differs from the config context is fine, because no later command uses the default; a config context that resolves to the wrong cluster is not.
@@ -375,6 +388,7 @@ Close by telling the user, in the terminal:
 | --- | --- |
 | Same service name repeats across two or more mapped clusters, and Scoutflo platform correlation resolves one service to a workload running in the *wrong* cluster | This is a real, confirmed platform-level failure mode, not hypothetical. When mapping 2+ clusters with any repeated service names, record which cluster each same-named service's workload actually lives in explicitly in `topology.md`, and flag the repeated name in the map header so a later Scoutflo Topology Readiness check knows to verify cluster-scoped resolution rather than assuming it |
 | Wrong cluster mapped because the shell's default context differed from the config | Pin `--context "${KUBE_CONTEXT}"` on every command and compare `cluster-info` output against the intended cluster before scanning |
+| A GKE/EKS/AKS exec-plugin credential expiry framed as "fix kubernetes.context" | Phase 0 detects the exec command and, on a failed reachability check, names the reauth path (`gcloud auth login` / `aws sso login` / re-run `az login`) instead of implying the context itself is wrong |
 | Istio CRDs present but no control plane, so the mesh path returns an empty map | Require a ready `istiod` before choosing the mesh path; otherwise fall back and record why in the header |
 | Kubernetes Gateway API `gateways` mixed into Istio gateway results | Query the full resource name `gateways.networking.istio.io`, never the `gateways` short name |
 | Stale Service with a selector that matches nothing mapped to a guessed workload | Check Endpoints for every Service and list backendless Services explicitly |

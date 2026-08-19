@@ -13,8 +13,10 @@ comprehensive coverage — score delivery high and move on"
    monitors is an inventory fact, not a delivery score.
 2. Subtracts what does not actually page: draft monitors (DD-003, drafts
    never notify), monitors with no `@handle` (DD-001), and monitors whose
-   handle targets a dead Slack channel/webhook (DD-002, verified against
-   the integration's live channel list).
+   handle targets a dead Slack channel/webhook (DD-002 — against the
+   integration's live channel list when it resolves, else via Datadog's own
+   `broken_at_handle` quality signal, since the legacy Slack config API now
+   404s).
 3. Scores delivery on the monitors that genuinely route to a live target,
    names the affected monitors, and states the real covered/total in the
    category denominator.

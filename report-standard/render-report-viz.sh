@@ -90,7 +90,12 @@ $(jq -r '.severity_counts | "\(.critical//0) \(.high//0) \(.medium//0) \(.low//0
 EOF
     SEVMAX="$(printf '%s\n' "$SC" "$SH" "$SM" "$SL" "$SI" | sort -rn | head -1)"; [ "${SEVMAX:-0}" -gt 0 ] || SEVMAX=1
     TREND="$(trend_scores "$HIST")"
-    TOP="$(jq -r '[.findings[]? | select((.severity!="info") and ((.points_recoverable//0)>0))] | max_by(.points_recoverable) // empty | "\(.id)\t\(.points_recoverable)\t\(.title)"' "$F" 2>/dev/null)"
+    # Highest points_recoverable wins; ties break by severity (critical>high>medium
+    # >low), mirroring the findings-table sort below. max_by alone returns the
+    # array-order-last element on a tie and could surface a lower-severity finding.
+    TOP="$(jq -r '[.findings[]? | select((.severity!="info") and ((.points_recoverable//0)>0))]
+      | sort_by([ ((.points_recoverable // 0) * -1), ({critical:0,high:1,medium:2,low:3,info:4}[.severity] // 5) ])
+      | (.[0] // empty) | "\(.id)\t\(.points_recoverable)\t\(.title)"' "$F" 2>/dev/null)"
 
     echo "## At a glance"
     echo
@@ -259,6 +264,7 @@ HTMLFOOT
     # This data is written to correlation.json every audit-all run and shown to a
     # human nowhere; this only renders it (never re-derives or re-scores it).
     C="${1:?correlation.json}"
+    [ -d "$C" ] && C="$C/correlation.json"   # accept a file OR the audits dir (rollup form)
     echo "## Cross-stack correlation"
     echo
     if [ ! -f "$C" ]; then
@@ -276,7 +282,8 @@ HTMLFOOT
       echo
       echo "| Service | Stacks | Findings | Consolidation review |"
       echo "| --- | --- | ---: | --- |"
-      jq -r '.overlaps[]? | [ .service, ((.targets // []) | join(", ")), ((.findings // []) | length | tostring), (.recommendation // "-") ] | @tsv' "$C" \
+      jq -r 'def esc: tostring | gsub("\\|"; "\\|");   # escape pipes so a value never breaks the table
+        .overlaps[]? | [ ((.service // "") | esc), (((.targets // []) | join(", ")) | esc), ((.findings // []) | length | tostring), ((.recommendation // "-") | esc) ] | @tsv' "$C" \
       | while IFS="$(printf '\t')" read -r svc stacks nf rec; do
           echo "| \`${svc}\` | ${stacks} | ${nf} | ${rec} |"
         done
@@ -355,7 +362,8 @@ HTMLFOOT
       echo
       echo "| name | covers | severity | routes to | enabled |"
       echo "| --- | --- | --- | --- | --- |"
-      jq -r --arg k "$kind" '.items[] | select(.kind == $k) | [ .name, (.covers // "-"), (.severity // "-"), (.routes_to // "-"), (if .enabled == false then "no" else "yes" end) ] | @tsv' "$INV" 2>/dev/null \
+      jq -r --arg k "$kind" 'def esc: tostring | gsub("\\|"; "\\|");   # escape pipes so a value never breaks the table
+        .items[] | select(.kind == $k) | [ ((.name // "") | esc), ((.covers // "-") | esc), ((.severity // "-") | esc), ((.routes_to // "-") | esc), (if .enabled == false then "no" else "yes" end) ] | @tsv' "$INV" 2>/dev/null \
       | while IFS="$(printf '\t')" read -r nm cov sev rt en; do
           echo "| \`${nm}\` | ${cov} | ${sev} | ${rt} | ${en} |"
         done

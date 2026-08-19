@@ -135,11 +135,26 @@ jq -r '[.[] | (.message // "") | scan("@[A-Za-z0-9._-]+")] | flatten | unique | 
 ```bash
 set -eu
 DD_SITE="datadoghq.com"; DD_HOST="api.${DD_SITE}"   # datadog.site
-# Slack: list configured channels for an account; a @slack-<account>-<channel> handle
-# whose channel is not in this list is dead.
-curl -fsS --max-time 30 -H "DD-API-KEY: ${DATADOG_API_KEY}" -H "DD-APPLICATION-KEY: ${DATADOG_APP_KEY}" \
-  "https://${DD_HOST}/api/v1/integration/slack/configuration/accounts" \
-  | jq '[.[]?.name]' 2>/dev/null || echo "slack integration not configured or not readable"
+RUN_DATE="$(date -u +%Y-%m-%d)"
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/datadog/${RUN_DATE}/raw"
+# Slack: the legacy Slack config API (/api/v1/integration/slack/configuration/accounts) is
+# DEPRECATED and now returns 404 on current orgs, so the channel-list resolution no longer works
+# everywhere. Capture the STATUS CODE, not just the body: on 200 use the live channel list (a
+# @slack-<account>-<channel> handle whose channel is absent is a dead handle); on 404 (or any
+# non-200) fall back to Datadog's OWN `broken_at_handle` monitor quality signal — the same
+# monitor-quality.json anchor DD-015 reads — which flags any monitor whose @-handle no longer
+# resolves. That keeps DD-002 resolving dead Slack handles instead of failing the resolution silent.
+SLACK_CODE=$(curl -s -o /tmp/dd-slack-accounts.json -w '%{http_code}' --max-time 30 \
+  -H "DD-API-KEY: ${DATADOG_API_KEY}" -H "DD-APPLICATION-KEY: ${DATADOG_APP_KEY}" \
+  "https://${DD_HOST}/api/v1/integration/slack/configuration/accounts")
+if [ "$SLACK_CODE" = "200" ]; then
+  jq '[.[]?.name]' /tmp/dd-slack-accounts.json   # live channel list (handle not in list = dead)
+else
+  echo "slack config API returned ${SLACK_CODE} (legacy endpoint deprecated); falling back to broken_at_handle"
+  # DD-002 fallback: monitors Datadog itself flags for an unresolvable @-handle (dead Slack channel).
+  jq '[.[] | select((.quality_issues | tostring) | test("broken_at_handle")) | {id, name}]' \
+    "${RAW_DIR}/monitor-quality.json"
+fi
 # Webhook: a named webhook that 404s is dead.
 WEBHOOK_NAME="your-webhook-name"   # from a @webhook-<name> handle in the messages
 code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 \
@@ -171,8 +186,11 @@ jq '[.[] | {id, name, notify_no_data: .options.notify_no_data,
 # Judgment: notify_no_data=false on a heartbeat/liveness monitor is a silent blind spot;
 # on a spiky business metric it is correct. Judge against monitor intent, not a blanket rule.
 
-# DD-012: unbounded renotification (renotify_interval set with no occurrence cap = forever)
-jq '[.[] | select(.options.renotify_interval != null and (.options.renotify_occurrences == null))
+# DD-012: unbounded renotification (a POSITIVE renotify_interval with no occurrence cap = forever)
+# renotify_interval=0 (or absent) means renotification is DISABLED in Datadog, NOT unbounded — so
+# `// 0` the field and require > 0 before flagging, else every never-renotifying monitor is a
+# false positive (live: 11 monitors carry renotify_interval=0 and must not be flagged as uncapped).
+jq '[.[] | select((.options.renotify_interval // 0) > 0 and (.options.renotify_occurrences == null))
     | {id, name, renotify_interval: .options.renotify_interval}]' "${RAW_DIR}/monitors.json"
 
 # DD-014: auto-resolve posture
@@ -285,9 +303,15 @@ DD_SITE="datadoghq.com"; DD_HOST="api.${DD_SITE}"   # datadog.site
 curl -fsS --max-time 30 -H "DD-API-KEY: ${DATADOG_API_KEY}" -H "DD-APPLICATION-KEY: ${DATADOG_APP_KEY}" \
   "https://${DD_HOST}/api/v2/usage/estimated_cost?view=sub-org" | jq '.data[0].attributes // {}' \
   || echo "estimated_cost not readable; report DDOPT cost-trend excluded"
-# Top custom-metric contributors (custom metrics are a common surprise cost)
+# Top custom-metric contributors (custom metrics are a common surprise cost).
+# top_avg_metrics REQUIRES a `month` (or `day`) param: without it the API returns
+# HTTP 400 "The parameter 'month/day' is required" every run. `month` is ISO-8601, UTC,
+# precise to the hour (YYYY-MM-DDTHH); pass the first hour of the current month
+# (e.g. 2026-08-01T00). Use `day=YYYY-MM-DD` instead for a single-day slice.
+USAGE_MONTH="$(date -u +%Y-%m-01T00)"
 curl -fsS --max-time 30 -H "DD-API-KEY: ${DATADOG_API_KEY}" -H "DD-APPLICATION-KEY: ${DATADOG_APP_KEY}" \
-  "https://${DD_HOST}/api/v1/usage/top_avg_metrics?limit=20" | jq '[.usage[]? | {metric_name, avg_metric_hour}]' \
+  "https://${DD_HOST}/api/v1/usage/top_avg_metrics?month=${USAGE_MONTH}&limit=20" \
+  | jq '[.usage[]? | {metric_name, avg_metric_hour}]' \
   || echo "top_avg_metrics not readable"
 ```
 

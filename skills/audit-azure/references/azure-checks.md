@@ -1,6 +1,6 @@
 # audit-azure: Check Catalog and Commands
 
-Runnable, strictly read-only checks for every scored surface the [audit-azure](../SKILL.md) workflow covers. Each section lists the catalog IDs it serves, the exact read command (an `az` read or an ARM REST GET pinned to an api-version **confirmed on a live 200 read**), the healthy target, the finding it emits, and its forbidden-mutations. Evidence for a finding is the command plus its observed output, trimmed with truncation marked. The non-scored Cost & Resource Optimization catalog (`AZR-OPT-NNN`) lives in its own file, [azure-cost-checks.md](azure-cost-checks.md); this file is the scored reliability axis (`AZR-NNN`).
+Runnable, strictly read-only checks for every scored surface the [audit-azure](../SKILL.md) workflow covers. Each section lists the catalog IDs it serves, the exact read command (an `az` read or an ARM REST GET pinned to an api-version **confirmed on a live 200 read**), the healthy target, the finding it emits, and its forbidden-mutations. Evidence for a finding is the command plus its observed output, trimmed with truncation marked. The non-scored Cost & Resource Optimization catalog (`AZROPT-NNN`) lives in its own file, [azure-cost-checks.md](azure-cost-checks.md); this file is the scored reliability axis (`AZR-NNN`).
 
 ## 1. Conventions
 
@@ -43,7 +43,7 @@ One permanent ID per check; IDs never change or get reused. Severity listed is t
 | AZR-050 | App Gateway / Load Balancer | Every serving App Gateway/Load Balancer has backend health probes and diagnostic settings enabled | `Microsoft.Network/applicationGateways`, `…/loadBalancers` (**2024-05-01**) + diagnostic-settings CLI | high |
 | AZR-060 | Alert quality | Every alert rule carries a severity, a responder-ready description, and a retest window | actionGroups + metric/scheduled/activity rules | medium |
 
-Non-scored: **AZR-OPT-NNN** — the Cost & Resource Optimization catalog is authored separately in [azure-cost-checks.md](azure-cost-checks.md) (Advisor cost recommendations, month-to-date spend, unattached disks/IPs, stopped-but-not-deallocated VMs, VMSS over-provisioning, orphans). It never enters `score.categories`; every finding there is `points_recoverable: 0`.
+Non-scored: **AZROPT-NNN** — the Cost & Resource Optimization catalog is authored separately in [azure-cost-checks.md](azure-cost-checks.md) (Advisor cost recommendations, month-to-date spend, unattached disks/IPs, stopped-but-not-deallocated VMs, VMSS over-provisioning, orphans). It never enters `score.categories`; every finding there is `points_recoverable: 0`.
 
 ## 3. Target profile
 
@@ -216,7 +216,7 @@ VM_ID="$(jq -r '.[0].id // empty' "${RAW_DIR}/vms.json")"
 # AZR-010 diagnostic routing: diagnostic settings are read via the CLI (the diagnosticSettings ARM
 # api-version is NOT confirmed in the report). A failure here is blocked, never a guessed api-version.
 [ -n "$VM_ID" ] && az monitor diagnostic-settings list --resource "$VM_ID" -o json 2>/tmp/ds-err \
-  | jq -r '[.value[]? | {name, workspaceId: .workspaceId}]' \
+  | jq -r '[.[]? | {name, workspaceId: .workspaceId}]' \
   || echo "AZR-010 diagnostic-settings read blocked: $(cat /tmp/ds-err)"
 ```
 
@@ -245,7 +245,7 @@ jq -c '.[]' "${RAW_DIR}/aks-list.json" | while read -r c; do
       } | "\('"$NAME"'): \(.)"'
   # AZR-032 control-plane diagnostic logs -> Log Analytics (diagnosticSettings via CLI; api-version unconfirmed).
   az monitor diagnostic-settings list --resource "$ID" -o json 2>/tmp/aks-ds-err \
-    | jq -r '[.value[]? | {name, workspaceId}] | "\('"$NAME"'") diag-settings: \(.)"' \
+    | jq -r '[.[]? | {name, workspaceId}] | "\('"$NAME"'") diag-settings: \(.)"' \
     || echo "AZR-032 blocked for ${NAME}: $(cat /tmp/aks-ds-err)"
 done
 ```
@@ -290,7 +290,7 @@ Then, per serving App Gateway / Load Balancer, read its diagnostic settings by r
 set -eu
 RESOURCE_ID="/subscriptions/.../providers/Microsoft.Network/applicationGateways/your-agw"   # each serving edge resource id
 az monitor diagnostic-settings list --resource "$RESOURCE_ID" -o json 2>/tmp/edge-ds-err \
-  | jq -r '[.value[]? | {name, workspaceId}]' \
+  | jq -r '[.[]? | {name, workspaceId}]' \
   || echo "AZR-050 diagnostic-settings read blocked: $(cat /tmp/edge-ds-err)"
 ```
 

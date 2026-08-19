@@ -100,13 +100,16 @@ RUN_DATE="$(date -u +%Y-%m-%d)"
 RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/gcp/${RUN_DATE}/raw"
 mkdir -p "$RAW_DIR"
 
-# Alert policies: REST, paginated, one JSON object per line.
+# Alert policies: REST, paginated, one JSON object per line. Redacted at capture:
+# creationRecord/mutationRecord carry the operator email in mutatedBy (PII that would
+# otherwise trip ci/leak-scan.sh on this run's own raw/ dir), and no check below reads
+# them — same discipline as the notification-channel pull's label-value redaction.
 : > "${RAW_DIR}/alert-policies.jsonl"
 PAGE=""
 while :; do
   RESP="$(curl -fsS --max-time 30 -H "Authorization: Bearer ${TOKEN}" \
     "${MON_API}/projects/${GCP_PROJECT}/alertPolicies?pageSize=500${PAGE:+&pageToken=${PAGE}}")"
-  printf '%s\n' "$RESP" | jq -c '.alertPolicies[]?' >> "${RAW_DIR}/alert-policies.jsonl"
+  printf '%s\n' "$RESP" | jq -c '.alertPolicies[]? | del(.mutationRecord, .creationRecord)' >> "${RAW_DIR}/alert-policies.jsonl"
   PAGE="$(printf '%s' "$RESP" | jq -r '.nextPageToken // empty')"
   [ -n "$PAGE" ] || break
 done

@@ -19,7 +19,7 @@ Run this standalone, from `/scoutflo:audit-all`, or on a schedule via `/scoutflo
 
 Outputs, per the [report standard](../../report-standard/README.md):
 
-- `./scoutflo-audits/azure/<YYYY-MM-DD>/findings.json` per the [findings schema](../../report-standard/findings-schema.md), finding IDs `AZR-NNN` (cost `AZR-OPT-NNN`)
+- `./scoutflo-audits/azure/<YYYY-MM-DD>/findings.json` per the [findings schema](../../report-standard/findings-schema.md), finding IDs `AZR-NNN` (cost `AZROPT-NNN`)
 - `./scoutflo-audits/azure/<YYYY-MM-DD>/report.md` per the [report template](../../report-standard/report-template.md), including the `## Inventory` section (the `render-report-viz.sh inventory` output)
 - `./scoutflo-audits/azure/<YYYY-MM-DD>/inventory.json` per the [inventory schema](../../report-standard/inventory-schema.md) (`scoutflo-inventory/v1`): the complete Phase-2 catalog — one item per action group, metric alert, scheduled-query (log) alert, activity-log alert, VM, VMSS, AKS cluster, Log Analytics workspace, App Gateway, and Load Balancer (`kind`: `action_group`, `alert_rule`, `log_alert`, `activity_log_alert`, `vm`, `vmss`, `cluster`, `workspace`, `app_gateway`, `load_balancer`) — each with `kind`, `covers`, `enabled`, `severity`, and `routes_to` for alerting objects. Built from the raw pull, never invented; redacted at capture, never a secret value.
 - One appended line in `./scoutflo-audits/azure/history.jsonl`
@@ -394,7 +394,7 @@ The subscription- and category-scoped checks (alert routing AZR-001, alert cover
 
 ## Cost and Resource Optimization (not scored)
 
-A separate, **never-scored** section reports Azure cost and idle-resource signals under the `AZR-OPT-NNN` prefix, per [references/azure-cost-checks.md](references/azure-cost-checks.md). None of it enters `score.categories` or `score.excluded`; every finding carries `points_recoverable: 0` and `area: cost-optimization`. The one hard rule: `estimated_monthly_savings_usd` appears **only** when copied verbatim from Azure Advisor's own cost recommendation — never recomputed against a price table, never converted from an annual or non-USD figure. Everything else (unattached disks, unassociated public IPs, stopped-but-not-deallocated VMs, over-scaled VMSS, orphaned resources) is a presence fact with no dollar. The subscription's month-to-date `PreTaxCost` from the Cost Management Query REST API (api-version `2023-11-01`, rate-limited — **handle 429 with backoff**) is spend already incurred, reported as context and never summed into savings. `az costmanagement query` **does not exist**; the read path is the Cost Management Query REST API only. The full catalog, the 429-aware `readOnly` POST helper, Resource Graph enumeration, and the forbidden-command list are in [references/azure-cost-checks.md](references/azure-cost-checks.md).
+A separate, **never-scored** section reports Azure cost and idle-resource signals under the `AZROPT-NNN` prefix, per [references/azure-cost-checks.md](references/azure-cost-checks.md). None of it enters `score.categories` or `score.excluded`; every finding carries `points_recoverable: 0` and `area: cost-optimization`. The one hard rule: `estimated_monthly_savings_usd` appears **only** when copied verbatim from Azure Advisor's own cost recommendation — never recomputed against a price table, never converted from an annual or non-USD figure. Everything else (unattached disks, unassociated public IPs, stopped-but-not-deallocated VMs, over-scaled VMSS, orphaned resources) is a presence fact with no dollar. The subscription's month-to-date `PreTaxCost` from the Cost Management Query REST API (api-version `2023-11-01`, rate-limited — **handle 429 with backoff**) is spend already incurred, reported as context and never summed into savings. `az costmanagement query` **does not exist**; the read path is the Cost Management Query REST API only. The full catalog, the 429-aware `readOnly` POST helper, Resource Graph enumeration, and the forbidden-command list are in [references/azure-cost-checks.md](references/azure-cost-checks.md).
 
 ## Remediation pointers
 
@@ -411,7 +411,7 @@ Every finding's `remediation` field points at the fix, so "Next safe actions" st
 | Missing diagnostic settings (AKS/App Gateway/LB); Log Analytics retention | `setup-azure#enable-diagnostic-settings` |
 | Empty/hidden-scope visibility gap (AZR-007) | `setup-azure#handle-the-empty-scope-guardrail` (diagnose scope, not a confident fix) |
 | VM agent installs, RBAC grants, health-probe edits, network changes | `setup-azure#plan-cost-and-out-of-scope-changes` (plan only) |
-| Cost / idle-resource opportunities (`AZR-OPT-*`) | `setup-azure#plan-cost-and-out-of-scope-changes` (read-only guidance) |
+| Cost / idle-resource opportunities (`AZROPT-*`) | `setup-azure#plan-cost-and-out-of-scope-changes` (read-only guidance) |
 | Topology readiness gaps with no finding | `/scoutflo:map-topology` |
 
 ## Common Failure Modes
