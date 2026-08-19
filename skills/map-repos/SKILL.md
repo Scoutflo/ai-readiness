@@ -52,11 +52,13 @@ command -v jq >/dev/null    || { echo "jq not installed"; exit 1; }
 
 echo "config org/user: ${GITHUB_ORG}"
 code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 -H "Authorization: Bearer ${GITHUB_TOKEN}" "https://api.github.com/orgs/${GITHUB_ORG}")
-if [ "$code" = "404" ]; then
-  code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 -H "Authorization: Bearer ${GITHUB_TOKEN}" "https://api.github.com/users/${GITHUB_ORG}")
-  echo "resolved as: user (org lookup 404'd)"
-elif [ "$code" = "200" ]; then
+if [ "$code" = "200" ]; then
   echo "resolved as: org"
+elif [ "$code" = "404" ]; then
+  code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 -H "Authorization: Bearer ${GITHUB_TOKEN}" "https://api.github.com/users/${GITHUB_ORG}")
+  if [ "$code" = "200" ]; then
+    echo "resolved as: user (org lookup 404'd)"
+  fi
 fi
 echo "identity check: ${code}"
 ```
