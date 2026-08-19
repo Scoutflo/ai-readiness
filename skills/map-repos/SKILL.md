@@ -80,3 +80,31 @@ fi
 ```
 
 Expected: one service name per line when `topology.md` exists (parsed from its Services table, same file `map-topology` writes and `audit-*` skills already read). When it doesn't exist, this is a judgment step: ask the user for their service names in the conversation rather than guessing from GitHub repo names — inferring services from repos would invert this skill's whole evidence direction.
+
+## Phase 2: Rank candidates and gather evidence
+
+Two decisions come out of this phase: which repos plausibly back each service, and what real evidence backs the top few of those guesses.
+
+### Rank by name similarity
+
+Normalize both sides (lowercase, strip `-`/`_`/`.` separators) and rank by containment, then shared-token overlap. This is a judgment step, not a fixed script: naming conventions vary too much across orgs for one formula to be authoritative, and it only ever produces candidates for the user to confirm or reject — it never writes a mapping on its own.
+
+```bash
+set -eu
+SERVICE="checkout"                                    # one name from Phase 1's list
+REPOS="${TMPDIR:-/tmp}/map-repos-repos.jsonl"          # from the cookbook's listing call
+norm() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | tr -d '_.-'; }
+ns=$(norm "$SERVICE")
+jq -c --arg ns "$ns" '
+  . + {norm_name: (.name | ascii_downcase | gsub("[-_.]"; ""))}
+  | .norm_name as $nn
+  | . + {score: (if $nn == $ns then 3 elif ($nn | contains($ns)) or ($ns | contains($nn)) then 2 else 0 end)}
+  | select(.score > 0)
+' "$REPOS" | jq -s 'sort_by(-.score)'
+```
+
+Expected: a JSON array of candidate repos for `SERVICE`, highest score first, empty array when nothing matches by name at all — an empty result is not a failure, it means Phase 3 asks the user for the repo directly with no ranked suggestion.
+
+### Corroborate the top candidates only
+
+For only the top 3 ranked candidates per service (fewer if the ranked list is shorter), run the cookbook's README and manifest-name blocks and attach whatever they return to that candidate's evidence. Never fetch corroborating evidence for every repo in the org — that is the estate-sizing discipline this skill needs instead of a worklist: the expensive calls are bounded to `services × 3`, not `services × total repos`, so no large-path batching machinery is ever required here.
