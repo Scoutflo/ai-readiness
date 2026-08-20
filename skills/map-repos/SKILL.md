@@ -97,11 +97,36 @@ Expected: one `namespace<TAB>service` row per service, a total count, and an exp
 
 ## Phase 2: Rank candidates and gather evidence
 
-Two decisions come out of this phase: which repos plausibly back each service, and what real evidence backs the top few of those guesses.
+Two decisions come out of this phase: which repos plausibly back each service, and what real evidence backs the top few of those guesses. **Evidence comes first; a service name is not evidence.** Live data proves it — a service called `account-service` can run an image named `neutral-service` with nothing name-linking it to any repo. So verify captured evidence first, and fall back to name similarity only when no evidence resolves.
 
-### Rank by name similarity
+### Evidence-first: verify captured `source_repo_evidence`
 
-Normalize both sides (lowercase, strip `-`/`_`/`.` separators) and rank in three tiers — exact, containment, shared-token overlap — with a deterministic tie-break and a short-name guard. It only ever produces candidates for the user to confirm or reject; it never writes a mapping on its own.
+When `map-topology` wrote `topology-export.json`, each workload may carry a `source_repo_evidence[]` array — tiered, typed candidates for its source repo (see [map-topology's export contract](../map-topology/references/scoutflo-export.md#source_repo_evidence--tiered-typed-servicerepo-evidence-optional-additive)). Read it per service (a service's evidence lives on the workload it is `DEPLOYED_AS`), then **verify each candidate live before trusting it** — a heuristic `image_registry_path` candidate often mirrors the repo but frequently doesn't.
+
+```bash
+set -eu
+EXPORT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/topology-export.json"
+SERVICE="account-service"                                   # one name from Phase 1
+NS="storefront"                                             # its namespace (Phase 1 keeps it)
+# Pull this service's evidence candidates, best tier first (authoritative before heuristic).
+[ -f "$EXPORT" ] && jq -c --arg svc "$SERVICE" --arg ns "$NS" '
+  # the workload this service is DEPLOYED_AS -> its source_repo_evidence
+  (.relationships[] | select(.relation=="DEPLOYED_AS" and .from.name==$svc) | .to.name) as $wl
+  | .resources[] | select(.name==$wl) | (.attributes.source_repo_evidence // [])
+  | sort_by(if .confidence=="authoritative" then 0 else 1 end)
+  | .[]' "$EXPORT" 2>/dev/null
+```
+
+For each candidate, run the cookbook's [resolve a repo by owner/name](references/github-queries.md#resolve-a-repo-by-owner-and-name) call on its `candidate_repo`:
+
+- **Resolves (`200`)** → strong evidence. Present it as the top candidate, with an `evidence[]` row citing the real source, e.g. `"image_registry_path candidate open-telemetry/demo verified live → repo id 542887714"`. An **authoritative** tier (OCI/ArgoCD) that resolves outranks a **heuristic** (image-path) one; an ArgoCD candidate also carries a `subpath` for the monorepo case.
+- **404 / no access** → drop that candidate to the next tier; a registry path that isn't a real repo simply falls through. Never present an unresolved candidate as evidence, and never assert it.
+
+Evidence-verified candidates are still **candidates**, not mappings — Phase 3 confirmation is mandatory exactly as for name-ranked ones. What changes is the *quality* of what's proposed: a live-verified repo with a cited signal, not a name guess.
+
+### Rank by name similarity (fallback when no evidence resolved)
+
+When a service has no `source_repo_evidence`, or none of its candidates resolved live, fall back to name similarity. Normalize both sides (lowercase, strip `-`/`_`/`.` separators) and rank in three tiers — exact, containment, shared-token overlap — with a deterministic tie-break and a short-name guard. It only ever produces candidates for the user to confirm or reject; it never writes a mapping on its own.
 
 ```bash
 set -eu
@@ -280,3 +305,4 @@ Close by telling the user, in the terminal:
 | An archived repo confirmed blind, then flagged as a "contradiction" on the very next re-run | Surface the listing's `archived` flag on every candidate at confirmation time; archived can be chosen, but only knowingly |
 | A very short service name (`ad`) floods the candidate list with substring false positives in arbitrary order | The short-name guard disables bare containment below 5 normalized chars; the token tier + deterministic tie-break (score, then name length, then name) keep what remains stable and honest |
 | A user-supplied repo (the "none of these" path) written without resolving or verifying it | Resolve owner/name to the immutable numeric id with the cookbook's resolve call — which must return 200 — before any mapping is written; works for cross-org repos too |
+| A `source_repo_evidence` candidate (esp. heuristic `image_registry_path`) presented as fact without live verification | Verify every captured candidate live via the resolve call first; a 404 drops it to the next tier or name fallback — a registry path (`.../open-telemetry/demo`) often is NOT the source repo (`opentelemetry-demo`). Never assert an unverified candidate; confirmation stays mandatory regardless of tier |

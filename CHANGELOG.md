@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.1.120
+
+Evidence-based service→repository correlation — the plugin side of a coordinated cross-repo design (schema → map-topology → map-repos), driven by the live-data finding that a service name is not evidence (`account-service` runs a `neutral-service` image, zero name-link to any repo). All additive; stays `scoutflo-topology-export/v1` and `scoutflo-repo-map/v1`.
+
+- **`source_repo_evidence[]` contract** on workload resources in the map-topology export: a tiered, typed evidence array `{candidate_repo, evidence_source, confidence, subpath, raw}` — the shared shape read by both `map-repos` ranking and the platform's future automation resolver. Four-tier authority model: OCI `org.opencontainers.image.source` and ArgoCD spec are authoritative; image-registry-path is heuristic (must be live-verified); name similarity is fallback-only and never appears as evidence. Workloads also gain optional `image_digest`.
+- **map-topology Tier-3 capture (Phase 2C):** parses each workload's image ref into a heuristic `candidate_repo` (last two registry-path segments) + `image`/`image_digest` — free, no new cluster access. Bare single-segment images (`postgres:18.4`) correctly yield no candidate. Tiers 1–2 (OCI/ArgoCD, authoritative) are documented as the later phase (need registry-read creds / ArgoCD access + doctor checks). A `USES` (vcs) edge is emitted only from a live-verified authoritative tier — never from a heuristic image-path guess.
+- **map-repos evidence-first consumption:** Phase 2 now reads `source_repo_evidence` (via each service's `DEPLOYED_AS` workload) and **verifies every candidate live against GitHub before trusting it** — a resolving candidate becomes a top proposal with a cited `evidence[]` row; a 404 drops to the next tier, then name similarity, then the monorepo probe. Confirmation stays mandatory for every tier; evidence improves *what is proposed*, never *whether a human confirms*.
+- Two new pressure scenarios (tier-3-image-evidence-not-asserted; evidence-first-verify-before-trust) and a self-test `shapes` fixture covering the image-path parse (incl. the `postgres:18.4` no-crash case) + tier ordering.
+
+Live-verified against the benchmark cluster: 61 workloads parsed with zero errors; OSS-imaged infra resolves to real upstream repos (`grafana/loki`, `valkey-io/valkey`), app-service heuristics correctly 404 and fall back. Gates: leak CLEAN, structure-check (13), run-tests, plugin validate --strict.
+
+The gateway-side layers of the design (the `IMPLEMENTED_BY`/`vcs_repositories[]` v2 import format, the evidence-based correlation rule, the automation resolver) live in gateway-server and are gated on the mutual schema-lock — documented as the agreed next step, not shipped here.
+
 ## 0.1.119
 
 Hardening from the post-mortem of how the map-repos monorepo gap shipped — three changes that make that failure class mechanical to catch:

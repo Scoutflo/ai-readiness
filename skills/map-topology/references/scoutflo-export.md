@@ -64,7 +64,17 @@ Everything here is derived from the same read-only inventory as `topology.md`. N
     "namespace": "shop",
     "workload_name": "checkout",
     "workload_type": "deployment",
-    "image": "registry.example.com/team/checkout@sha256:abcd1234"
+    "image": "ghcr.io/acme/checkout:3.0.0",
+    "image_digest": "sha256:abcd1234",
+    "source_repo_evidence": [
+      {
+        "candidate_repo": "acme/checkout",
+        "evidence_source": "image_registry_path",
+        "confidence": "heuristic",
+        "subpath": null,
+        "raw": "ghcr.io/acme/checkout:3.0.0"
+      }
+    ]
   }
 }
 ```
@@ -80,7 +90,38 @@ Everything here is derived from the same read-only inventory as `topology.md`. N
 ```
 
 - Emit the cluster, every in-scope namespace (`kubernetes_namespace`), every workload, and one resource per observability backend named in the Integration watchpoints table.
-- Workload `resource_type` one of `kubernetes_deployment, kubernetes_stateful_set, kubernetes_daemon_set, kubernetes_job, kubernetes_cron_job`. **The four workload attributes (`cluster_id`, `namespace`, `workload_name`, `workload_type`) are mandatory: the import contract rejects workload resources without all four.** `image` is optional but capture it when known (the first container's image reference from the pod spec): it is the one always-present breadcrumb toward the workload's build origin, even though a registry path alone never identifies a source repository (a package name can differ from the repo name, and a shared build image says nothing per-service) — treat it as ranking evidence for tools like `map-repos`, never as an identity.
+- Workload `resource_type` one of `kubernetes_deployment, kubernetes_stateful_set, kubernetes_daemon_set, kubernetes_job, kubernetes_cron_job`. **The four workload attributes (`cluster_id`, `namespace`, `workload_name`, `workload_type`) are mandatory: the import contract rejects workload resources without all four.** `image` (full ref) and `image_digest` are optional but capture them when known (the first container's image + resolved digest from the pod spec): the image is the one always-present breadcrumb toward the workload's build origin, even though a registry path alone never identifies a source repository (a package name can differ from the repo name, and a shared build image says nothing per-service).
+
+### `source_repo_evidence[]` — tiered, typed service→repo evidence (optional, additive)
+
+A workload may carry `source_repo_evidence`: an array of typed candidates for the source repository, each tagged with where it came from and how authoritative that source is. This is the shared contract read by both `map-repos` (candidate ranking) and the platform's future automation resolver — one captured evidence set, two consumers. Each entry:
+
+```json
+{
+  "candidate_repo": "acme/checkout",
+  "evidence_source": "image_registry_path",
+  "confidence": "heuristic",
+  "subpath": "services/checkout",
+  "raw": "ghcr.io/acme/checkout:3.0.0"
+}
+```
+
+- `candidate_repo` — the proposed `owner/name`. A candidate, never a confirmed mapping.
+- `evidence_source` — one of `oci_image_source | argocd | image_registry_path | pod_annotation`.
+- `confidence` — `authoritative` (the publisher's own declaration: OCI `org.opencontainers.image.source`, or an ArgoCD Application spec) or `heuristic` (a registry-path parse, or an annotation that isn't a declared source). Name similarity is not evidence and never appears here — it is the last-resort fallback in the consumer, carrying no `source_repo_evidence` entry.
+- `subpath` — the service's subdirectory inside a monorepo, present **only** for sources that actually carry it (ArgoCD `spec.source.path`, a repo descriptor, or human confirmation downstream). A registry-path/OCI candidate is repo-level and leaves `subpath: null` — it must never claim a per-service subpath it did not observe.
+- `raw` — the exact source string the candidate was derived from, for auditability.
+
+**The four-tier model** (capture what's available; a workload may carry entries from several tiers, and the consumer ranks by tier):
+
+| Tier | `evidence_source` | Authority | How obtained |
+| --- | --- | --- | --- |
+| 1 | `oci_image_source` | authoritative | `org.opencontainers.image.source` label — registry manifest/config fetch (not `kubectl`) |
+| 2 | `argocd` | authoritative (repo **and** `subpath`) | ArgoCD Application `spec.source.repoURL` + `path` |
+| 3 | `image_registry_path` | heuristic — must be live-verified | parse of the already-captured `image` ref (free) |
+| — | *(name similarity)* | fallback only | consumer-side; never written here |
+
+An `image_registry_path` candidate is a *guess that must be verified live against GitHub before use* — a registry path often mirrors the repo (`ghcr.io/open-telemetry/demo` → `open-telemetry/demo`) but frequently doesn't (`gcr.io/my-proj/checkout` ≠ source repo). map-topology only captures the candidate; the consumer verifies it. Never promote a heuristic candidate to a confirmed mapping, and never let any evidence override a human-confirmed `repo-map.json`.
 - Integration backends use `resource_type` `monitoring`, `alerting`, `vcs`, or `ci_cd`; `identity.provider` is one of `prometheus, grafana, sentry, loki, tempo, mimir, victoriametrics, victorialogs, victoriatraces, elk, datadog, groundcover, pagerduty, zenduty, github, gitlab, bitbucket, argocd, jira, confluence, jsm, k8s, aws, gcp, azure, custom`; `identity.external_id` is the provider-side identifier alerts will carry (org slug, integration id). Alert correlation looks this up; a backend without identity cannot resolve alerts to services.
 
 ## relationships[] — where all meaning lives
@@ -120,7 +161,7 @@ Emit these edge families:
 | service -> errors/monitoring/alerting backend | `MONITORED_BY` | watchpoints row (asserted) |
 | service -> vcs/ci/ticketing | `USES` | watchpoints or user (asserted) |
 
-A `USES` edge to a `vcs` resource should carry, in `attributes`, the repo label (`repository` as `owner/name`) and — when the service lives inside a monorepo — a `path` (its subdirectory, e.g. `services/checkout`), mirroring `repo-map.json`'s per-mapping `path` so the two artifacts agree. Discoverable repo *hints* may seed an asserted low-confidence `USES` edge when they actually exist — an ArgoCD `Application`'s `spec.source.repoURL` + `path` (authoritative when present), an `org.opencontainers.image.source` OCI label (requires a registry config fetch; verified absent on many real images), or an explicit `git`/`repo` workload annotation. Never invent one: on real estates all three sources are commonly absent, and a human-confirmed `repo-map.json` remains the canonical source of service→repo truth.
+A `USES` edge to a `vcs` resource should carry, in `attributes`, the repo label (`repository` as `owner/name`) and — when the service lives inside a monorepo — a `subpath` (its subdirectory, e.g. `services/checkout`). Emit a `USES` edge only from evidence that actually resolved: an authoritative-tier `source_repo_evidence` entry (OCI/ArgoCD) whose candidate was live-verified, kept as `assertion_type: asserted` with the evidence source named. Do **not** emit a `USES` edge from a bare heuristic (`image_registry_path`) candidate that hasn't been verified, from name similarity, or by inventing one — on real estates the authoritative tiers are commonly absent, in which case the workload still carries its `source_repo_evidence` candidates (for the consumer to verify) but no `USES` edge is written. A human-confirmed `repo-map.json` remains the canonical source of service→repo truth and is never overridden by an asserted edge. (`subpath` here is the same concept `repo-map.json` records as `path` on a confirmed monorepo mapping — the evidence/export layer and the confirmed-mapping layer name the same subdirectory string.)
 
 - `assertion_type`: `observed` for edges derived from live cluster objects, `asserted` for edges declared by the watchpoints table or the user.
 - `confidence` 0-10. Use 9 for object-backed edges, 8 for user-declared watchpoints, lower when uncertain. 8 is the actionable threshold downstream, but the number alone is not sufficient: the platform also needs a service/workload/app identity attribute plus either a Kubernetes anchor (`namespace`/`pod`/`container`) or, for Sentry, a `project`/`environment` attribute before it treats the edge as actionable. Populate the identity and anchor attributes together, not just a high confidence number on its own.

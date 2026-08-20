@@ -172,6 +172,19 @@ Without a mesh there is no declared service-to-service routing, so the traffic m
 
 On the large path, feed each collection filter from the merged batch pulls per the next section instead of live cluster-wide calls.
 
+## Phase 2C: Source-repo evidence (Tier 3, both paths)
+
+Capture a **heuristic** source-repository candidate for each workload from data already in hand — no new cluster access, no new credentials. This is the free tier of the tiered evidence model ([references/scoutflo-export.md](references/scoutflo-export.md#source_repo_evidence--tiered-typed-servicerepo-evidence-optional-additive)); it feeds `map-repos`' candidate ranking and the platform's future automation resolver from one captured set.
+
+Run the cookbook's **"Source-repo evidence (Tier 3: image-path candidate)"** block: for each workload, record the full `image`, its `image_digest`, and a `source_repo_evidence` entry whose `candidate_repo` is the registry path's last two segments (`evidence_source: image_registry_path`, `confidence: heuristic`, `subpath: null`). A bare single-segment image (e.g. `postgres:18.4`) yields no candidate — that is correct, not a gap.
+
+These are **candidates, not mappings**. This skill never verifies them against GitHub and never writes a `USES` edge from a heuristic candidate — `map-repos` does the live verification. The authoritative tiers cost more and ship later:
+
+- **Tier 1 — OCI `org.opencontainers.image.source`** (authoritative): a registry manifest/config fetch (`crane` or a manifest API call), not `kubectl`. Needs a registry-read credential in `toolkit.yaml` + a `doctor` check. When present and read, add a `source_repo_evidence` entry with `evidence_source: oci_image_source`, `confidence: authoritative`.
+- **Tier 2 — ArgoCD Application spec** (authoritative, carries `subpath`): read `spec.source.repoURL` + `path` from ArgoCD Applications. Needs an `argocd` config block + `doctor` check. Add an entry with `evidence_source: argocd`, `confidence: authoritative`, `subpath` set.
+
+Until those are wired, capture Tier 3 only; a workload with no resolvable candidate simply carries an empty `source_repo_evidence` array.
+
 ## Large clusters: worklist, batches, and resume
 
 Runs on the large path only. All state lives under a run-ID-keyed run directory `./scoutflo-audits/map-topology/runs/<RUN_ID>/` (see [Run-ID keying](#run-id-keying) below), not a calendar-date directory: the worklist, the raw per-namespace pulls, the step TSVs, and the partial map. It is working state, not a report; delete the run directory after `topology.md` is written, or delete it to force a fresh start.
@@ -222,7 +235,7 @@ Two hard rules:
 
 ## Phase 3: Write topology.md and topology-export.json
 
-Two artifacts, same inventory: `topology.md` for humans and audits, and `./scoutflo-audits/topology-export.json`, the machine-readable form aligned to the Scoutflo platform's topology import contract. Compose the JSON per [references/scoutflo-export.md](references/scoutflo-export.md): every service with its correlation attributes (`service_name`, `namespace`, `cluster_id`, `app`), every workload resource with its four mandatory attributes plus its optional `image` (the first container's image reference — already collected by the workloads step; a build-origin breadcrumb for downstream tools like `map-repos`, never a repo identity by itself), one resource per watchpoints backend, and the edge families (`DEPLOYED_AS`, `PART_OF`, `ROUTES_TO`, `CALLS`, `SENDS_METRICS_TO`, `SENDS_LOGS_TO`, `SENDS_TRACES_TO`, `MONITORED_BY`, `USES`). Validate with `jq empty` before moving it into place. Audits read this file for the Scoutflo Topology Readiness section of their reports.
+Two artifacts, same inventory: `topology.md` for humans and audits, and `./scoutflo-audits/topology-export.json`, the machine-readable form aligned to the Scoutflo platform's topology import contract. Compose the JSON per [references/scoutflo-export.md](references/scoutflo-export.md): every service with its correlation attributes (`service_name`, `namespace`, `cluster_id`, `app`), every workload resource with its four mandatory attributes plus its optional `image`, `image_digest`, and `source_repo_evidence[]` (the Tier-3 candidates from Phase 2C — a build-origin breadcrumb for `map-repos` to verify, never a repo identity by itself), one resource per watchpoints backend, and the edge families (`DEPLOYED_AS`, `PART_OF`, `ROUTES_TO`, `CALLS`, `SENDS_METRICS_TO`, `SENDS_LOGS_TO`, `SENDS_TRACES_TO`, `MONITORED_BY`, `USES`). Validate with `jq empty` before moving it into place. Audits read this file for the Scoutflo Topology Readiness section of their reports.
 
 Compose the new map in a temp file first (`${TMP}/topology.new.md`); Phase 4 needs both old and new before the final write. On the large path, compose from the step TSVs in the run directory, and only after the worklist shows zero pending rows. Structure:
 

@@ -109,7 +109,51 @@ done | sort | tee "${TMP}/workloads.tsv"
 
 Expected: one line per workload, `namespace  kind/name  version`. The `split("/") | last` step strips the registry first, so a registry port (`registry.example.com:5000/app`) is never mistaken for a tag.
 
-## Service-to-workload join
+## Source-repo evidence (Tier 3: image-path candidate)
+
+For each workload, capture the full image ref, its digest, and a **heuristic** `candidate_repo` parsed from the registry path — the free, no-new-access tier of the evidence model in [scoutflo-export.md](scoutflo-export.md#source_repo_evidence--tiered-typed-servicerepo-evidence-optional-additive). This only *captures a candidate*; `map-repos` verifies it live against GitHub before ever proposing it. It never becomes a mapping here.
+
+```bash
+set -eu
+KUBE_CONTEXT="your-kube-context"
+NS_EXCLUDE="^(kube-system|kube-public|kube-node-lease|istio-system)$"
+TMP="${TMP:-$(mktemp -d)}"
+
+for kind in deployment statefulset daemonset; do
+  kubectl --context "${KUBE_CONTEXT}" get "${kind}" -A -o json \
+  | jq -c --arg kind "${kind}" --arg ex "${NS_EXCLUDE}" '
+      # candidate_repo = last two path segments after the registry host, tag/digest stripped.
+      # Only strip a host when there is >1 segment: a bare "postgres:18.4" is name:tag,
+      # not host/name — its colon is a tag, not a registry port.
+      def candidate($image):
+        ($image | sub("@sha256:[0-9a-f]+$"; "")) as $nd
+        | ($nd | split("/")) as $p
+        | (if (($p | length) > 1) and (($p[0] | test("[.:]")) or ($p[0] == "localhost"))
+           then $p[1:] else $p end) as $path
+        | (if ($path | length) == 0 then null
+           else ($path | .[-1] |= sub(":[^:/]+$"; ""))
+                | (if (length) >= 2 then (.[-2:] | join("/")) else null end)
+           end);
+      .items[]
+      | select(.metadata.namespace | test($ex) | not)
+      | (.spec.template.spec.containers[0].image // "") as $img
+      | (if ($img | test("@sha256:")) then ($img | capture("@(?<d>sha256:[0-9a-f]+)$").d) else null end) as $digest
+      | { workload: ($kind + "/" + .metadata.name),
+          namespace: .metadata.namespace,
+          image: (if $img == "" then null else $img end),
+          image_digest: $digest,
+          source_repo_evidence:
+            ( if ($img != "" and candidate($img) != null)
+              then [ { candidate_repo: candidate($img),
+                       evidence_source: "image_registry_path",
+                       confidence: "heuristic",
+                       subpath: null,
+                       raw: $img } ]
+              else [] end ) }'
+done | jq -s '.' | tee "${TMP}/source-repo-evidence.json"
+```
+
+Expected: a JSON array, one object per workload, each with `image`, `image_digest` (null when the ref carries no digest — enrich from `kubectl get pods -o jsonpath='{..imageID}'` only if you need it), and a `source_repo_evidence` array holding at most one `image_registry_path` candidate (empty when the image is a bare single-segment name like `postgres:18.4`, which yields no `owner/name`). `subpath` is always `null` at this tier — a registry path is repo-level, never per-service. These objects become the `image`/`image_digest`/`source_repo_evidence` attributes on each workload resource in `topology-export.json`.
 
 Joins Services to workloads whose pod-template labels satisfy the Service selector, within the same namespace. Used on both paths.
 
