@@ -948,6 +948,37 @@ else
   fi
 fi
 
+# --- github ------------------------------------------------------------------------
+
+GITHUB_ORG="$(cfg github org)"
+if [ -z "$GITHUB_ORG" ]; then
+  row github configured no - skipped - "add a github block via /scoutflo:connect if you run map-repos"
+else
+  CONFIGURED_COUNT=$((CONFIGURED_COUNT + 1))
+  resolve_token github
+  if token_gate github org; then
+    note "doctor: checking github org: GET https://api.github.com/orgs/${GITHUB_ORG}"
+    http_get "https://api.github.com/orgs/${GITHUB_ORG}" "$TOKEN"
+    if [ "$CURL_RC" -ne 0 ]; then
+      row github org yes "${TOKEN_VAR:-none}" fail "000" "$(transport_hint "$CURL_RC") (https://api.github.com/orgs/${GITHUB_ORG})"
+    elif [ "$HTTP_CODE" = "200" ]; then
+      row github org yes "${TOKEN_VAR:-none}" pass "$HTTP_CODE" -
+    elif [ "$HTTP_CODE" = "404" ]; then
+      note "doctor: checking github user (org lookup 404'd): GET https://api.github.com/users/${GITHUB_ORG}"
+      http_get "https://api.github.com/users/${GITHUB_ORG}" "$TOKEN"
+      if [ "$CURL_RC" -ne 0 ]; then
+        row github org yes "${TOKEN_VAR:-none}" fail "000" "$(transport_hint "$CURL_RC") (https://api.github.com/users/${GITHUB_ORG})"
+      elif [ "$HTTP_CODE" = "200" ]; then
+        row github org yes "${TOKEN_VAR:-none}" pass "$HTTP_CODE" "-"
+      else
+        row github org yes "${TOKEN_VAR:-none}" fail "$HTTP_CODE" "$(http_hint "$HTTP_CODE") (github.org is not an org or a user login GitHub recognizes)"
+      fi
+    else
+      row github org yes "${TOKEN_VAR:-none}" fail "$HTTP_CODE" "$(http_hint "$HTTP_CODE")"
+    fi
+  fi
+fi
+
 # --- kubernetes --------------------------------------------------------------------------
 
 KUBE_CONTEXT="$(cfg kubernetes context)"
