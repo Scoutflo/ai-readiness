@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.119
+
+Hardening from the post-mortem of how the map-repos monorepo gap shipped — three changes that make that failure class mechanical to catch:
+
+- **Doctor: estate-coherence check.** New row comparing `topology.md`'s `Cluster context` header against `toolkit.yaml`'s `kubernetes.context` — a mismatch (one cluster's service map, another cluster's config, e.g. after a migration) is now a red doctor row naming both strings and the fix, instead of audits silently correlating against the wrong service map. Skips cleanly when either side is absent.
+- **Live smoke is now a hard merge gate, not a suggestion.** AGENTS.md Done-criteria rewritten: a new or behavior-changed skill does not merge until someone has run it against a real estate and stated what it ran against and found — if the author's environment can't reach one, a maintainer runs it. New `.github/PULL_REQUEST_TEMPLATE.md` carries the same gate. (Rationale: a skill passed every static gate and scenario, then failed on 100% of services on first contact with a real estate.)
+- **map-topology: build-origin breadcrumbs in the export.** Workload resources gain an optional `image` attribute (the first container's image reference, already collected); `USES` (vcs) edges document `repository` + optional monorepo `path` attributes (mirroring `repo-map.json`), and may be seeded as *asserted* low-confidence edges only from real signals (ArgoCD Application repoURL+path, an actually-present `org.opencontainers.image.source` OCI label, an explicit git/repo annotation) — never inferred from image-path similarity, and never overriding the human-confirmed `repo-map.json`. Two new pressure scenarios (doctor estate mismatch; repo-hint-never-invented).
+
+Gates: leak CLEAN, structure-check (13), run-tests, plugin validate --strict.
+
 ## 0.1.118
 
 `map-repos` learns monorepo estates, namespaces, and honest verification — every fix below traces to a live run against a real 229-repo org whose services all live inside one repository (`services/<name>/`), where v0.1.117 returned "unresolved" for **every** service:

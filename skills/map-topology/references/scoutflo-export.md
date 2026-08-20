@@ -63,7 +63,8 @@ Everything here is derived from the same read-only inventory as `topology.md`. N
     "cluster_id": "your-cluster-name",
     "namespace": "shop",
     "workload_name": "checkout",
-    "workload_type": "deployment"
+    "workload_type": "deployment",
+    "image": "registry.example.com/team/checkout@sha256:abcd1234"
   }
 }
 ```
@@ -79,7 +80,7 @@ Everything here is derived from the same read-only inventory as `topology.md`. N
 ```
 
 - Emit the cluster, every in-scope namespace (`kubernetes_namespace`), every workload, and one resource per observability backend named in the Integration watchpoints table.
-- Workload `resource_type` one of `kubernetes_deployment, kubernetes_stateful_set, kubernetes_daemon_set, kubernetes_job, kubernetes_cron_job`. **The four workload attributes (`cluster_id`, `namespace`, `workload_name`, `workload_type`) are mandatory: the import contract rejects workload resources without all four.**
+- Workload `resource_type` one of `kubernetes_deployment, kubernetes_stateful_set, kubernetes_daemon_set, kubernetes_job, kubernetes_cron_job`. **The four workload attributes (`cluster_id`, `namespace`, `workload_name`, `workload_type`) are mandatory: the import contract rejects workload resources without all four.** `image` is optional but capture it when known (the first container's image reference from the pod spec): it is the one always-present breadcrumb toward the workload's build origin, even though a registry path alone never identifies a source repository (a package name can differ from the repo name, and a shared build image says nothing per-service) — treat it as ranking evidence for tools like `map-repos`, never as an identity.
 - Integration backends use `resource_type` `monitoring`, `alerting`, `vcs`, or `ci_cd`; `identity.provider` is one of `prometheus, grafana, sentry, loki, tempo, mimir, victoriametrics, victorialogs, victoriatraces, elk, datadog, groundcover, pagerduty, zenduty, github, gitlab, bitbucket, argocd, jira, confluence, jsm, k8s, aws, gcp, azure, custom`; `identity.external_id` is the provider-side identifier alerts will carry (org slug, integration id). Alert correlation looks this up; a backend without identity cannot resolve alerts to services.
 
 ## relationships[] — where all meaning lives
@@ -118,6 +119,8 @@ Emit these edge families:
 | service -> traces backend | `SENDS_TRACES_TO` | watchpoints row (asserted) |
 | service -> errors/monitoring/alerting backend | `MONITORED_BY` | watchpoints row (asserted) |
 | service -> vcs/ci/ticketing | `USES` | watchpoints or user (asserted) |
+
+A `USES` edge to a `vcs` resource should carry, in `attributes`, the repo label (`repository` as `owner/name`) and — when the service lives inside a monorepo — a `path` (its subdirectory, e.g. `services/checkout`), mirroring `repo-map.json`'s per-mapping `path` so the two artifacts agree. Discoverable repo *hints* may seed an asserted low-confidence `USES` edge when they actually exist — an ArgoCD `Application`'s `spec.source.repoURL` + `path` (authoritative when present), an `org.opencontainers.image.source` OCI label (requires a registry config fetch; verified absent on many real images), or an explicit `git`/`repo` workload annotation. Never invent one: on real estates all three sources are commonly absent, and a human-confirmed `repo-map.json` remains the canonical source of service→repo truth.
 
 - `assertion_type`: `observed` for edges derived from live cluster objects, `asserted` for edges declared by the watchpoints table or the user.
 - `confidence` 0-10. Use 9 for object-backed edges, 8 for user-declared watchpoints, lower when uncertain. 8 is the actionable threshold downstream, but the number alone is not sufficient: the platform also needs a service/workload/app identity attribute plus either a Kubernetes anchor (`namespace`/`pod`/`container`) or, for Sentry, a `project`/`environment` attribute before it treats the edge as actionable. Populate the identity and anchor attributes together, not just a high confidence number on its own.
