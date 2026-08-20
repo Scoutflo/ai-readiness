@@ -127,6 +127,12 @@ aws:
   #                                         # Optimization section entirely, even if Compute Optimizer/Cost
   #                                         # Explorer/Trusted Advisor permissions are present
 
+github:
+  org: your-org                             # GitHub org or user login that owns your repos
+  token_env: GITHUB_TOKEN                   # read-only PAT; classic `repo` read scope (private repos)
+  #                                         # or fine-grained Contents:Read + Metadata:Read
+  tier: read-only                           # read-only | elevated; map-repos requires read-only
+
 kubernetes:
   context: your-kube-context                # kubectl context for cluster checks
   # monitoring_namespace: monitoring

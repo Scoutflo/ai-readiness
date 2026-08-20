@@ -32,6 +32,7 @@ State your installed toolkit version in this orientation (read `version` from `$
 | `/scoutflo:connect` | harness | Guided credential setup per integration, two token tiers |
 | `/scoutflo:doctor` | harness | Preflight: config, env vars, one live check per integration |
 | `/scoutflo:map-topology` | harness | Service map into `./scoutflo-audits/topology.md` |
+| `/scoutflo:map-repos` | harness | Service→GitHub repo map into `./scoutflo-audits/repo-map.md`; every match is user-confirmed, never auto-picked |
 | `/scoutflo:business-context` | harness | Capture SLAs, critical services, per-environment rules, and exclusions into `business_context.md`; every audit reads it to tune severity and scope |
 | `/scoutflo:audit-all` | harness | Run every configured audit, then correlate across them, into one combined report and brief |
 | `/scoutflo:correlation-engine` | harness | Cross-audit correlation: redundant monitoring, cascade risks, business-context filtering (also run automatically by `audit-all`) |

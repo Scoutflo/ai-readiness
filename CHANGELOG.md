@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.117
+
+New guide skill `map-repos` (sibling to `map-topology`): maps each of your services to its GitHub repository with **mandatory per-service confirmation** — it never auto-accepts a match, even a single obvious one. Reads the service list from `topology.md` (or asks directly), lists repos in a configured org/user via a read-only PAT, ranks candidates by name similarity and corroborates only the top few with README/manifest evidence, then writes `repo-map.md`/`repo-map.json` (`scoutflo-repo-map/v1`) keyed on each repo's **immutable numeric id** — a rename or transfer just updates the label, and a repo that 404s on recheck is flagged, never silently dropped. Adds a read-only `github:` config block wired into `/scoutflo:connect` and `/scoutflo:doctor` (org→user fallback), and catalogs the skill in the README and `/scoutflo:start`. Five pressure scenarios.
+
+Gates: leak CLEAN, structure-check (13), run-tests, plugin validate --strict.
+
 ## 0.1.116
 
 Closes the one non-blocking advisory from the rubric review of the fix sweep (all 9 changed skills gated PASS). `audit-kubernetes`'s doctor-gate *failure* branch named the reauth path for GKE (`gke-gcloud-auth-plugin` → `gcloud auth login`) and EKS (`aws` → `aws sso login`) but not **AKS** (`kubelogin`) — so an Entra-integrated AKS context with an *installed* kubelogin binary but an *expired token* fell through to the generic "bind the view ClusterRole" message (the up-front kubelogin check only catches a *missing* binary, not an expired token). Added the `*kubelogin*` arm → `az login` to refresh, matching the GKE/EKS branches and the parity `map-topology` preflight (which already had it). The `gke-eks-exec-plugin-expiry-not-rbac` pressure scenario now covers all three exec plugins.

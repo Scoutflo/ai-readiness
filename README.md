@@ -169,6 +169,7 @@ Secrets live only in environment variables you export yourself. `~/.scoutflo/too
 | `/scoutflo:connect` | Guided credential setup per integration, two token tiers |
 | `/scoutflo:doctor` | Preflight: config parses, env vars are set, one live check per integration |
 | `/scoutflo:map-topology` | Builds your real service map from Kubernetes/Istio |
+| `/scoutflo:map-repos` | Maps each of your services to its GitHub repository — you confirm every match, it never auto-picks even an obvious one |
 | `/scoutflo:business-context` | Captures your SLAs, critical services, per-environment rules, and exclusions into one `business_context.md` that every audit reads to tune severity and scope |
 | `/scoutflo:audit-all` | Runs every audit you've configured, then correlates across them, into one combined report and Slack brief |
 | `/scoutflo:rca` | Ask *"why is `<service>` failing — give me the RCA?"* — evidence-cited root cause correlated across every report + topology + business context, with a confidence level and an honest list of what it couldn't determine |
