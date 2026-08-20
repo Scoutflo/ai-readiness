@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.1.118
+
+`map-repos` learns monorepo estates, namespaces, and honest verification — every fix below traces to a live run against a real 229-repo org whose services all live inside one repository (`services/<name>/`), where v0.1.117 returned "unresolved" for **every** service:
+
+- **Monorepo support.** `repo-map.json` mappings gain optional `path` (per-service subdirectory) and `namespace` fields — additive, still `scoutflo-repo-map/v1`; several services may share one `repository_id` and differ by `path`. Phase 2 gains a **monorepo probe**: mass-empty ranking (>half of in-scope services with no candidate) now triggers a bounded discovery pass (top-level tree calls on ≤5 candidate repos, looking for `services/`/`apps/`/`packages/` directories whose entries match the service list) instead of ending in "no repos found". Phase 3 gains **batched confirmation** for the matched set (one question, per-service opt-outs, one mapping row per service) — never-auto-accept unchanged.
+- **Namespace-qualified services.** Phase 1 now loads `namespace + service` pairs (preferring the versioned `topology-export.json` over the shape-coupled `topology.md` table scrape) and never dedupes across namespaces — two `api-gateway`s in different namespaces stay two services, confirmed separately, recorded with their `namespace`.
+- **Reconcile verification.** Phase 5 now asserts `mappings + unresolved_services` equals Phase 1's in-scope service count and fails otherwise — an empty map written from Phase 4's placeholder arrays can no longer validate as success.
+- **Ranking honesty.** The promised shared-token tier is now actually implemented; a short-name guard (<5 normalized chars) stops substring floods (`ad` matching half the org); ties break deterministically (tier, name length, name) instead of listing order; candidates surface their `archived` flag at confirmation time.
+- **"None of these" path completed.** New cookbook recipe resolves a user-supplied owner/name (including cross-org) to the immutable numeric id, verified `200`, before any mapping is written. Re-runs also re-propose prior `unresolved_services` once instead of silently re-grinding or dropping them.
+- **Scoping.** Large service lists (>~20) get a scope question first (app namespaces vs third-party/infra services), so a 49-service estate doesn't become 49 mandatory confirmations.
+- Three new pressure scenarios: monorepo estate, duplicate service name across namespaces, empty-map write guard.
+
+Gates: leak CLEAN, structure-check (13), run-tests, plugin validate --strict; monorepo probe + resolve recipes live-verified against a real monorepo org.
+
 ## 0.1.117
 
 New guide skill `map-repos` (sibling to `map-topology`): maps each of your services to its GitHub repository with **mandatory per-service confirmation** — it never auto-accepts a match, even a single obvious one. Reads the service list from `topology.md` (or asks directly), lists repos in a configured org/user via a read-only PAT, ranks candidates by name similarity and corroborates only the top few with README/manifest evidence, then writes `repo-map.md`/`repo-map.json` (`scoutflo-repo-map/v1`) keyed on each repo's **immutable numeric id** — a rename or transfer just updates the label, and a repo that 404s on recheck is flagged, never silently dropped. Adds a read-only `github:` config block wired into `/scoutflo:connect` and `/scoutflo:doctor` (org→user fallback), and catalogs the skill in the README and `/scoutflo:start`. Five pressure scenarios.

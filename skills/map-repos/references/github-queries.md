@@ -50,6 +50,46 @@ fi
 
 Expected: a single JSON object with the current `name`/`owner`/`archived` state on `200` (compare against the last-recorded label to detect a rename or transfer), or the `repo <id>: 404 ...` line on failure.
 
+## Resolve a repo by owner and name
+
+Used by Phase 3's "none of these" path (the user supplies an owner/name or URL) and by the monorepo flow when the user names the shared repo directly. It resolves a human label to the **immutable numeric id** every mapping must carry, verifies the token can actually see the repo, and works for a repo in a *different* org/user than the configured `github.org` — the org listing can't do either of those.
+
+```bash
+set -eu
+OWNER="your-org"                # from the user's answer (strip a URL down to owner/name first)
+NAME="checkout-api"
+resp=$(curl -s -o "${TMPDIR:-/tmp}/map-repos-resolve.json" -w '%{http_code}' --max-time 10 \
+  -H "Authorization: Bearer ${GITHUB_TOKEN}" "https://api.github.com/repos/${OWNER}/${NAME}")
+if [ "$resp" = "200" ]; then
+  jq -c '{id, name, owner: .owner.login, full_name, archived}' "${TMPDIR:-/tmp}/map-repos-resolve.json"
+else
+  echo "repo ${OWNER}/${NAME}: HTTP ${resp} — do not write a mapping for an unresolved repo (404 = wrong name or no access; 401 = token problem)"
+fi
+```
+
+Expected: one JSON object with the numeric `id` on `200` — that id (stringified) becomes the mapping's `repository_id`. Anything other than `200` means the label the user gave cannot be verified; ask again rather than writing an unverifiable mapping.
+
+## List a repo's top-level tree
+
+Used by Phase 2's monorepo probe, on at most 5 candidate repos per run. One call returns the repo's root entries; a `services/`, `apps/`, or `packages/` directory is the monorepo signature, and a second call on that directory lists the per-service subdirectories to match against the in-scope service names.
+
+```bash
+set -eu
+OWNER="your-org"
+NAME="platform-monorepo"
+# Root entries (directories only):
+curl -fsS --max-time 10 -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+  "https://api.github.com/repos/${OWNER}/${NAME}/contents/" \
+  | jq -r '.[] | select(.type == "dir") | .name'
+# If one of services/ apps/ packages/ exists, list its entries and compare to the service list:
+DIR="services"
+curl -fsS --max-time 10 -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+  "https://api.github.com/repos/${OWNER}/${NAME}/contents/${DIR}" \
+  | jq -r '.[] | select(.type == "dir") | .name' | sort
+```
+
+Expected: the first call prints the root directory names; the second prints each subdirectory of the chosen container (e.g. `account-service`, `api-gateway`, …). The overlap between that list and Phase 1's in-scope service names is the monorepo evidence Phase 3 presents — count it explicitly ("matches N of your M unresolved services"). Two calls per probed repo, at most 5 repos: bounded, never org-wide.
+
 ## Fetch a repo's README (first section only)
 
 ```bash
