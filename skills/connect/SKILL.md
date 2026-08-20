@@ -88,6 +88,7 @@ Ask which integrations to configure as a plain numbered list in a normal chat me
 | Azure | audit-azure, setup-azure | `azure:` | none (`az login`) or a service principal | `subscription_id` in config; `az` identity, `Monitoring Reader`+`Reader` for audits; setup that grants RBAC also needs `User Access Administrator`/Owner (Contributor alone cannot create role assignments) |
 | AWS | audit-aws, setup-aws | `aws:` | none (credential chain) or `AWS_ROLE_ARN` | `account_id`+`region` in config; active credential chain or assumed role, read-only policy for audits |
 | Kubernetes | map-topology, audit-kubernetes, audit-lgtm, setup-lgtm | `kubernetes:` | none (kubeconfig context) | read-only context for audits |
+| GitHub | map-repos | `github:` | `GITHUB_TOKEN` | fine-grained PAT with Contents:Read + Metadata:Read, or classic `repo` read on private repos |
 | Slack | the per-run brief from every audit skill | `slack:` | `SCOUTFLO_SLACK_WEBHOOK` | the webhook URL is itself the secret |
 
 ## Step 2: Gather the configuration
@@ -111,6 +112,7 @@ Judgment step: collect the non-secret facts for every integration you picked bef
 | Mimir | `mimir.url`; optional `tenant_id`, `token_env`, `tier` | `tenant_id: your-tenant` |
 | VictoriaMetrics | `victoriametrics.url`; optional `vmalert_url`, `token_env`, `tier` | `vmalert_url: https://vmalert.example.com` |
 | Kubernetes | `kubernetes.context`; optional `monitoring_namespace` | `context: your-kube-context` |
+| GitHub | `github.org`, `github.token_env`; optional `tier` | `org: your-org` |
 | Slack | `slack.webhook_env` | `webhook_env: SCOUTFLO_SLACK_WEBHOOK` |
 
 A minimal assembled config, for a team running only Grafana and an unauthenticated in-cluster Prometheus, looks like this:
