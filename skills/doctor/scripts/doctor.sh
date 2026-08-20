@@ -1003,6 +1003,26 @@ else
   fi
 fi
 
+# --- estate coherence (topology vs config) ------------------------------------------------
+# A config can drift into naming TWO estates at once: kubernetes.context pointing at one
+# cluster while topology.md (and the audits that read it) was generated against another.
+# Every audit then correlates findings against the wrong service map. This check catches the
+# exact mismatch mechanically: the cluster context recorded in topology.md's header must be
+# the same string as kubernetes.context. It only runs when both sides exist; a missing
+# topology.md is a normal pre-map-topology state, not a failure.
+
+TOPO_MD="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/topology.md"
+if [ -n "$KUBE_CONTEXT" ] && [ -f "$TOPO_MD" ]; then
+  TOPO_CTX="$(awk -F'|' '/Cluster context/ {gsub(/^[ \t]+|[ \t]+$/,"",$3); print $3; exit}' "$TOPO_MD")"
+  if [ -z "$TOPO_CTX" ]; then
+    row estate coherence yes - skipped - "topology.md has no 'Cluster context' header row; regenerate it with /scoutflo:map-topology"
+  elif [ "$TOPO_CTX" = "$KUBE_CONTEXT" ]; then
+    row estate coherence yes - pass - -
+  else
+    row estate coherence yes - fail - "mixed estate: topology.md was generated against '${TOPO_CTX}' but kubernetes.context is '${KUBE_CONTEXT}' — re-run /scoutflo:map-topology against the current context, or fix kubernetes.context; audits would otherwise correlate against the wrong service map"
+  fi
+fi
+
 # --- slack (test post only with --slack-test) ----------------------------------------------
 
 SLACK_VAR="$(cfg slack webhook_env)"

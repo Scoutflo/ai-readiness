@@ -133,5 +133,5 @@ Before declaring a change complete:
 2. Run the three repository gates under **Commands** and resolve every failure.
 3. For audit changes, validate generated `report.md` output with `report-standard/check-report.sh` as required by the report standard.
 4. Confirm relevant pressure scenarios cover the changed behavior.
-5. Smoke-test the affected skill with `claude --plugin-dir .` when the change affects runtime behavior.
+5. **Live smoke — a hard merge gate for new or behavior-changed skills, not a checkbox.** Run the skill once against a real estate (`claude --plugin-dir .`) and state in the PR what it ran against and what it found. If your environment cannot reach a real estate, say so in the PR and hand the smoke to a maintainer who can — the PR does not merge until someone has run it. Two shipped incidents prove why: a skill passed every static gate and scenario, then failed on 100% of services the first time it met a real estate, because every offline test shared the design's own blind spot. Synthetic gates catch regressions on known shapes; only a live run meets an unknown one.
 6. Confirm user-visible changes include both the plugin version bump and `CHANGELOG.md` entry.
