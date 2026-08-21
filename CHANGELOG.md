@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.1.125
+
+Edge-case fix wave from the end-to-end verification campaign (7 full skill runs against the real estate; 44/48 design expectations already MET — these close the 6 confirmed defects plus 7 smaller ones):
+
+- **map-topology Tier-2 (ArgoCD) evidence now actually reaches workloads:** the block emits `managed_workloads` from `status.resources` — the mechanical Application→workload join Phase 3 uses to attach evidence (`namespace`+`workload_name`+`workload_type`); a never-synced Application joins to nothing and is recorded as an unattached note, never guessed onto a workload (and `dest_namespace` alone never attaches). **Helm-chart sources are skipped with a visible note** — a chart registry is not a source repo (was emitting false "authoritative" candidates like `charts/stable`). **Multi-source apps** read `status.sync.revisions[0]` so a synced multi-source app no longer loses its `deployed_revision`. The CRD guard distinguishes "cannot reach the cluster" (error) from "CRD absent" (normal skip).
+- **map-repos:** Phase 4's compose now **wires `env_branch_convention`** (an answered branch question was silently dropped when the block ran as written); the working service list is audit-dir anchored (concurrent estates no longer collide on a shared /tmp path); the monorepo tree-probe matches **bare** service names (namespace qualifiers stripped, rows stay namespace-bound).
+- **audit-lgtm:** zero sizing inputs (no topology.md, no Grafana token) now reads **`sizing-path=unknown`** and forces the scope checkpoint — never "small" (zero knowledge is not a small estate; the checkpoint could previously never fire on first runs).
+- **audit-kubernetes:** output paths carry the declared `<context>` segment in every block (Phase 10/Slack had dropped it); K8SRT probe fallbacks check output **emptiness** instead of exit codes (the lib returns rc=0 when blocked, so the old `||` fallbacks were dead code).
+- **audit-clickstack:** `chq` probes the `readonly=1` form **once per session** and caches the working form — the per-query Code-164 retry was polluting `system.errors` with READONLY entries that CS-030 then read back as a health finding (the audit polluting its own signal); CS-030 discounts the probe's single entry. CS-040's receiver resolution is now documented end-to-end (channel `webhookId` → `GET /api/webhooks` → host class only, confirmed live).
+- **doctor:** warns when clickstack HyperDX credential keys are configured without `hyperdx_url` (silently-unused creds); presence-checks `hyperdx_api_key_env` with the v2 ingestion-only note.
+
+Scenarios updated/added: Tier-2 join + Helm rules; lgtm estate-size-unknown. Gates: leak CLEAN, structure-check (15), run-tests (22 suites), plugin validate --strict; fixes re-verified live (join demonstrated on a real synced Application; helm/multi-source/SHA-target edges verified offline against the shipped jq).
+
 ## 0.1.124
 
 Branch + deployed-revision capture — the plugin-side of the agreed cross-repo design ("repo alone can't pin a commit"): RCA needs the repo, the branch context, and the exact live SHA to name a culprit commit. All additive; both schemas stay v1.

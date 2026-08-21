@@ -221,8 +221,12 @@ if [ -f "$TOPO" ]; then
   | while read -r NS SVC; do
       [ -n "${SVC:-}" ] || continue
       echo "== ${NS}/${SVC} =="
-      probe_rollout "$KUBE_CONTEXT" "$NS" "$SVC" || echo "rollout probe blocked for ${NS}/${SVC} (verdict unknown, never healthy)"
-      probe_events  "$KUBE_CONTEXT" "$NS" "$SVC" || true
+      # probe_* return rc=0 with EMPTY stdout when blocked (the lib swallows errors),
+      # so an `||` fallback is dead code — check output emptiness instead.
+      _ro="$(probe_rollout "$KUBE_CONTEXT" "$NS" "$SVC" 2>/dev/null || true)"
+      if [ -n "$_ro" ]; then printf '%s\n' "$_ro"; else echo "rollout probe blocked for ${NS}/${SVC} (verdict unknown, never healthy)"; fi
+      _ev="$(probe_events "$KUBE_CONTEXT" "$NS" "$SVC" 2>/dev/null || true)"
+      [ -n "$_ev" ] && printf '%s\n' "$_ev" || echo "events probe returned nothing for ${NS}/${SVC} (no recent events, or probe blocked)"
     done
 else
   echo "per-service probes: skipped, reason: no topology-export.json (run /scoutflo:map-topology); the cluster-wide snapshot above still stands"
@@ -257,8 +261,9 @@ Write `findings.json` first (canonical), then regenerate `report.md`, the histor
 
 ```bash
 set -eu
+KUBE_CONTEXT="your-kube-context"   # kubernetes.context — the same per-cluster segment the outputs section declares
 RUN_DATE="$(date -u +%Y-%m-%d)"
-OUT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/kubernetes/${RUN_DATE}"
+OUT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/kubernetes/${KUBE_CONTEXT}/${RUN_DATE}"   # per-cluster segment, matching the declared outputs
 sh "${CLAUDE_PLUGIN_ROOT}/report-standard/check-findings.sh" "$OUT/findings.json"
 # Inventory (scoutflo-inventory/v1): the complete Phase-1 catalog of what exists,
 # built from the raw pull (never invented, redacted). counts.total must reconcile

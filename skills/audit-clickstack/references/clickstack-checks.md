@@ -24,17 +24,27 @@ CH_KEY="${CH_KEY:-}"                        # clickstack.clickhouse_password_env
 # -f turns any write attempt, auth failure, or error into a hard non-zero exit. If the server
 # rejects readonly=1 (Code 164 — the user is already read-only by profile), retry without the
 # param: the read-only guarantee still holds from the scoped user, so this is safe, not a downgrade.
+# Probe the readonly=1 form ONCE per session and remember which form works.
+# Retrying readonly=1 on every call would land a Code-164 rejection per query in
+# system.errors — which CS-030 then reads back as "spiking READONLY errors": the
+# audit polluting the very signal it audits. One probe, then a stable form.
+CHQ_FORM=""   # set on first call: "ro" (readonly=1 accepted) or "plain" (profile-readonly user)
 chq() {
-  curl -fsS --max-time 20 \
-    -H "X-ClickHouse-User: ${CH_USER}" \
-    -H "X-ClickHouse-Key: ${CH_KEY}" \
-    "${CH_URL}/?readonly=1" \
-    --data-binary "$1" 2>/dev/null \
-  || curl -fsS --max-time 20 \
-    -H "X-ClickHouse-User: ${CH_USER}" \
-    -H "X-ClickHouse-Key: ${CH_KEY}" \
-    "${CH_URL}/" \
-    --data-binary "$1"
+  if [ -z "$CHQ_FORM" ]; then
+    if curl -fsS --max-time 20 -H "X-ClickHouse-User: ${CH_USER}" -H "X-ClickHouse-Key: ${CH_KEY}" \
+         "${CH_URL}/?readonly=1" --data-binary "SELECT 1" >/dev/null 2>&1; then
+      CHQ_FORM="ro"
+    else
+      CHQ_FORM="plain"   # user is already read-only by profile (Code 164 on the param)
+    fi
+  fi
+  if [ "$CHQ_FORM" = "ro" ]; then
+    curl -fsS --max-time 20 -H "X-ClickHouse-User: ${CH_USER}" -H "X-ClickHouse-Key: ${CH_KEY}" \
+      "${CH_URL}/?readonly=1" --data-binary "$1"
+  else
+    curl -fsS --max-time 20 -H "X-ClickHouse-User: ${CH_USER}" -H "X-ClickHouse-Key: ${CH_KEY}" \
+      "${CH_URL}/" --data-binary "$1"
+  fi
 }
 ```
 
@@ -107,7 +117,7 @@ One permanent ID per check. IDs never change or get reused; retired checks keep 
 | CS-010 | Telemetry coverage | Logs, traces, and metrics tables carry recent data for the critical services | high |
 | CS-011 | Ingestion freshness | `max(Timestamp)` lag on `otel_logs` / `otel_traces` / `otel_metrics_*` within threshold (stale = broken pipeline) | high |
 | CS-020 | Retention | Each `otel_*` table has a deliberate TTL (unbounded = cost/compliance gap; too-short = data-loss gap) | high |
-| CS-030 | ClickHouse health | Part counts sane, replicas in sync, no spiking `system.errors` codes, no stuck mutations | high |
+| CS-030 | ClickHouse health | Part counts sane, replicas in sync, no spiking `system.errors` codes (discount the single `READONLY` (164) entry the section-1 probe itself may add on a profile-readonly user), no stuck mutations | high |
 | CS-040 | HyperDX alerting | Alerts exist **and** route to a live receiver (webhook/Slack/PagerDuty); an alert wired to nothing is the core failure | critical |
 | CS-041 | HyperDX dashboards/sources | Dashboards exist and sources are connected for the critical services | medium |
 | CS-050 | Security posture | External `default` user requires a password; service users off `plaintext_password`; TLS on the wire; a least-privilege read-only user exists for audits | high |
@@ -275,7 +285,7 @@ HyperDX endpoints are auth-gated: run them only when the section-1 helper resolv
 hdx_get /api/alerts | jq .
 ```
 
-Field names are confirm-live, so inspect the raw JSON once, confirm which field carries the destination, then follow each alert to its receiver. A defensive scan that does not assume a single field name:
+Field names are confirm-live, so inspect the raw JSON once, confirm which field carries the destination, then follow each alert to its receiver. **Receiver resolution (confirmed live against v2.35):** an alert's channel carries `{type: "webhook", webhookId: "<id>"}` — the id alone says nothing about the destination. Resolve it with `GET /api/webhooks` (same auth as the alerts call): match the `webhookId` to the webhook object's id and read its `url`. Record only the **host class** of that url (loopback / private / public / placeholder — e.g. a `webhook.site` or `example.com` host is a placeholder, a real finding), never the full URL. A defensive scan that does not assume a single field name:
 
 ```bash
 # Does each alert reference SOME live channel/receiver? Confirm the real key names against the raw JSON above.
