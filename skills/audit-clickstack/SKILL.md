@@ -54,9 +54,20 @@ else
   echo "clickstack block not configured in toolkit.yaml; this audit has nothing to read — configure it or run a different audit"; exit 1
 fi
 if [ -n "${HDX_API_KEY:-}" ]; then
-  : # HyperDX in scope
+  # Key present — but on HyperDX v2.x the REST API is session-authenticated (the apiKey is
+  # ingestion-only), so a key that 401s on /api/alerts means HyperDX is not scorable via a key.
+  # This is not a doctor failure: the audit will mark CS-040/CS-041 not-in-scope with that reason.
+  HDX_URL_D=$(awk '/^clickstack:/{f=1;next} /^[a-z]/{f=0} f && $1=="hyperdx_url:"{print $2}' "$CFG")
+  if [ -n "$HDX_URL_D" ]; then
+    _c=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 -H "Authorization: Bearer ${HDX_API_KEY}" "${HDX_URL_D%/}/api/alerts")
+    case "$_c" in
+      200) echo "HyperDX in scope (GET /api/alerts -> 200)";;
+      401|403) echo "HyperDX key configured but GET /api/alerts -> ${_c}: HyperDX v2.x authenticates the REST API by session, not a static key (the apiKey is ingestion-only). CS-040/CS-041 will be marked not-in-scope with that reason — this is expected on v2.x, not a failure.";;
+      *) echo "HyperDX GET /api/alerts -> ${_c}; HyperDX categories may be not-in-scope. Verify clickstack.hyperdx_url.";;
+    esac
+  fi
 else
-  echo "HyperDX API key (clickstack.hyperdx_api_key_env) not set; /api/alerts returns 401 without it — alerting (CS-040) and dashboards/sources (CS-041) will be marked not-in-scope"
+  echo "HyperDX API key (clickstack.hyperdx_api_key_env) not set; alerting (CS-040) and dashboards/sources (CS-041) will be marked not-in-scope"
 fi
 ```
 

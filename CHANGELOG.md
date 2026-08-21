@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.121
+
+`audit-clickstack` hardened against two real gaps found running it live against a HyperDX v2.35 + ClickHouse 26.5 all-in-one carrying real OpenTelemetry-demo telemetry (the first time the skill ran on genuine `otel_*` data, not synthetic seed rows):
+
+- **ClickHouse `readonly=1` resilience.** A read-only user enforced by a `users.xml` **profile** `readonly` setting (common on locked-down/managed ClickHouse where RBAC access-management is off and a scoped user can't be made with `CREATE USER … GRANT`) rejects the skill's pinned `?readonly=1` with `Code: 164 — Cannot modify 'readonly' setting in readonly mode`, which failed **every** ClickHouse check on a healthy instance. `chq` now keeps `?readonly=1` as defense-in-depth but falls back to the query without it on failure — the read-only guarantee still comes from the mandated read-only user, so it's safe, and a genuine error still fails hard on the fallback.
+- **HyperDX v2.x session-auth handling.** On HyperDX v2.x the REST API (`/api/alerts|dashboards|sources`) authenticates by **session cookie**, not a static key — the team `apiKey` is ingestion-only and 401s under every key header. The skill previously treated that 401 as a wrong-key error. It now probes once, recognizes a 401/403-with-key-configured as the v2 session-auth case, and marks CS-040/CS-041 **not-in-scope** with that reason (renormalizing the score over the ClickHouse categories) — never a confident fail, never header-variant looping, never a doctor failure. Documented in the doctor gate + connect providers doc.
+
+Both paths verified live: the ClickHouse categories (coverage/freshness/retention/health/security) score correctly on real demo telemetry after the fix; HyperDX degrades cleanly to not-in-scope. Two new pressure scenarios (readonly-user-profile-code164; hyperdx-v2-session-auth). Gates: leak CLEAN, structure-check (13), run-tests, plugin validate --strict.
+
 ## 0.1.120
 
 Evidence-based service→repository correlation — the plugin side of a coordinated cross-repo design (schema → map-topology → map-repos), driven by the live-data finding that a service name is not evidence (`account-service` runs a `neutral-service` image, zero name-link to any repo). All additive; stays `scoutflo-topology-export/v1` and `scoutflo-repo-map/v1`.
