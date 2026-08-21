@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.124
+
+Branch + deployed-revision capture — the plugin-side of the agreed cross-repo design ("repo alone can't pin a commit"): RCA needs the repo, the branch context, and the exact live SHA to name a culprit commit. All additive; both schemas stay v1.
+
+- **`source_repo_evidence` gains `deployed_revision` + `branch_ref`** (optional): `deployed_revision` is only ever a real 40-hex SHA — from ArgoCD's `status.sync.revision` (a never-synced Application echoes its target ref there, which is recorded as `branch_ref`, never as a revision) or the OCI `org.opencontainers.image.revision` label (same registry fetch as `image.source`).
+- **map-topology Tier 2 is now wired**: a runnable cookbook block reads ArgoCD Application CRs with the existing kubeconfig (`kubectl get applications.argoproj.io -A`, read-only, no ArgoCD API or new credential) → authoritative `candidate_repo` + `subpath` + `branch_ref` + `deployed_revision`. Live-verified against a real cluster: a synced app yielded a real 40-hex `deployed_revision`; never-synced apps correctly yielded `null` + `branch_ref`. Absent CRD = silent skip; the block never creates or syncs anything.
+- **map-repos captures `default_branch` for free** on the listing/resolve calls that already produce `repository_id` (zero extra requests, zero questions) and records it on the mapping. Mappings may also carry `deployed_revision` carried over from the verified evidence entry that backed them.
+- **`env_branch_convention`** (optional, top-level in `repo-map.json`): ONE consolidated global/team question — "prod deploys from `main`, staging from `release/dev`" — asked once by Phase 3 and propagated, with per-mapping override for genuine deviants. Never asked per service; branches are never enumerated (stale/temp noise); `business_context.md` can seed the default but is never required or a prerequisite. New pressure scenario locks all of that in.
+
+Gates: leak CLEAN, structure-check (15), run-tests (22 suites), plugin validate --strict.
+
 ## 0.1.123
 
 The full enhancement wave from the live-test campaign — 9 parallel builders + integration, everything below verified against the real benchmark estate:
