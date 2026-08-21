@@ -827,6 +827,8 @@ In HyperDX, open Team Settings and create an API key (read scope is enough for t
 export HDX_API_KEY='<your-hyperdx-api-key>'
 ```
 
+**HyperDX version note (confirmed live against v2.35):** on HyperDX **v2.x** the REST endpoints (`/api/alerts`, `/api/dashboards`, `/api/sources`) authenticate by **session cookie** (user login), not a static key — the team `apiKey` shown in Team Settings is an **ingestion-only** key (the OTLP `authorization` header) and returns `401` on those endpoints under every header form. On such a build, `audit-clickstack` will mark the HyperDX categories (CS-040/CS-041) `not-in-scope` with that reason and still fully score the ClickHouse categories; there is nothing to fix. A HyperDX build that issues a REST API key scores the HyperDX categories normally.
+
 ### Verify
 
 ```bash
