@@ -109,7 +109,7 @@ Expected: one line, for example `estate: namespaces=14 workloads=52 sizing-path=
 | Path | When | How the run behaves |
 | --- | --- | --- |
 | small | workloads at most `SMALL_MAX_WORKLOADS` | Phases run as written: cluster-wide calls, intermediates in a throwaway temp dir, one sitting. No worklist, no batching. |
-| medium | workloads at most `MEDIUM_MAX_WORKLOADS` | Same cluster-wide calls, still one run, but declare `TMP="./scoutflo-audits/map-topology/$(date -u +%F)"` in every block instead of the mktemp default, so a failed collection step is redone alone instead of restarting the run. |
+| medium | workloads at most `MEDIUM_MAX_WORKLOADS` | Same cluster-wide calls, still one run, but declare `TMP="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/map-topology/$(date -u +%F)"` in every block instead of the mktemp default, so a failed collection step is redone alone instead of restarting the run. |
 | large | above `MEDIUM_MAX_WORKLOADS` | Namespace batches against a durable worklist with resume support; see [Large clusters: worklist, batches, and resume](#large-clusters-worklist-batches-and-resume). |
 
 Proportionality is a rule in both directions:
@@ -280,11 +280,11 @@ is yours to edit, everything else is regenerated.
 
 Fill these in: which monitoring covers which service. Audits use the
 rows to focus coverage checks; triage uses them to open the right
-backend first. Rows you fill are carried forward on re-runs.
+backend first. Rows you fill are carried forward on re-runs, keyed on Namespace + Service (never Service alone — two same-named services in different namespaces are different rows and must never collapse or swap).
 
-| Service | Metrics | Logs | Traces | Errors | Alert route | Owner |
-| --- | --- | --- | --- | --- | --- | --- |
-| checkout | unknown | unknown | unknown | unknown | unknown | unknown |
+| Service | Namespace | Metrics | Logs | Traces | Errors | Alert route | Owner |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| checkout | shop | unknown | unknown | unknown | unknown | unknown | unknown |
 
 ## Changes since <previous run date>
 
@@ -415,3 +415,4 @@ Close by telling the user, in the terminal:
 | Run crosses UTC midnight and the next batch lands in a fresh, empty date directory, abandoning everything already pulled | Key the run directory by `RUN_ID` (first-seen timestamp of the run), never by calendar date |
 | Two invocations pull the same batch of namespaces at once and corrupt the worklist | Acquire `worklist.lock` before claiming a batch; treat a lock older than `LOCK_STALE_MINUTES` as abandoned and reclaim it |
 | Mesh path chosen correctly (CRDs present, istiod ready) but the cluster is mesh-inert everywhere except a small sandbox namespace, so mesh-derived rows are near-empty | The gate is right even when its yield is thin: sidecar coverage and VirtualService/DestinationRule/Gateway/ServiceEntry counts near zero outside one namespace mean the mesh is installed but barely adopted, not a bug. Report the true sidecar coverage ratio rather than assuming the mesh path implies mesh-wide routing data. Confirmed live: a real cluster with Istio CRDs + a ready istiod had 0 sidecars across 27 namespaces except one `istio-injection=enabled` test namespace, where all mesh objects (1 VirtualService, 1 DestinationRule, 1 Gateway, 1 ServiceEntry) also lived. |
+| Two same-named Services in different namespaces collapse into one map row / one watchpoints row | Qualify every colliding service as `<service>.<namespace>` in the map and the export (`attributes.service_name` keeps the bare name); the watchpoints table carries a Namespace column and carry-forward keys on Namespace + Service |

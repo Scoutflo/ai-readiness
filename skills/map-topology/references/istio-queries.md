@@ -14,7 +14,7 @@ NS_EXCLUDE="^(kube-system|kube-public|kube-node-lease|istio-system)$"
 TMP="${TMP:-$(mktemp -d)}"
 ```
 
-On the medium sizing path (chosen in SKILL.md Phase 1), replace the `TMP` declaration in each block with `TMP="./scoutflo-audits/map-topology/$(date -u +%F)"` (after `mkdir -p` on that path) so intermediates survive a shell restart and a failed step can be redone alone. A medium-path run stays inside one calendar day by definition (one run, one sitting), so date-keying is safe there.
+On the medium sizing path (chosen in SKILL.md Phase 1), replace the `TMP` declaration in each block with `TMP="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/map-topology/$(date -u +%F)"` (after `mkdir -p` on that path) so intermediates survive a shell restart and a failed step can be redone alone. A medium-path run stays inside one calendar day by definition (one run, one sitting), so date-keying is safe there.
 
 On the large sizing path, replace the `TMP` declaration with `TMP="${RUN_DIR}"`, where `RUN_DIR` is the run-ID-keyed directory from [SKILL.md's Run-ID keying](../SKILL.md#run-id-keying): `./scoutflo-audits/map-topology/runs/<RUN_ID>/`. A large-path run can cross midnight UTC mid-batch, so it is keyed by `RUN_ID` (the run's first-seen timestamp), never by calendar date; see "Worklist build and resume" and "Worklist lock" below for the exact commands.
 
@@ -154,6 +154,8 @@ done | jq -s '.' | tee "${TMP}/source-repo-evidence.json"
 ```
 
 Expected: a JSON array, one object per workload, each with `image`, `image_digest` (null when the ref carries no digest — enrich from `kubectl get pods -o jsonpath='{..imageID}'` only if you need it), and a `source_repo_evidence` array holding at most one `image_registry_path` candidate (empty when the image is a bare single-segment name like `postgres:18.4`, which yields no `owner/name`). `subpath` is always `null` at this tier — a registry path is repo-level, never per-service. These objects become the `image`/`image_digest`/`source_repo_evidence` attributes on each workload resource in `topology-export.json`.
+
+## Service-to-workload join
 
 Joins Services to workloads whose pod-template labels satisfy the Service selector, within the same namespace. Used on both paths.
 

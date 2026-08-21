@@ -38,6 +38,7 @@ Everything here is derived from the same read-only inventory as `topology.md`. N
 ```
 
 - `name` must be unique across the export; it is the stable identifier relationships reference.
+- **Duplicate service names across namespaces:** when the same Service name exists in more than one namespace (live-real: `api-gateway` in both `storefront` and `benchmark-workloads`), name **every** colliding service `<service>.<namespace>` — none of them keeps the bare name, so no reader can mistake one for the other. `attributes.service_name` keeps the bare name and `attributes.namespace` disambiguates; relationships reference the qualified `name`. This mirrors `map-repos`' rule that same-named services in different namespaces never collapse into one row.
 - `service_type` one of: `api, worker, frontend, backend, cron, gateway, batch, stream, function, webhook, notification, auth, analytics, search, email, sms, push_notification, reporting, admin, mobile, event_handler, library`. Derive from workload shape (Deployment behind an Ingress: `api` or `frontend`; CronJob: `cron`; queue consumer: `worker`); default `backend` when unclear and record the guess.
 - `environment` one of `prod, staging, dev`; `business_criticality` one of `low, medium, high, critical`. Ask the user once per run for anything not derivable; do not invent criticality.
 - `attributes` is the correlation DNA: `service_name`, `namespace`, `cluster_id`, and `app` (from `app.kubernetes.io/name` when present). Values lowercase, no URLs, no hostnames, no IPs, no secrets; matching engines drop such values.

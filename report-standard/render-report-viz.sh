@@ -62,9 +62,16 @@ viz_spark() {
   printf '%s' "$vs_o"
 }
 
-score_label() {  # a plain-language band for a 0-100 score
-  sl="$1"
-  if   [ "$sl" -ge "$GATE" ]; then echo "end-to-end ready (>= ${GATE} gate)"
+score_label() {  # a plain-language band for a 0-100 score; $2 = end_to_end (true/false)
+  sl="$1"; sl_e2e="${2:-false}"
+  # "end-to-end ready" requires BOTH the score gate AND the findings' own
+  # end_to_end flag — a score >= GATE with end_to_end:false (excluded categories,
+  # coverage gaps) is above the gate but NOT end-to-end, and saying otherwise is
+  # a false green light (found live: an 86/100 with 2 excluded categories).
+  if [ "$sl" -ge "$GATE" ]; then
+    if [ "$sl_e2e" = "true" ]; then echo "end-to-end ready (>= ${GATE} gate)"
+    else echo "above the ${GATE} gate — not end-to-end (excluded categories or coverage gaps)"
+    fi
   elif [ "$sl" -ge 50 ]; then echo "good base coverage (below the ${GATE} end-to-end gate)"
   else echo "early coverage (below 50)"
   fi
@@ -90,16 +97,18 @@ $(jq -r '.severity_counts | "\(.critical//0) \(.high//0) \(.medium//0) \(.low//0
 EOF
     SEVMAX="$(printf '%s\n' "$SC" "$SH" "$SM" "$SL" "$SI" | sort -rn | head -1)"; [ "${SEVMAX:-0}" -gt 0 ] || SEVMAX=1
     TREND="$(trend_scores "$HIST")"
-    # Highest points_recoverable wins; ties break by severity (critical>high>medium
-    # >low), mirroring the findings-table sort below. max_by alone returns the
-    # array-order-last element on a tie and could surface a lower-severity finding.
+    E2E="$(jq -r '.score.end_to_end // false' "$F")"
+    # Severity first, then points: a +1 critical outranks a +3 high — the lever
+    # is "restore the paging path", not "harvest the most points". (Found live:
+    # points-first told the operator to fix Loki rate-limiting before a dead
+    # default receiver.) Within a severity band, higher points win.
     TOP="$(jq -r '[.findings[]? | select((.severity!="info") and ((.points_recoverable//0)>0))]
-      | sort_by([ ((.points_recoverable // 0) * -1), ({critical:0,high:1,medium:2,low:3,info:4}[.severity] // 5) ])
-      | (.[0] // empty) | "\(.id)\t\(.points_recoverable)\t\(.title)"' "$F" 2>/dev/null)"
+      | sort_by([ ({critical:0,high:1,medium:2,low:3,info:4}[.severity] // 5), ((.points_recoverable // 0) * -1) ])
+      | (.[0] // empty) | "\(.id)\t\(.points_recoverable)\t\(.severity)\t\(.title)"' "$F" 2>/dev/null)"
 
     echo "## At a glance"
     echo
-    echo "**Score: ${OVERALL}/100**  \`$(viz_bar "$OVERALL" 100 20)\`  $(score_label "$OVERALL")"
+    echo "**Score: ${OVERALL}/100**  \`$(viz_bar "$OVERALL" 100 20)\`  $(score_label "$OVERALL" "$E2E")"
     if [ -n "$TREND" ]; then
       CURFIRST="${TREND%% *}"; CURLAST="$(printf '%s' "$TREND" | awk '{print $NF}')"
       DELTA=$(( CURLAST - CURFIRST ))
@@ -118,9 +127,9 @@ EOF
     echo "| 🔵 low | ${SL} | \`$(viz_bar "$SL" "$SEVMAX" 10)\` |"
     echo "| ⚪ info | ${SI} | \`$(viz_bar "$SI" "$SEVMAX" 10)\` |"
     if [ -n "$TOP" ]; then
-      TID="$(printf '%s' "$TOP" | cut -f1)"; TP="$(printf '%s' "$TOP" | cut -f2)"; TT="$(printf '%s' "$TOP" | cut -f3)"
+      TID="$(printf '%s' "$TOP" | cut -f1)"; TP="$(printf '%s' "$TOP" | cut -f2)"; TSEV="$(printf '%s' "$TOP" | cut -f3)"; TT="$(printf '%s' "$TOP" | cut -f4)"
       echo
-      echo "**Start here → ${TT} (${TID}): recovers the most points (+${TP}).**"
+      echo "**Start here → ${TT} (${TID}): highest-severity actionable finding (${TSEV}, +${TP} points).**"
     fi
     ;;
 

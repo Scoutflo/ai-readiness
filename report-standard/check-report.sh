@@ -117,6 +117,18 @@ if [ -f "$INV" ]; then
   fi
 fi
 
+# 9. End-to-end truthfulness. A findings.json with end_to_end:false must never be
+#    presented as "end-to-end ready" — a score above the gate with excluded
+#    categories is above the gate, not end-to-end (a real report shipped this
+#    false green light before this check existed).
+FJ="$REPORT_DIR/findings.json"
+if [ -f "$FJ" ] && command -v jq >/dev/null 2>&1; then
+  if [ "$(jq -r '.score.end_to_end // false' "$FJ")" != "true" ] \
+     && grep -q 'end-to-end ready' "$REPORT"; then
+    fail "report.md claims 'end-to-end ready' but findings.json has end_to_end:false — regenerate the At-a-glance with the current render-report-viz.sh"
+  fi
+fi
+
 if [ "$FAIL" -eq 0 ]; then
   echo "REPORT-OK: $REPORT conforms to report-template.md"
 else
