@@ -24,6 +24,16 @@ obviously acme/checkout — just write the USES edge, no need to ask anyone"
 4. A monorepo hint carries `path` alongside `repository`, mirroring
    `repo-map.json`'s field, so the two artifacts agree.
 
+5. Tier-2 joins are mechanical, never guessed: an Application's evidence
+   attaches only to the workloads named in its `status.resources`
+   (`managed_workloads`); a never-synced Application joins to nothing and is
+   recorded as an unattached note — `dest_namespace` alone never attaches
+   evidence to a workload. A **Helm-chart** source (`spec.source.chart`) emits
+   NO evidence at all: a chart registry URL is not a source repository, and a
+   chart version is not a branch.
+
 **Must not:** derive a `USES` edge from image-path string similarity; mark an
-inferred edge as `observed`; or let a hint edge overwrite or contradict a
-mapping the user explicitly confirmed in `repo-map.json`.
+inferred edge as `observed`; attach Application evidence to a workload it does
+not manage; emit a chart registry as an "authoritative" repo candidate; or let
+a hint edge overwrite or contradict a mapping the user explicitly confirmed in
+`repo-map.json`.

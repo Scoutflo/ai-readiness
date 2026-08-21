@@ -139,10 +139,20 @@ if [ -n "${GRAFANA_TOKEN:-}" ]; then
 fi
 
 TOTAL=$((SERVICES + DASHBOARDS))
-path="large"
-[ "${TOTAL}" -le "${MEDIUM_MAX_OBJECTS}" ] && path="medium"
-[ "${TOTAL}" -le "${SMALL_MAX_OBJECTS}" ] && path="small"
-echo "estate: services=${SERVICES} dashboards=${DASHBOARDS} scored_objects=${TOTAL} sizing-path=${path}"
+if [ "${TOTAL}" -eq 0 ]; then
+  # Zero here means zero KNOWLEDGE (no topology.md, no Grafana token), not a small
+  # estate. Concluding "small" from zero inputs is exactly how a first run on a huge
+  # stack skips the scope checkpoint and grinds unbounded. Size is UNKNOWN: run the
+  # cli_pause_before_audit scope checkpoint unconditionally and ask the user to scope
+  # (or to run /scoutflo:map-topology first for a real size).
+  path="unknown"
+  echo "estate: services=0 dashboards=0 scored_objects=UNKNOWN (no sizing inputs) — sizing-path=unknown; the scope checkpoint MUST run before any deep collection"
+else
+  path="large"
+  [ "${TOTAL}" -le "${MEDIUM_MAX_OBJECTS}" ] && path="medium"
+  [ "${TOTAL}" -le "${SMALL_MAX_OBJECTS}" ] && path="small"
+  echo "estate: services=${SERVICES} dashboards=${DASHBOARDS} scored_objects=${TOTAL} sizing-path=${path}"
+fi
 
 # Guided-walkthrough drift check, per report-standard/README.md#using-topology-and-prior-runs-as-a-guided-walkthrough:
 # compare against the last run rather than a blank slate. This stays in the SAME block as the

@@ -1048,6 +1048,25 @@ if [ -n "$CH_URL_CFG" ]; then
   fi
 fi
 
+# clickstack credential keys configured without a hyperdx_url are silently unused —
+# say so instead of leaving the user to wonder why HyperDX categories stay not-in-scope.
+if [ -n "$CH_URL_CFG" ] && [ -z "$(cfg clickstack hyperdx_url)" ]; then
+  _hdx_stray=""
+  for _k in hyperdx_email_env hyperdx_password_env hyperdx_api_key_env; do
+    [ -n "$(cfg clickstack "$_k")" ] && _hdx_stray="${_hdx_stray} ${_k}"
+  done
+  [ -n "$_hdx_stray" ] && row clickstack hyperdx-config yes - warn - "clickstack.${_hdx_stray# } configured but clickstack.hyperdx_url is not set — these credentials are unused until hyperdx_url is added; HyperDX categories stay not-in-scope"
+fi
+# v1 REST-key path: presence-check the api-key variable when named (v2 ignores it for REST).
+HDX_KEY_VAR="$(cfg clickstack hyperdx_api_key_env)"
+if [ -n "$(cfg clickstack hyperdx_url)" ] && [ -n "$HDX_KEY_VAR" ]; then
+  if [ -n "$(printenv "$HDX_KEY_VAR" 2>/dev/null || true)" ]; then
+    row clickstack hyperdx-api-key-env yes "$HDX_KEY_VAR" pass - "present (presence-checked only); note: on HyperDX v2.x this key is ingestion-only — REST scoring needs the login env pair"
+  else
+    row clickstack hyperdx-api-key-env yes "$HDX_KEY_VAR" env-missing - "clickstack.hyperdx_api_key_env names ${HDX_KEY_VAR} but it is not set; add it to ~/.scoutflo/env or run /scoutflo:connect"
+  fi
+fi
+
 # --- azure (az CLI identity, mirrors the audit-azure doctor gate) ---------------------------
 
 AZ_SUB="$(cfg azure subscription_id)"

@@ -188,14 +188,18 @@ Expected: a JSON array, one object per workload, each with `image`, `image_diges
 
 ## Source-repo evidence (Tier 2: ArgoCD Applications)
 
-Authoritative service→repo evidence, read from ArgoCD Application CRs with the same kubeconfig as every other block — no ArgoCD API, no new credential; needs only `get`/`list` on `applications.argoproj.io`. Skip silently when the CRD is absent (that is a normal estate, not a gap). Read-only: this block never creates, syncs, patches, or refreshes an Application.
+Authoritative service→repo evidence, read from ArgoCD Application CRs with the same kubeconfig as every other block — no ArgoCD API, no new credential; needs only `get`/`list` on `applications.argoproj.io`. Read-only: this block never creates, syncs, patches, or refreshes an Application.
 
 ```bash
 set -eu
 KUBE_CONTEXT="your-kube-context"
 TMP="${TMP:-$(mktemp -d)}"
 
-if ! kubectl --context "${KUBE_CONTEXT}" api-resources --api-group=argoproj.io 2>/dev/null | grep -q '^applications '; then
+# Distinguish "CRD absent" (a normal estate) from "cannot reach the cluster" (an error
+# that must be reported, never mis-read as absence).
+if ! API_OUT=$(kubectl --context "${KUBE_CONTEXT}" api-resources --api-group=argoproj.io 2>&1); then
+  echo "ERROR: could not query api-resources (${API_OUT}); fix cluster access before concluding anything about ArgoCD" >&2
+elif ! printf '%s\n' "${API_OUT}" | grep -q '^applications '; then
   echo "no ArgoCD Application CRD on this cluster — Tier 2 evidence not available (normal, skipping)"
 else
   kubectl --context "${KUBE_CONTEXT}" get applications.argoproj.io -A -o json \
@@ -209,10 +213,21 @@ else
       .items[]
       | (.spec.source // (.spec.sources // [] | .[0]) // {}) as $src
       | select(($src.repoURL // "") != "")
-      | (.status.sync.revision // "") as $sync
+      # A Helm-chart source (spec.source.chart set) deploys a packaged chart from a chart
+      # registry — its repoURL is NOT a source-code repository. Emitting it as evidence
+      # plants a false "authoritative" candidate; skip it with a visible note instead.
+      | if (($src.chart // "") != "") then
+          { application: .metadata.name, skipped: "helm-chart source (\($src.chart)) — a chart registry is not a source repo; no evidence emitted" }
+        else
+      # Multi-source apps report per-source SHAs in status.sync.revisions (parallel to
+      # spec.sources); single-source apps use status.sync.revision.
+      ((.status.sync.revisions // [] | .[0]) // .status.sync.revision // "") as $sync
       | { application: .metadata.name,
           app_namespace: .metadata.namespace,
           dest_namespace: (.spec.destination.namespace // null),
+          managed_workloads: [ (.status.resources // [])[]
+              | select(.kind == "Deployment" or .kind == "StatefulSet" or .kind == "DaemonSet")
+              | { namespace: (.namespace // null), workload_name: .name, workload_type: (.kind | ascii_downcase) } ],
           source_repo_evidence: [ {
             candidate_repo: (repo_label($src.repoURL)),
             evidence_source: "argocd",
@@ -220,12 +235,16 @@ else
             subpath: ($src.path // null),
             deployed_revision: (if ($sync | test("^[0-9a-f]{40}$")) then $sync else null end),
             branch_ref: (if (($src.targetRevision // "") != "") and (($src.targetRevision // "") | test("^[0-9a-f]{40}$") | not) then $src.targetRevision else null end),
-            raw: ($src.repoURL + " @ " + ($src.targetRevision // "HEAD")) } ] }' \
+            raw: ($src.repoURL + " @ " + ($src.targetRevision // "HEAD")) } ] }
+        end' \
   | tee "${TMP}/argocd-evidence.json"
 fi
 ```
 
-Expected: one JSON object per Application with a single authoritative `source_repo_evidence` entry: `candidate_repo` as `owner/name`, `subpath` from `spec.source.path`, `branch_ref` from `targetRevision` when it is a ref, and `deployed_revision` **only when `status.sync.revision` is a real 40-hex SHA** — a never-synced Application echoes its target ref there and must yield `deployed_revision: null`, never a branch name masquerading as a commit. Join each Application to a workload by `dest_namespace` + the manifests it manages; when the join is ambiguous, attach the evidence at namespace level and let `map-repos` present it, never guess a per-service link.
+Expected: one JSON object per Application. A Helm-chart source prints a `skipped` note and emits **no** evidence (a chart registry is not a source repo). Otherwise: `candidate_repo` as `owner/name`, `subpath` from `spec.source.path`, `branch_ref` from `targetRevision` when it is a ref, `deployed_revision` **only when the synced revision is a real 40-hex SHA** (multi-source apps read `status.sync.revisions[0]`; a never-synced Application yields `null`, never a branch name masquerading as a commit), and **`managed_workloads`** — the workloads this Application actually manages, from `status.resources`.
+
+**The join (how evidence reaches workloads):** `managed_workloads` is the mechanical join — in Phase 3, attach the Application's `source_repo_evidence` entry to each export workload whose `namespace` + `workload_name` + `workload_type` match a `managed_workloads` row. A never-synced Application has no `status.resources` and therefore joins to nothing: record it in the map as an unattached ArgoCD note ("Application X declares repo Y for namespace Z but has never synced") and let `map-repos` present it to the user — never guess a workload for it, and never attach by `dest_namespace` alone (a namespace is not a workload).
+
 
 ## Service-to-workload join
 

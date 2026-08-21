@@ -74,7 +74,7 @@ set -eu
 AUDIT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}"
 EXPORT="${AUDIT}/topology-export.json"
 TOPOLOGY="${AUDIT}/topology.md"
-OUT="${TMPDIR:-/tmp}/map-repos-services.tsv"   # namespace<TAB>service, one per line
+OUT="${AUDIT}/.map-repos-services.tsv"   # namespace<TAB>service working state, audit-dir anchored (concurrent estates never collide)
 
 if [ -f "$EXPORT" ] && jq -e '.version == "scoutflo-topology-export/v1"' "$EXPORT" >/dev/null 2>&1; then
   echo "loading service list from: ${EXPORT}"
@@ -166,7 +166,7 @@ For only the top 3 ranked candidates per service (fewer if the ranked list is sh
 Name-vs-name ranking silently assumes every service has its own repository. Estates that keep many services inside **one repository** (under `services/<name>/`, `apps/<name>/`, or `packages/<name>/`) produce the opposite signature: an empty or junk ranked list for *most* of the service list at once. Treat that signature — more than half the in-scope services with no exact/containment candidate — as a trigger, not a dead end:
 
 1. Ask the user whether their services live together in one repository, and if they know it, take the owner/name directly (resolve it with the cookbook's [resolve a repo by owner/name](references/github-queries.md#resolve-a-repo-by-owner-and-name) call — this also covers a repo in a *different* org than `github.org`).
-2. When they don't know, probe for it — bounded, and **never by listing order**. Gather the estate's tokens (from the org's own product/team words, and from the name of any repo a service's weak tier-1 hit pointed at), normalize them exactly like the ranking above, then weight each token by **inverse frequency across the whole repo listing**: count the repos whose tokenized name contains the token; a token matching more than 10% of the org is generic noise (`service`, `api`) — drop it outright, because a shared-token filter fed such a token fills every candidate slot with junk in listing order and cuts the real monorepo (live-proven on a 229-repo org, where the actual monorepo ranked 6th and was cut at 5); a token matching exactly one repo always survives, so a small org still probes. Each surviving token weighs `total_repos / hits` (a token matching 1 of 229 repos scores 229; one matching 5 scores ~46), each candidate repo scores the summed weight of the tokens its name matches, and the order is deterministic: weight descending, then name — never listing order. Take the **top 5** and run the cookbook's [list a repo's top-level tree](references/github-queries.md#list-a-repos-top-level-tree) call on each. A repo whose tree has a `services/`, `apps/`, or `packages/` directory containing entries matching several in-scope service names is a monorepo candidate; count the matches and present it with that evidence ("`ai-sre-benchmark-fixtures` contains services/ entries matching 11 of your 12 unresolved services").
+2. When they don't know, probe for it — bounded, and **never by listing order**. Gather the estate's tokens (from the org's own product/team words, and from the name of any repo a service's weak tier-1 hit pointed at), normalize them exactly like the ranking above, then weight each token by **inverse frequency across the whole repo listing**: count the repos whose tokenized name contains the token; a token matching more than 10% of the org is generic noise (`service`, `api`) — drop it outright, because a shared-token filter fed such a token fills every candidate slot with junk in listing order and cuts the real monorepo (live-proven on a 229-repo org, where the actual monorepo ranked 6th and was cut at 5); a token matching exactly one repo always survives, so a small org still probes. Each surviving token weighs `total_repos / hits` (a token matching 1 of 229 repos scores 229; one matching 5 scores ~46), each candidate repo scores the summed weight of the tokens its name matches, and the order is deterministic: weight descending, then name — never listing order. Take the **top 5** and run the cookbook's [list a repo's top-level tree](references/github-queries.md#list-a-repos-top-level-tree) call on each. A repo whose tree has a `services/`, `apps/`, or `packages/` directory containing entries matching several in-scope service names is a monorepo candidate — match subdirectory names against the **bare** service name (`attributes.service_name`, any `.namespace` qualifier stripped), keeping each matched row bound to its own namespace so a name shared by two namespaces yields two rows, never one; count the matches and present it with that evidence ("`ai-sre-benchmark-fixtures` contains services/ entries matching 11 of your 12 unresolved services").
 3. Confirmation stays per the never-auto-accept rule, but **batched**: present the monorepo candidate once, list every service whose name matched a subdirectory, and let the user confirm the whole set in one answer (plus per-service opt-outs), rather than asking the same question N times. Each confirmed service gets its own mapping row sharing the repo's `repository_id` with its own `path` (`services/<name>`), per the schema.
 
 Step 2's candidate selection, runnable against the same listing the ranking already fetched (zero extra API calls):
@@ -249,10 +249,20 @@ GENERATED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 # counts against Phase 1's in-scope service list and fails on a mismatch.
 MAPPINGS_JSON='[]'        # replace with Phase 3's actual accumulated array
 UNRESOLVED_JSON='[]'      # replace with Phase 3's actual accumulated array
+# Phase 3's answered branch question. Empty = skipped -> field OMITTED (never an
+# empty object). Silently dropping an answered convention is a defect, so it is
+# wired into the compose, not left to memory.
+ENV_BRANCH_JSON=''        # e.g. '{"prod":"main","staging":"release/dev"}' or '' if skipped
 
-jq -n --arg gen "$GENERATED_AT" --argjson mappings "$MAPPINGS_JSON" --argjson unresolved "$UNRESOLVED_JSON" \
-  '{version: "scoutflo-repo-map/v1", generated_at: $gen, mappings: $mappings, unresolved_services: $unresolved}' \
-  > "${TMP}/repo-map.new.json"
+if [ -n "$ENV_BRANCH_JSON" ]; then
+  jq -n --arg gen "$GENERATED_AT" --argjson mappings "$MAPPINGS_JSON" --argjson unresolved "$UNRESOLVED_JSON" --argjson ebc "$ENV_BRANCH_JSON" \
+    '{version: "scoutflo-repo-map/v1", generated_at: $gen, env_branch_convention: $ebc, mappings: $mappings, unresolved_services: $unresolved}' \
+    > "${TMP}/repo-map.new.json"
+else
+  jq -n --arg gen "$GENERATED_AT" --argjson mappings "$MAPPINGS_JSON" --argjson unresolved "$UNRESOLVED_JSON" \
+    '{version: "scoutflo-repo-map/v1", generated_at: $gen, mappings: $mappings, unresolved_services: $unresolved}' \
+    > "${TMP}/repo-map.new.json"
+fi
 
 jq empty "${TMP}/repo-map.new.json"
 
@@ -287,7 +297,7 @@ The write is unverified until re-read:
 ```bash
 set -eu
 OUT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/repo-map.json"
-SVC="${TMPDIR:-/tmp}/map-repos-services.tsv"   # Phase 1's in-scope list (after any scoping exclusions)
+SVC="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/.map-repos-services.tsv"   # Phase 1's in-scope list (after any scoping exclusions)
 [ -f "$OUT" ] || { echo "repo-map.json was not written"; exit 1; }
 jq -e '.version == "scoutflo-repo-map/v1"' "$OUT" >/dev/null || { echo "repo-map.json missing or invalid version"; exit 1; }
 jq -r '"mapped: \(.mappings | length) services, unresolved: \(.unresolved_services | length)"' "$OUT"
