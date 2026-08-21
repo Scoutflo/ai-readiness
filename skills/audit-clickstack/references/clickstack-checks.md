@@ -4,10 +4,10 @@ Runnable, read-only checks for every surface the [audit-clickstack](../SKILL.md)
 
 ## 1. Conventions
 
-- The tables, columns, system tables, and endpoint/auth model below were **confirmed on a live read** of a ClickStack all-in-one instance. Anything marked **confirm-live** (HyperDX JSON response shapes, some resource paths, the exact HyperDX auth header, and any ClickHouse system-table column not named here) needs verifying against your instance with a real API key before the skill asserts it. Never invent a table, column, endpoint, or field beyond what is confirmed.
+- The tables, columns, system tables, and endpoint/auth model below were **confirmed on a live read** of a ClickStack all-in-one instance. Anything marked **confirm-live** (HyperDX JSON response shapes, some resource paths, the exact HyperDX auth header, and any ClickHouse system-table column not named here) needs verifying against your instance with a working credential (a REST API key, or the v2 session login below) before the skill asserts it. Never invent a table, column, endpoint, or field beyond what is confirmed.
 - **ClickHouse read surface:** HTTP on `:8123` (native `:9000` is not used by this audit). Every ClickHouse block authenticates as a **least-privilege read-only user** (see [CS-050](#7-cs-050--security-posture)) — that user is the read-only guarantee. The HTTP `readonly=1` setting is pinned as *defense-in-depth* on top of it, but note: a user that is **already read-only by profile** (a `users.xml` profile with `<readonly>1</readonly>` or `2`, common on locked-down/managed ClickHouse where RBAC access-management is disabled and a scoped user can't be created via SQL) will reject `?readonly=1` with `Code: 164 — Cannot modify 'readonly' setting in readonly mode`. That error itself proves the user is read-only, so `chq` falls back to the query without the param. The SQL is sent as the raw POST body with `--data-binary`; nothing is stored.
-- **HyperDX API:** served on `:8080` under `/api/<resource>` — the `/api/v1/*` form 404s, do not use it. `/api/health` and `/api/config` are open; `/api/alerts`, `/api/dashboards`, `/api/sources`, `/api/me` are auth-gated. The exact auth header scheme is **confirm-live**; `Authorization: Bearer <key>` is the assumed form below. **Important, confirmed live against HyperDX v2.35:** in HyperDX **v2.x** these REST endpoints authenticate by **session cookie** (user login), *not* a static API key — the team `apiKey` is an **ingestion-only** key (the OTLP `authorization` header), and every static-key header (`Bearer`, `x-api-key`, raw, `?apiKey=`) returns `401` on `/api/alerts`. So on a v2.x instance the HyperDX categories (CS-040, CS-041) are **not scorable with an API key** and must be marked `not-in-scope` with that reason — never treated as a wrong-key config error, and never a confident fail. An API key only scores HyperDX on a build that issues a REST API key. (Session-cookie support is a possible future skill enhancement, but requires storing login credentials, which is a heavier posture than a read-only key.)
-- Presence-check tokens and passwords only; never echo, log, or write a secret value anywhere. Rendered configs and API responses can embed webhook URLs with secrets — record their shape and host class (loopback, private, public), never the full URL.
+- **HyperDX API:** served on `:8080` under `/api/<resource>` — the `/api/v1/*` form 404s, do not use it. `/api/health` and `/api/config` are open; `/api/alerts`, `/api/dashboards`, `/api/sources`, `/api/me` are auth-gated. The exact auth header scheme is **confirm-live**; `Authorization: Bearer <key>` is the assumed form below. **Important, confirmed live against HyperDX v2.35:** in HyperDX **v2.x** these REST endpoints authenticate by **session cookie** (user login), *not* a static API key — the team `apiKey` is an **ingestion-only** key (the OTLP `authorization` header), and every static-key header (`Bearer`, `x-api-key`, raw, `?apiKey=`) returns `401` on `/api/alerts`. An API key only scores HyperDX on a build that issues a REST API key. **Optional session login (confirmed live against a v2 build):** when `clickstack.hyperdx_email_env` + `clickstack.hyperdx_password_env` are configured, the helper below authenticates the way the UI does — `POST /api/login/password` with `{email, password}` answers with a redirect (`303` observed live) and sets a `connect.sid` session cookie, and a session-cookie `GET /api/alerts` returns `200` — making CS-040/CS-041 scorable on v2.x. The cookie lives only in a `mktemp` jar (`chmod 600`), is deleted on exit, and is never printed, logged, or persisted anywhere. This is a deliberately heavier posture than a read-only key — opt in per estate via `/scoutflo:connect`. With no login credentials configured, a v2.x instance's HyperDX categories (CS-040, CS-041) remain **not scorable** and must be marked `not-in-scope` with that reason — never treated as a wrong-key config error, and never a confident fail.
+- Presence-check tokens and passwords only; never echo, log, or write a secret value anywhere. Rendered configs and API responses can embed webhook URLs with secrets — record their shape and host class (loopback, private, public), never the full URL. The HyperDX login password and the `connect.sid` session cookie are secrets under the same rule: the password is read only from the variable the config names, the cookie exists only inside the `0600` `mktemp` jar, and neither ever appears in terminal output, evidence, `raw/`, the report, or any persistent file.
 - `curl -fsS --max-time 20` is the default. Where a status code is itself the evidence (the unauthenticated default-user probe in CS-050), `-f` is dropped deliberately and `-w '%{http_code}'` is used; that block says so.
 - Time windows and thresholds are examples; tune to your ingest volume: `RECENT="INTERVAL 1 HOUR"` for coverage, `FRESH_LAG_S=900` for freshness, part-count and error-spike thresholds per your cluster size.
 - The all-in-one/single-node build has **no replicas and no sharding**, so `system.replicas` is empty there — that is expected, not a finding. Replica checks apply to clustered ClickHouse.
@@ -38,26 +38,62 @@ chq() {
 }
 ```
 
-HyperDX helper:
+HyperDX helper (declare once per session; every HyperDX block below calls `hdx_get`):
 
 ```bash
 set -eu
 HDX_URL="https://your-hyperdx-url"          # clickstack.hyperdx_url (:8080 in the all-in-one build)
 HDX_URL="${HDX_URL%/}"
 HDX_API_KEY="${HDX_API_KEY:-}"              # clickstack.hyperdx_api_key_env; presence-checked by the doctor gate
-# Auth header scheme is confirm-live; Bearer is the assumed form:
-[ -n "${HDX_API_KEY:-}" ] || { echo "HDX_API_KEY not set; HyperDX checks unavailable — run /scoutflo:connect"; exit 1; }
-HDX_AUTH="Authorization: Bearer ${HDX_API_KEY}"   # exact key header is confirm-live (Bearer vs x-api-key)
+HDX_EMAIL="${HDX_EMAIL:-}"                  # clickstack.hyperdx_email_env (optional: v2.x session login)
+HDX_PASSWORD="${HDX_PASSWORD:-}"            # clickstack.hyperdx_password_env (optional; secret — never printed)
+[ -n "$HDX_API_KEY" ] || [ -n "$HDX_EMAIL" ] || { echo "no HyperDX credential set (neither an API key nor login email+password); HyperDX checks unavailable — run /scoutflo:connect"; exit 1; }
 
-# Probe once before running the HyperDX checks: a 401 here with a key SET is the HyperDX v2.x
-# session-auth case (the key is ingestion-only) — mark CS-040/CS-041 not-in-scope with that
-# reason and skip the HyperDX blocks; do NOT loop trying header variants, and do NOT emit a fail.
-HDX_PROBE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 -H "${HDX_AUTH}" "${HDX_URL}/api/alerts")
-if [ "$HDX_PROBE" = "401" ] || [ "$HDX_PROBE" = "403" ]; then
-  echo "HyperDX /api/alerts -> ${HDX_PROBE} with a key configured: this is HyperDX v2.x session-cookie auth (the apiKey is ingestion-only). CS-040/CS-041 = not-in-scope (reason: v2 REST API is session-authenticated, no static-key path). Not a fail."
-  HDX_IN_SCOPE=0
-else
-  HDX_IN_SCOPE=1
+# hdx_get <path> — the ONE way every HyperDX block below reads the API; GET only.
+# HDX_MODE decides auth: "key" = Bearer header (a build that issues a REST key);
+# "session" = the connect.sid cookie jar from the v2 login below.
+hdx_get() {
+  if [ "$HDX_MODE" = "session" ]; then
+    curl -fsS --max-time 20 -b "$HDX_JAR" "${HDX_URL}$1"
+  else
+    curl -fsS --max-time 20 -H "Authorization: Bearer ${HDX_API_KEY}" "${HDX_URL}$1"
+  fi
+}
+
+# Probe once before running the HyperDX checks — never loop trying header variants,
+# and never turn an auth failure into a confident CS-040/CS-041 fail.
+HDX_MODE="none"; HDX_IN_SCOPE=0; HDX_JAR=""
+if [ -n "$HDX_API_KEY" ]; then
+  HDX_PROBE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 \
+    -H "Authorization: Bearer ${HDX_API_KEY}" "${HDX_URL}/api/alerts") || HDX_PROBE="000"
+  if [ "$HDX_PROBE" = "200" ]; then HDX_MODE="key"; HDX_IN_SCOPE=1; fi
+fi
+
+# v2.x session fallback (confirmed live): the key 401s because on v2 the apiKey is
+# ingestion-only. With login credentials configured, authenticate the way the UI does:
+# POST /api/login/password with {email, password} answers with a redirect (303 observed
+# live) and sets a connect.sid session cookie. The cookie lands in a mktemp jar
+# (chmod 600), is deleted on exit, and is NEVER printed, logged, echoed, or written to
+# any output file, report, or evidence — the jar path is the only thing the shell holds.
+if [ "$HDX_MODE" = "none" ] && [ -n "$HDX_EMAIL" ] && [ -n "$HDX_PASSWORD" ]; then
+  HDX_JAR="$(mktemp)"; chmod 600 "$HDX_JAR"
+  trap 'rm -f "$HDX_JAR"' EXIT INT TERM
+  jq -n --arg e "$HDX_EMAIL" --arg p "$HDX_PASSWORD" '{email: $e, password: $p}' \
+    | curl -s -o /dev/null --max-time 10 -c "$HDX_JAR" \
+        -H 'Content-Type: application/json' --data-binary @- \
+        "${HDX_URL}/api/login/password" || true
+  # Success is proven by the session working, not by the login status code (a redirect):
+  HDX_SESS=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 -b "$HDX_JAR" "${HDX_URL}/api/alerts") || HDX_SESS="000"
+  if [ "$HDX_SESS" = "200" ]; then
+    HDX_MODE="session"; HDX_IN_SCOPE=1
+    echo "HyperDX v2 session login OK (GET /api/alerts -> 200 with the session cookie) — CS-040/CS-041 are scorable this run"
+  else
+    echo "HyperDX session login did not yield a working session (GET /api/alerts -> ${HDX_SESS}); check the variables hyperdx_email_env/hyperdx_password_env name. CS-040/CS-041 = not-in-scope (reason: HyperDX v2 session login failed). Not a fail — never retry-loop the login."
+  fi
+fi
+
+if [ "$HDX_IN_SCOPE" = "0" ] && { [ -z "$HDX_EMAIL" ] || [ -z "$HDX_PASSWORD" ]; }; then
+  echo "HyperDX /api/alerts -> ${HDX_PROBE:-no-key} with a static key: HyperDX v2.x REST is session-cookie auth (the apiKey is ingestion-only). CS-040/CS-041 = not-in-scope (reason: v2 REST API is session-authenticated; no login credentials configured). Optional: set clickstack.hyperdx_email_env + hyperdx_password_env via /scoutflo:connect to score them. Not a fail."
 fi
 ```
 
@@ -97,8 +133,9 @@ chq "SELECT table, total FROM (
 HyperDX alert census:
 
 ```bash
-curl -fsS --max-time 20 -H "$HDX_AUTH" "${HDX_URL}/api/alerts" | jq 'if type=="array" then length else (.data // .alerts // [] | length) end'
+hdx_get /api/alerts | jq 'if type=="array" then length else (.data // .alerts // [] | length) end'
 # response shape confirm-live: the top-level key is confirm-against-your-instance; the census is "any alerts at all?"
+# (hdx_get is the section-1 helper: Bearer key, or the v2 session cookie when that path engaged)
 ```
 
 - **Healthy target:** at least one `otel_*` table carries rows, and at least one HyperDX alert exists.
@@ -230,26 +267,26 @@ chq "SELECT database, table, is_readonly, absolute_delay, queue_size
 
 ## 7. HyperDX alerting and dashboards (CS-040, CS-041)
 
-HyperDX endpoints are auth-gated and need the API key. Response shapes and some resource paths are **confirm-live**: enumerate them against your instance and confirm the field names before crediting a check.
+HyperDX endpoints are auth-gated: run them only when the section-1 helper resolved an auth mode (`HDX_IN_SCOPE=1` — a working REST key, or the v2 session cookie), and always through `hdx_get`. Response shapes and some resource paths are **confirm-live**: enumerate them against your instance and confirm the field names before crediting a check.
 
 ### CS-040 — alerting reaches a human
 
 ```bash
-curl -fsS --max-time 20 -H "$HDX_AUTH" "${HDX_URL}/api/alerts" | jq .
+hdx_get /api/alerts | jq .
 ```
 
 Field names are confirm-live, so inspect the raw JSON once, confirm which field carries the destination, then follow each alert to its receiver. A defensive scan that does not assume a single field name:
 
 ```bash
 # Does each alert reference SOME live channel/receiver? Confirm the real key names against the raw JSON above.
-curl -fsS --max-time 20 -H "$HDX_AUTH" "${HDX_URL}/api/alerts" \
+hdx_get /api/alerts \
   | jq -r '(if type=="array" then . else (.data // .alerts // []) end)[]
            | tostring | test("webhook|slack|pagerduty|channel|destination|receiver";"i") as $wired
            | "\($wired)"' | sort | uniq -c
 ```
 
 - **Healthy target:** at least one alert exists **and** every alert resolves to a live receiver — a webhook, Slack, or PagerDuty destination that is real (not empty, not a loopback/placeholder host).
-- **Finding (CS-040):** an alert that references no receiver, or a receiver whose target is empty / a loopback / a placeholder, is the core failure — the alert evaluates and pages nobody. Record the alert name and the receiver's host class (e.g. "receiver target is a loopback address"), never the full webhook URL. Zero alerts entirely routes to CS-007, not a confident CS-040 fail. **If the pre-check `HDX_IN_SCOPE=0` (a `401`/`403` with a key configured — HyperDX v2.x session auth), mark CS-040 `not-in-scope` with the reason "HyperDX v2.x REST API is session-authenticated; the apiKey is ingestion-only" and renormalize the score over the remaining categories — never a fail, never a wrong-key error.** Remediation points at **[setup-clickstack#create-hyperdx-alert](../../setup-clickstack/SKILL.md#create-hyperdx-alert)**.
+- **Finding (CS-040):** an alert that references no receiver, or a receiver whose target is empty / a loopback / a placeholder, is the core failure — the alert evaluates and pages nobody. Record the alert name and the receiver's host class (e.g. "receiver target is a loopback address"), never the full webhook URL. Zero alerts entirely routes to CS-007, not a confident CS-040 fail. **If the section-1 helper ended with `HDX_IN_SCOPE=0` (the key 401s on HyperDX v2.x and no login credentials are configured, or the v2 session login failed), mark CS-040 `not-in-scope` with the matching reason — "HyperDX v2.x REST API is session-authenticated; the apiKey is ingestion-only" or "HyperDX v2 session login failed" — and renormalize the score over the remaining categories; never a fail, never a wrong-key error. With `HDX_MODE=session` the category scores normally through `hdx_get`.** Remediation points at **[setup-clickstack#create-hyperdx-alert](../../setup-clickstack/SKILL.md#create-hyperdx-alert)**.
 - **Forbidden:** GET only — never `POST`/`PUT`/`PATCH`/`DELETE` on `/api/alerts` (no test alerts, no "quick fix"); see section 8.
 
 ### CS-041 — dashboards and sources
@@ -257,8 +294,8 @@ curl -fsS --max-time 20 -H "$HDX_AUTH" "${HDX_URL}/api/alerts" \
 The `/api/dashboards` and `/api/sources` paths and their response shapes are **confirm-live** — confirm both against your instance:
 
 ```bash
-curl -fsS --max-time 20 -H "$HDX_AUTH" "${HDX_URL}/api/dashboards" | jq .   # path + shape confirm-live
-curl -fsS --max-time 20 -H "$HDX_AUTH" "${HDX_URL}/api/sources"    | jq .   # path + shape confirm-live
+hdx_get /api/dashboards | jq .   # path + shape confirm-live
+hdx_get /api/sources    | jq .   # path + shape confirm-live
 ```
 
 - **Healthy target:** at least one dashboard exists for the critical services, and the sources they read from are connected (each source points at a reachable ClickHouse table/database).
@@ -299,6 +336,6 @@ printf '%s\n' "$CH_URL" | grep -qE '^https://' && echo "TLS: audit endpoint is h
 This audit is strictly read-only. Every command above is a `SELECT`/`SHOW` over ClickHouse HTTP `:8123` (as the read-only user, with `readonly=1` pinned) or a `GET` on the HyperDX `/api/<resource>` API. The following are **never** issued from audit-clickstack — they belong to `setup-clickstack`, under its confirm-then-verify change protocol:
 
 - **ClickHouse (DDL/DML/admin):** `INSERT`, `ALTER`, `CREATE`, `DROP`, `TRUNCATE`, `RENAME`, `OPTIMIZE`, `DETACH`, `ATTACH`, `SYSTEM ...`, and any `CREATE USER` / `ALTER USER` / `GRANT` / `REVOKE`. The `readonly=1` HTTP setting is the server-side belt that rejects these even if a command leaks in; the read-only user's grants are the braces.
-- **HyperDX API:** any `POST`, `PUT`, `PATCH`, or `DELETE` on any `/api/*` resource — no test alerts, no dashboard edits, no source changes, no "harmless" writes.
+- **HyperDX API:** any `POST`, `PUT`, `PATCH`, or `DELETE` on any `/api/*` resource — no test alerts, no dashboard edits, no source changes, no "harmless" writes — with **exactly one deliberate exception**: the section-1 helper's `POST /api/login/password`, an *authentication handshake, not a resource write*. It exists only because HyperDX v2.x gates its read endpoints behind a session; it creates or modifies no alert, dashboard, source, or any other observability object, runs at most once per audit session (never in a retry loop), its request body is never logged, and the resulting session cookie lives only in the `0600` `mktemp` jar deleted on exit. Any other non-GET against HyperDX remains a bug in the skill.
 
 A write attempt is a bug in the skill, not a finding; if any block above ever needs a mutation to produce evidence, that is the wrong command — read the state instead, and route the change to `setup-clickstack`.

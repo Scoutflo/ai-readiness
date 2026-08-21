@@ -6,7 +6,7 @@
 
 - [ ] Base branch is `release/dev` (never `main`)
 - [ ] `sh ci/leak-scan.sh .` — CLEAN
-- [ ] `sh ci/structure-check.sh .` — STRUCTURE-OK (13 checks)
+- [ ] `sh ci/structure-check.sh .` — STRUCTURE-OK (15 checks)
 - [ ] `sh ci/run-tests.sh .` — all suites pass
 - [ ] `claude plugin validate . --strict` — passes
 - [ ] Pressure scenarios added/updated for every changed skill

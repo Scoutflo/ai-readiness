@@ -5,7 +5,7 @@ Runnable, read-only checks for every surface the [audit-kubernetes](../SKILL.md)
 ## 1. Conventions
 
 - `KUBE_CONTEXT` is `kubernetes.context` from toolkit.yaml and is passed on **every** call. The active/current context is never used for targeting.
-- Every command is read-only: `kubectl get`, `kubectl auth can-i`, `kubectl api-resources`, `kubectl version`, `kubectl config view`. No mutating verb appears anywhere (forbidden list, section 9).
+- Every command is read-only: `kubectl get`, `kubectl auth can-i`, `kubectl api-resources`, `kubectl version`, `kubectl config view`. The live-runtime snapshot (section 10) additionally uses the read-only `top` verb and `get events`, only through the guarded `le_kubectl` wrapper from the shared live-evidence library. No mutating verb appears anywhere (forbidden list, section 9).
 - Secret **values** are never read. `kubectl get secret` (names/types) is allowed; `kubectl get secret -o yaml`/`-o json` with `.data` is forbidden.
 - `-o json | jq` is the parsing path. A `Forbidden` from the API server on a specific `get`/`list` means the audit credential lacks that `view` grant → record `blocked` for the check naming the exact resource.
 - Thresholds/namespace classifications are examples; tune to your cluster. Named defaults live in section 8.
@@ -22,6 +22,8 @@ One permanent ID per check. IDs never change or get reused; retired checks keep 
 | K8S-003 | Network | Application namespaces have at least one NetworkPolicy (not a flat open network) | high |
 | K8S-004 | Reliability | Deployments/StatefulSets/DaemonSets set container resource requests and limits | medium |
 | K8S-005 | Reliability | Critical single-replica workloads have a PodDisruptionBudget | medium |
+
+The parallel non-scored live-runtime snapshot IDs (`K8SRT-NNN`, always `info`, never scored) are cataloged in section 10.
 
 ## 3. Pod Security (K8S-001)
 
@@ -67,9 +69,12 @@ kubectl --context "$KUBE_CONTEXT" get networkpolicy -A -o json \
 kubectl --context "$KUBE_CONTEXT" get networkpolicy -A --no-headers 2>/dev/null | awk '{print $1}' | sort | uniq -c
 
 # Application namespaces with ZERO policies (the finding).
-comm -23 \
-  <(kubectl --context "$KUBE_CONTEXT" get ns -o jsonpath='{.items[*].metadata.name}' | tr ' ' '\n' | sort) \
-  <(kubectl --context "$KUBE_CONTEXT" get networkpolicy -A -o jsonpath='{.items[*].metadata.namespace}' | tr ' ' '\n' | sort -u)
+# (temp files, not process substitution: these blocks run under plain /bin/sh)
+NP_TMP="${TMPDIR:-/tmp}/k8s003.$$"
+kubectl --context "$KUBE_CONTEXT" get ns -o jsonpath='{.items[*].metadata.name}' | tr ' ' '\n' | sort > "${NP_TMP}.all"
+kubectl --context "$KUBE_CONTEXT" get networkpolicy -A -o jsonpath='{.items[*].metadata.namespace}' | tr ' ' '\n' | sort -u > "${NP_TMP}.with"
+comm -23 "${NP_TMP}.all" "${NP_TMP}.with"
+rm -f "${NP_TMP}.all" "${NP_TMP}.with"
 ```
 
 Healthy: each application namespace appears with ≥1 NetworkPolicy. Fail (K8S-003): application namespaces (e.g. the one running checkout/orders/payments) appear in the zero-policy list — any pod can reach any other. System namespaces (`kube-system`, `kube-node-lease`) are excluded from the finding.
@@ -108,4 +113,46 @@ Healthy: critical workloads have replicas>1 or a PDB with `minAvailable`. Fail (
 
 Never run any of these — they mutate the cluster:
 
-`kubectl apply`, `create`, `edit`, `patch`, `replace`, `delete`, `label`, `annotate`, `scale`, `rollout`, `set`, `cordon`, `drain`, `uncordon`, `taint`, `exec`, `cp`, `port-forward` (as a mutation path), `auth reconcile`, and `kubectl get secret -o yaml`/`-o json` (reads Secret values). This audit only ever `get`/`list`/`auth can-i`/`version`/`api-resources`/`config view`.
+`kubectl apply`, `create`, `edit`, `patch`, `replace`, `delete`, `label`, `annotate`, `scale`, `rollout`, `set`, `cordon`, `drain`, `uncordon`, `taint`, `exec`, `cp`, `port-forward` (as a mutation path), `auth reconcile`, and `kubectl get secret -o yaml`/`-o json` (reads Secret values). This audit only ever `get`/`list`/`auth can-i`/`version`/`api-resources`/`config view`, plus — in the live-runtime snapshot (section 10) only, through the guarded `le_kubectl` wrapper — the read-only `top` verb. The wrapper's allowlist contains no mutating verb, and `ci/liveness-readonly-check.sh` enforces that mechanically.
+
+## 10. Live-runtime snapshot (K8SRT — evidence, not scored)
+
+Serves the SKILL's Phase 8. Every probe routes through `le_kubectl` from the shared live-evidence library ([skills/live-evidence/lib/live-evidence.sh](../../live-evidence/lib/live-evidence.sh)): allowlisted read verbs only, explicit `--context`, every call bounded by `--request-timeout`; the read-only guarantee is enforced by `ci/liveness-readonly-check.sh`. The IDs below form a parallel non-scored section per the findings schema: `area: live-runtime`, always severity `info` and `points_recoverable: 0`, never present in `score.categories` or `score.excluded`. Snapshot facts are tagged `[live@<ISO8601>]`. The failure taxonomy that decides when an observation may be *named* (a cause-class field vs a bare symptom) is shared with rca: [live-evidence/references/k8s-liveness-probes.md](../../live-evidence/references/k8s-liveness-probes.md).
+
+| ID | Signal | Emit only when this exact field is observed |
+| --- | --- | --- |
+| K8SRT-001 | Container in a crash/backoff waiting state now | `state.waiting.reason` is `CrashLoopBackOff`/`ImagePullBackOff`/`ErrImagePull`/`CreateContainerConfigError`; cite it together with `lastState.terminated.reason` + `exitCode` when present |
+| K8SRT-002 | Container OOMKilled in its last termination | `lastState.terminated.reason = OOMKilled` (typically `exitCode = 137`); when K8S-004 flagged the same workload, also cite this observation in K8S-004's evidence and mark that finding `validated-live` |
+| K8SRT-003 | Warning-event burst in an application namespace | observed events with `type=Warning` (`FailedScheduling`/`Unhealthy`/`BackOff`/`Failed`); cite reason, involved object, count |
+| K8SRT-004 | Node or pod resource pressure | metrics-server answered `top` and a node or pod shows saturation; cite the observed lines. Never emitted when metrics-server is absent |
+
+```bash
+# Stateless: source the guarded probe lib first (redaction first so probe output is filtered).
+. "${CLAUDE_PLUGIN_ROOT}/skills/redaction/lib/redaction.sh" 2>/dev/null || true
+. "${CLAUDE_PLUGIN_ROOT}/skills/live-evidence/lib/live-evidence.sh"
+
+# Gate: no probe runs when live access is unavailable (skip with the exact reason).
+le_can_probe "$KUBE_CONTEXT"
+
+# Containers restarting or stuck in a waiting state right now (K8SRT-001/002).
+le_kubectl "$KUBE_CONTEXT" get pods -A -o json | jq -r '
+  .items[] | . as $p | .status.containerStatuses[]?
+  | select((.restartCount // 0) > 0 or ((.state.waiting.reason // "") != ""))
+  | "\($p.metadata.namespace)/\($p.metadata.name)\t\(.name)\trestarts=\(.restartCount // 0)\twaiting=\(.state.waiting.reason // "-")\tlast=\(.lastState.terminated.reason // "-")/exit=\(.lastState.terminated.exitCode // "-")"'
+
+# Recent Warning events, newest last (K8SRT-003).
+le_kubectl "$KUBE_CONTEXT" get events -A --field-selector type=Warning --sort-by=.lastTimestamp -o json \
+  | jq -r '.items[-20:] | .[] | "\(.lastTimestamp)\t\(.involvedObject.namespace // "-")/\(.involvedObject.name)\t\(.reason)\tcount=\(.count // 1)"'
+
+# Node/pod usage (K8SRT-004) — only when metrics-server answers; skip with the reason otherwise.
+le_kubectl "$KUBE_CONTEXT" top nodes
+le_kubectl "$KUBE_CONTEXT" top pods -A --sort-by=memory | head -15
+
+# Per-critical-service rollout state and events, keyed on namespace + name from
+# topology-export.json (attributes.namespace + name — never bare name; two services
+# sharing a name in different namespaces are two probe targets).
+probe_rollout "$KUBE_CONTEXT" "$NS" "$SVC"
+probe_events  "$KUBE_CONTEXT" "$NS" "$SVC"
+```
+
+This section has no pass/fail. A probe that returns nothing, times out, or is RBAC-denied is recorded `skipped, reason: <exact error>` — verdict unknown, never healthy, never converted to a finding. `top` on a cluster without metrics-server (no `metrics.k8s.io` API) is the expected shape on many clusters: skip with that reason; it is not an error and not a finding. Where metrics-server exists, its default RBAC aggregates `system:aggregated-metrics-reader` into the `view` ClusterRole, so the audit credential from the doctor gate usually covers `top`; a denial is still just a skip. A bare `restartCount` with no terminated reason or Warning event is a symptom row in the snapshot table, never a K8SRT finding. This section never calls `logs`; previous-container log depth belongs to `/scoutflo:rca`.

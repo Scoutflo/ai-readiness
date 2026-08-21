@@ -790,7 +790,7 @@ Run only the checks for the stores you configured. These health paths vary by de
 
 ## ClickStack (ClickHouse + HyperDX)
 
-ClickStack stores telemetry in ClickHouse and fronts it with HyperDX. `audit-clickstack` needs a **read-only ClickHouse user** and a **HyperDX API key**; both are read-only.
+ClickStack stores telemetry in ClickHouse and fronts it with HyperDX. `audit-clickstack` needs a **read-only ClickHouse user** and a **HyperDX API key**; both are read-only. On HyperDX **v2.x** the REST API is session-authenticated (the apiKey is ingestion-only), so there is an **optional** login-credential pair that lets the audit score the HyperDX categories there — see below.
 
 ### Config
 
@@ -801,6 +801,10 @@ clickstack:
   clickhouse_password_env: CH_KEY
   hyperdx_url: https://your-hyperdx-host:8080
   hyperdx_api_key_env: HDX_API_KEY
+  # Optional — HyperDX v2.x only (REST is session-auth; the apiKey cannot read
+  # alerts/dashboards/sources there). Set both to let the audit log in instead:
+  # hyperdx_email_env: HDX_EMAIL
+  # hyperdx_password_env: HDX_PASSWORD
 ```
 
 ### Create a read-only ClickHouse user
@@ -827,7 +831,18 @@ In HyperDX, open Team Settings and create an API key (read scope is enough for t
 export HDX_API_KEY='<your-hyperdx-api-key>'
 ```
 
-**HyperDX version note (confirmed live against v2.35):** on HyperDX **v2.x** the REST endpoints (`/api/alerts`, `/api/dashboards`, `/api/sources`) authenticate by **session cookie** (user login), not a static key — the team `apiKey` shown in Team Settings is an **ingestion-only** key (the OTLP `authorization` header) and returns `401` on those endpoints under every header form. On such a build, `audit-clickstack` will mark the HyperDX categories (CS-040/CS-041) `not-in-scope` with that reason and still fully score the ClickHouse categories; there is nothing to fix. A HyperDX build that issues a REST API key scores the HyperDX categories normally.
+**HyperDX version note (confirmed live against v2.35):** on HyperDX **v2.x** the REST endpoints (`/api/alerts`, `/api/dashboards`, `/api/sources`) authenticate by **session cookie** (user login), not a static key — the team `apiKey` shown in Team Settings is an **ingestion-only** key (the OTLP `authorization` header) and returns `401` on those endpoints under every header form. On such a build you have two options: set the **optional login credentials** below so the audit can score the HyperDX categories (CS-040/CS-041) via a session, or set nothing extra and the audit marks those categories `not-in-scope` with that reason while still fully scoring the ClickHouse categories. A HyperDX build that issues a REST API key scores the HyperDX categories normally with the key alone.
+
+### Optional: HyperDX v2 login credentials (session auth)
+
+This is a deliberately **heavier posture** than a read-only key — it is a real user login. Prefer a dedicated least-privilege HyperDX member account for auditing, not an owner account. What the audit does with it (confirmed live): one `POST /api/login/password` with `{email, password}` per run, which answers with a redirect and sets a `connect.sid` session cookie; the cookie is held in a `mktemp` jar (`chmod 600`), used only for the read-only `GET`s, deleted on exit, and never printed, logged, or written anywhere persistent.
+
+```bash
+export HDX_EMAIL='<hyperdx-login-email>'
+export HDX_PASSWORD='<hyperdx-login-password>'
+```
+
+Name both variables in `clickstack.hyperdx_email_env` / `clickstack.hyperdx_password_env`. Skipping this is fine — the v2 HyperDX categories simply stay `not-in-scope`.
 
 ### Verify
 
@@ -835,9 +850,21 @@ export HDX_API_KEY='<your-hyperdx-api-key>'
 CH_URL="https://your-clickhouse-host:8123"; CH_USER="scoutflo_ro"   # clickstack.clickhouse_url / _user
 curl -sS --max-time 10 -H "X-ClickHouse-User: ${CH_USER}" -H "X-ClickHouse-Key: ${CH_KEY}" \
   "${CH_URL}/?query=SELECT%201" | grep -qx 1 && echo "ClickHouse PASS" || echo "ClickHouse FAIL — check url/user/CH_KEY"
-# HyperDX: /api/alerts is auth-gated (401 without a key). The exact API-key header
+# HyperDX: /api/alerts is auth-gated (401 without a credential). The exact API-key header
 # varies by HyperDX version — confirm it against your instance (Authorization: Bearer <key>
 # or x-api-key: <key>); a 200 with the key configured is the authoritative signal.
+```
+
+If you configured the v2 login credentials, verify the session path too (the cookie jar is temporary and never printed):
+
+```bash
+HDX_URL="https://your-hyperdx-host:8080"   # clickstack.hyperdx_url
+JAR="$(mktemp)"; chmod 600 "$JAR"; trap 'rm -f "$JAR"' EXIT INT TERM
+jq -n --arg e "$HDX_EMAIL" --arg p "$HDX_PASSWORD" '{email: $e, password: $p}' \
+  | curl -s -o /dev/null --max-time 10 -c "$JAR" -H 'Content-Type: application/json' \
+      --data-binary @- "${HDX_URL%/}/api/login/password"
+code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 -b "$JAR" "${HDX_URL%/}/api/alerts")
+[ "$code" = "200" ] && echo "HyperDX session PASS" || echo "HyperDX session FAIL: got $code — check HDX_EMAIL/HDX_PASSWORD"
 ```
 
 The external `default` ClickHouse user requires a password, so the audit always uses its own scoped `scoutflo_ro` user, never `default`.
@@ -865,12 +892,13 @@ Write the exact context name into `kubernetes.context`. Every kubectl command in
 If a managed cluster's context is not in your kubeconfig yet, fetch it once with the provider's CLI. Each command adds a context to your local kubeconfig — a local file change, not a change to the cluster — and every audit still pins `--context`, so nothing trusts the ambient default. EKS, GKE, and AKS are handled the same way:
 
 ```bash
+CLUSTER="your-cluster"; REGION="your-region"; PROJECT="your-project"
 # EKS
-aws eks update-kubeconfig --name <cluster> --region <region>
+aws eks update-kubeconfig --name "$CLUSTER" --region "$REGION"
 # GKE
-gcloud container clusters get-credentials <cluster> --region <region> --project <project>
+gcloud container clusters get-credentials "$CLUSTER" --region "$REGION" --project "$PROJECT"
 # AKS — non-admin form runs as your own RBAC-limited identity; never use --admin for audits
-az aks get-credentials --resource-group <rg> --name <cluster>
+az aks get-credentials --name "$CLUSTER" --resource-group "your-resource-group"
 ```
 
 Use `--zone` in place of `--region` for a zonal GKE cluster or a zonal AKS node scope. Then run `kubectl config get-contexts`, copy the exact name that was added, and write it into `kubernetes.context`.

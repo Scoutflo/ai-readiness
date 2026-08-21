@@ -59,7 +59,7 @@ echo "live-safety gate: pass — read-only probes only; confirm this is the clus
 | Per-audit `findings.json` (`./scoutflo-audits/<target>/<date>/`) | **reference (prior)** | findings naming the target — the posture context (e.g. "no memory limit") and known symptoms, each tagged `[report@<run_date>]` with its age |
 | `topology-export.json` | **blast-radius map** | `relationships[]` classified into identity / dependency / observation edges — the full attached set, who to probe, and who breaks downstream |
 | Live probes (`live-evidence` lib) | **evidence (current truth)** | the target's and suspects' real state now: restarts, OOM/exit codes, events, probe failures, redacted logs — tagged `[live@<now>]` |
-| `correlation.json` | cross-report links | precomputed `overlaps` + `cascades` (`root_cause`→`effects`) |
+| `correlation.json` | cross-report links | precomputed `cascades` (`root_cause`→`effects`) + `overlaps` (`OVL-*`: the same service flagged by ≥2 audits — independent multi-stack agreement) |
 | `business_context.json` (`~/.scoutflo/`) | priority | `critical_dependencies`, `environment`, SLA — raises urgency and calibrates language |
 
 ## Phase 1: Resolve the target (identity only)
@@ -132,14 +132,14 @@ fi
 
 Tag every observation `[live@<now>]`. When a live result contradicts a report (e.g. report said 0 restarts, live shows 42), **live wins** and the delta is stated — it is high-value output. The exact fields and the taxonomy (CrashLoopBackOff+terminated reason, OOMKilled/137, ImagePullBackOff, Unhealthy probe, Pending/Unschedulable, benign-rollout) are in [live-evidence/references/k8s-liveness-probes.md](../live-evidence/references/k8s-liveness-probes.md).
 
-## Phase 5: Walk the correlation chains
+## Phase 5: Walk the correlation chains (cascades + overlap agreement)
 
-If `correlation.json` exists, connect the target to cause→effect chains the single-report view can't see.
+If `correlation.json` exists, use both halves of it: the `cascades` connect the target to cause→effect chains the single-report view can't see, and the `overlaps` (`OVL-*` groups) say whether **two or more audits independently flagged the target service** — multi-stack agreement that corroborates the trouble is real.
 
 ```bash
 set -eu
 AUD="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}"; CORR="$AUD/correlation.json"; TARGET="checkout"
-[ -f "$CORR" ] || { echo "no correlation.json — correlating findings directly by shared resource; cascades not precomputed"; exit 0; }
+[ -f "$CORR" ] || { echo "no correlation.json — correlating findings directly by shared resource; cascades and overlap groups not precomputed"; exit 0; }
 jq -r --arg t "$TARGET" '
   (.cascades // [])[]
   # Parenthesize the root-string test so the `|` stays LOCAL to that clause. Without
@@ -149,7 +149,27 @@ jq -r --arg t "$TARGET" '
   | select( ( ( .root_cause.title + " " + ((.root_cause.shared_resources // []) | join(" ")) ) | test($t;"i") )
             or (any(.effects[]?; .title | test($t;"i"))) )
   | "ROOT: \(.root_cause.finding_id) \(.root_cause.title)\n  EFFECTS: \([.effects[]? | "\(.finding_id) \(.title)"] | join(" | "))"' "$CORR"
+# Overlap agreement: did two or more audits independently flag the target service?
+# (Same loose test($t;"i") match as the rest of the skill; each group prints its
+# own service name so a prefix hit like cart→valkey-cart is visible, not silent.)
+jq -r --arg t "$TARGET" '
+  (.overlaps // [])
+  | map(select(.service | test($t; "i")))
+  | if length == 0 then
+      "no overlap group names \($t) — single-stack signal only; this changes nothing"
+    else
+      .[] | "OVERLAP \(.overlap_id): \(.targets | length) audits independently flagged \(.service): "
+            + ([.findings[] | "\(.target)/\(.finding_id) (\(.severity))"] | join(", "))
+    end' "$CORR"
 ```
+
+How overlap agreement is weighed — supporting evidence only, never a cause:
+
+- **Cite it.** Each matched group goes into the Phase 7 Evidence list with a `[correlation]` tag: `[correlation] OVL-checkout: 2 audits independently flagged checkout: clickstack/TOPO-001 (info), lgtm/LGTM-035 (high)`.
+- **Agreement raises confidence — bounded.** Independent audits see the estate from different vantage points, so a group with ≥2 distinct `targets` whose member findings are *consistent with the cause already established by Phases 2–4* raises the RCA confidence at most one step (low→medium, medium→high). An overlap says "flagged by many", never "why" — it can never substitute for the report/probe evidence that names the cause.
+- **Weigh the members, not the raw count.** A member finding that names most of the estate (e.g. an info-severity "no service declares telemetry connections" finding that attaches to every group) is weak corroboration; what matters is the number of distinct audits (`targets | length`) and the member severities.
+- **Absence changes nothing.** No overlap group naming the target neither lowers confidence nor exonerates anything — a single-audit finding is often the only coverage a service has.
+- **Never invent.** Cite only `overlap_id`s and `finding_id`s actually present in `correlation.json`. If you enter this phase holding a finding id instead of a service name, the correlation-engine library exposes the same lookup keyed on finding id: source `skills/correlation-engine/lib/correlation-engine.sh` and call `correlation_find_related <finding-id>` to get the first overlap group containing that finding.
 
 ## Phase 6: Weigh by business context
 
@@ -157,7 +177,7 @@ Read `~/.scoutflo/business_context.json`. If the target or a downstream neighbor
 
 ## Phase 7: Assemble the evidence-cited RCA
 
-Open with a one-line **mode banner** so freshness is unmissable: `[live-verified @ <now>]` or `[report-only, as of <date>]`. Every factual clause carries its provenance tag. Confidence is a joint function of source **and** recency: a live-confirmed cause matching a report finding is highest; a report-only inference on a stale report is low.
+Open with a one-line **mode banner** so freshness is unmissable: `[live-verified @ <now>]` or `[report-only, as of <date>]`. Every factual clause carries its provenance tag. Confidence is a joint function of source **and** recency: a live-confirmed cause matching a report finding is highest; a report-only inference on a stale report is low. Multi-audit overlap agreement (Phase 5) adjusts this at most one step upward when consistent with the cause; its absence changes nothing.
 
 ```markdown
 ## RCA: <target> — <one-line verdict>   [live-verified @ <ts> | report-only, as of <date>]
@@ -173,6 +193,7 @@ Open with a one-line **mode banner** so freshness is unmissable: `[live-verified
 - [live@ts] <probe result, e.g. "app container OOMKilled exitCode 137, 4 restarts/20m">
 - [report@date] <finding-id: title (provider, severity)>
 - [topology@gen] <edge, confidence n, observed/asserted>
+- [correlation] <OVL-id: N audits independently flagged <service>: <target>/<finding-id> (<severity>), …  — omit when no overlap group names the target>
 
 **What I could NOT determine (do this to confirm):**
 <explicit gaps: blocked probes, suspects not reached, stale reports not re-probed; if signal was thin, say the cause is a hypothesis, not established>
@@ -194,6 +215,7 @@ If neither reports, topology, correlation, nor live probes yield a cause: do **n
 | Trusting the ambient kube-context | Every live call pins `--context` from `kubernetes.context`; the live-safety gate prints server+context to confirm the cluster |
 | Presenting a stale report as current | Tag every fact with its date; if the live branch is up, re-probe and prefer live, stating the delta; if down, lower confidence and list a live re-probe as the top gap |
 | Topology staleness masking a real dependency | Topology is a hypothesis source; the live probe confirms; rca states "topology may be incomplete; only topology-named suspects were probed" |
+| Reading overlap agreement as a cause, or its absence as exoneration | `OVL-*` groups are supporting evidence only: multi-audit agreement raises confidence in an already-evidenced cause at most one step; no overlap changes nothing; an estate-wide member finding is weak corroboration |
 | Leaking a secret via `logs --previous` | Log slices pass through the redaction filter, are `--tail` capped, and are never written raw to a report or brief |
 
 ## Maturity note (v0.1.101)

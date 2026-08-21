@@ -312,8 +312,13 @@ set -eu
 GRAFANA_URL="https://grafana.example.com"   # grafana.url
 [ -n "${GRAFANA_TOKEN:-}" ] || { echo "GRAFANA_TOKEN is not set; run /scoutflo:connect"; exit 1; }
 BACKUP_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/grafana/setup-$(date -u +%F)/backups"   # the directory holding policies.json from the GET-before-write step
+# Compose the intended tree from the backup (append your new route object), then diff
+# against what the server now serves. Temp file, not process substitution: /bin/sh.
+INTENDED="${TMPDIR:-/tmp}/policies-intended.$$"
+jq '.routes += [{"receiver": "your-new-receiver"}]' "${BACKUP_DIR}/policies.json" > "$INTENDED"   # your real route object here
 curl -fsS --max-time 10 -H "Authorization: Bearer ${GRAFANA_TOKEN}" "${GRAFANA_URL}/api/v1/provisioning/policies" \
-  | diff - <(jq '.routes += [...]' "${BACKUP_DIR}/policies.json")
+  | diff - "$INTENDED"
+rm -f "$INTENDED"
 ```
 
 Rollback: PUT the backed-up tree.

@@ -7,7 +7,7 @@ description: Read-only scored audit of a ClickStack observability deployment (Cl
 
 Scored, read-only audit of a **ClickStack** deployment — **ClickHouse** (the columnar telemetry store), **HyperDX** (search, dashboards, and alerting UI/API), and the **OpenTelemetry** collector that feeds them. It answers one question: when something breaks tonight, is the telemetry for your critical services actually landing in ClickHouse, is it fresh and retained deliberately, is the database healthy, and does a HyperDX alert reach a human on a receiver that will deliver?
 
-Every command in this audit is read-only: ClickHouse `SELECT`/`SHOW` statements over the HTTP interface (port 8123), issued with the session flag `readonly=1`, and HyperDX `GET` calls only. Nothing is inserted, altered, created, dropped, or notified. A mutating SQL statement (`INSERT`, `ALTER`, `CREATE`, `DROP`, `TRUNCATE`, `OPTIMIZE`) belongs to `/scoutflo:setup-clickstack`, never here. Firing a HyperDX test alert to prove delivery end to end is also a mutation and lives in the setup lane.
+Every command in this audit is read-only: ClickHouse `SELECT`/`SHOW` statements over the HTTP interface (port 8123), issued with the session flag `readonly=1`, and HyperDX `GET` calls only — plus, on HyperDX v2.x with the optional login credentials configured, exactly one authentication handshake (`POST /api/login/password`) that obtains the session cookie those GETs need; it creates or modifies no resource (see the forbidden-mutations section of the check catalog). Nothing is inserted, altered, created, dropped, or notified. A mutating SQL statement (`INSERT`, `ALTER`, `CREATE`, `DROP`, `TRUNCATE`, `OPTIMIZE`) belongs to `/scoutflo:setup-clickstack`, never here. Firing a HyperDX test alert to prove delivery end to end is also a mutation and lives in the setup lane.
 
 Run this standalone, from `/scoutflo:audit-all`, or on a schedule via `/scoutflo:schedule-audits`.
 
@@ -18,7 +18,7 @@ Outputs, per the [report standard](../../report-standard/README.md):
 - `./scoutflo-audits/clickstack/<YYYY-MM-DD>/inventory.json` per the [inventory schema](../../report-standard/inventory-schema.md) (`scoutflo-inventory/v1`): the complete Phase-2 catalog — one item per HyperDX `alert`, `dashboard`, and `source`, per telemetry `table`, and per ClickHouse `user`, each built from the raw pull, never invented, redacted at capture.
 - One Slack brief, when `slack.webhook_env` is configured
 
-Provenance note: the ClickHouse read surface and HyperDX endpoint/auth model cited below were **confirmed on a live read** against an official ClickStack build. The exact JSON field names of the HyperDX `/api/alerts`, `/api/dashboards`, and `/api/sources` responses are **confirm-against-your-instance** — resolve them from the live response this run, never assume a field name.
+Provenance note: the ClickHouse read surface and HyperDX endpoint/auth model cited below were **confirmed on a live read** against an official ClickStack build — including the v2 session-login path (`POST /api/login/password` answers with a redirect and a `connect.sid` cookie; a session `GET /api/alerts` returns `200`). The exact JSON field names of the HyperDX `/api/alerts`, `/api/dashboards`, and `/api/sources` responses are **confirm-against-your-instance** — resolve them from the live response this run, never assume a field name.
 
 ## Doctor gate
 
@@ -27,8 +27,11 @@ Requirements. Configure only the blocks that exist in your environment; delete t
 | Integration | toolkit.yaml keys | Secret | Minimum scope | Tier |
 | --- | --- | --- | --- | --- |
 | ClickHouse | `clickstack.clickhouse_url` (`http(s)://your-clickhouse-host:8123`), `clickstack.clickhouse_user` | `clickstack.clickhouse_password_env` (the variable named there — e.g. `CH_KEY`) | a scoped **read-only** user: `SELECT` on the telemetry database + `system.*` | read-only |
-| HyperDX | `clickstack.hyperdx_url` (`http(s)://your-hyperdx-url:8080`) | `clickstack.hyperdx_api_key_env` (the variable named there — e.g. `HDX_API_KEY`) | API key that can `GET /api/alerts`, `/api/dashboards`, `/api/sources` | read-only |
+| HyperDX | `clickstack.hyperdx_url` (`http(s)://your-hyperdx-url:8080`) | `clickstack.hyperdx_api_key_env` (the variable named there — e.g. `HDX_API_KEY`) | API key that can `GET /api/alerts`, `/api/dashboards`, `/api/sources` — only on builds that issue a REST key; on v2.x the apiKey is ingestion-only | read-only |
+| HyperDX v2 login (optional) | `clickstack.hyperdx_email_env`, `clickstack.hyperdx_password_env` (the variables named there — e.g. `HDX_EMAIL`, `HDX_PASSWORD`) | the login password variable | a HyperDX member account whose UI login can view alerts/dashboards/sources; used once per run for `POST /api/login/password` to obtain the session cookie that scores CS-040/CS-041 on v2.x | read-only reads via session |
 | Slack (optional) | `slack.webhook_env` | webhook variable | post to one channel | n/a |
+
+The v2 login pair is a deliberately heavier posture than a read-only key (it is a real user credential) — configure it only when you want the HyperDX categories scored on a v2.x build; without it they are marked `not-in-scope`, never failed. The session cookie lives in a `0600` `mktemp` jar, is deleted on exit, and is never printed or persisted.
 
 Preflight. A failed check stops the audit with the exact failure and the fix (usually `/scoutflo:connect`). Never downgrade a doctor failure into a finding.
 
@@ -44,10 +47,11 @@ CFG="${SCOUTFLO_CONFIG:-$HOME/.scoutflo/toolkit.yaml}"
 command -v curl >/dev/null || { echo "curl not installed"; exit 1; }
 command -v jq   >/dev/null || { echo "jq not installed"; exit 1; }
 
-# For every configured *_env key: presence only, never the value. CH_KEY and
-# HDX_API_KEY are the variables that clickstack.clickhouse_password_env and
-# clickstack.hyperdx_api_key_env name; references/clickstack-checks.md reads the
-# same two variables in every command block, so doctor and the checks agree.
+# For every configured *_env key: presence only, never the value. CH_KEY, HDX_API_KEY,
+# HDX_EMAIL, and HDX_PASSWORD are the variables that clickstack.clickhouse_password_env,
+# clickstack.hyperdx_api_key_env, and the optional clickstack.hyperdx_email_env /
+# clickstack.hyperdx_password_env name; references/clickstack-checks.md reads the same
+# variables in every command block, so doctor and the checks agree.
 if grep -q '^clickstack:' "$CFG"; then
   [ -n "${CH_KEY:-}" ] || { echo "clickstack block configured but the ClickHouse password variable (clickstack.clickhouse_password_env) is not set; the default user requires a password over HTTP :8123 — run /scoutflo:connect"; exit 1; }
 else
@@ -56,22 +60,30 @@ fi
 if [ -n "${HDX_API_KEY:-}" ]; then
   # Key present — but on HyperDX v2.x the REST API is session-authenticated (the apiKey is
   # ingestion-only), so a key that 401s on /api/alerts means HyperDX is not scorable via a key.
-  # This is not a doctor failure: the audit will mark CS-040/CS-041 not-in-scope with that reason.
+  # This is not a doctor failure: with the optional login credentials set, the check-catalog
+  # helper obtains a session instead; without them, CS-040/CS-041 are marked not-in-scope.
   HDX_URL_D=$(awk '/^clickstack:/{f=1;next} /^[a-z]/{f=0} f && $1=="hyperdx_url:"{print $2}' "$CFG")
   if [ -n "$HDX_URL_D" ]; then
     _c=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 -H "Authorization: Bearer ${HDX_API_KEY}" "${HDX_URL_D%/}/api/alerts")
     case "$_c" in
-      200) echo "HyperDX in scope (GET /api/alerts -> 200)";;
-      401|403) echo "HyperDX key configured but GET /api/alerts -> ${_c}: HyperDX v2.x authenticates the REST API by session, not a static key (the apiKey is ingestion-only). CS-040/CS-041 will be marked not-in-scope with that reason — this is expected on v2.x, not a failure.";;
+      200) echo "HyperDX in scope (GET /api/alerts -> 200 with the REST key)";;
+      401|403)
+        if [ -n "${HDX_EMAIL:-}" ] && [ -n "${HDX_PASSWORD:-}" ]; then
+          echo "HyperDX key 401s (v2.x: the apiKey is ingestion-only) but login credentials are set — the audit obtains a session via POST /api/login/password (cookie in a 0600 mktemp jar, deleted on exit, never printed) and scores CS-040/CS-041"
+        else
+          echo "HyperDX key configured but GET /api/alerts -> ${_c}: HyperDX v2.x authenticates the REST API by session, not a static key (the apiKey is ingestion-only). CS-040/CS-041 will be marked not-in-scope with that reason — expected on v2.x, not a failure. Optional: set clickstack.hyperdx_email_env + hyperdx_password_env via /scoutflo:connect to score them."
+        fi;;
       *) echo "HyperDX GET /api/alerts -> ${_c}; HyperDX categories may be not-in-scope. Verify clickstack.hyperdx_url.";;
     esac
   fi
+elif [ -n "${HDX_EMAIL:-}" ] && [ -n "${HDX_PASSWORD:-}" ]; then
+  echo "HyperDX API key not set but login credentials are — the audit scores CS-040/CS-041 via the v2 session login (presence-checked only; never printed)"
 else
-  echo "HyperDX API key (clickstack.hyperdx_api_key_env) not set; alerting (CS-040) and dashboards/sources (CS-041) will be marked not-in-scope"
+  echo "no HyperDX credential set (neither clickstack.hyperdx_api_key_env nor hyperdx_email_env + hyperdx_password_env); alerting (CS-040) and dashboards/sources (CS-041) will be marked not-in-scope"
 fi
 ```
 
-Then one cheap live call per configured integration: a ClickHouse `SELECT 1` over HTTP with the read-only session flag, and the open HyperDX `GET /api/health` (200) followed by one keyed call. Exact commands are in [references/clickstack-checks.md](references/clickstack-checks.md) section 1. `/scoutflo:doctor` runs the same checks standalone.
+Then one cheap live call per configured integration: a ClickHouse `SELECT 1` over HTTP with the read-only session flag, and the open HyperDX `GET /api/health` (200) followed by one authenticated call (the keyed probe, or on v2.x the session-login probe from the helper). Exact commands are in [references/clickstack-checks.md](references/clickstack-checks.md) section 1. `/scoutflo:doctor` runs the same checks standalone.
 
 ## Live-safety gate
 
@@ -88,18 +100,18 @@ echo "HyperDX API     : ${HDX_URL}"
 case "$CH_URL" in https://*) : ;; *) echo "WARN: ClickHouse HTTP is not TLS (https) — see CS-050" ;; esac
 ```
 
-If the resolved host or URL differs from what `toolkit.yaml` names, stop and report the mismatch. Never proceed on "probably the right instance". Every command in this skill (and in [references/clickstack-checks.md](references/clickstack-checks.md)) names its target explicitly: ClickHouse reads go through the `chq` helper — `curl` against `${CH_URL}/?readonly=1` with the `X-ClickHouse-User: ${CH_USER}` / `X-ClickHouse-Key: ${CH_KEY}` headers and the SQL as the POST body — and HyperDX reads send `Authorization: Bearer ${HDX_API_KEY}` (the exact header scheme is confirm-against-your-instance).
+If the resolved host or URL differs from what `toolkit.yaml` names, stop and report the mismatch. Never proceed on "probably the right instance". Every command in this skill (and in [references/clickstack-checks.md](references/clickstack-checks.md)) names its target explicitly: ClickHouse reads go through the `chq` helper — `curl` against `${CH_URL}/?readonly=1` with the `X-ClickHouse-User: ${CH_USER}` / `X-ClickHouse-Key: ${CH_KEY}` headers and the SQL as the POST body — and HyperDX reads go through the `hdx_get` helper, which authenticates with `Authorization: Bearer ${HDX_API_KEY}` on builds that issue a REST key (the exact header scheme is confirm-against-your-instance), or on HyperDX v2.x with the optional login credentials via the `connect.sid` session cookie (obtained once per run by `POST /api/login/password`, held in a `0600` `mktemp` jar, deleted on exit, never printed).
 
 ## Ground rules
 
 - Config records are discovery metadata; a live query is proof. Credit nothing you did not read live this run.
 - Evidence is real command output. An assertion without the query and its observed rows is a suspicion, not a finding.
-- API and SQL errors are evidence. A `401`/`403` on `/api/alerts` means a missing or wrong HyperDX API key; a `404` on `/api/v1/*` means the wrong path (the confirmed API is `/api/<resource>`, **not** `/api/v1/*`); an `unknown table` error means the wrong database or a renamed table; a `516`/auth error over HTTP means the ClickHouse user or password is wrong. Never convert an upstream error into empty success.
+- API and SQL errors are evidence. A `401`/`403` on `/api/alerts` **with a static key** is the HyperDX v2.x session-auth reality (the apiKey is ingestion-only) — score CS-040/CS-041 via the optional login credentials, or mark them `not-in-scope`; it is a wrong-key error only on a build that actually issues REST keys. A `404` on `/api/v1/*` means the wrong path (the confirmed API is `/api/<resource>`, **not** `/api/v1/*`); an `unknown table` error means the wrong database or a renamed table; a `516`/auth error over HTTP means the ClickHouse user or password is wrong. Never convert an upstream error into empty success.
 - Never score from object counts. Forty dashboards and two hundred rows prove nothing; credit comes from telemetry a responder could actually act on — recent rows for the critical services, an alert wired to a live receiver.
 - A table that exists is not coverage. `otel_logs` present with zero recent rows for `checkout` is a gap, not a pass.
 - Alerts are not live until they route to a receiver. A HyperDX alert wired to nothing is the core failure this audit exists to catch (CS-040); "an alert exists" is `configured`, not working.
 - Treat HyperDX response field names (`/api/alerts`, `/api/dashboards`, `/api/sources`) as confirm-against-your-instance: read the shape from the live response, never assume `channel`, `webhookUrl`, or `destination`.
-- Never print, log, or write a secret: no ClickHouse passwords, HyperDX API keys, webhook URLs, DSNs, or auth headers, in terminal output or in any output file. Capture receiver targets by name/class only.
+- Never print, log, or write a secret: no ClickHouse passwords, HyperDX API keys, HyperDX login passwords or session cookies (the `connect.sid` jar is `mktemp` `0600`, deleted on exit, and never echoed or copied anywhere persistent), webhook URLs, DSNs, or auth headers, in terminal output or in any output file. Capture receiver targets by name/class only.
 
 ## Metadata Load
 
@@ -140,13 +152,14 @@ if [ -f "${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/topology.md" ]; then
     | awk -F'|' '{gsub(/^[ \t]+|[ \t]+$/,"",$2); if($2!="") print $2}' \
     | sort -u | grep -c . || true)"
 fi
-# HyperDX alerts (guard the fetch: a 401 must surface, not silently count as zero).
-HDX_URL="https://your-hyperdx-url:8080"           # clickstack.hyperdx_url
+# HyperDX alerts (guard the fetch: an auth failure must surface, not silently count as
+# zero). Declare the HyperDX helper from references/clickstack-checks.md section 1 first:
+# it resolves the auth mode once (REST key, or the v2 session cookie) and sets
+# HDX_IN_SCOPE + hdx_get, so sizing and the Phase-7 checks agree on scorability.
 ALERTS=0
-if [ -n "${HDX_API_KEY:-}" ]; then
-  if ! ALERTS="$(curl -fsS --max-time 10 -H "Authorization: Bearer ${HDX_API_KEY}" \
-      "${HDX_URL%/}/api/alerts" | jq 'if type=="array" then length elif has("data") then (.data|length) else 0 end' 2>/dev/null)"; then
-    echo "WARN: GET /api/alerts failed (401 or wrong path?) — alert count unknown; estate sizing is a floor, not the truth."
+if [ "${HDX_IN_SCOPE:-0}" = "1" ]; then
+  if ! ALERTS="$(hdx_get /api/alerts | jq 'if type=="array" then length elif has("data") then (.data|length) else 0 end' 2>/dev/null)"; then
+    echo "WARN: GET /api/alerts failed — alert count unknown; estate sizing is a floor, not the truth."
     ALERTS=0
   fi
 fi
@@ -209,11 +222,11 @@ Behavior this enforces:
 
 ## Phase 2: Read-only inventory
 
-Build the raw picture before judging anything. Commands are in [references/clickstack-checks.md](references/clickstack-checks.md) section 2; capture into the run's `raw/` directory, redacted.
+Build the raw picture before judging anything. Commands are in [references/clickstack-checks.md](references/clickstack-checks.md) (the helpers in section 1; the per-surface reads in sections 5, 7, and 8); capture into the run's `raw/` directory, redacted.
 
 - **Tables:** `SELECT name, engine, total_rows, total_bytes, engine_full FROM system.tables WHERE database = currentDatabase() AND (name LIKE 'otel_%' OR name = 'hyperdx_sessions') ORDER BY name` — enumerates the confirmed telemetry tables (`otel_logs`, `otel_traces`, `otel_metrics_gauge`, `otel_metrics_sum`, `otel_metrics_histogram`, `otel_metrics_exponential_histogram`, `otel_metrics_summary`, `hyperdx_sessions`) and their rollup materialized views. The `engine_full` string carries the retention TTL read in Phase 5.
 - **Users:** `SELECT name, auth_type, host_ip FROM system.users` — confirmed columns; the security read in Phase 6.
-- **HyperDX objects (if in scope):** `GET /api/alerts`, `GET /api/dashboards`, `GET /api/sources` with the API key. The base path `/api/<resource>` is confirmed; the exact resource path and field names are confirm-against-your-instance — read them from the live response.
+- **HyperDX objects (if in scope):** `GET /api/alerts`, `GET /api/dashboards`, `GET /api/sources` through `hdx_get` (REST key, or the v2 session cookie). The base path `/api/<resource>` is confirmed; the exact resource path and field names are confirm-against-your-instance — read them from the live response.
 
 Record what exists (tables, row/byte counts, users, alerts, dashboards, sources) as inventory, not yet as findings. This is the raw pull that both `findings.json` and `inventory.json` derive from — no new live calls later.
 
@@ -223,7 +236,7 @@ ClickStack owns backend telemetry (logs, metrics, traces) and its own alerting v
 
 ## Phase 4: Telemetry coverage (CS-010) and ingestion freshness (CS-011)
 
-For each critical service from Phase 1, query the confirmed columns over a recent window (commands in [references/clickstack-checks.md](references/clickstack-checks.md) section 3):
+For each critical service from Phase 1, query the confirmed columns over a recent window (commands in [references/clickstack-checks.md](references/clickstack-checks.md) section 4):
 
 - **Logs:** `SELECT count() FROM otel_logs WHERE ServiceName = {svc} AND Timestamp >= now() - INTERVAL {RECENT_WINDOW}` — `Timestamp DateTime64(9)` and `ServiceName` are confirmed columns.
 - **Traces:** the same shape against `otel_traces` (confirmed `Timestamp`, `ServiceName`).
@@ -240,7 +253,7 @@ Fill one row per critical service:
 
 ## Phase 5: Retention (CS-020)
 
-Read the per-table **TTL** from the confirmed read path — `SHOW CREATE TABLE {table}` or the `engine_full` column captured in Phase 2 (commands in section 4). For each `otel_*` telemetry table:
+Read the per-table **TTL** from the confirmed read path — `SHOW CREATE TABLE {table}` or the `engine_full` column captured in Phase 2 (commands in section 5). For each `otel_*` telemetry table:
 
 - A deliberate TTL (e.g. `TTL toDateTime(Timestamp) + toIntervalDay(30)`) is `pass` — retention is bounded and intentional.
 - **No TTL clause = unbounded retention** — a real cost and compliance finding (`CS-020`), because the table grows without limit.
@@ -250,7 +263,7 @@ Read retention; never guess it. A missing TTL is a finding, not an assumption of
 
 ## Phase 6: ClickHouse health (CS-030) and security posture (CS-050)
 
-Inspection only, from the confirmed `system.*` tables (commands in section 5):
+Inspection only, from the confirmed `system.*` tables (commands in sections 6 and 8):
 
 - **CS-030 (ClickHouse health):** `system.parts` (active part counts and bytes per table — a runaway part count signals merge pressure), `system.replicas` (replicas in sync, no growing queue), `system.errors` (no spiking error codes — read `name`, `code`, `value`, `last_error_time`), `system.mutations` (none stuck / long-running). A spiking error code or a stuck mutation is a health finding.
 - **CS-050 (Security posture):** from `system.users` (confirmed columns `name`, `auth_type`, `auth_params`, `host_ip`):
@@ -261,7 +274,7 @@ Inspection only, from the confirmed `system.*` tables (commands in section 5):
 
 ## Phase 7: HyperDX alerting (CS-040) and dashboards/sources (CS-041)
 
-Via the HyperDX API with the key (commands in section 6). The confirmed base path is `/api/<resource>`; treat field names as confirm-against-your-instance and read them from the live response.
+Via the HyperDX API through `hdx_get` — a REST key where the build issues one, or the v2 session cookie when the optional login credentials engaged (commands in section 7 of the check catalog; run these only when the helper ended with `HDX_IN_SCOPE=1`). The confirmed base path is `/api/<resource>`; treat field names as confirm-against-your-instance and read them from the live response.
 
 - **CS-040 (alerting reaches a human):** `GET /api/alerts`. Alerts must exist **and** route to a live receiver — a webhook, Slack channel, or PagerDuty destination. An alert wired to nothing (no destination, or a placeholder) is the core failure this category exists to catch. Reading the alert config proves it is **configured**; it does not prove delivery — mark delivery `configured`, not `validated-live`, since the controlled test-fire that upgrades it lives in `setup-clickstack`. Capture receiver targets by name/class only, never the webhook URL.
 - **CS-041 (dashboards and sources):** `GET /api/dashboards` and `GET /api/sources`. Dashboards should exist for the critical services, and each `source` should be connected to a live ClickHouse table/database (a source pointing at a table that does not exist in `system.tables` is a dead reference). A critical service with no dashboard and no source is a `CS-041` gap.
@@ -394,6 +407,8 @@ All thresholds and windows named in the checks (`RECENT_WINDOW`, `FRESHNESS_THRE
 | Stalled pipeline read as "no data" | Distinguish zero rows (CS-010) from rows present but a growing `max(Timestamp)` lag (CS-011) |
 | Invented a metrics-table column name | Only `otel_logs`/`otel_traces` columns are confirmed; resolve `otel_metrics_*` columns from `system.columns` before querying |
 | `/api/v1/*` used against HyperDX | The confirmed API base is `/api/<resource>`; `/api/v1/*` returns 404 |
+| A v2 `401` read as a wrong API key | On HyperDX v2.x the apiKey is ingestion-only; the helper falls back to the optional session login (`hyperdx_email_env`/`hyperdx_password_env`) or marks CS-040/CS-041 `not-in-scope` — never a confident fail, never header-variant looping |
+| Session cookie printed or persisted | The `connect.sid` jar is `mktemp` `chmod 600`, deleted on exit; it never appears in terminal output, evidence, `raw/`, the report, or any file that outlives the run |
 | HyperDX field names assumed | Read `/api/alerts`, `/api/dashboards`, `/api/sources` shapes from the live response; treat field names as confirm-against-your-instance |
 | Alert counted as working because it exists | An alert wired to no receiver is the CS-040 failure; mark delivery `configured`, not validated-live |
 | Retention assumed instead of read | Read the per-table TTL from `SHOW CREATE TABLE` / `engine_full`; a missing TTL is unbounded retention (CS-020), not "probably fine" |

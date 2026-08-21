@@ -29,7 +29,7 @@ Requirements. Configure only the blocks that exist in your environment; delete t
 | Traces | `tempo.url` | `tempo.token_env`, if set | search and trace APIs | read-only |
 | Alerting | `prometheus.alertmanager_url`, `victoriametrics.vmalert_url` | token, if fronted by auth | status, receivers, alerts | read-only |
 | Grafana | `grafana.url` | `grafana.token_env` (`GRAFANA_TOKEN`) | service account: datasources, dashboards, and alert rules read | read-only |
-| Kubernetes | `kubernetes.context`, `kubernetes.monitoring_namespace` | kubeconfig | get, list | read-only |
+| Kubernetes | `kubernetes.context`, `kubernetes.monitoring_namespace` (one or more namespaces, space-separated — real stacks often span several) | kubeconfig | get, list | read-only |
 | Slack (optional) | `slack.webhook_env` | webhook variable | post to one channel | n/a |
 
 Preflight. A failed check stops the audit with the exact failure and the fix (usually `/scoutflo:connect`). Never downgrade a doctor failure into a finding.
@@ -118,10 +118,12 @@ if [ -f "${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/topology.md" ]; then
   # matches the metadata, Traffic-map, Entry-points, and Integration-watchpoints tables
   # (and header/`---` rows), so it double-counts every real service and scores phantom
   # rows named `---`/`Mesh` — inflating estate.objects ~6x and corrupting coverage.
+  # Key on namespace/service (columns 3 and 2), never the bare name: the same service
+  # name in two namespaces is two real services, and a bare-name `sort -u` merges them.
   SERVICES="$(awk '/^## Services$/{f=1;next} /^## /{f=0} f' ${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/topology.md \
     | grep -E '^\| ' \
     | grep -vE '^\| *Service *\||^\| *-{2,}' \
-    | awk -F'|' '{gsub(/^[ \t]+|[ \t]+$/,"",$2); if($2!="") print $2}' \
+    | awk -F'|' '{gsub(/^[ \t]+|[ \t]+$/,"",$2); gsub(/^[ \t]+|[ \t]+$/,"",$3); if($2!="") print ($3!="" ? $3"/"$2 : $2)}' \
     | sort -u | grep -c . || true)"
 fi
 
@@ -205,16 +207,20 @@ Build the raw picture before judging anything.
 
 ```bash
 set -eu
-KUBE_CONTEXT="your-kube-context"   # kubernetes.context
-MON_NS="monitoring"                # kubernetes.monitoring_namespace
+KUBE_CONTEXT="your-kube-context"    # kubernetes.context
+MONITORING_NAMESPACES="monitoring"  # kubernetes.monitoring_namespace; space-separated when the stack
+                                    # spans several namespaces, e.g. "monitoring lgtm victoriametrics"
 kubectl --context "$KUBE_CONTEXT" get namespaces
-kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" get deploy,sts,ds,svc,ingress,pvc
-kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" get pods -o wide
-helm --kube-context "$KUBE_CONTEXT" -n "$MON_NS" list 2>/dev/null \
-  || echo "helm not installed; chart inventory skipped"
+for MON_NS in $MONITORING_NAMESPACES; do
+  echo "== monitoring namespace: ${MON_NS} =="
+  kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" get deploy,sts,ds,svc,ingress,pvc
+  kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" get pods -o wide
+  helm --kube-context "$KUBE_CONTEXT" -n "$MON_NS" list 2>/dev/null \
+    || echo "helm not installed; chart inventory skipped"
+done
 ```
 
-Expected: the monitoring namespace lists your telemetry stores (Loki, Tempo, Mimir, Prometheus, VictoriaMetrics components), Grafana, Alertmanager or vmalert, and collectors (Alloy, OTel Collector, Promtail, Fluent Bit, vmagent, exporters). Record what exists, replica counts, and PVC sizes as inventory, not yet as findings. Also inventory the data model as you go: metric names, label keys, log fields, trace attributes, service and environment label values, tenant labels. Note two collectors that are now end-of-life and superseded by **Grafana Alloy**: **Promtail** (EOL 2026-03-02) and **Grafana Agent** (EOL 2025-11-01). Finding either still running is a migration-debt signal scored under LGTM-025 (the image scan is in [references/backend-checks.md](references/backend-checks.md) section 11); record it and point at an Alloy migration.
+A single-namespace assumption silently hides everything deployed elsewhere: a metrics-family stack, the LGTM components, and a legacy stack in three separate namespaces is a real, observed estate shape. List every namespace the stack occupies in `MONITORING_NAMESPACES` (the `kubectl get namespaces` output above is the cross-check — a namespace named after a telemetry product that is not in your list is a flag to resolve before scoring), and carry the namespace in every inventory record. Expected: the monitoring namespaces together list your telemetry stores (Loki, Tempo, Mimir, Prometheus, VictoriaMetrics components), Grafana, Alertmanager or vmalert, and collectors (Alloy, OTel Collector, Promtail, Fluent Bit, vmagent, exporters). Record what exists, replica counts, and PVC sizes as inventory, not yet as findings. Also inventory the data model as you go: metric names, label keys, log fields, trace attributes, service and environment label values, tenant labels. Note two collectors that are now end-of-life and superseded by **Grafana Alloy**: **Promtail** (EOL 2026-03-02) and **Grafana Agent** (EOL 2025-11-01). Finding either still running is a migration-debt signal scored under LGTM-025 (the image scan is in [references/backend-checks.md](references/backend-checks.md) section 11); record it and point at an Alloy migration.
 
 ## Phase 3: Tool ownership boundary
 
@@ -258,14 +264,24 @@ Only after the gate: for every critical service from Phase 1, run the per-servic
 
 | Service | Ready | Metrics | Logs | Traces | Alerts | View | Owner | Gap |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| checkout | 2/2 | pass | pass | fail | pass | partial | Known | no traces |
+| shop/checkout | 2/2 | pass | pass | fail | pass | partial | Known | no traces |
 
-Use the check-result vocabulary (`pass`, `partial`, `fail`, `blocked`, `not-in-scope`) and canonical service names. Normalize aliases but never hide them: if one service appears under three different names across metrics, logs, and traces, that is a correlation finding (`LGTM-031`), and the diff belongs in evidence. Name affected services in findings; "three services lack log coverage" is not a finding, "checkout, payments, and search lack log coverage" is. A critical service with no telemetry in any signal is `LGTM-030`, critical severity — but only when the Phase 6 scope gate confirmed the backends actually monitor that service's cluster; a same-shaped zero on a different-cluster backend is `blocked` under `LGTM-039`, never LGTM-030.
+Key every row on **namespace + service** (`namespace/service`), never the bare name — the same service name legitimately runs in two namespaces on real estates, and a bare-name row merges their telemetry so one covered instance masks the other's blindness; the per-service queries in [references/backend-checks.md](references/backend-checks.md) section 12 carry both. Use the check-result vocabulary (`pass`, `partial`, `fail`, `blocked`, `not-in-scope`) and canonical service names. Normalize aliases but never hide them: if one service appears under three different names across metrics, logs, and traces, that is a correlation finding (`LGTM-031`), and the diff belongs in evidence. Name affected services in findings; "three services lack log coverage" is not a finding, "checkout, payments, and search lack log coverage" is. A critical service with no telemetry in any signal is `LGTM-030`, critical severity — but only when the Phase 6 scope gate confirmed the backends actually monitor that service's cluster; a same-shaped zero on a different-cluster backend is `blocked` under `LGTM-039`, never LGTM-030.
 
 - ❌ `LGTM-030 critical: local workloads have no matching telemetry label` — when the scope probe showed the backends scrape a different cluster.
 - ✅ `LGTM-039 info: backends monitor cluster X while kubeconfig points at Y; local-workload coverage rows blocked, telemetry-estate services scored on their own labels.`
 
 Then render the Scoutflo Topology Readiness section per [topology-readiness.md](../../report-standard/topology-readiness.md): evaluate T1 to T6 per critical service from `./scoutflo-audits/topology-export.json`, read-only. An edge this audit verified live (for example a `SENDS_METRICS_TO` edge to Prometheus/VictoriaMetrics this audit confirmed is actively scraped via the Phase 5 targets and ingestion checks) satisfies T4. **T6 needs one more thing T4 does not check**: the `serviceName` field (VictoriaLogs, Tempo, VictoriaTraces edges) and the `serviceLabel` field (Prometheus-family edges) are camelCase, and the platform's correlation-category mapping does not split camelCase, so populating only that field satisfies T4 but leaves T6's `service`-category anchor unpopulated (see [topology-readiness.md](../../report-standard/topology-readiness.md#t6s-category-mapping-is-stricter-than-a-providers-field-names-suggest)). Mirror that value into a literal `service` (or `service_name`) key on the same edge's attributes, or T6 will read `partial` even though the signal genuinely resolved to the right service. Loki's `app`/`namespace` fields do not have this problem. Gaps that map to an existing finding reference its ID; gaps with no finding get a `TOPO-` row pointing at `/scoutflo:map-topology`. Render check names and confidence per the standard: plain-English column headers (T-codes only in the legend line), confidence as `n/10`, and — whenever any service is below ready — the ticket-ready sync-readiness action plan table from [topology-readiness.md](../../report-standard/topology-readiness.md). If the export or topology.md is missing, or exists but describes a different target than this audit covers (wrong `cluster_id`, non-overlapping services), the section renders the matching state from topology-readiness.md with its one-line unlock (run `/scoutflo:map-topology` against the right estate, or hand-author the export per `scoutflo-export.md` for non-Kubernetes estates); it never guesses and never says a bare "unavailable". Readiness is reported, never folded into the 0-100 score.
+
+## Phase 6b: Datastore alert depth
+
+Databases, caches, and queues fail differently from request-serving services — connection exhaustion, deadlocks, evictions, consumer-group lag — and Phase 6's per-service rows do not ask whether those failure modes are *alertable*. This phase does, on real series (commands in [references/backend-checks.md](references/backend-checks.md) section 14). For each datastore family, two live questions: do the series exist in some configured metrics backend, and does at least one alerting rule on an evaluator that can actually see those series cover the family's key signals? **Absence of an alert on a present series is the finding.**
+
+- **LGTM-080 (PostgreSQL):** connections vs max connections, deadlocks, commit rate.
+- **LGTM-081 (Redis/Valkey):** evictions, connected clients.
+- **LGTM-082 (Kafka):** consumer-group lag.
+
+Ground rules for this lane. Discover live series names first — exporter-style (`pg_*`, `redis_*`, `kafka_*`) and OTel-collector-style (`postgresql_*`, `valkey_*`) naming both occur in the wild, and judging one family's estate by the other family's names fabricates gaps; the reference lists common candidate names, and the live `__name__` list is the truth. Run the discovery against **every** configured metrics backend: datastore series routinely live in a different backend than the request-path series, and a covering rule only counts on an evaluator whose datasource stores the series (a rule that evaluates against a backend without them covers nothing — that evaluator gap is LGTM-012, the uncovered series are this lane's finding). No series of a family anywhere is `not-in-scope` for that check, stated — a datastore workload running with no exporter at all is a coverage gap owned by LGTM-032/LGTM-035, not double-filed here. These checks join the Service coverage category: like Phase 7b's additions to Alert routing, they add no category and change no weight; they grow the denominator. `affected` names the datastore workloads from topology, keyed `namespace/service`.
 
 ## Phase 7: Alert routing, read-only
 
@@ -307,14 +323,14 @@ Inspection only, commands in [references/backend-checks.md](references/backend-c
 
 ## Phase 9: Dashboards and correlation
 
-Via the Grafana API ([references/backend-checks.md](references/backend-checks.md) section 10): Grafana and every datasource pass their health checks (`LGTM-050`); each critical service has an incident view linking its signals and active alerts (`LGTM-051`); no broken panels or dead datasource references in the dashboards responders use (`LGTM-052`); cross-signal pivots work, metrics to logs and trace to logs through the trace ID (`LGTM-053`); panel scope is honest, with no org-wide queries behind per-service titles and reducers matching the source shape (`LGTM-054`). A deeper Grafana-wide audit is `/scoutflo:audit-grafana`; this phase checks only what incident response needs from the LGTM side.
+Via the Grafana API ([references/backend-checks.md](references/backend-checks.md) section 10): Grafana and every datasource pass their health checks (`LGTM-050`); each critical service has an incident view linking its signals and active alerts (`LGTM-051`); no broken panels or dead datasource references in the dashboards responders use (`LGTM-052`); cross-signal pivots work, metrics to logs and trace to logs through the trace ID (`LGTM-053`) — using the normalized pivot in [references/backend-checks.md](references/backend-checks.md) section 7.1, because Tempo search returns trace IDs with leading zeros trimmed and a literal single-ID grep into the log backend false-negatives ("this trace has no logs" when the logs are there under the padded form); panel scope is honest, with no org-wide queries behind per-service titles and reducers matching the source shape (`LGTM-054`). A deeper Grafana-wide audit is `/scoutflo:audit-grafana`; this phase checks only what incident response needs from the LGTM side.
 
 ## Large-path worklist: services in batches
 
 Runs on the large path only (see [Estate sizing](#estate-sizing) above). All state lives under a run-ID-keyed run directory `./scoutflo-audits/lgtm/runs/<RUN_ID>/`, not a calendar-date directory, so a run that is still batching when the date rolls over UTC keeps writing into the same place. Full runnable commands (resume scan, run-ID mint, worklist build, lock, batch claim, incremental report assembly) are in [references/estate-worklist.md](references/estate-worklist.md); this section states the workflow they implement.
 
 1. **Find a resumable run, or start a new one.** Before minting a new `RUN_ID`, scan `./scoutflo-audits/lgtm/runs/*/worklist.tsv` for one with pending rows and offer to resume it instead of starting over.
-2. **Build or resume the worklist.** One row per critical service (from Phase 1's topology.md list) plus one row per Grafana dashboard, status `pending` or `done`. A resumed run continues from its existing worklist; never rebuild one that already exists.
+2. **Build or resume the worklist.** One row per critical service — keyed `namespace/service` from Phase 1's topology.md list, never the bare name — plus one row per Grafana dashboard, status `pending` or `done`. A resumed run continues from its existing worklist; never rebuild one that already exists.
 3. **Lock, then claim one batch.** Acquire `worklist.lock` in the run directory before reading pending rows; a lock older than `LOCK_STALE_MINUTES` (30 minutes; example, tune to your batch size) is abandoned and safe to reclaim. Take the next `BATCH_SIZE` pending rows and run Phase 6 (coverage), Phase 9 (dashboard checks), and section 12 of the reference against just that batch. A row is marked `done` only after its checks complete, so an interrupted batch resumes at the row that failed. Release the lock once the batch's rows are marked.
 4. **Assemble incrementally.** After each batch, recompose the partial findings and coverage matrix from the batches completed so far, and print progress (`done=X pending=Y`). Repeat from step 3 until the worklist has zero pending rows, then proceed to Phase 10.
 
@@ -326,7 +342,7 @@ Score per [severity-and-scoring.md](../../report-standard/severity-and-scoring.m
 
 | Category | Weight | ID range |
 | --- | ---: | --- |
-| Service coverage | 20 | LGTM-030 to 039 |
+| Service coverage | 20 | LGTM-030 to 039, 080 to 082 |
 | Metrics layer | 15 | LGTM-001 to 006 |
 | Logs layer | 15 | LGTM-020 to 025 |
 | Traces layer | 15 | LGTM-040 to 045 |
@@ -449,6 +465,7 @@ Every finding's `remediation` field points at the fix, so "Next safe actions" in
 | Noisy rules, missing `for`, Jobs paging | `setup-lgtm#quiet-noisy-rules` |
 | Service name mismatches across signals | `setup-lgtm#standardize-service-labels` |
 | Missing signals for critical services, collector drops, tenant misconfig | `setup-lgtm` (label, collector, and tenant fixes; instrumentation gaps get a named owner) |
+| Datastore series present with no covering alert rule (LGTM-080 to 082) | `setup-lgtm` (add the datastore rules in the evaluator wired to the backend that stores the series; a missing evaluator is LGTM-012 first) |
 | Broken dashboards, dead datasources, dishonest panels | `/scoutflo:setup-grafana` |
 | Single-replica storage, retention, backups, exposure, network policies | `setup-lgtm#set-retention`, `setup-lgtm#enable-ha`, `setup-lgtm#lock-down-exposure`, `setup-lgtm#add-network-policies`, `setup-lgtm#add-disruption-budgets` |
 
@@ -472,3 +489,8 @@ All thresholds and time windows named in the checks (`RECENT_WINDOW`, lookbacks,
 | Secrets leak into evidence | Record receiver host class and key names only; never webhook URLs, tokens, or rendered configs |
 | Object counts scored as coverage | Credit only meaningful queries returning data a responder could act on |
 | One environment's thresholds treated as universal | Declare every threshold as a named variable with a tune-to-your-environment note |
+| Trace-to-logs pivot false-negatives on a leading-zero-trimmed trace ID | Left-pad search-returned IDs to 32 hex chars, search both forms, sample several traces (section 7.1); with OTLP structured metadata, field-filter joins need both forms too |
+| Only one monitoring namespace inspected | Loop `MONITORING_NAMESPACES` (space-separated) through Phase 2 and the section 11 checks; cross-check against `kubectl get namespaces` |
+| Datastore metrics judged by one exporter's names | Discover live series names first (`pg_*`/`postgresql_*`, `redis_*`/`valkey_*`, `kafka_*`); the live `__name__` list is the truth |
+| Datastore alert rule credited from an evaluator that cannot see the series | Confirm the rule's expression returns data on its own datasource before crediting LGTM-080 to 082 |
+| Same service name in two namespaces scored as one | Key worklist rows, matrix rows, queries, and `affected` on `namespace/service`, never the bare name |

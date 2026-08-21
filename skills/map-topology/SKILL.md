@@ -85,10 +85,12 @@ Two decisions come out of this phase, both printed before any deep collection ru
 
 One cheap call counts what the run will map. The thresholds are named variables with example defaults; tune them to your environment.
 
+Before sizing, pick the `NS_EXCLUDE` preset for your provider — GKE, EKS, AKS, or vanilla (cookbook: "Namespace-exclude presets") — then extend it; the vanilla default leaves managed-cluster system namespaces (`gke-managed-*`, `gmp-system`, `aws-observability`, `gatekeeper-system`, ...) in the map and in these counts, and the same value must be used in every block of the run.
+
 ```bash
 set -eu
 KUBE_CONTEXT="your-kube-context"   # kubernetes.context
-NS_EXCLUDE="^(kube-system|kube-public|kube-node-lease|istio-system)$"   # example, tune to your environment
+NS_EXCLUDE="^(kube-system|kube-public|kube-node-lease|istio-system)$"   # vanilla preset; pick your provider's (cookbook: "Namespace-exclude presets"), then extend
 SMALL_MAX_WORKLOADS="30"     # single-pass ceiling; example, tune to your environment
 MEDIUM_MAX_WORKLOADS="150"   # one-run ceiling; example, tune to your environment
 
@@ -407,6 +409,7 @@ Close by telling the user, in the terminal:
 | Stale Service with a selector that matches nothing mapped to a guessed workload | Check Endpoints for every Service and list backendless Services explicitly |
 | Re-run clobbers hand-filled Integration watchpoints | Copy the old file aside first and carry user rows forward; only add rows or flag removals |
 | System and mesh namespaces flood the service list | Apply `NS_EXCLUDE` and print the excluded list in the map header so omissions are visible |
+| Managed-cluster system namespaces (`gke-managed-*`, `gmp-system`, `aws-observability`, `gatekeeper-system`, ...) mapped as services because the vanilla `NS_EXCLUDE` default only knows vanilla Kubernetes — confirmed on a real GKE cluster | Pick the provider preset (GKE, EKS, AKS, or vanilla) from the cookbook's "Namespace-exclude presets" in Phase 1, extend it, and use the same value in every block of the run |
 | Image tag `latest` recorded as a version | Resolve versions by label precedence and record `latest` or missing tags as `unknown` |
 | Call graph invented from service naming conventions on the fallback path | Only emit traffic rows backed by an object: Ingress backend, Service selector, VirtualService, or ServiceEntry |
 | Worklist and batches run on a tiny cluster | Size the estate first; at or below `SMALL_MAX_WORKLOADS` the small path runs one pass with no worklist file |

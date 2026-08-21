@@ -171,8 +171,23 @@ correlation_save() {
   total_raw=$(printf '%s\n' "$findings" | jq 'length')
   total_overlaps=$(printf '%s\n' "$overlaps" | jq 'length')
   total_cascades=$(printf '%s\n' "$cascades" | jq 'length')
-  # Each overlap group of n findings represents n-1 candidate duplicates.
-  dupes=$(printf '%s\n' "$overlaps" | jq '[.[] | (.findings | length) - 1] | add // 0')
+  # Candidate duplicates are counted per DISTINCT finding, never per
+  # (finding, service) row. Overlap groups are per-service, so one finding
+  # that names many affected services sits in many groups; the old
+  # sum-of-(group-size - 1) counted such a finding once per group and drove
+  # total_findings_deduplicated negative on real inputs (raw 32, "dupes" 38,
+  # total -6). Instead: within each group each finding appears once, one
+  # representative per group is kept (the first in jq's stable unique order),
+  # and the union across groups counts every candidate duplicate at most once.
+  # This guarantees 0 <= dupes < total_raw, so the dedup total reconciles
+  # (dedup = raw - dupes) and can never go negative.
+  dupes=$(printf '%s\n' "$overlaps" | jq '
+    [ .[] | .findings
+      | map({target, finding_id}) | unique   # one row per finding per group
+      | .[1:] | .[]                          # all but the kept representative
+    ]
+    | unique | length                        # each finding at most once overall
+  ')
   total_dedup=$((total_raw - dupes))
 
   jq -n \
@@ -199,7 +214,7 @@ correlation_save() {
     }' > "$CORRELATION_FILE"
 
   echo "[correlation] Written $CORRELATION_FILE"
-  echo "[correlation] Raw findings: $total_raw | Overlaps: $total_overlaps | Cascades: $total_cascades"
+  echo "[correlation] Raw findings: $total_raw | Deduplicated: $total_dedup | Overlaps: $total_overlaps | Cascades: $total_cascades"
 }
 
 # Main entry point

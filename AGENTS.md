@@ -13,11 +13,15 @@ sh ci/run-tests.sh .
 claude plugin validate . --strict
 ```
 
-`ci/structure-check.sh` composes 13 checks: anchor, cross-block, coverage,
+`ci/structure-check.sh` composes 15 checks: anchor, cross-block, coverage,
 remediation-map, **skill-completeness**, the four behavioral-parity gates
 (scope-checkpoint, redaction-parity, business-context-parity, **env-load-parity**),
-and manifest-compat, min-version-consistency, catalog-consistency, and
-liveness-readonly.
+and manifest-compat, min-version-consistency, catalog-consistency,
+liveness-readonly, **audit-dir** (runnable output-path declarations resolve via
+`${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}`, never a hardcoded literal), and
+**named-section** (every `(cookbook: "Section Name")` prose reference in a
+SKILL.md resolves to a real `## Section Name` heading in that skill's
+`references/*.md`).
 `ci/run-tests.sh` executes
 every `tests/*.sh` and `skills/*/tests/*.sh` under `/bin/sh` (and rejects dead
 bats-syntax files that cannot run). All four run in CI on every push/PR — a

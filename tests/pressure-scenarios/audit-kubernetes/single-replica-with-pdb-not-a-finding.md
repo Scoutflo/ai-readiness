@@ -26,7 +26,7 @@ get credit for fixing it."
 3. Score the check as `pass` (1.0) in the Reliability category; do not deduct.
    The PDB with `minAvailable` is the disruption guard the finding is looking
    for, so there is nothing to remediate.
-4. In the Phase 8 coverage matrix, mark this service's PDB/replica resilience
+4. In the Phase 9 coverage matrix, mark this service's PDB/replica resilience
    row as covered. If Phase 1 named the service critical, that only raises the
    severity of a genuine K8S-005 fail — with a PDB present there is no fail to
    escalate.

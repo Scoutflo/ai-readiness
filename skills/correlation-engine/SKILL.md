@@ -20,7 +20,7 @@ Output: `scoutflo-audits/correlation.json` — machine-readable deduplication + 
 ```
 
 ### Scenario 2: Sequential audits over time
-```bash
+```text
 Day 1: /scoutflo:audit-aws
 → AWS findings → correlation.json (v1)
 

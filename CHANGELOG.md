@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.1.123
+
+The full enhancement wave from the live-test campaign — 9 parallel builders + integration, everything below verified against the real benchmark estate:
+
+- **audit-lgtm:** Tempo trace-IDs are zero-trim normalized (left-pad to 32 hex + dual-form search) before the Loki pivot, so the core trace→logs incident join can no longer false-negative on trimmed IDs; LGTM-024 sample raised 5→50 lines with an OTLP structured-metadata alternate join (confirm-live). `MONITORING_NAMESPACES` is now a space-separated list looped through discovery and checks (real estates split their stack across several namespaces). NEW datastore alert-depth lane **LGTM-080/081/082**: postgres (connections/max, deadlocks, commits), redis/valkey (evictions, clients), kafka (consumer-group lag) — a present series with no alert evaluator covering it is the finding; grounded in real series shapes.
+- **rca:** Phase 5 now surfaces correlation **overlap groups** (OVL-*) alongside cascades — "N audits independently flagged this service" becomes cited supporting evidence with bounded confidence rules (agreement raises confidence at most one step; overlap never names a cause; absence changes nothing). Verified against real campaign correlation output.
+- **correlation-engine:** fixed the dedup arithmetic that reported **negative** `total_findings_deduplicated` (−6 on real inputs — a finding in N groups was subtracted N times); counters are now distinct-finding based with invariants (0 ≤ dedup ≤ raw) enforced by a new 6-test suite including a mutation test.
+- **audit-kubernetes:** NEW Phase 8 live-runtime snapshot (**K8SRT-001..004**, registered prefix) — non-scored, read-only probes via the guarded live-evidence lib (restarts/waiting reasons, warning events, node/pod pressure), runs-anywhere fallback, never touches the score. Per-service loops keyed namespace+name.
+- **map-topology:** managed-cluster **namespace-exclude presets** (GKE/EKS/AKS/vanilla, GKE grounded in real cluster data; EKS/AKS confirm-live).
+- **map-repos:** monorepo-probe candidate selection now uses **inverse-token-frequency weighting** (drop tokens matching >10% of the org; rare tokens dominate; deterministic tie-break) — fixes the live-proven case where generic-token junk filled all 5 probe slots and the real monorepo ranked 6th. Includes a small-org floor and a latent jq character-class fix.
+- **audit-clickstack:** HyperDX v2 categories are now **scorable via optional session login** (`hyperdx_email_env`/`hyperdx_password_env`): on a key-401 with creds set, the helper logs in (cookie in a chmod-600 mktemp jar, trap-deleted, never printed) and runs CS-040/CS-041 with the session; without creds the not-in-scope path is unchanged. Live-verified against a real HyperDX v2.35.
+- **Two new CI gates** (structure-check: 13 → **15**): `audit-dir-check` (runnable output-path declarations must resolve `${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}`) and `named-section-check` (every `(cookbook: "…")` prose reference resolves to a real heading — the lost-heading regression class).
+- **Six shell-syntax doc defects fixed** (found by the new local shell-syntax sweep over all 751 command blocks): audit-all's bash-3.2 `case` paren bug (9 occurrences, a real runtime failure on stock macOS /bin/sh), process substitution in audit-kubernetes + setup-grafana blocks, angle-bracket placeholders in connect + setup-kubernetes command bodies, a prose block fenced as bash in correlation-engine.
+- 10+ new/updated pressure scenarios across the changed skills.
+
+Gates: leak CLEAN, structure-check (15), run-tests (22 suites), plugin validate --strict.
+
 ## 0.1.122
 
 Fix wave from the first comprehensive live-test campaign (16 agents, 6 skills executed end-to-end against the real benchmark estate: 64-service GKE cluster, in-cluster VM/Loki/Tempo with live OTel-demo telemetry, ClickStack with 5.6M real rows, 229-repo GitHub org). Every fix below is a **live-confirmed** defect (each reproduced by an adversarial verifier before being accepted):

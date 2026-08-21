@@ -1,6 +1,6 @@
 ---
 name: audit-kubernetes
-description: Read-only scored audit of a Kubernetes cluster's security and operational posture — Pod Security Admission enforcement, RBAC over-permissioning, network-policy coverage, workload resource limits, and PodDisruptionBudget/replica resilience; writes findings.json and report.md and changes nothing. Use when the user mentions auditing or scoring a Kubernetes/EKS/GKE/AKS cluster, pod security, cluster RBAC, network policies, missing resource limits, or single-replica critical workloads. Do not use to change the cluster (there is no in-cluster mutation here; findings name the fix), for in-cluster Prometheus/Grafana telemetry (use audit-lgtm / audit-grafana), or for cloud-provider control-plane alarms (use audit-aws / audit-gcp).
+description: Read-only scored audit of a Kubernetes cluster's security and operational posture — Pod Security Admission enforcement, RBAC over-permissioning, network-policy coverage, workload resource limits, and PodDisruptionBudget/replica resilience — that also reports a separate NON-SCORED live-runtime snapshot (current pod restarts and waiting reasons, recent warning events, node/pod usage when metrics-server answers) through guarded read-only probes; writes findings.json and report.md and changes nothing. Use when the user mentions auditing or scoring a Kubernetes/EKS/GKE/AKS cluster, pod security, cluster RBAC, network policies, missing resource limits, or single-replica critical workloads. Do not use to change the cluster (there is no in-cluster mutation here; findings name the fix), for in-cluster Prometheus/Grafana telemetry (use audit-lgtm / audit-grafana), for cloud-provider control-plane alarms (use audit-aws / audit-gcp), or for a root-cause verdict on a failing workload (use rca; the snapshot here is evidence, not an RCA).
 ---
 
 # audit-kubernetes
@@ -9,13 +9,13 @@ Scored, read-only audit of a Kubernetes cluster's security and reliability postu
 
 This audit reads cluster **objects** (via `kubectl get`/`auth can-i`). Whether the in-cluster observability stack is healthy is `audit-lgtm`/`audit-grafana`; the cloud provider's own control-plane monitoring is `audit-aws`/`audit-gcp`. This audit stops at the cluster's own security and workload configuration.
 
-Every command is read-only: `kubectl get`, `kubectl auth can-i`, `kubectl api-resources`, `kubectl version`. No `apply`, `create`, `edit`, `patch`, `delete`, `label`, `annotate`, `scale`, `cordon`, or `exec` — the full forbidden list is in [references/kubernetes-checks.md](references/kubernetes-checks.md) section 9. `setup-kubernetes` performs the confirm-then-verify fixes; this audit only names them.
+Every command is read-only: `kubectl get`, `kubectl auth can-i`, `kubectl api-resources`, `kubectl version`. The live-runtime snapshot (Phase 8) additionally uses the read-only `top` verb and `get events`, and only through the guarded `le_kubectl` wrapper in the shared live-evidence library (allowlisted read verbs, mechanically enforced by `ci/liveness-readonly-check.sh`). No `apply`, `create`, `edit`, `patch`, `delete`, `label`, `annotate`, `scale`, `cordon`, or `exec` — the full forbidden list is in [references/kubernetes-checks.md](references/kubernetes-checks.md) section 9. `setup-kubernetes` performs the confirm-then-verify fixes; this audit only names them.
 
 Run this standalone, from `/scoutflo:audit-all`, or on a schedule via `/scoutflo:schedule-audits`.
 
 Outputs, per the [report standard](../../report-standard/README.md):
 
-- `./scoutflo-audits/kubernetes/<context>/<YYYY-MM-DD>/findings.json` per the [findings schema](../../report-standard/findings-schema.md), finding IDs `K8S-NNN`. The `<context>` directory segment exists because one machine's kubeconfig routinely reaches several clusters; each cluster gets its own history.
+- `./scoutflo-audits/kubernetes/<context>/<YYYY-MM-DD>/findings.json` per the [findings schema](../../report-standard/findings-schema.md), scored posture finding IDs `K8S-NNN`, plus `K8SRT-NNN` for the parallel non-scored live-runtime snapshot section (Phase 8; `area: live-runtime`, always severity `info` and `points_recoverable: 0`, never in `score.categories` or `score.excluded`). The `<context>` directory segment exists because one machine's kubeconfig routinely reaches several clusters; each cluster gets its own history.
 - `./scoutflo-audits/kubernetes/<context>/<YYYY-MM-DD>/report.md` per the [report template](../../report-standard/report-template.md), including the `## Inventory` section (the `render-report-viz.sh inventory` output)
 - `./scoutflo-audits/kubernetes/<context>/<YYYY-MM-DD>/inventory.json` per the [inventory schema](../../report-standard/inventory-schema.md) (`scoutflo-inventory/v1`): the complete Phase-1 catalog — one item per namespace, workload (Deployment/StatefulSet/DaemonSet), NetworkPolicy, RBAC binding, and PodDisruptionBudget — each with `kind`, `covers`, `enabled`, `severity`, and `routes_to` for alerting objects. Built from the raw pull, never invented; redacted at capture, never a secret value.
 - One appended line in `./scoutflo-audits/kubernetes/<context>/history.jsonl`
@@ -101,6 +101,7 @@ The context selects the cluster; there is no ambient default in this audit. The 
 - Errors are evidence. An RBAC `Forbidden` on a specific list means the audit credential lacks that `view` grant; record `blocked` for that check with the exact resource, never convert it to a pass.
 - Captures keep object names, namespaces, kinds, and RBAC verbs/resources. Never capture Secret *values*; this audit never reads Secret data (`kubectl get secret -o yaml` is forbidden — only names/types via `get secret` without `-o yaml`).
 - **Never print or write a secret value.** Webhook URLs, API tokens, bearer/auth headers, cloud keys, and connection strings are captured by key name or type only, never by value — not into the terminal, evidence, `findings.json`, `report.md`, or a Slack brief. Follow the shared [secret-redaction discipline](../../report-standard/secret-redaction.md); the redaction filter (`skills/redaction/lib/redaction.sh`, `redact_file`) masks any residual secret in a written artifact as defense-in-depth.
+- **Per-service loops key on namespace + name, never bare service name.** One estate routinely runs the same service name in two namespaces (a `redis` in two application namespaces, staging and prod copies side by side); a name-only key silently collapses them into one coverage row or one probe target. Every loop over topology services reads `attributes.namespace` together with `name` from the export, and `<namespace>/<name>` is the unit for coverage rows, live-runtime probes, and `affected` entries.
 
 ## Estate sizing
 
@@ -146,6 +147,8 @@ The large-path phases then run against the scoped set; the report names anything
 
 If `./scoutflo-audits/topology.md` or a business-context file names critical services, load them (see [Metadata Load](#metadata-load-v0168) below). They set which workloads make the Reliability checks high vs medium and which namespaces are "application namespaces" for the network-policy check. Without them, treat every non-system namespace as an application namespace and every workload equally.
 
+Resolve each critical service to its `<namespace>/<name>` pair here, once — `attributes.namespace` plus `name` from `topology-export.json` — and carry that pair through every later phase (per the ground rule above). Two services that share a name in different namespaces are two entries from this point on, never one.
+
 ## Phase 2: Read-only inventory
 
 Build the raw picture with the commands in [references/kubernetes-checks.md](references/kubernetes-checks.md) section 2: server version; namespaces with their `pod-security.kubernetes.io/*` labels; ClusterRoles/ClusterRoleBindings/Roles/RoleBindings; NetworkPolicies per namespace; Deployments/StatefulSets/DaemonSets with their container resource requests/limits; PodDisruptionBudgets and replica counts. Judgment starts in Phase 3.
@@ -170,11 +173,73 @@ Commands in section 6. Deployments/StatefulSets/DaemonSets whose containers set 
 
 Commands in section 7. Critical workloads (from Phase 1, else all application Deployments) that run a single replica **and** have no PodDisruptionBudget (`K8S-005`, medium — a node drain or upgrade takes the service down with no minAvailable guard). A single replica *with* a PDB, or multiple replicas, passes.
 
-## Phase 8: Coverage matrix and topology readiness
+## Phase 8: Live-runtime snapshot (K8SRT — evidence, not scored)
 
-Per the report standard, render the per-service coverage matrix and the Scoutflo Topology Readiness section for the critical services named in Phase 1: for each, does it have an enforced pod-security namespace, a NetworkPolicy, resource limits, and PDB/replica resilience. A service missing all four is `0 of 4`; state the count in plain language (see [topology-readiness.md](../../report-standard/topology-readiness.md)).
+The scored checks above judge **configuration**: what this cluster would do under attack or a node drain. This phase captures what the cluster is **doing right now** — current container restarts and waiting reasons, recent Warning events, and node/pod usage when metrics-server answers. It is a snapshot, not a trend and not a posture judgment, so it is a parallel non-scored section per the [report template](../../report-standard/report-template.md)'s pattern (the same way Scoutflo Topology Readiness and audit-aws's Cost section work): finding IDs `K8SRT-NNN`, `area: live-runtime`, always severity `info` and `points_recoverable: 0`, never present in `score.categories` or `score.excluded`. A crash-looping pod observed here moves no score in either direction — the scored posture gap (for example K8S-004, no memory limit) carries the points; the snapshot carries the current proof.
 
-## Phase 9: Score, write, brief
+Every probe routes through the guarded wrapper in the shared live-evidence library ([skills/live-evidence/lib/live-evidence.sh](../live-evidence/lib/live-evidence.sh)): allowlisted read verbs only, `--context` pinned explicitly, every call bounded by `--request-timeout`, probe output redacted. The read-only guarantee is enforced mechanically by `ci/liveness-readonly-check.sh`, not by promise. This phase uses `get`, `get events`, and `top` only; it never calls `logs` — that depth belongs to `/scoutflo:rca`.
+
+**Runs-anywhere fallback.** When probes are unavailable — kubectl missing, context unresolvable, RBAC denied, cluster unreachable — the section renders `skipped, reason: <the exact reason>` and nothing else. A skipped snapshot is never a finding, never a fail, and never invented output; the scored audit is complete without it. The same rule applies per probe: `top` on a cluster without metrics-server is skipped with that reason, never estimated.
+
+```bash
+set -eu
+KUBE_CONTEXT="my-cluster"   # kubernetes.context
+SNAP_TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"   # tag every fact below [live@${SNAP_TS}]
+# Redaction first, then the guarded probe lib (le_kubectl allows read verbs only).
+. "${CLAUDE_PLUGIN_ROOT}/skills/redaction/lib/redaction.sh" 2>/dev/null || true
+. "${CLAUDE_PLUGIN_ROOT}/skills/live-evidence/lib/live-evidence.sh"
+if ! REASON="$(le_can_probe "$KUBE_CONTEXT" 2>&1 >/dev/null)"; then
+  echo "live-runtime snapshot: skipped, reason: ${REASON:-no live access}"; exit 0
+fi
+echo "live-runtime snapshot @ ${SNAP_TS} (read-only, not scored)"
+
+# 1. Containers restarting or stuck in a waiting state right now (K8SRT-001/002 evidence).
+le_kubectl "$KUBE_CONTEXT" get pods -A -o json 2>/dev/null | jq -r '
+  .items[] | . as $p | .status.containerStatuses[]?
+  | select((.restartCount // 0) > 0 or ((.state.waiting.reason // "") != ""))
+  | "\($p.metadata.namespace)/\($p.metadata.name)\t\(.name)\trestarts=\(.restartCount // 0)\twaiting=\(.state.waiting.reason // "-")\tlast=\(.lastState.terminated.reason // "-")/exit=\(.lastState.terminated.exitCode // "-")"' \
+  || echo "pod snapshot: blocked (record the exact error; verdict unknown, never healthy)"
+
+# 2. Recent Warning events, newest last (K8SRT-003 evidence).
+le_kubectl "$KUBE_CONTEXT" get events -A --field-selector type=Warning --sort-by=.lastTimestamp -o json 2>/dev/null \
+  | jq -r '.items[-20:] | .[] | "\(.lastTimestamp)\t\(.involvedObject.namespace // "-")/\(.involvedObject.name)\t\(.reason)\tcount=\(.count // 1)"' \
+  || echo "warning events: blocked (record the exact error; verdict unknown, never healthy)"
+
+# 3. Node/pod usage (K8SRT-004 evidence) — only when metrics-server answers.
+if le_kubectl "$KUBE_CONTEXT" top nodes >/dev/null 2>&1; then
+  le_kubectl "$KUBE_CONTEXT" top nodes 2>/dev/null || true
+  le_kubectl "$KUBE_CONTEXT" top pods -A --sort-by=memory 2>/dev/null | head -15 || true
+else
+  echo "top nodes/pods: skipped, reason: metrics-server (metrics.k8s.io) not answering on this cluster, or RBAC denies it"
+fi
+
+# 4. Per-critical-service rollout state, keyed on namespace + name (never bare name).
+TOPO="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/topology-export.json"
+if [ -f "$TOPO" ]; then
+  jq -r '.services[]? | select(.business_criticality == "critical" or .business_criticality == "high")
+    | "\(.attributes.namespace // "default") \(.name)"' "$TOPO" | sort -u \
+  | while read -r NS SVC; do
+      [ -n "${SVC:-}" ] || continue
+      echo "== ${NS}/${SVC} =="
+      probe_rollout "$KUBE_CONTEXT" "$NS" "$SVC" || echo "rollout probe blocked for ${NS}/${SVC} (verdict unknown, never healthy)"
+      probe_events  "$KUBE_CONTEXT" "$NS" "$SVC" || true
+    done
+else
+  echo "per-service probes: skipped, reason: no topology-export.json (run /scoutflo:map-topology); the cluster-wide snapshot above still stands"
+fi
+```
+
+When the export's `DEPLOYED_AS` edge or `attributes.app` names a workload different from the service name, probe that workload name instead; a probe that finds no object is recorded as unknown for that `<namespace>/<name>`, never as healthy and never re-guessed against another namespace.
+
+**When does a snapshot row become a K8SRT finding?** Only when the exact taxonomy field is present, per the shared failure taxonomy in [k8s-liveness-probes.md](../live-evidence/references/k8s-liveness-probes.md); the catalog and skip rules are in [references/kubernetes-checks.md](references/kubernetes-checks.md) section 10. `K8SRT-001`: a container in a crash/backoff waiting state now (cite the waiting reason plus `lastState.terminated` reason/exit code). `K8SRT-002`: OOMKilled in the last termination (cite exit code 137; when K8S-004 flagged the same workload, also cite this observation in K8S-004's evidence and mark that finding `validated-live` — the posture finding carries the severity, the snapshot carries the proof). `K8SRT-003`: a Warning-event burst in an application namespace (cite reason, object, count). `K8SRT-004`: node/pod pressure from `top` output (only when metrics-server answered). A bare `restartCount` with no terminated reason or event is a **symptom**: it stays a snapshot table row, never a finding. A blocked probe is recorded `skipped, reason:` — verdict unknown, never healthy.
+
+Render the section in `report.md` under its own heading, after Scoutflo Topology Readiness, per the report template's parallel non-scored section pattern. Open it with the mode line (`[live@<SNAP_TS>]`, or the skip line with its reason), then the snapshot tables, then any K8SRT findings. Close with the pointer: for a verdict on anything distressed here, run `/scoutflo:rca <namespace>/<service>` — this section is evidence, not an RCA.
+
+## Phase 9: Coverage matrix and topology readiness
+
+Per the report standard, render the per-service coverage matrix and the Scoutflo Topology Readiness section for the critical services named in Phase 1: for each, does it have an enforced pod-security namespace, a NetworkPolicy, resource limits, and PDB/replica resilience. A service missing all four is `0 of 4`; state the count in plain language (see [topology-readiness.md](../../report-standard/topology-readiness.md)). Every matrix row is keyed `<namespace>/<name>` (per the ground rule): two same-named services in different namespaces get two rows, each judged against its own namespace's labels, policies, and PDBs.
+
+## Phase 10: Score, write, brief
 
 Score per [severity-and-scoring.md](../../report-standard/severity-and-scoring.md): each check yields `pass` (1.0), `partial` (0.5), `fail`/`blocked` (0); `not-in-scope` (e.g. the PSP branch on a 1.25+ server) leaves the denominator. Category score is the credit ratio × 100 floored; overall is the weight-normalized sum over included categories, conservatively.
 
@@ -184,7 +249,7 @@ Score per [severity-and-scoring.md](../../report-standard/severity-and-scoring.m
 | Network | 30 | K8S-003 (network policies) |
 | Reliability | 30 | K8S-004 (resource limits), K8S-005 (PDB/replicas) |
 
-Full check catalog and target profile at the top of [references/kubernetes-checks.md](references/kubernetes-checks.md). IDs are stable: the same defect gets the same ID every run, one finding per failed check, affected objects (namespace/kind/name) enumerated in `affected`. Compute `points_recoverable` per finding by re-running the scoring model with that check at full credit; `info` findings carry 0. The executive summary states the gap to target and the two or three highest-`points_recoverable` findings as the biggest levers.
+Full check catalog and target profile at the top of [references/kubernetes-checks.md](references/kubernetes-checks.md). IDs are stable: the same defect gets the same ID every run, one finding per failed check, affected objects (namespace/kind/name) enumerated in `affected`. Compute `points_recoverable` per finding by re-running the scoring model with that check at full credit; `info` findings carry 0. Live-runtime (`K8SRT-*`) findings are always `info` with `points_recoverable: 0` and never enter this arithmetic — the snapshot can corroborate a posture finding's evidence (and upgrade its `status` to `validated-live`), but it never moves the score in either direction. The executive summary states the gap to target and the two or three highest-`points_recoverable` findings as the biggest levers.
 
 End-to-end gate: claim end-to-end coverage only when the overall score is at or above 85, every critical service passes every applicable coverage row, and no category was excluded. Below the gate, write "good base posture", never "end to end".
 
@@ -211,13 +276,17 @@ set -eu
 TARGET_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/kubernetes"
 RUN_DATE="$(date -u +%Y-%m-%d)"
 OUT="${TARGET_DIR}/${RUN_DATE}"
+RT_LINE=""   # optional; set only when live-runtime (K8SRT) observations exist this run
 # slack.webhook_env names the webhook variable; skip when unset.
 if [ -n "${SCOUTFLO_SLACK_WEBHOOK:-}" ]; then
   OUT_ABS="$(cd "$OUT" && pwd)"   # absolute path: the brief must be openable from anywhere
   SCORE="$(jq -r '.score.overall' "$OUT/findings.json")"
   E2E="$(jq -r 'if .score.end_to_end then "end-to-end" else "not end-to-end" end' "$OUT/findings.json")"
   COUNTS="$(jq -r '.severity_counts | "\(.critical) critical, \(.high) high, \(.medium) medium, \(.low) low"' "$OUT/findings.json")"
-  TOP="$(jq -r '[.findings[] | "\(.id) \(.title)"] | .[0:5] | join("\n")' "$OUT/findings.json")"
+  # Top findings are the scored posture levers; the non-scored live-runtime snapshot gets its own count line.
+  TOP="$(jq -r '[.findings[] | select(.area != "live-runtime") | "\(.id) \(.title)"] | .[0:5] | join("\n")' "$OUT/findings.json")"
+  RT_COUNT="$(jq -r '[.findings[] | select(.area == "live-runtime")] | length' "$OUT/findings.json")"
+  [ "$RT_COUNT" -gt 0 ] && RT_LINE="Live-runtime: ${RT_COUNT} runtime observations (snapshot, not scored)"
   # Date-named run dirs only (the previous run's baseline for movement + delta).
   PREV="$(find "$TARGET_DIR" -mindepth 1 -maxdepth 1 -type d -name '[0-9]*-[0-9]*-[0-9]*' | sort | tail -2 | head -1)"
   MOVE=""; DELTA="first run"
@@ -229,8 +298,8 @@ if [ -n "${SCOUTFLO_SLACK_WEBHOOK:-}" ]; then
       "\(($b - $n) | length) fixed, \(($n - $b) | length) new, \(($n - ($n - $b)) | length) unchanged"')"
   fi
   jq -n --arg head "audit-kubernetes ${RUN_DATE}: ${SCORE}/100${MOVE:+ $MOVE}, ${E2E}. ${COUNTS}." \
-        --arg top "$TOP" --arg delta "$DELTA" --arg path "$OUT_ABS/report.md" \
-        '{text: ($head + "\nTop findings:\n" + $top + "\nDelta: " + $delta + "\nReport: " + $path)}' \
+        --arg top "$TOP" --arg delta "$DELTA" --arg rt "$RT_LINE" --arg path "$OUT_ABS/report.md" \
+        '{text: ($head + "\nTop findings:\n" + $top + "\nDelta: " + $delta + ($rt | if . == "" then "" else "\n" + . end) + "\nReport: " + $path)}' \
     | curl -fsS --max-time 10 -H 'Content-Type: application/json' -d @- "$SCOUTFLO_SLACK_WEBHOOK" \
     || echo "Slack brief failed to send; audit result unaffected"
 fi
@@ -288,9 +357,14 @@ When context is available, apply it per [BUSINESS-CONTEXT-INTEGRATION-v0168.md](
 | A single replica with a PDB flagged as unresilient | K8S-005 fails only when single-replica AND no PDB; either replicas>1 or a PDB present is a pass |
 | Entra-integrated AKS context failing with a cryptic exec-plugin error | The doctor gate detects a `kubelogin` exec context and stops with `az aks install-cli` guidance before any check runs; cert/local-account AKS and EKS/GKE contexts skip the probe |
 | A GKE/EKS exec-plugin credential expiry mis-reported as an RBAC gap | On a failed `auth can-i`, the doctor gate branches on the exec command first: `gke-gcloud-auth-plugin` → `gcloud auth login` / token refresh, `aws` → `aws sso login` / credential refresh; only a non-exec context falls through to the "bind the view ClusterRole" RBAC message |
+| A live crash-loop dropped into the scorecard | K8SRT findings are a parallel non-scored section: `area: live-runtime` never appears in `score.categories` or `score.excluded`, severity is always `info`, `points_recoverable` is always 0; the scored posture finding (e.g. K8S-004) carries the points, the snapshot carries the proof |
+| Unavailable live probes faked, or scored as a failure | `le_can_probe` gates the section; without kubectl/context/RBAC/reachability it renders `skipped, reason: <exact reason>` — never a finding, never invented output, and the scored audit completes without it. `top` without metrics-server is skipped with that reason, never estimated |
+| A snapshot probe mutating the cluster | Every Phase 8 probe routes through the guarded `le_kubectl` wrapper (allowlisted read verbs only, pinned `--context`, bounded `--request-timeout`), mechanically enforced by `ci/liveness-readonly-check.sh`; no mutating verb exists on the allowlist |
+| Two same-named services in different namespaces collapsed into one row or probe | Per-service loops key on `namespace + name` from the topology export; `<namespace>/<name>` is the unit for coverage rows, K8SRT probes, and `affected` entries |
 
 ---
 
 **v0.1.65+** — Standalone audit
 **v0.1.69+** — Runs under `/scoutflo:audit-all`
 **v0.1.76+** — Rebuilt to fleet parity: Pod Security Admission (not removed PSP), standard schema + report, full check catalog, explicit-context safety
+**v0.1.123+** — Live-runtime snapshot section (`K8SRT-NNN`, parallel non-scored) via the shared guarded live-evidence library; per-service loops keyed on namespace + name
