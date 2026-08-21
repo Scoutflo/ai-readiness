@@ -1003,6 +1003,80 @@ else
   fi
 fi
 
+# --- clickstack (ClickHouse + HyperDX) ------------------------------------------------------
+
+CH_URL_CFG="$(cfg clickstack clickhouse_url)"
+if [ -n "$CH_URL_CFG" ]; then
+  CONFIGURED_COUNT=$((CONFIGURED_COUNT + 1))
+  CH_USER_CFG="$(cfg clickstack clickhouse_user)"; [ -n "$CH_USER_CFG" ] || CH_USER_CFG="default"
+  CH_PW_VAR="$(cfg clickstack clickhouse_password_env)"
+  CH_PW=""; [ -n "$CH_PW_VAR" ] && CH_PW="$(printenv "$CH_PW_VAR" 2>/dev/null || true)"
+  if [ -n "$CH_PW_VAR" ] && [ -z "$CH_PW" ]; then
+    row clickstack clickhouse yes "$CH_PW_VAR" env-missing - "clickstack.clickhouse_password_env names ${CH_PW_VAR} but it is not set; add it to ~/.scoutflo/env or run /scoutflo:connect"
+  else
+    note "doctor: checking clickstack clickhouse: SELECT 1 against ${CH_URL_CFG}"
+    CH_BODY="$(curl -s --connect-timeout "$CONNECT_TIMEOUT" --max-time "$MAX_TIME" \
+      -H "X-ClickHouse-User: ${CH_USER_CFG}" ${CH_PW:+-H "X-ClickHouse-Key: ${CH_PW}"} \
+      --data-binary 'SELECT 1' "${CH_URL_CFG%/}/" 2>/dev/null)" || CH_BODY=""
+    if [ "$CH_BODY" = "1" ]; then
+      row clickstack clickhouse yes "${CH_PW_VAR:-none}" pass 200 -
+    else
+      row clickstack clickhouse yes "${CH_PW_VAR:-none}" fail - "SELECT 1 as ${CH_USER_CFG} against ${CH_URL_CFG} did not return 1 — check the URL/port-forward, user, and password variable; audit-clickstack cannot read anything until this passes"
+    fi
+  fi
+  HDX_URL_CFG="$(cfg clickstack hyperdx_url)"
+  if [ -n "$HDX_URL_CFG" ]; then
+    HDX_HC="$(curl -s -o /dev/null -w '%{http_code}' --connect-timeout "$CONNECT_TIMEOUT" --max-time "$MAX_TIME" "${HDX_URL_CFG%/}/api/health")" || HDX_HC="000"
+    if [ "$HDX_HC" = "200" ]; then
+      row clickstack hyperdx-health yes - pass 200 "reachable; note: HyperDX v2.x REST (alerts/dashboards) is session-authenticated — an ingestion apiKey 401s there and the audit marks those categories not-in-scope (expected)"
+    else
+      row clickstack hyperdx-health yes - fail "$HDX_HC" "GET ${HDX_URL_CFG%/}/api/health did not return 200 — check clickstack.hyperdx_url"
+    fi
+  fi
+fi
+
+# --- azure (az CLI identity, mirrors the audit-azure doctor gate) ---------------------------
+
+AZ_SUB="$(cfg azure subscription_id)"
+if [ -n "$AZ_SUB" ]; then
+  CONFIGURED_COUNT=$((CONFIGURED_COUNT + 1))
+  if ! command -v az >/dev/null 2>&1; then
+    row azure binary-az yes - fail - "azure block configured but the az CLI is not installed; install it (https://learn.microsoft.com/cli/azure/install-azure-cli) — macOS: brew install azure-cli"
+  else
+    note "doctor: checking azure identity: az account show --subscription ${AZ_SUB}"
+    if az account show --subscription "$AZ_SUB" --query id -o tsv >/dev/null 2>&1; then
+      row azure identity yes - pass - -
+    else
+      row azure identity yes - fail - "az account show failed for subscription ${AZ_SUB} — run az login (or az account set) and confirm the subscription id in toolkit.yaml"
+    fi
+  fi
+fi
+
+# --- unknown blocks: never let a configured block silently skip -----------------------------
+# Every top-level key in toolkit.yaml must be one doctor knows how to check; a block
+# doctor does not know is reported, never silently ignored (a clickstack-only config
+# once exited 0 "PASS" with zero rows — that class of false green is what this kills).
+
+KNOWN_BLOCKS="grafana sentry pagerduty datadog elk jsm zenduty groundcover prometheus alertmanager loki tempo mimir victoriametrics vmalert digitalocean gcp aws azure github kubernetes clickstack slack"
+for blk in $(sed -n 's/^\([a-z_][a-z_0-9]*\):.*$/\1/p' "$CONFIG" | sort -u); do
+  case " $KNOWN_BLOCKS " in
+    *" $blk "*) : ;;
+    *) row "$blk" not-checked-by-doctor yes - warn - "toolkit.yaml has a '${blk}:' block that doctor has no check for — its health is UNKNOWN, not verified; if this is a real integration, doctor needs a check for it" ;;
+  esac
+done
+
+# --- placeholder secrets: catch '<your-token>'-style stubs before they burn a 401 ----------
+
+sed -n 's/^[[:space:]]\{1,\}[a-z_]*_env:[[:space:]]*//p' "$CONFIG" | sed 's/[[:space:]]#.*$//' | sort -u | while IFS= read -r pv; do
+  [ -n "$pv" ] || continue
+  pval="$(printenv "$pv" 2>/dev/null || true)"
+  [ -n "$pval" ] || continue
+  case "$pval" in
+    \<*\>|changeme|CHANGEME|your-*|YOUR-*|xxx*|XXX*|placeholder|PLACEHOLDER|TODO|todo)
+      row env placeholder-token yes "$pv" warn - "${pv} is set to a placeholder-looking value — replace it with the real secret in ~/.scoutflo/env before it burns a live 401" ;;
+  esac
+done
+
 # --- estate coherence (topology vs config) ------------------------------------------------
 # A config can drift into naming TWO estates at once: kubernetes.context pointing at one
 # cluster while topology.md (and the audits that read it) was generated against another.

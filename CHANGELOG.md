@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.1.122
+
+Fix wave from the first comprehensive live-test campaign (16 agents, 6 skills executed end-to-end against the real benchmark estate: 64-service GKE cluster, in-cluster VM/Loki/Tempo with live OTel-demo telemetry, ClickStack with 5.6M real rows, 229-repo GitHub org). Every fix below is a **live-confirmed** defect (each reproduced by an adversarial verifier before being accepted):
+
+- **Report false-green killed (high).** `render-report-viz.sh` at-a-glance claimed "end-to-end ready" from `overall >= 85` alone — a real 86/100 report with `end_to_end:false` (excluded categories) shipped that label. The ready label now requires **both** the gate and `score.end_to_end:true`; otherwise it prints "above the gate — not end-to-end". `check-report.sh` gains a contradiction check: a report claiming "end-to-end ready" over `end_to_end:false` findings now fails validation.
+- **"Start here" lever is severity-first (high-value fix).** The lever picked max `points_recoverable` regardless of severity — on the real LGTM audit it told the operator to fix Loki rate-limiting (+3 high) *before a dead default receiver* (+1 critical, the paging path). Now: severity rank first, points second, and the label says so.
+- **Doctor truthfulness (high).** doctor silently skipped `clickstack` and `azure` blocks — a clickstack-only config at a dead port exited 0 "PASS" with zero clickstack rows. doctor now checks both (ClickHouse `SELECT 1` as the configured user; HyperDX `/api/health` with the v2 session-auth note; az binary + identity), plus two guards that kill the class: an **unknown-block guard** (any toolkit.yaml block doctor can't check emits a `not-checked-by-doctor` warn row) and a **placeholder-token guard** (`<your-token>`/`changeme`-shaped secrets warn instead of burning a live 401).
+- **map-topology cookbook anchor restored (medium).** The v0.1.120 Tier-3 insertion accidentally *replaced* the `## Service-to-workload join` heading — anchors cited by SKILL.md and the merge step dangled. Restored.
+- **map-topology medium-path TMP honors `SCOUTFLO_AUDIT_DIR` (medium)** in both SKILL.md and the cookbook preamble (was hardcoded `./scoutflo-audits`, splitting artifacts across directories when the env var was set).
+- **Duplicate service names across namespaces (medium).** New export rule: colliding services are all named `<service>.<namespace>` (bare `service_name` kept in attributes); the watchpoints table gains a Namespace column and re-run carry-forward keys on Namespace + Service (live-real: two `api-gateway`s produced 63 watchpoint rows for 64 services).
+
+Two new pressure scenarios (doctor unknown-block false-green; map-topology duplicate names). Gates: leak CLEAN, structure-check (13), run-tests, plugin validate --strict; fixes re-verified live against the estate and the campaign's real artifacts.
+
 ## 0.1.121
 
 `audit-clickstack` hardened against two real gaps found running it live against a HyperDX v2.35 + ClickHouse 26.5 all-in-one carrying real OpenTelemetry-demo telemetry (the first time the skill ran on genuine `otel_*` data, not synthetic seed rows):
