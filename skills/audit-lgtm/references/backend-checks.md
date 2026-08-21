@@ -79,6 +79,9 @@ One permanent ID per check. IDs never change or get reused; retired checks keep 
 | LGTM-071 | Alert routing | Ruler rule groups cap fan-out: group `limit` is not 0/unlimited on high-cardinality rules | medium |
 | LGTM-072 | Alert routing | Ruler re-notify and restart-state timing deliberate (resend delay, resolve duration, outage/grace tolerances) | low |
 | LGTM-073 | Alert routing | HA ruler replicas do not double-evaluate rules (Loki sharding ring; VM-family sample dedup) | low |
+| LGTM-080 | Service coverage | PostgreSQL series present are covered by alert rules on a seeing evaluator (connections vs max, deadlocks, commit rate) | high |
+| LGTM-081 | Service coverage | Redis/Valkey series present are covered by alert rules on a seeing evaluator (evictions, connected clients) | medium |
+| LGTM-082 | Service coverage | Kafka series present are covered by alert rules on a seeing evaluator (consumer-group lag) | high |
 
 ## 1. Backend detection (LGTM-002, LGTM-021, LGTM-041)
 
@@ -270,7 +273,9 @@ AUTH="Authorization: Bearer ${LOKI_TOKEN}"
 # Multi-tenant Loki also needs: -H "X-Scope-OrgID: <tenant>" on every call.
 SERVICE_LABEL="service"                # your canonical service label; tune
 TRACED_SERVICE="checkout"              # one topology.md service that emits traces
+TRACED_NS="shop"                       # that service's Namespace column from topology.md; key on namespace+service, never bare name
 RECENT_S="900"                         # smoke window in seconds; example, tune to your volume
+LOG_SAMPLE="50"                        # lines sampled for the trace-ID check; 5 was too thin to trust a zero
 
 # LGTM-020: readiness
 curl -fsS --max-time 10 -H "$AUTH" "${LOKI_URL}/ready"
@@ -290,18 +295,31 @@ curl -fsS --max-time 15 -H "$AUTH" --get \
 
 # LGTM-024: trace ID present in recent log lines of one traced service
 curl -fsS --max-time 15 -H "$AUTH" --get \
-  --data-urlencode "query={${SERVICE_LABEL}=\"${TRACED_SERVICE}\"}" \
+  --data-urlencode "query={${SERVICE_LABEL}=\"${TRACED_SERVICE}\", namespace=\"${TRACED_NS}\"}" \
   --data-urlencode "start=${START}" --data-urlencode "end=${END}" \
-  --data-urlencode 'limit=5' \
+  --data-urlencode "limit=${LOG_SAMPLE}" \
   "${LOKI_URL}/loki/api/v1/query_range" \
   | jq -r '.data.result[].values[][1]' | grep -ciE 'trace[_-]?id' || true
+
+# LGTM-024 (alternate join): an OTLP-shipping collector moves the trace ID out of
+# the line body into Loki structured metadata, so the body grep above reads 0 on a
+# healthy pipeline. Before failing this check, count lines whose structured-metadata
+# trace_id field is populated (needs Loki >= 3.0 with schema v13 structured
+# metadata; confirm-live on your install — a parse error here on older Loki means
+# the feature is absent, not that the check failed):
+curl -fsS --max-time 15 -H "$AUTH" --get \
+  --data-urlencode "query={${SERVICE_LABEL}=\"${TRACED_SERVICE}\", namespace=\"${TRACED_NS}\"} | trace_id != \"\"" \
+  --data-urlencode "start=${START}" --data-urlencode "end=${END}" \
+  --data-urlencode "limit=${LOG_SAMPLE}" \
+  "${LOKI_URL}/loki/api/v1/query_range" \
+  | jq '[.data.result[].values[]] | length' || echo "structured-metadata filter unsupported on this Loki"
 
 # LGTM-025 (backend side): discarded or rejected ingestion, from Loki self-metrics
 curl -fsS --max-time 10 -H "$AUTH" "${LOKI_URL}/metrics" \
   | grep -E '^loki_discarded_samples_total' || echo "no discarded-samples counters (nothing discarded)"
 ```
 
-Expected: `/ready` returns `ready`; label keys include a service-identifying label and `namespace`; the smoke query returns at least one stream; the LGTM-024 count is nonzero for a service that emits traces; discarded-samples counters are absent or flat. Failure shapes: `parse error` on a valid LogQL query means the backend is not Loki (back to section 1); zero streams with healthy collectors means ingestion is broken upstream (collector-side evidence in section 11); `too many outstanding requests` means the query window is too wide for your install, shrink `RECENT_S`. A zero LGTM-024 count means responders cannot pivot log to trace; check that the log pipeline keeps the trace ID field. Discarded counters present and rising name their reason in the label (rate limits, out-of-order writes, label cardinality); quote the counter line as evidence. If `/metrics` 404s behind your gateway, score LGTM-025 from the collector-side checks in section 11 instead.
+Expected: `/ready` returns `ready`; label keys include a service-identifying label and `namespace`; the smoke query returns at least one stream; the LGTM-024 count is nonzero for a service that emits traces; discarded-samples counters are absent or flat. Failure shapes: `parse error` on a valid LogQL query means the backend is not Loki (back to section 1); zero streams with healthy collectors means ingestion is broken upstream (collector-side evidence in section 11); `too many outstanding requests` means the query window is too wide for your install, shrink `RECENT_S`. A zero on **both** LGTM-024 forms — line body and structured metadata — over a `LOG_SAMPLE`-sized sample means responders cannot pivot log to trace; check that the log pipeline keeps the trace ID field (OTLP structured metadata is the modern carrier). A zero on the body grep alone is not the finding when the metadata form is populated; say which form carries the ID, because dashboards' derived-field regexes need to match it. Discarded counters present and rising name their reason in the label (rate limits, out-of-order writes, label cardinality); quote the counter line as evidence. If `/metrics` 404s behind your gateway, score LGTM-025 from the collector-side checks in section 11 instead.
 
 ## 6. VictoriaLogs (LGTM-020, LGTM-022, LGTM-023)
 
@@ -361,7 +379,44 @@ curl -fsS --max-time 15 -H "$AUTH" --get \
   "${TEMPO_URL}/api/search" | jq '.traces | length'
 ```
 
-Expected: `/ready` returns ready text; recent search returns traces with plausible `rootServiceName` values; the tag-values list matches your services; the error search parses (zero results is fine when nothing is erroring, a parse failure is not). Failure shapes: 404 on `/api/search` means not Tempo (section 1); traces present but `service.name` values like `unknown_service` mean OTel resource attributes are missing at the SDK or collector (feeds LGTM-043 and LGTM-031). To spot-check trace-to-logs correlation for LGTM-053, fetch one trace by ID via `/api/traces/<trace-id>` and query the log backend for that ID.
+Expected: `/ready` returns ready text; recent search returns traces with plausible `rootServiceName` values; the tag-values list matches your services; the error search parses (zero results is fine when nothing is erroring, a parse failure is not). Failure shapes: 404 on `/api/search` means not Tempo (section 1); traces present but `service.name` values like `unknown_service` mean OTel resource attributes are missing at the SDK or collector (feeds LGTM-043 and LGTM-031). Trace-to-logs correlation for LGTM-053 runs through the normalized pivot in section 7.1 below — never a literal grep of a single search-returned ID.
+
+### 7.1 Trace-to-logs pivot with trace-ID normalization (LGTM-053, cross-checks LGTM-024)
+
+Tempo search returns trace IDs with their **leading zeros trimmed** (a 31-character ID was observed live on a real estate; W3C/OTLP trace IDs are 32 lowercase hex characters). Log lines and structured metadata usually carry the full padded form, so an exact-match join on the trimmed ID — a structured-metadata field filter, a JSON field equality, or an anchored grep — false-negatives and produces the phantom finding "this trace has no logs". Normalize before joining: left-pad the ID to 32 hex characters and search **both** forms. And never judge the pivot from one trace; sample several.
+
+```bash
+set -eu
+TEMPO_URL="https://tempo.example.com"   # tempo.url
+TEMPO_TOKEN="${TEMPO_TOKEN:-}"          # tempo.token_env, if set
+LOKI_URL="https://loki.example.com"     # loki.url
+LOKI_TOKEN="${LOKI_TOKEN:-}"            # loki.token_env, if set
+TAUTH="Authorization: Bearer ${TEMPO_TOKEN}"; [ -n "$TEMPO_TOKEN" ] || TAUTH="Accept: application/json"
+LAUTH="Authorization: Bearer ${LOKI_TOKEN}";  [ -n "$LOKI_TOKEN" ]  || LAUTH="Accept: application/json"
+TRACE_SAMPLE="10"                       # traces sampled for the pivot; one trace proves nothing, tune upward on busy estates
+LOOKBACK_S="3600"                       # search window in seconds; example, tune to your sampling
+
+END_S="$(date -u +%s)"; START_S="$(( END_S - LOOKBACK_S ))"
+END_NS="${END_S}000000000"; START_NS="${START_S}000000000"
+
+curl -fsS --max-time 15 -H "$TAUTH" --get \
+  --data-urlencode "start=${START_S}" --data-urlencode "end=${END_S}" \
+  --data-urlencode "limit=${TRACE_SAMPLE}" \
+  "${TEMPO_URL}/api/search" | jq -r '.traces[].traceID' > /tmp/lgtm-trace-ids.txt
+
+while read -r tid; do
+  [ -n "$tid" ] || continue
+  padded="$(printf '%032s' "$tid" | tr ' ' '0')"   # left-pad to 32 hex chars
+  hits="$(curl -fsS --max-time 15 -H "$LAUTH" --get \
+    --data-urlencode "query={namespace=~\".+\"} |~ \"(${padded}|${tid})\"" \
+    --data-urlencode "start=${START_NS}" --data-urlencode "end=${END_NS}" \
+    --data-urlencode 'limit=5' \
+    "${LOKI_URL}/loki/api/v1/query_range" | jq '[.data.result[].values[]] | length')"
+  echo "trace ${tid} (padded: ${padded}): ${hits} log lines"
+done < /tmp/lgtm-trace-ids.txt
+```
+
+Read it as: most sampled traces landing log lines is a `pass` for the trace-to-logs side of LGTM-053; zero across the whole sample is the pivot genuinely broken — and it cross-checks LGTM-024 (if log lines carry no trace IDs at all, this pivot cannot work, and the LGTM-024 finding owns the root cause). A mixed result names which services' traces found logs in the evidence. Where the pipeline ships the trace ID as OTLP structured metadata rather than in the line body (see the LGTM-024 alternate join in section 5), replace the line-body regex with the structured-metadata field filter — `| trace_id = "<id>"` — and try **both** the padded and trimmed forms there too: exact-match field filters are precisely where the padded/trimmed mismatch bites hardest. The same normalization applies to IDs taken from the Jaeger-shaped VictoriaTraces API (section 8) and to any trace ID a responder copies out of a Grafana panel for the section 10 pivot.
 
 ## 8. VictoriaTraces (LGTM-040, LGTM-042, LGTM-043)
 
@@ -458,52 +513,61 @@ curl -fsS --max-time 10 -H "Authorization: Bearer ${GRAFANA_TOKEN}" \
   "${GRAFANA_URL}/api/v1/provisioning/contact-points" | jq -r '.[] | "\(.name) \(.type)"'
 ```
 
-The contact-points response can include webhook URLs; the `jq` above extracts names and types only, and that is all that goes into evidence. Datasource health failures name the broken datasource; a dashboard panel whose `ds=` uid is absent from the datasource list is a dead reference (LGTM-052). For LGTM-054, open the panels behind your key stat numbers: a per-service title over an unfiltered org-wide query, or a `count` of a paginated list used as a total, is a dishonest panel. For LGTM-053, follow one metrics panel's data links and one trace ID from section 7 into the log backend and confirm the pivot lands scoped to the same service and environment. The full dashboard-quality pass is `/scoutflo:audit-grafana`.
+The contact-points response can include webhook URLs; the `jq` above extracts names and types only, and that is all that goes into evidence. Datasource health failures name the broken datasource; a dashboard panel whose `ds=` uid is absent from the datasource list is a dead reference (LGTM-052). For LGTM-054, open the panels behind your key stat numbers: a per-service title over an unfiltered org-wide query, or a `count` of a paginated list used as a total, is a dishonest panel. For LGTM-053, follow one metrics panel's data links into the log backend and run the section 7.1 pivot (which left-pads leading-zero-trimmed trace IDs to 32 hex chars, searches both forms, and samples several traces rather than one), confirming the pivot lands scoped to the same service and environment; a Grafana trace-to-logs data link built on the trimmed ID has the same false-negative shape. The full dashboard-quality pass is `/scoutflo:audit-grafana`.
 
 ## 11. Kubernetes-side reliability checks (LGTM-025, LGTM-060 to LGTM-066)
 
+A real observability estate rarely fits one namespace: the metrics family, the LGTM components, and a legacy stack commonly live in two or three separate namespaces, and checking only one silently passes the others. `MONITORING_NAMESPACES` is a space-separated list (from `kubernetes.monitoring_namespace`, which may name several); every check below loops over it, and the evidence names which namespace each result came from.
+
 ```bash
 set -eu
-KUBE_CONTEXT="your-kube-context"   # kubernetes.context
-MON_NS="monitoring"                # kubernetes.monitoring_namespace
-COLLECTOR="alloy"                  # your log/metric collector daemonset name, from Phase 2 inventory
-SINCE="15m"                        # log inspection window; example, tune
+KUBE_CONTEXT="your-kube-context"    # kubernetes.context
+MONITORING_NAMESPACES="monitoring"  # kubernetes.monitoring_namespace; space-separated when the
+                                    # stack spans several namespaces, e.g. "monitoring lgtm victoriametrics"
+COLLECTOR="alloy"                   # your log/metric collector daemonset name, from Phase 2 inventory
+SINCE="15m"                         # log inspection window; example, tune
 
-# LGTM-060: single-replica telemetry stores
-kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" get sts -o json \
-  | jq -r '.items[] | select(.spec.replicas == 1) | "\(.metadata.name): 1 replica"'
+for MON_NS in $MONITORING_NAMESPACES; do
+  echo "== monitoring namespace: ${MON_NS} =="
 
-# LGTM-025: collector rollout and recent error volume
-kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" get ds -o json \
-  | jq -r '.items[] | "\(.metadata.name): desired=\(.status.desiredNumberScheduled) ready=\(.status.numberReady)"'
-kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" logs "ds/${COLLECTOR}" --since="$SINCE" 2>/dev/null \
-  | grep -ciE 'error|dropped|failed|retry' || echo "0 error lines"
+  # LGTM-060: single-replica telemetry stores
+  kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" get sts -o json \
+    | jq -r '.items[] | select(.spec.replicas == 1) | "\(.metadata.name): 1 replica"'
 
-# LGTM-025 (EOL collectors): flag Promtail (EOL 2026-03-02) and Grafana Agent (EOL 2025-11-01)
-# pods still running; both are superseded by Grafana Alloy. Scan daemonset AND deployment images
-# across the namespace, not just the one named COLLECTOR, so a second legacy collector is caught.
-kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" get ds,deploy -o json \
-  | jq -r '.items[].spec.template.spec.containers[].image
-      | select(test("promtail|grafana[-/]agent|grafana/agent"))'
-echo "flag: each image above is an EOL collector (Promtail/Grafana Agent) -> migration-debt finding, migrate to grafana/alloy"
+  # LGTM-025: collector rollout and recent error volume (skip namespaces without the collector)
+  kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" get ds -o json \
+    | jq -r '.items[] | "\(.metadata.name): desired=\(.status.desiredNumberScheduled) ready=\(.status.numberReady)"'
+  kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" logs "ds/${COLLECTOR}" --since="$SINCE" 2>/dev/null \
+    | grep -ciE 'error|dropped|failed|retry' || echo "collector ds/${COLLECTOR} not in ${MON_NS} or 0 error lines"
 
-# LGTM-061 / LGTM-062: storage sizing as retention input; snapshot objects if a backup operator runs
-kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" get pvc
-kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" get volumesnapshot 2>/dev/null || echo "no VolumeSnapshot objects"
+  # LGTM-025 (EOL collectors): flag Promtail (EOL 2026-03-02) and Grafana Agent (EOL 2025-11-01)
+  # pods still running; both are superseded by Grafana Alloy. Scan daemonset AND deployment images
+  # across the namespace, not just the one named COLLECTOR, so a second legacy collector is caught.
+  kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" get ds,deploy -o json \
+    | jq -r '.items[].spec.template.spec.containers[].image
+        | select(test("promtail|grafana[-/]agent|grafana/agent"))'
+  echo "flag: each image above is an EOL collector (Promtail/Grafana Agent) -> migration-debt finding, migrate to grafana/alloy"
 
-# LGTM-063: what is exposed, then probe each host unauthenticated (expect a non-200)
-kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" get ingress -o json \
-  | jq -r '.items[] | "\(.metadata.name) \(.spec.rules[].host)"'
-EXPOSED_HOST="grafana.example.com"          # each host from the list above
+  # LGTM-061 / LGTM-062: storage sizing as retention input; snapshot objects if a backup operator runs
+  kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" get pvc
+  kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" get volumesnapshot 2>/dev/null || echo "no VolumeSnapshot objects"
+
+  # LGTM-063: what is exposed; probe each listed host unauthenticated afterwards (expect a non-200)
+  kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" get ingress -o json \
+    | jq -r '.items[] | "\(.metadata.name) \(.spec.rules[].host)"'
+
+  # LGTM-064: network and disruption controls
+  kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" get networkpolicy
+  kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" get pdb
+
+  # LGTM-066: secret-shaped values in plain ConfigMaps
+  kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" get configmap -o json \
+    | jq -r '.items[] | select(.data | tostring | test("token|password|secret|api[_-]?key"; "i")) | .metadata.name'
+done
+
+# LGTM-063 (probe): each host the ingress listing above printed, from any namespace
+EXPOSED_HOST="grafana.example.com"          # each host from the lists above
 curl -sS -o /dev/null -w '%{http_code}\n' --max-time 10 "https://${EXPOSED_HOST}/"
-
-# LGTM-064: network and disruption controls
-kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" get networkpolicy
-kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" get pdb
-
-# LGTM-066: secret-shaped values in plain ConfigMaps
-kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" get configmap -o json \
-  | jq -r '.items[] | select(.data | tostring | test("token|password|secret|api[_-]?key"; "i")) | .metadata.name'
 ```
 
 Reading the results. LGTM-060: any single-replica statefulset holding metrics, logs, or traces is a finding unless an accepted RPO/RTO with proven backups is on record. LGTM-061: PVC size alone is not retention; read the store's retention flag or chart values (`helm --kube-context "$KUBE_CONTEXT" -n "$MON_NS" get values <release>` is read-only) and record the period per store. LGTM-063: an unauthenticated `200` from a metrics store, Alertmanager, or a raw Grafana render is exposure; `401`, `403`, or a `302` to a login is the healthy shape. LGTM-064: `No resources found` on both queries means one bad node drain can take monitoring down silently. LGTM-066: the jq filter is a heuristic for where to look, not proof; open the named ConfigMaps and confirm before filing, and never copy the matched values into evidence. For LGTM-065, sample label cardinality from the metrics store (Prometheus: `/api/v1/status/tsdb` top label pairs) and look for IDs, emails, session tokens, or full URLs used as label values.
@@ -546,12 +610,14 @@ comm -23 /tmp/lgtm-ns-local.txt /tmp/lgtm-ns-telemetry.txt | head    # local-onl
 
 Interpretation, evaluated **per critical service**, not once globally: take that service's `attributes.cluster_id` from `topology-export.json` and check whether the telemetry backend's Side A cluster values/labels include it (exact match, or the backend's node inventory and namespace overlap corroborate it). A service whose declared cluster_id matches the telemetry side = same cluster, proceed with scoring for that service. A service whose declared cluster_id does not appear anywhere in the telemetry backend's cluster values, node inventory, or namespace overlap = different cluster; that service's workload-coverage row is `blocked` per SKILL.md Phase 6, filed as LGTM-039 naming both cluster_ids as evidence. Only fall back to the kubectl-context comparison (Side B fallback above) for services with no `cluster_id` in the export, and when you do, say so explicitly in the LGTM-039 finding rather than presenting it as equivalent evidence — a kubectl-context match is weaker proof than a declared, map-topology-authored `cluster_id` match. No `kube_node_info`, no cluster label, thin namespace sets, and no declared `cluster_id` = undetermined; state it and score conservatively without inventing a critical finding. Because the gate is now per-service, a single run can have some services pass the gate and others blocked — do not collapse this to one global verdict.
 
-Then run the queries below once per critical service from `./scoutflo-audits/topology.md`. Label names are yours to tune.
+Then run the queries below once per critical service from `./scoutflo-audits/topology.md`. **Key every pass on namespace + service, never the bare name**: the same service name legitimately runs in two namespaces on real estates (an `api-gateway` per tier is a live-observed shape), and a bare-name query merges their telemetry so one covered instance masks the other's blindness. Coverage-matrix rows, worklist rows, and `affected` entries all carry the `namespace/service` form. Label names are yours to tune.
 
 ```bash
 set -eu
-SERVICE="checkout"                     # one topology.md service per pass
+SERVICE="checkout"                     # one topology.md service per pass (Service column)
+SERVICE_NS="shop"                      # that service's Namespace column from topology.md
 SERVICE_LABEL="service"                # your canonical metrics/logs service label; tune
+NS_LABEL="namespace"                   # your namespace label on metrics/logs series; tune
 RECENT_S="900"                         # freshness window in seconds; example, tune
 METRICS_URL="https://prometheus.example.com"   # prometheus.url (adjust prefix per sections 3-4)
 LOKI_URL="https://loki.example.com"            # loki.url
@@ -561,9 +627,9 @@ MAUTH="Authorization: Bearer ${METRICS_TOKEN}"; [ -n "$METRICS_TOKEN" ] || MAUTH
 LAUTH="Authorization: Bearer ${LOKI_TOKEN}";    [ -n "$LOKI_TOKEN" ]    || LAUTH="Accept: application/json"
 TAUTH="Authorization: Bearer ${TEMPO_TOKEN}";   [ -n "$TEMPO_TOKEN" ]   || TAUTH="Accept: application/json"
 
-# LGTM-032: recent metric series for this service (existence)
+# LGTM-032: recent metric series for this service (existence), keyed namespace+service
 curl -fsS --max-time 10 -H "$MAUTH" --get \
-  --data-urlencode "query=count({${SERVICE_LABEL}=\"${SERVICE}\"})" \
+  --data-urlencode "query=count({${SERVICE_LABEL}=\"${SERVICE}\", ${NS_LABEL}=\"${SERVICE_NS}\"})" \
   "${METRICS_URL}/api/v1/query" | jq '.data.result[0].value[1] // "0"'
 
 # LGTM-032 depth, real, not just existence: per-pod resource series, HTTP status-code
@@ -571,26 +637,29 @@ curl -fsS --max-time 10 -H "$MAUTH" --get \
 # every one of these is absent, and RCA quality has already been observed to depend on
 # exactly this depth, not on "metrics exist" alone.
 curl -fsS --max-time 10 -H "$MAUTH" --get \
-  --data-urlencode "query=count(container_cpu_usage_seconds_total{${SERVICE_LABEL}=\"${SERVICE}\"}) by (pod)" \
+  --data-urlencode "query=count(container_cpu_usage_seconds_total{${SERVICE_LABEL}=\"${SERVICE}\", ${NS_LABEL}=\"${SERVICE_NS}\"}) by (pod)" \
   "${METRICS_URL}/api/v1/query" | jq '.data.result | length'   # per-pod cAdvisor CPU series present, one row per pod
 curl -fsS --max-time 10 -H "$MAUTH" --get \
-  --data-urlencode "query=count(http_requests_total{${SERVICE_LABEL}=\"${SERVICE}\"}) by (status_code)" \
+  --data-urlencode "query=count(http_requests_total{${SERVICE_LABEL}=\"${SERVICE}\", ${NS_LABEL}=\"${SERVICE_NS}\"}) by (status_code)" \
   "${METRICS_URL}/api/v1/query" | jq '.data.result | length'   # >1 distinct status_code value proves the label exists and is populated, tune the metric name to your app's actual HTTP metric
 curl -fsS --max-time 10 -H "$MAUTH" --get \
-  --data-urlencode "query=count(http_request_duration_seconds_bucket{${SERVICE_LABEL}=\"${SERVICE}\"}) by (le)" \
+  --data-urlencode "query=count(http_request_duration_seconds_bucket{${SERVICE_LABEL}=\"${SERVICE}\", ${NS_LABEL}=\"${SERVICE_NS}\"}) by (le)" \
   "${METRICS_URL}/api/v1/query" | jq '.data.result | length'   # >0 le buckets prove a real latency histogram exists, not just a bare counter
 
-# LGTM-033: recent log streams for this service
+# LGTM-033: recent log streams for this service, keyed namespace+service
 END="$(date -u +%s)000000000"; START="$(( $(date -u +%s) - RECENT_S ))000000000"
 curl -fsS --max-time 15 -H "$LAUTH" --get \
-  --data-urlencode "query={${SERVICE_LABEL}=\"${SERVICE}\"}" \
+  --data-urlencode "query={${SERVICE_LABEL}=\"${SERVICE}\", ${NS_LABEL}=\"${SERVICE_NS}\"}" \
   --data-urlencode "start=${START}" --data-urlencode "end=${END}" --data-urlencode 'limit=1' \
   "${LOKI_URL}/loki/api/v1/query_range" | jq '.data.result | length'
 
-# LGTM-034: recent traces for this service (Tempo form; VictoriaTraces form in section 8)
+# LGTM-034: recent traces for this service (Tempo form; VictoriaTraces form in section 8).
+# resource.k8s.namespace.name is the standard OTel resource attribute; if your spans
+# carry a different namespace attribute (or none), tune or drop the second clause and
+# record the weaker keying in evidence.
 END_S="$(date -u +%s)"; START_S="$(( END_S - RECENT_S ))"
 curl -fsS --max-time 15 -H "$TAUTH" --get \
-  --data-urlencode "q={ resource.service.name = \"${SERVICE}\" }" \
+  --data-urlencode "q={ resource.service.name = \"${SERVICE}\" && resource.k8s.namespace.name = \"${SERVICE_NS}\" }" \
   --data-urlencode "start=${START_S}" --data-urlencode "end=${END_S}" --data-urlencode 'limit=1' \
   "${TEMPO_URL}/api/search" | jq '.traces | length'
 
@@ -600,7 +669,7 @@ curl -fsS --max-time 10 -H "$MAUTH" "${METRICS_URL}/api/v1/rules" \
     '.data.groups[].rules[] | select(.query? // "" | contains($s)) | "\(.name) severity=\(.labels.severity // "none")"'
 ```
 
-Row scoring: a nonzero count is `pass` for that signal; zero where the signal should exist is `fail`; zero because tracing is intentionally sampled out or not deployed for this service, with the decision recorded, is `not-in-scope`; zero where the LGTM-039 probe showed the backend does not monitor this service's cluster is `blocked`, never `fail`. All applicable signals at zero makes this service part of LGTM-030, critical — only under a confirmed same-cluster scope. Rules matching by name substring is a starting heuristic; confirm the rule's selector actually targets the service before crediting LGTM-035. For LGTM-036 to LGTM-038, check the paging rules' annotations for `runbook_url` and owner labels, and dashboards for deploy markers.
+Row scoring: a nonzero count is `pass` for that signal; zero where the signal should exist is `fail`; zero because tracing is intentionally sampled out or not deployed for this service, with the decision recorded, is `not-in-scope`; zero where the LGTM-039 probe showed the backend does not monitor this service's cluster is `blocked`, never `fail`. All applicable signals at zero makes this service part of LGTM-030, critical — only under a confirmed same-cluster scope. Rules matching by name substring is a starting heuristic; confirm the rule's selector actually targets the service **in its namespace** before crediting LGTM-035 — a rule scoped to the other namespace's same-named service is not coverage for this one. For LGTM-036 to LGTM-038, check the paging rules' annotations for `runbook_url` and owner labels, and dashboards for deploy markers.
 
 For LGTM-032 specifically: the existence query passing is `partial`, not `pass`, on its own. Full `pass` needs the depth queries too — per-pod cAdvisor series (proves resource-saturation questions are answerable per pod, not just in aggregate), a populated status-code label on the HTTP metric (proves error-rate-by-code is measurable, not just total request count), and a real latency histogram (proves percentile/SLO questions are answerable, not just averages). A service with metrics that exist but lack all three is a real, common shape: it looks "covered" in a naive dashboard scan while an actual investigation into "is this pod resource-starved" or "what's our p99" has nothing to query.
 
@@ -743,3 +812,51 @@ curl -fsS --max-time 10 -H "$AUTH" "${TEMPO_URL}/api/overrides" 2>/dev/null \
 ```
 
 Documented defaults to read against: `registry.stale_duration` 15m (a much longer value keeps dead series lingering, a stuck-metric risk), `registry.collection_interval` 15s, `max_label_name_length`/`max_label_value_length` 1024/2048, and `metrics_ingestion_time_range_slack` 30s (late spans excluded to avoid retroactive rate spikes). `max_active_series`/`max_active_entities` are per-tenant overrides; unset means no cap. `filter_policies` empty means every span becomes a metric — the noisy default. Enabling `enable_target_info` or service-graph `enable_client_server_prefix` multiplies cardinality. These are cardinality inputs to metric-alert noise, not alert-rule config; frame them that way in the report.
+
+## 14. Datastore alert depth (LGTM-080, LGTM-081, LGTM-082)
+
+Runs [Phase 6b](../SKILL.md#phase-6b-datastore-alert-depth). Databases, caches, and queues fail differently from request-serving services — connection exhaustion, deadlocks, evictions, consumer lag — and their series routinely land in a different metrics backend than the request-path series. Each check here asks two live questions per datastore family: do the series exist in some configured metrics backend, and does at least one alerting rule **on an evaluator that can actually see those series** cover the family's key signals? A present series with no covering alert is the finding. No series of the family anywhere is `not-in-scope` for this lane — a datastore workload running with no exporter at all is a coverage gap owned by LGTM-032/LGTM-035, not re-filed here.
+
+Run the discovery against **every** configured metrics backend (Prometheus per section 2, Mimir per section 3, VictoriaMetrics per section 4 — adjust the path prefix and tenant header accordingly). The two naming families in the wild are exporter-style (`pg_*`, `redis_*`, `kafka_*`) and OTel-collector-style (`postgresql_*`, `redis_*`/`valkey_*`, `kafka_*`); the live `__name__` list is the truth, never an assumed name:
+
+```bash
+set -eu
+METRICS_URL="https://prometheus.example.com"   # prometheus.url / mimir.url / victoriametrics.url; repeat per configured backend
+METRICS_TOKEN="${PROM_TOKEN:-}"                # the matching token_env, if set
+MAUTH="Authorization: Bearer ${METRICS_TOKEN}"
+[ -n "$METRICS_TOKEN" ] || MAUTH="Accept: application/json"
+
+# LGTM-080 / LGTM-081 / LGTM-082: which datastore series actually exist here
+for fam in 'pg_.*|postgresql_.*' 'redis_.*|valkey_.*' 'kafka_.*'; do
+  echo "== family: ${fam} =="
+  curl -fsS --max-time 15 -H "$MAUTH" --get \
+    --data-urlencode "match[]={__name__=~\"${fam}\"}" \
+    "${METRICS_URL}/api/v1/label/__name__/values" | jq -r '.data[]?' | head -40
+done
+```
+
+Key signals to locate in the live list, per check. The names in the last column are the common exporter-style / OTel-collector-style candidates — starting points to grep the live list for, **not** an assumed truth; confirm each name against the discovery output before judging (confirm-live):
+
+| Check | Family | Key signals | Common series names (exporter / OTel; confirm against the live list) |
+| --- | --- | --- | --- |
+| LGTM-080 | PostgreSQL | connections vs max; deadlocks; commit rate | `pg_stat_activity_count` + `pg_settings_max_connections` / `postgresql_backends` + `postgresql_connection_max`; `pg_stat_database_deadlocks` / `postgresql_deadlocks`; `pg_stat_database_xact_commit` / `postgresql_commits` |
+| LGTM-081 | Redis or Valkey | evictions; connected clients | `redis_evicted_keys_total` / `redis_keys_evicted`; `redis_connected_clients` / `redis_clients_connected` (Valkey deployments may keep `redis_*` names or use `valkey_*`) |
+| LGTM-082 | Kafka | consumer-group lag | `kafka_consumergroup_lag` / `kafka_consumer_group_lag` |
+
+Then read the alerting rules from **every evaluator wired to a backend that stores these series**: Prometheus `/api/v1/rules` (section 2), vmalert `/api/v1/rules` (section 4), the Mimir ruler per tenant (section 13.3). A rule that references `postgresql_*` in an evaluator whose datasource does not store those series covers nothing — verify by running the rule's expression against that evaluator's own datasource; an empty result is not coverage. This is a real, observed estate shape: the richest datastore series in one backend while the only rule evaluator watches another (that evaluator gap itself is LGTM-012; the uncovered series are this lane's finding).
+
+```bash
+set -eu
+RULES_URL="https://prometheus.example.com"   # prometheus.url or victoriametrics.vmalert_url; repeat once per evaluator
+RULES_TOKEN="${PROM_TOKEN:-}"                # the matching token_env, if set
+RAUTH="Authorization: Bearer ${RULES_TOKEN}"
+[ -n "$RULES_TOKEN" ] || RAUTH="Accept: application/json"
+
+# LGTM-080 / LGTM-081 / LGTM-082: alerting rules whose expression touches a datastore family
+curl -fsS --max-time 15 -H "$RAUTH" "${RULES_URL}/api/v1/rules" \
+  | jq -r '.data.groups[].rules[] | select(.type == "alerting") | "\(.name)\t\(.query // "")"' \
+  | grep -iE 'pg_|postgresql_|redis_|valkey_|kafka_' \
+  || echo "no alerting rule on this evaluator references any datastore series"
+```
+
+Scoring, per family: every key signal present in the live series list and referenced by at least one alerting rule on a seeing evaluator is `pass`; some signals covered but not all is `partial`; series present and zero covering rules is `fail` — the finding names the observed series counts and the uncovered signals in evidence, and `affected` names the datastore workloads from topology, keyed `namespace/service`. No series of the family in any configured backend is `not-in-scope`, stated with the LGTM-032/LGTM-035 pointer above. These checks join the Service coverage category (LGTM-080 to LGTM-082); like Phase 7b's additions to Alert routing, they add no category and do not change its weight — they grow its denominator. They are structural presence-and-reference checks: whether the covering rule's threshold or `for` is any good is alert hygiene (Phase 7b) and rule-noise territory (LGTM-017), not re-scored here.

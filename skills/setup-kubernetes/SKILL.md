@@ -128,8 +128,9 @@ K8S-002, K8S-006. Guarded → disruptive. Replace a workload ServiceAccount's wi
 
 ```bash
 # 1. Announce + apply a scoped Role/RoleBinding (guarded). 2. Verify the SA retains needed access:
-kubectl --context "$KUBE_CONTEXT" auth can-i <verb> <resource> \
-  --as=system:serviceaccount:<ns>:<sa> -n <ns>
+VERB="get"; RESOURCE="pods"; NS="your-namespace"; SA="your-serviceaccount"   # what the workload legitimately needs
+kubectl --context "$KUBE_CONTEXT" auth can-i "$VERB" "$RESOURCE" \
+  --as="system:serviceaccount:${NS}:${SA}" -n "$NS"
 # 3. Only then announce removal of the wildcard ClusterRoleBinding (DISRUPTIVE, second confirmation):
 #    rollback = re-apply the backed-up ClusterRoleBinding yaml.
 ```

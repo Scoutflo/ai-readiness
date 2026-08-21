@@ -7,8 +7,10 @@ Shared variable conventions used by every block:
 ```bash
 # Resolved from ~/.scoutflo/toolkit.yaml
 KUBE_CONTEXT="your-kube-context"   # kubernetes.context
-# Namespaces to skip. Example, tune to your environment; add operator or
-# system namespaces you do not want in the map.
+# Namespaces to skip. This is the vanilla-Kubernetes preset; on a managed
+# cluster pick your provider's preset from "Namespace-exclude presets"
+# below, then extend with operator or system namespaces you do not want
+# in the map.
 NS_EXCLUDE="^(kube-system|kube-public|kube-node-lease|istio-system)$"
 # Working directory for intermediate TSVs; reuse one TMP across all blocks.
 TMP="${TMP:-$(mktemp -d)}"
@@ -17,6 +19,35 @@ TMP="${TMP:-$(mktemp -d)}"
 On the medium sizing path (chosen in SKILL.md Phase 1), replace the `TMP` declaration in each block with `TMP="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/map-topology/$(date -u +%F)"` (after `mkdir -p` on that path) so intermediates survive a shell restart and a failed step can be redone alone. A medium-path run stays inside one calendar day by definition (one run, one sitting), so date-keying is safe there.
 
 On the large sizing path, replace the `TMP` declaration with `TMP="${RUN_DIR}"`, where `RUN_DIR` is the run-ID-keyed directory from [SKILL.md's Run-ID keying](../SKILL.md#run-id-keying): `./scoutflo-audits/map-topology/runs/<RUN_ID>/`. A large-path run can cross midnight UTC mid-batch, so it is keyed by `RUN_ID` (the run's first-seen timestamp), never by calendar date; see "Worklist build and resume" and "Worklist lock" below for the exact commands.
+
+## Namespace-exclude presets
+
+The vanilla default above only knows vanilla Kubernetes. On a managed cluster it leaves the provider's own system namespaces in scope, and each one becomes a fake service row, a pre-seeded watchpoints row, and noise in every audit that loads the map — confirmed on a real GKE cluster, where the default pulled in `gke-managed-cim`, `gke-managed-system`, `gke-managed-networking-dra-driver`, `gke-managed-volumepopulator`, `gmp-system`, and `gmp-public`.
+
+Pick the preset for your provider, paste it as the `NS_EXCLUDE` value in every block you run, then extend it with your own operator and system namespaces. Use the same value in every block of one run — the estate-sizing counts in SKILL.md Phase 1 and every collection filter must agree on scope, and the value is printed in the map header (`Namespaces excluded`) so omissions stay visible. All presets are examples to tune, not exhaustive lists: providers add managed namespaces over time, so check the Phase 1 namespace scan output for anything a preset missed.
+
+```bash
+# Vanilla Kubernetes (the default used in every block in this cookbook)
+NS_EXCLUDE="^(kube-system|kube-public|kube-node-lease|istio-system)$"
+
+# GKE: adds GKE-managed system namespaces, Google Managed Prometheus
+# (gmp-*; gke-gmp-system on some versions), Config Sync, and Config
+# Connector. The gke-managed-* and gmp-* names are confirmed on a real
+# GKE cluster; treat the rest as examples to tune.
+NS_EXCLUDE="^(kube-system|kube-public|kube-node-lease|istio-system|gke-managed-.*|gke-gmp-system|gmp-system|gmp-public|config-management-system|cnrm-system)$"
+
+# EKS: adds the Fargate log-router (aws-observability), Container
+# Insights / CloudWatch agent (amazon-cloudwatch), and GuardDuty runtime
+# agent (amazon-guardduty) namespaces. Examples to tune; confirm against
+# your own namespace scan.
+NS_EXCLUDE="^(kube-.*|istio-system|aws-observability|amazon-cloudwatch|amazon-guardduty)$"
+
+# AKS: adds the Azure Policy add-on (gatekeeper-system), Azure Arc agents
+# (azure-arc), and the managed Istio add-on (aks-istio-system/-ingress/
+# -egress) namespaces. Examples to tune; confirm against your own
+# namespace scan.
+NS_EXCLUDE="^(kube-.*|istio-system|gatekeeper-system|azure-arc|aks-istio-.*)$"
+```
 
 ## Namespace scan
 

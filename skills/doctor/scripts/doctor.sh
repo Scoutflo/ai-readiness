@@ -1028,9 +1028,22 @@ if [ -n "$CH_URL_CFG" ]; then
   if [ -n "$HDX_URL_CFG" ]; then
     HDX_HC="$(curl -s -o /dev/null -w '%{http_code}' --connect-timeout "$CONNECT_TIMEOUT" --max-time "$MAX_TIME" "${HDX_URL_CFG%/}/api/health")" || HDX_HC="000"
     if [ "$HDX_HC" = "200" ]; then
-      row clickstack hyperdx-health yes - pass 200 "reachable; note: HyperDX v2.x REST (alerts/dashboards) is session-authenticated — an ingestion apiKey 401s there and the audit marks those categories not-in-scope (expected)"
+      row clickstack hyperdx-health yes - pass 200 "reachable; note: HyperDX v2.x REST (alerts/dashboards) is session-authenticated — an ingestion apiKey 401s there; with hyperdx_email_env + hyperdx_password_env set the audit logs in and scores those categories, otherwise it marks them not-in-scope (expected)"
     else
       row clickstack hyperdx-health yes - fail "$HDX_HC" "GET ${HDX_URL_CFG%/}/api/health did not return 200 — check clickstack.hyperdx_url"
+    fi
+    # Optional v2 session-login credentials: presence-check only, never a login from doctor
+    # and never a value printed. Both-or-neither: one without the other cannot log in.
+    HDX_EMAIL_VAR="$(cfg clickstack hyperdx_email_env)"
+    HDX_PW_VAR="$(cfg clickstack hyperdx_password_env)"
+    if [ -n "$HDX_EMAIL_VAR" ] || [ -n "$HDX_PW_VAR" ]; then
+      HDX_EMAIL_VAL=""; [ -n "$HDX_EMAIL_VAR" ] && HDX_EMAIL_VAL="$(printenv "$HDX_EMAIL_VAR" 2>/dev/null || true)"
+      HDX_PW_VAL=""; [ -n "$HDX_PW_VAR" ] && HDX_PW_VAL="$(printenv "$HDX_PW_VAR" 2>/dev/null || true)"
+      if [ -n "$HDX_EMAIL_VAR" ] && [ -n "$HDX_PW_VAR" ] && [ -n "$HDX_EMAIL_VAL" ] && [ -n "$HDX_PW_VAL" ]; then
+        row clickstack hyperdx-login-env yes "$HDX_PW_VAR" pass - "v2 login credentials present (presence-checked only) — audit-clickstack obtains a session via POST /api/login/password (cookie in a 0600 mktemp jar, deleted on exit) and scores CS-040/CS-041"
+      else
+        row clickstack hyperdx-login-env yes "${HDX_PW_VAR:-$HDX_EMAIL_VAR}" env-missing - "clickstack.hyperdx_email_env/hyperdx_password_env are configured but incomplete (both keys and both variables must be set); add the missing piece to ~/.scoutflo/env or run /scoutflo:connect — until then the v2 HyperDX categories stay not-in-scope"
+      fi
     fi
   fi
 fi

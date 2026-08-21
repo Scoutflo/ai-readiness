@@ -166,10 +166,41 @@ For only the top 3 ranked candidates per service (fewer if the ranked list is sh
 Name-vs-name ranking silently assumes every service has its own repository. Estates that keep many services inside **one repository** (under `services/<name>/`, `apps/<name>/`, or `packages/<name>/`) produce the opposite signature: an empty or junk ranked list for *most* of the service list at once. Treat that signature — more than half the in-scope services with no exact/containment candidate — as a trigger, not a dead end:
 
 1. Ask the user whether their services live together in one repository, and if they know it, take the owner/name directly (resolve it with the cookbook's [resolve a repo by owner/name](references/github-queries.md#resolve-a-repo-by-owner-and-name) call — this also covers a repo in a *different* org than `github.org`).
-2. When they don't know, probe for it — bounded: take the repos whose normalized name shares a token with the *estate* (the org's own product/team words, or any repo a service's weak tier-1 hit pointed at), at most 5, and run the cookbook's [list a repo's top-level tree](references/github-queries.md#list-a-repos-top-level-tree) call on each. A repo whose tree has a `services/`, `apps/`, or `packages/` directory containing entries matching several in-scope service names is a monorepo candidate; count the matches and present it with that evidence ("`ai-sre-benchmark-fixtures` contains services/ entries matching 11 of your 12 unresolved services").
+2. When they don't know, probe for it — bounded, and **never by listing order**. Gather the estate's tokens (from the org's own product/team words, and from the name of any repo a service's weak tier-1 hit pointed at), normalize them exactly like the ranking above, then weight each token by **inverse frequency across the whole repo listing**: count the repos whose tokenized name contains the token; a token matching more than 10% of the org is generic noise (`service`, `api`) — drop it outright, because a shared-token filter fed such a token fills every candidate slot with junk in listing order and cuts the real monorepo (live-proven on a 229-repo org, where the actual monorepo ranked 6th and was cut at 5); a token matching exactly one repo always survives, so a small org still probes. Each surviving token weighs `total_repos / hits` (a token matching 1 of 229 repos scores 229; one matching 5 scores ~46), each candidate repo scores the summed weight of the tokens its name matches, and the order is deterministic: weight descending, then name — never listing order. Take the **top 5** and run the cookbook's [list a repo's top-level tree](references/github-queries.md#list-a-repos-top-level-tree) call on each. A repo whose tree has a `services/`, `apps/`, or `packages/` directory containing entries matching several in-scope service names is a monorepo candidate; count the matches and present it with that evidence ("`ai-sre-benchmark-fixtures` contains services/ entries matching 11 of your 12 unresolved services").
 3. Confirmation stays per the never-auto-accept rule, but **batched**: present the monorepo candidate once, list every service whose name matched a subdirectory, and let the user confirm the whole set in one answer (plus per-service opt-outs), rather than asking the same question N times. Each confirmed service gets its own mapping row sharing the repo's `repository_id` with its own `path` (`services/<name>`), per the schema.
 
-The probe costs at most 5 tree calls per run — inside the same estate-sizing discipline as corroboration (never `services × total repos`).
+Step 2's candidate selection, runnable against the same listing the ranking already fetched (zero extra API calls):
+
+```bash
+set -eu
+REPOS="${TMPDIR:-/tmp}/map-repos-repos.jsonl"          # from the cookbook's listing call
+# Estate words, space-separated, raw (product/team words + weak-hit repo names, per step 2):
+ESTATE_TOKENS="storefront benchmark fixtures"
+jq -cs --arg toks "$ESTATE_TOKENS" '
+  length as $total
+  # normalize estate tokens exactly like the ranking normalizes names
+  | ($toks | ascii_downcase | split("[- _.]"; "") | map(select(length > 2)) | unique) as $etok
+  | map(. + {rtok: (.name | ascii_downcase | split("[-_.]"; "") | map(select(length > 2)))}) as $repos
+  # count each token against the WHOLE listing; drop noise (> 10% of the org);
+  # a token matching exactly one repo always survives
+  | ($etok
+     | map(. as $t | {tok: $t, hits: ([$repos[] | select(.rtok | index($t))] | length)})
+     | map(select(.hits >= 1 and (.hits == 1 or .hits * 10 <= $total)))
+     | map(. + {weight: ($total / .hits)})) as $weighted
+  | $repos
+  | map(. as $r
+      | . + {matched: [$weighted[] | . as $w | select($r.rtok | index($w.tok)) | $w.tok],
+             score:   ([$weighted[] | . as $w | select($r.rtok | index($w.tok)) | $w.weight] | add // 0)})
+  | map(select(.score > 0))
+  | sort_by(-.score, .name)
+  | .[0:5]
+  | map({name, full_name, id, matched, score: (.score * 10 | round / 10)})
+' "$REPOS"
+```
+
+Expected: at most 5 candidates, each carrying the estate tokens it matched and its summed weight — the probe's tree-call shortlist, in an order no generic-token flood can displace. An empty array here is still not a dead end: fall back to step 1 and ask the user for the repo directly.
+
+The probe costs at most 5 tree calls per run — inside the same estate-sizing discipline as corroboration (never `services × total repos`); the weighting itself is one jq pass over the already-fetched listing.
 
 ## Phase 3: Confirm every service
 

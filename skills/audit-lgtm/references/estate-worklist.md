@@ -44,7 +44,7 @@ echo "run: ${RUN_ID}"
 
 ## 3. Build or resume the worklist
 
-One row per critical service (from `./scoutflo-audits/topology.md`) and one row per Grafana dashboard, tab-separated: `kind`, `name`, `status` (`pending` or `done`). Never rebuild a worklist that already exists in the resumed run directory; that forgets progress.
+One row per critical service (from `./scoutflo-audits/topology.md`) and one row per Grafana dashboard, tab-separated: `kind`, `name`, `status` (`pending` or `done`). Service rows are keyed `namespace/service` (the table's Namespace and Service columns), never the bare name — the same service name in two namespaces is two rows with independent coverage. Never rebuild a worklist that already exists in the resumed run directory; that forgets progress.
 
 ```bash
 set -eu
@@ -65,10 +65,12 @@ else
     # tables and header/`---` rows, so it would enqueue phantom "services" named `---`,
     # `Mesh`, `Service`, and double-enqueue every real service (each also appears in the
     # Integration-watchpoints table) — corrupting per-service coverage on the large path.
+    # Rows are keyed namespace/service (columns 3 and 2): a bare-name key would collapse
+    # two same-named services in different namespaces into one row.
     awk '/^## Services$/{f=1;next} /^## /{f=0} f' ${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/topology.md \
       | grep -E '^\| ' \
       | grep -vE '^\| *Service *\||^\| *-{2,}' \
-      | awk -F'|' '{gsub(/^[ \t]+|[ \t]+$/, "", $2); if($2!="") print $2}' \
+      | awk -F'|' '{gsub(/^[ \t]+|[ \t]+$/, "", $2); gsub(/^[ \t]+|[ \t]+$/, "", $3); if($2!="") print ($3!="" ? $3"/"$2 : $2)}' \
       | sort -u \
       | while read -r svc; do printf 'service\t%s\tpending\n' "${svc}" >> "${WORKLIST}"; done
   fi
@@ -127,7 +129,9 @@ echo "claimed batch: ${count} rows -> ${BATCH_FILE}"
 
 # ... for each row in "${BATCH_FILE}", run the Phase 6 / Phase 9 / section 12
 # checks for that service or dashboard, appending results to the run's
-# incremental findings file. Only after every row's checks succeed:
+# incremental findings file. A service row's name is `namespace/service`; split it
+# for the section 12 variables with SERVICE_NS="${name%%/*}" SERVICE="${name#*/}".
+# Only after every row's checks succeed:
 
 while IFS=$'\t' read -r kind name _status; do
   # mark this row done in place; a real run does this after its checks pass
