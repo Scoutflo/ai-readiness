@@ -186,6 +186,47 @@ done | jq -s '.' | tee "${TMP}/source-repo-evidence.json"
 
 Expected: a JSON array, one object per workload, each with `image`, `image_digest` (null when the ref carries no digest — enrich from `kubectl get pods -o jsonpath='{..imageID}'` only if you need it), and a `source_repo_evidence` array holding at most one `image_registry_path` candidate (empty when the image is a bare single-segment name like `postgres:18.4`, which yields no `owner/name`). `subpath` is always `null` at this tier — a registry path is repo-level, never per-service. These objects become the `image`/`image_digest`/`source_repo_evidence` attributes on each workload resource in `topology-export.json`.
 
+## Source-repo evidence (Tier 2: ArgoCD Applications)
+
+Authoritative service→repo evidence, read from ArgoCD Application CRs with the same kubeconfig as every other block — no ArgoCD API, no new credential; needs only `get`/`list` on `applications.argoproj.io`. Skip silently when the CRD is absent (that is a normal estate, not a gap). Read-only: this block never creates, syncs, patches, or refreshes an Application.
+
+```bash
+set -eu
+KUBE_CONTEXT="your-kube-context"
+TMP="${TMP:-$(mktemp -d)}"
+
+if ! kubectl --context "${KUBE_CONTEXT}" api-resources --api-group=argoproj.io 2>/dev/null | grep -q '^applications '; then
+  echo "no ArgoCD Application CRD on this cluster — Tier 2 evidence not available (normal, skipping)"
+else
+  kubectl --context "${KUBE_CONTEXT}" get applications.argoproj.io -A -o json \
+  | jq -c '
+      # candidate_repo = owner/name from the repoURL (https or ssh form), .git suffix stripped.
+      def repo_label($u):
+        ($u | sub("\\.git$"; "")
+            | sub("^git@[^:]+:"; "")
+            | sub("^[a-z]+://[^/]+/"; "")) as $p
+        | (if ($p | split("/") | length) >= 2 then ($p | split("/") | .[-2:] | join("/")) else null end);
+      .items[]
+      | (.spec.source // (.spec.sources // [] | .[0]) // {}) as $src
+      | select(($src.repoURL // "") != "")
+      | (.status.sync.revision // "") as $sync
+      | { application: .metadata.name,
+          app_namespace: .metadata.namespace,
+          dest_namespace: (.spec.destination.namespace // null),
+          source_repo_evidence: [ {
+            candidate_repo: (repo_label($src.repoURL)),
+            evidence_source: "argocd",
+            confidence: "authoritative",
+            subpath: ($src.path // null),
+            deployed_revision: (if ($sync | test("^[0-9a-f]{40}$")) then $sync else null end),
+            branch_ref: (if (($src.targetRevision // "") != "") and (($src.targetRevision // "") | test("^[0-9a-f]{40}$") | not) then $src.targetRevision else null end),
+            raw: ($src.repoURL + " @ " + ($src.targetRevision // "HEAD")) } ] }' \
+  | tee "${TMP}/argocd-evidence.json"
+fi
+```
+
+Expected: one JSON object per Application with a single authoritative `source_repo_evidence` entry: `candidate_repo` as `owner/name`, `subpath` from `spec.source.path`, `branch_ref` from `targetRevision` when it is a ref, and `deployed_revision` **only when `status.sync.revision` is a real 40-hex SHA** — a never-synced Application echoes its target ref there and must yield `deployed_revision: null`, never a branch name masquerading as a commit. Join each Application to a workload by `dest_namespace` + the manifests it manages; when the join is ambiguous, attach the evidence at namespace level and let `map-repos` present it, never guess a per-service link.
+
 ## Service-to-workload join
 
 Joins Services to workloads whose pod-template labels satisfy the Service selector, within the same namespace. Used on both paths.

@@ -111,6 +111,8 @@ A workload may carry `source_repo_evidence`: an array of typed candidates for th
 - `evidence_source` — one of `oci_image_source | argocd | image_registry_path | pod_annotation`.
 - `confidence` — `authoritative` (the publisher's own declaration: OCI `org.opencontainers.image.source`, or an ArgoCD Application spec) or `heuristic` (a registry-path parse, or an annotation that isn't a declared source). Name similarity is not evidence and never appears here — it is the last-resort fallback in the consumer, carrying no `source_repo_evidence` entry.
 - `subpath` — the service's subdirectory inside a monorepo, present **only** for sources that actually carry it (ArgoCD `spec.source.path`, a repo descriptor, or human confirmation downstream). A registry-path/OCI candidate is repo-level and leaves `subpath: null` — it must never claim a per-service subpath it did not observe.
+- `deployed_revision` (optional) — the exact commit SHA that is **live**, when a source actually carries it: ArgoCD's `status.sync.revision` (only when it is a 40-hex SHA — a never-synced Application echoes the target ref instead, which is NOT a revision), or the OCI `org.opencontainers.image.revision` label (the standard companion to `image.source`, same registry fetch). This is the field that lets RCA name the culprit commit; never populate it with a branch name.
+- `branch_ref` (optional) — the branch/tag the source deploys from when the source states it (ArgoCD `spec.source.targetRevision` when it is a ref like `main`, not a SHA). Branch context for diffing history — distinct from `deployed_revision` and never a substitute for it.
 - `raw` — the exact source string the candidate was derived from, for auditability.
 
 **The four-tier model** (capture what's available; a workload may carry entries from several tiers, and the consumer ranks by tier):
@@ -118,7 +120,7 @@ A workload may carry `source_repo_evidence`: an array of typed candidates for th
 | Tier | `evidence_source` | Authority | How obtained |
 | --- | --- | --- | --- |
 | 1 | `oci_image_source` | authoritative | `org.opencontainers.image.source` label — registry manifest/config fetch (not `kubectl`) |
-| 2 | `argocd` | authoritative (repo **and** `subpath`) | ArgoCD Application `spec.source.repoURL` + `path` |
+| 2 | `argocd` | authoritative (repo, `subpath`, `branch_ref`, and — when synced — `deployed_revision`) | ArgoCD Application CRs read via `kubectl` (`spec.source.repoURL` + `path` + `targetRevision`, `status.sync.revision`) |
 | 3 | `image_registry_path` | heuristic — must be live-verified | parse of the already-captured `image` ref (free) |
 | — | *(name similarity)* | fallback only | consumer-side; never written here |
 

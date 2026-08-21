@@ -23,7 +23,7 @@ while :; do
   resp=$(curl -fsS --max-time 15 -H "Authorization: Bearer ${GITHUB_TOKEN}" "${BASE}?per_page=100&page=${page}")
   n=$(printf '%s' "$resp" | jq 'length')
   [ "$n" -eq 0 ] && break
-  printf '%s' "$resp" | jq -c '.[] | {id: .id, name: .name, owner: .owner.login, full_name: .full_name, description: (.description // ""), archived: .archived}' >> "$OUT"
+  printf '%s' "$resp" | jq -c '.[] | {id: .id, name: .name, owner: .owner.login, full_name: .full_name, description: (.description // ""), archived: .archived, default_branch: .default_branch}' >> "$OUT"
   [ "$n" -lt 100 ] && break
   page=$((page + 1))
 done
@@ -42,7 +42,7 @@ REPOSITORY_ID="812345678"      # an already-confirmed repository_id from a prior
 resp=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 -H "Authorization: Bearer ${GITHUB_TOKEN}" "https://api.github.com/repositories/${REPOSITORY_ID}")
 if [ "$resp" = "200" ]; then
   curl -fsS --max-time 10 -H "Authorization: Bearer ${GITHUB_TOKEN}" "https://api.github.com/repositories/${REPOSITORY_ID}" \
-    | jq -c '{id: .id, name: .name, owner: .owner.login, full_name: .full_name, archived: .archived}'
+    | jq -c '{id: .id, name: .name, owner: .owner.login, full_name: .full_name, archived: .archived, default_branch: .default_branch}'
 else
   echo "repo ${REPOSITORY_ID}: ${resp} (404 means deleted or access lost; treat as a contradiction to flag, never as a silent drop)"
 fi
@@ -61,13 +61,13 @@ NAME="checkout-api"
 resp=$(curl -s -o "${TMPDIR:-/tmp}/map-repos-resolve.json" -w '%{http_code}' --max-time 10 \
   -H "Authorization: Bearer ${GITHUB_TOKEN}" "https://api.github.com/repos/${OWNER}/${NAME}")
 if [ "$resp" = "200" ]; then
-  jq -c '{id, name, owner: .owner.login, full_name, archived}' "${TMPDIR:-/tmp}/map-repos-resolve.json"
+  jq -c '{id, name, owner: .owner.login, full_name, archived, default_branch}' "${TMPDIR:-/tmp}/map-repos-resolve.json"
 else
   echo "repo ${OWNER}/${NAME}: HTTP ${resp} — do not write a mapping for an unresolved repo (404 = wrong name or no access; 401 = token problem)"
 fi
 ```
 
-Expected: one JSON object with the numeric `id` on `200` — that id (stringified) becomes the mapping's `repository_id`. Anything other than `200` means the label the user gave cannot be verified; ask again rather than writing an unverifiable mapping.
+Expected: one JSON object with the numeric `id` on `200` — that id (stringified) becomes the mapping's `repository_id`, and `default_branch` comes free on the same call (record it on the mapping; zero extra requests, zero questions). Anything other than `200` means the label the user gave cannot be verified; ask again rather than writing an unverifiable mapping.
 
 ## List a repo's top-level tree
 

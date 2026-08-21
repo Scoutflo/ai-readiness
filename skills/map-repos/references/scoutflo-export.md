@@ -25,6 +25,16 @@
 }
 ```
 
+### `env_branch_convention` (optional, top-level)
+
+One consolidated answer to "which branch deploys to which environment," captured **once** at global/team level by Phase 3's single branch question and propagated to every mapping — never asked per service, and branches are never enumerated (most are stale/temp noise):
+
+```json
+"env_branch_convention": { "prod": "main", "staging": "release/dev" }
+```
+
+A per-mapping `env_branch_convention` override is allowed for the rare repo that deviates; omit the field entirely when the user skips the question. All of this is additive — the schema stays `scoutflo-repo-map/v1` and existing readers parse existing files unchanged.
+
 A **monorepo** is expressed as several mappings that share one `repository_id` and differ only by `path` — the per-service subdirectory inside that one repo (the topology-seed convention for the AI-SRE benchmark, where every service lives under `services/<name>/` of a single fixtures repo, is exactly this shape):
 
 ```json
@@ -46,5 +56,7 @@ Rules:
 - `evidence` is a plain-language list of what led to the match — never invent an entry that wasn't actually produced by Phase 2 (name similarity, README text, manifest name).
 - A service with no confirmed repo (the user skipped it, or rejected every candidate) goes in `unresolved_services`, not into `mappings` with a null repo.
 - `confirmed_at` is stamped once, at the moment the user confirms; a carried-forward mapping on re-run keeps its original `confirmed_at`, it does not reset.
+- `default_branch` (optional) — the repo's default branch, captured free from the resolve/listing call that produced `repository_id` (GitHub returns it on the same response). Never asked, never guessed.
+- `deployed_revision` (optional) — the exact live commit SHA, carried over from the verified `source_repo_evidence` entry that backed this mapping (ArgoCD synced revision or the OCI `org.opencontainers.image.revision` label). Only ever a real 40-hex SHA; a branch name never goes here. This is what lets RCA diff the right history at the right commit and name the culprit.
 - `namespace` (optional) records the Kubernetes namespace the service came from in `topology.md`. Set it whenever a service name is not unique across namespaces (for example `api-gateway` existing in both `storefront` and `benchmark-workloads`) so the two do not collapse into one mapping; omit it or set null when the bare name is already unique.
 - `path` (optional) is the per-service subdirectory inside a monorepo, for example `services/account-service`. Omit it or set null for a whole-repo mapping. Several services mapped into one monorepo share the same `repository_id`/`owner`/`name` and differ only by `path`; the Phase 5 re-run recheck still keys on `repository_id`, so a monorepo mapping is a contradiction only when that repo is archived/deleted/renamed, never because a sibling service's `path` differs. Both fields are additive and optional — a `v1` reader that ignores them still parses the file.
