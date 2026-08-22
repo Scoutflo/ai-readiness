@@ -77,9 +77,17 @@ printf -- '---\nname: audit-foo\ndescription: x\n---\n# audit-foo\n[ -n "${FOO_T
 sh "$ENVL" "$WORK/t" >/dev/null 2>&1 && fail "env-load gate accepted an audit that never sources the store"
 echo "PASS"
 
-echo "Test 9: an audit that sources ~/.scoutflo/env PASSES the env-load gate"
+echo "Test 9: an audit with the layered secret-store resolver PASSES the env-load gate"
 mk; mkdir -p "$WORK/t/skills/audit-foo"
-printf -- '---\nname: audit-foo\ndescription: x\n---\n# audit-foo\n[ -f "$HOME/.scoutflo/env" ] && . "$HOME/.scoutflo/env" || true\n' > "$WORK/t/skills/audit-foo/SKILL.md"
+cat > "$WORK/t/skills/audit-foo/SKILL.md" <<'FIXEOF'
+---
+name: audit-foo
+description: x
+---
+# audit-foo
+SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.scoutflo/env" ]; then SCOUTFLO_ENV="./.scoutflo/env"; else SCOUTFLO_ENV="$HOME/.scoutflo/env"; fi; }
+[ -f "$SCOUTFLO_ENV" ] && . "$SCOUTFLO_ENV" || true
+FIXEOF
 sh "$ENVL" "$WORK/t" >/dev/null 2>&1 || { sh "$ENVL" "$WORK/t" 2>&1 | head; fail "env-load gate rejected an audit that sources the store"; }
 echo "PASS"
 

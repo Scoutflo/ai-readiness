@@ -42,7 +42,7 @@ set -eu
 
 # --- defaults and argument parsing -------------------------------------------
 
-CONFIG="${SCOUTFLO_CONFIG:-${HOME}/.scoutflo/toolkit.yaml}"
+CONFIG="${SCOUTFLO_CONFIG:-}"; [ -n "$CONFIG" ] || { if [ -f "./.scoutflo/toolkit.yaml" ]; then CONFIG="./.scoutflo/toolkit.yaml"; else CONFIG="$HOME/.scoutflo/toolkit.yaml"; fi; }
 OUT_DIR=""
 SLACK_TEST=0
 MAX_TIME="${CURL_MAX_TIME:-10}"  # seconds; example, tune to your network latency

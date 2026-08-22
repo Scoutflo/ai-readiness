@@ -29,9 +29,15 @@ for d in "$DIR"/skills/audit-*/; do
   f="${d}SKILL.md"
   [ -f "$f" ] || continue
 
-  # Require an actual source of a *scoutflo/env path: `.` or `source`, then the path.
-  if ! grep -qE '(^|[^[:alnum:]_])(\.|source)[[:space:]]+"?[^"]*scoutflo/env' "$f"; then
-    echo "ENV-LOAD: ${name} does not source ~/.scoutflo/env in its doctor gate — a token added to the store mid-session would show green in doctor but 'not set' here; add: [ -f \"\$HOME/.scoutflo/env\" ] && . \"\$HOME/.scoutflo/env\" || true"
+  # Require the LAYERED secret-store resolver (override -> project-local -> home)
+  # plus an actual dot-source of the resolved path. The layered form is what makes
+  # the plugin work on sandboxed surfaces (Desktop app) where $HOME is not shell-
+  # writable: connect can fall back to ./.scoutflo and every audit still finds it.
+  if ! grep -qF 'SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"' "$f" \
+     || ! grep -qF '[ -f "./.scoutflo/env" ]' "$f" \
+     || ! grep -qF '$HOME/.scoutflo/env' "$f" \
+     || ! grep -qE '(^|[^[:alnum:]_])\.[[:space:]]+"\$SCOUTFLO_ENV"' "$f"; then
+    echo "ENV-LOAD: ${name} does not use the layered secret-store resolver in its doctor gate — add the canonical two lines: SCOUTFLO_ENV=\"\${SCOUTFLO_ENV_FILE:-}\"; [ -n ... ] || { if [ -f \"./.scoutflo/env\" ]; then ... else ...\$HOME/.scoutflo/env...; fi; } then: [ -f \"\$SCOUTFLO_ENV\" ] && . \"\$SCOUTFLO_ENV\" || true"
     FAIL=1
   fi
 done
@@ -40,4 +46,4 @@ if [ "$FAIL" -ne 0 ]; then
   echo "ENV-LOAD CHECK FAILED"
   exit 1
 fi
-echo "ENV-LOAD-OK (every audit-* sources the ~/.scoutflo/env secret store, matching doctor)"
+echo "ENV-LOAD-OK (every audit-* uses the layered secret-store resolver, matching doctor)"

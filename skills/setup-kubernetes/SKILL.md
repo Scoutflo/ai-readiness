@@ -65,7 +65,7 @@ Elevated tier: this skill mutates namespace labels, RBAC, NetworkPolicies, and w
 
 ```bash
 set -eu
-CFG="${SCOUTFLO_CONFIG:-$HOME/.scoutflo/toolkit.yaml}"
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || { if [ -f "./.scoutflo/toolkit.yaml" ]; then CFG="./.scoutflo/toolkit.yaml"; else CFG="$HOME/.scoutflo/toolkit.yaml"; fi; }
 [ -f "$CFG" ] || { echo "missing $CFG; run /scoutflo:connect"; exit 1; }
 for bin in kubectl jq; do command -v "$bin" >/dev/null || { echo "missing binary: $bin"; exit 1; }; done
 KUBE_CONTEXT="my-cluster"   # kubernetes.context

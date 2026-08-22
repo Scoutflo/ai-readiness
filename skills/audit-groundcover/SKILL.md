@@ -32,13 +32,14 @@ Outputs, per the [report standard](../../report-standard/README.md):
 
 ```bash
 set -eu
-CFG="${SCOUTFLO_CONFIG:-$HOME/.scoutflo/toolkit.yaml}"
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || { if [ -f "./.scoutflo/toolkit.yaml" ]; then CFG="./.scoutflo/toolkit.yaml"; else CFG="$HOME/.scoutflo/toolkit.yaml"; fi; }
 [ -f "$CFG" ] || { echo "missing $CFG; run /scoutflo:connect"; exit 1; }
 # Load the home-anchored secret store so a token added to ~/.scoutflo/env (by connect,
 # even mid-session) is seen here without re-exporting or opening a new terminal. It only
 # sets *_env variables; no secret value is printed. A profile that already sources it makes
 # this a no-op. This mirrors what /scoutflo:doctor does, so doctor and this audit agree.
-[ -f "$HOME/.scoutflo/env" ] && . "$HOME/.scoutflo/env" || true
+SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.scoutflo/env" ]; then SCOUTFLO_ENV="./.scoutflo/env"; else SCOUTFLO_ENV="$HOME/.scoutflo/env"; fi; }
+[ -f "$SCOUTFLO_ENV" ] && . "$SCOUTFLO_ENV" || true
 for bin in curl jq; do
   command -v "$bin" >/dev/null || { echo "missing binary: $bin"; exit 1; }
 done

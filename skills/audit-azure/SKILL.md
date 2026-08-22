@@ -36,13 +36,14 @@ All api-versions, property paths, and auth behavior cited below are the ones liv
 
 ```bash
 set -eu
-CFG="${SCOUTFLO_CONFIG:-$HOME/.scoutflo/toolkit.yaml}"
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || { if [ -f "./.scoutflo/toolkit.yaml" ]; then CFG="./.scoutflo/toolkit.yaml"; else CFG="$HOME/.scoutflo/toolkit.yaml"; fi; }
 [ -f "$CFG" ] || { echo "missing $CFG; run /scoutflo:connect"; exit 1; }
 # Load the home-anchored secret store so a token added to ~/.scoutflo/env (by connect,
 # even mid-session) is seen here without re-exporting. It only sets *_env variables; no secret
 # value is printed. A profile that already sources it makes this a no-op. This mirrors what
 # /scoutflo:doctor does, so doctor and this audit agree.
-[ -f "$HOME/.scoutflo/env" ] && . "$HOME/.scoutflo/env" || true
+SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.scoutflo/env" ]; then SCOUTFLO_ENV="./.scoutflo/env"; else SCOUTFLO_ENV="$HOME/.scoutflo/env"; fi; }
+[ -f "$SCOUTFLO_ENV" ] && . "$SCOUTFLO_ENV" || true
 for bin in az curl jq; do
   command -v "$bin" >/dev/null || { echo "missing binary: $bin"; exit 1; }
 done
@@ -73,7 +74,7 @@ Print what you are pointed at and compare it against the config before the first
 
 ```bash
 set -eu
-CONFIG="${SCOUTFLO_CONFIG:-$HOME/.scoutflo/toolkit.yaml}"
+CONFIG="${SCOUTFLO_CONFIG:-}"; [ -n "$CONFIG" ] || { if [ -f "./.scoutflo/toolkit.yaml" ]; then CONFIG="./.scoutflo/toolkit.yaml"; else CONFIG="$HOME/.scoutflo/toolkit.yaml"; fi; }
 [ -f "$CONFIG" ] || { echo "missing $CONFIG; run /scoutflo:connect"; exit 1; }
 # Resolve azure.subscription_id the same way doctor.sh reads two-level keys: yq when present,
 # a sed fallback otherwise. Never hand-typed.

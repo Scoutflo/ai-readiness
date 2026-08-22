@@ -62,7 +62,7 @@ Elevated tier: this skill mutates Azure Monitor and Log Analytics state. A faile
 
 ```bash
 set -eu
-CFG="${SCOUTFLO_CONFIG:-$HOME/.scoutflo/toolkit.yaml}"
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || { if [ -f "./.scoutflo/toolkit.yaml" ]; then CFG="./.scoutflo/toolkit.yaml"; else CFG="$HOME/.scoutflo/toolkit.yaml"; fi; }
 [ -f "$CFG" ] || { echo "missing $CFG; run /scoutflo:connect"; exit 1; }
 for bin in az curl jq; do
   command -v "$bin" >/dev/null || { echo "missing binary: $bin"; exit 1; }
@@ -87,7 +87,7 @@ Resolve the target subscription from `toolkit.yaml` itself, not from a value typ
 
 ```bash
 set -eu
-CONFIG="${SCOUTFLO_CONFIG:-$HOME/.scoutflo/toolkit.yaml}"
+CONFIG="${SCOUTFLO_CONFIG:-}"; [ -n "$CONFIG" ] || { if [ -f "./.scoutflo/toolkit.yaml" ]; then CONFIG="./.scoutflo/toolkit.yaml"; else CONFIG="$HOME/.scoutflo/toolkit.yaml"; fi; }
 [ -f "$CONFIG" ] || { echo "missing $CONFIG; run /scoutflo:connect"; exit 1; }
 # Resolve azure.subscription_id the same way doctor.sh's cfg() reads two-level keys:
 # yq when present, a sed fallback otherwise. Never hand-typed.
