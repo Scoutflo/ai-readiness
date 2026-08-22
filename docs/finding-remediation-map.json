@@ -442,6 +442,38 @@
       "setup_skill": "setup-kubernetes",
       "anchor": "tighten-rbac"
     },
+    "K8S-007": {
+      "setup_skill": "setup-kubernetes",
+      "anchor": "harden-container-security-contexts"
+    },
+    "K8S-008": {
+      "setup_skill": "setup-kubernetes",
+      "anchor": "harden-container-security-contexts"
+    },
+    "K8S-009": {
+      "setup_skill": "setup-kubernetes",
+      "anchor": "tighten-rbac"
+    },
+    "K8S-010": {
+      "setup_skill": "setup-kubernetes",
+      "anchor": "add-network-policies"
+    },
+    "K8S-011": {
+      "setup_skill": "setup-kubernetes",
+      "anchor": "add-network-policies"
+    },
+    "K8S-012": {
+      "setup_skill": "setup-kubernetes",
+      "anchor": "add-health-probes"
+    },
+    "K8S-013": {
+      "setup_skill": "setup-kubernetes",
+      "anchor": "spread-replicas-across-failure-domains"
+    },
+    "K8S-014": {
+      "setup_skill": "setup-kubernetes",
+      "anchor": "set-namespace-quotas-and-limitranges"
+    },
     "SNTRY-001": {
       "setup_skill": "setup-sentry",
       "anchor": "alert-rule-taxonomy"

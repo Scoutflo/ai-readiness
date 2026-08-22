@@ -30,7 +30,9 @@ if [ -f "$SCOUTFLO_ENV" ]; then set +eu; . "$SCOUTFLO_ENV" || echo "rca: warning
 . "${CLAUDE_PLUGIN_ROOT}/skills/redaction/lib/redaction.sh" 2>/dev/null || true
 . "${CLAUDE_PLUGIN_ROOT}/skills/live-evidence/lib/live-evidence.sh"
 AUD="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}"
-CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || { if [ -f "./.scoutflo/toolkit.yaml" ]; then CFG="./.scoutflo/toolkit.yaml"; else CFG="$HOME/.scoutflo/toolkit.yaml"; fi; }
+CFG="${SCOUTFLO_CONFIG:-}"
+[ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done
+[ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
 KUBE_CONTEXT="$(sed -n 's/^[[:space:]]*context:[[:space:]]*//p' "$CFG" 2>/dev/null | head -1)"
 REPORTS=0; [ -d "$AUD" ] && REPORTS="$(find "$AUD" -name findings.json 2>/dev/null | wc -l | tr -d ' ')"
 LIVE=0; le_can_probe "$KUBE_CONTEXT" >/dev/null 2>&1 && LIVE=1

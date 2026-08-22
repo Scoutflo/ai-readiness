@@ -30,7 +30,9 @@ Outputs, per the [report standard](../../report-standard/README.md):
 
 ```bash
 set -eu
-CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || { if [ -f "./.scoutflo/toolkit.yaml" ]; then CFG="./.scoutflo/toolkit.yaml"; else CFG="$HOME/.scoutflo/toolkit.yaml"; fi; }
+CFG="${SCOUTFLO_CONFIG:-}"
+[ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done
+[ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
 if [ ! -f "$CFG" ]; then
   # Multi-environment setup: a customer running prod+nonprod often has no default
   # toolkit.yaml but named variants (toolkit-prod.yaml, toolkit-nonprod.yaml). List
@@ -168,25 +170,27 @@ Resolve each critical service to its `<namespace>/<name>` pair here, once — `a
 
 Build the raw picture with the commands in [references/kubernetes-checks.md](references/kubernetes-checks.md) section 2: server version; namespaces with their `pod-security.kubernetes.io/*` labels; ClusterRoles/ClusterRoleBindings/Roles/RoleBindings; NetworkPolicies per namespace; Deployments/StatefulSets/DaemonSets with their container resource requests/limits; PodDisruptionBudgets and replica counts. Judgment starts in Phase 3.
 
-## Phase 3: Pod security (K8S-001)
+Phases 3–7 are the five scored categories. Each finding must clear the [depth doctrine](../../report-standard/depth-doctrine.md): name the exact object and value, compute the blast radius **from this cluster** (who reaches what, what goes down), state the correlation chain when one exists, and give the specific fix. "X is missing" is a linter line, not a finding. Commands and the per-check blast-radius/correlation notes are in [references/kubernetes-checks.md](references/kubernetes-checks.md) sections 3–7.
 
-Commands in section 3. On 1.25+, judge Pod Security Admission: every application namespace should carry a `pod-security.kubernetes.io/enforce` label at `baseline` or `restricted` (`K8S-001`, high when no application namespace enforces any standard — pods run unconstrained). Note privileged/hostNetwork/hostPID workloads that would violate `baseline` as supporting evidence. On <1.25, fall back to PSP presence and note the cluster is on an unsupported version.
+## Phase 3: Workload hardening (K8S-001, K8S-007, K8S-008)
 
-## Phase 4: RBAC (K8S-002)
+Commands in section 3. **K8S-001** — on 1.25+, every application namespace should enforce a `pod-security.kubernetes.io/enforce` standard at `baseline` or `restricted` (high when none is enforced — pods run unconstrained). **K8S-007** — no application workload runs `privileged`, a host namespace (`hostNetwork`/`hostPID`/`hostIPC`), a `hostPath` mount, or `SYS_ADMIN`/`NET_ADMIN` capabilities (high — a node-escape surface; critical when the same workload is internet-exposed per K8S-010 or its SA is privileged per K8S-002). CNI/CSI/node-exporter DaemonSets in system namespaces legitimately need host access — a posture note, never a finding. **K8S-008** — application containers meet the restricted baseline (`runAsNonRoot`, `readOnlyRootFilesystem`, `allowPrivilegeEscalation: false`, drop `ALL` caps); a root container with a writable rootfs is the substrate for a post-exploit payload (medium; cite alongside K8S-007 when the same workload fails both). K8S-001 is the upstream cause — cite the specific K8S-007/008 violators as proof that `enforce=none` is not theoretical.
 
-Commands in section 4. Find subjects with cluster-wide wildcard power: ClusterRoles granting `*` verbs on `*` resources in `*` API groups, and who they are bound to (`K8S-002`, high when bound to a workload ServiceAccount, critical when that workload is also exposed via a public ingress). Flag direct `cluster-admin` bindings to ServiceAccounts, and ServiceAccounts with cluster-wide `secrets` `get`/`list` (`K8S-006`). Break-glass human/group bindings are recorded as posture notes, not high findings.
+## Phase 4: Identity & access (K8S-002, K8S-006, K8S-009)
 
-## Phase 5: Network segmentation (K8S-003)
+Commands in section 4. **K8S-002** — ClusterRoles granting `*` verbs on `*` resources in `*` API groups, and their ServiceAccount subjects (high when bound to a workload SA, critical when that workload is public per K8S-010). **K8S-006** — a workload SA that can `list secrets` cluster-wide; **confirm it with `auth can-i list secrets --all-namespaces --as=system:serviceaccount:<ns>:<sa>`** — the returned `yes`/count *is* the blast radius, not an inference (high). **K8S-009** — workloads that never call the API server should set `automountServiceAccountToken: false`; a mounted token matters exactly as much as its SA's RBAC, so **rank K8S-009 findings by each SA's `auth can-i` result**: a `default` SA with no bindings mounting a token is low; the payments pod mounting a secrets-reader token is high, and its fix names both the automount flag and the RBAC to narrow. Break-glass human/group bindings are posture notes.
 
-Commands in section 5. Per application namespace: at least one NetworkPolicy selecting its pods, and a default-deny ingress posture rather than a flat open network (`K8S-003`, high when application namespaces have zero NetworkPolicies — any pod can reach any other). Egress policies are a plus, not required for a pass.
+## Phase 5: Network segmentation (K8S-003, K8S-011, K8S-010)
 
-## Phase 6: Workload resource governance (K8S-004)
+Commands in section 5. **K8S-003** — each application namespace has ≥1 NetworkPolicy selecting its pods (high when a namespace has zero — any pod reaches any other; name the reachable datastores by pod/port, not "flat network"). **K8S-011** — a namespace with policies but no **default-deny** ingress is allow-by-omission: every pod no policy selects is still open (medium; name the uncovered pods). A namespace can pass K8S-003 and fail K8S-011. **K8S-010** — inventory internet-facing Services (LoadBalancer/NodePort) and Ingress, resolve each to its backing workload, and compute the external→cluster path by joining K8S-007 (privileged?), K8S-002/006/009 (SA power?), and K8S-003 (segmented?). The one-sentence path — public Service → token-mounting pod → secrets-reader SA → unsegmented namespace — is the flagship finding no scanner assembles (high, critical when the exposed pod's SA is privileged).
 
-Commands in section 6. Deployments/StatefulSets/DaemonSets whose containers set neither requests nor limits (`K8S-004`, medium — an unbounded container can starve a node; the ingress controller and other shared-path workloads are the highest-value cases). Requests-without-limits is a partial, not a full pass.
+## Phase 6: Resource governance (K8S-004, K8S-014)
 
-## Phase 7: Resilience (K8S-005)
+Commands in section 6. **K8S-004** — Deployments/StatefulSets/DaemonSets whose containers set no limits (medium; requests-without-limits is a partial). Name the node-shared workloads an unbounded container can starve; if K8SRT-002 shows it already OOMKilled, mark `validated-live`. **K8S-014** — application namespaces with neither a ResourceQuota nor a LimitRange (medium). The correlation with K8S-004 is the point: no LimitRange *and* no per-workload limits is truly unbounded with no admission backstop — and a LimitRange retro-fits sane defaults onto the K8S-004 offenders in one object, so name it as the cheap first move.
 
-Commands in section 7. Critical workloads (from Phase 1, else all application Deployments) that run a single replica **and** have no PodDisruptionBudget (`K8S-005`, medium — a node drain or upgrade takes the service down with no minAvailable guard). A single replica *with* a PDB, or multiple replicas, passes.
+## Phase 7: Reliability & resilience (K8S-005, K8S-012, K8S-013)
+
+Commands in section 7. **K8S-005** — critical single-replica workloads with no PodDisruptionBudget (medium, high for critical services); frame it as a *scheduled-maintenance* outage (a routine node drain takes it down), not a rare failure. **K8S-012** — workloads missing readiness or liveness probes (medium): missing readiness sends deploy-time traffic to not-ready pods (user-visible 502s on every rollout); missing liveness leaves a wedged process unrestarted (silent brownout) — name which mode applies. **K8S-013** — multi-replica critical workloads with no `topologySpreadConstraints` or pod anti-affinity (medium, high for critical): `replicas: 3` reads as HA but the scheduler may co-locate all three, so one node loss is a full outage; use the live `-o wide` per-node count to say whether they are co-located *right now* and mark `validated-live` if they are. This is why K8S-005 passing is not the end of resilience.
 
 ## Phase 8: Live-runtime snapshot (K8SRT — evidence, not scored)
 
@@ -256,7 +260,7 @@ Render the section in `report.md` under its own heading, after Scoutflo Topology
 
 ## Phase 9: Coverage matrix and topology readiness
 
-Per the report standard, render the per-service coverage matrix and the Scoutflo Topology Readiness section for the critical services named in Phase 1: for each, does it have an enforced pod-security namespace, a NetworkPolicy, resource limits, and PDB/replica resilience. A service missing all four is `0 of 4`; state the count in plain language (see [topology-readiness.md](../../report-standard/topology-readiness.md)). Every matrix row is keyed `<namespace>/<name>` (per the ground rule): two same-named services in different namespaces get two rows, each judged against its own namespace's labels, policies, and PDBs.
+Per the report standard, render the per-service coverage matrix and the Scoutflo Topology Readiness section for the critical services named in Phase 1. Judge each service against six posture columns: **hardened** (namespace enforces pod security AND the workload is non-privileged/non-root — K8S-001/007/008), **least-privilege** (its SA holds no wildcard/secret-reader power and mounts a token only if it needs one — K8S-002/006/009), **network-isolated** (a NetworkPolicy selects it AND its namespace has a default-deny — K8S-003/011), **resource-bounded** (requests + limits, under a namespace LimitRange — K8S-004/014), **resilient** (PDB/replicas AND spread across nodes — K8S-005/013), and **health-probed** (readiness + liveness — K8S-012). A service missing all six is `0 of 6`; state the count in plain language (see [topology-readiness.md](../../report-standard/topology-readiness.md)). Every matrix row is keyed `<namespace>/<name>` (per the ground rule): two same-named services in different namespaces get two rows, each judged against its own namespace's labels, policies, PDBs, and spread rules.
 
 ## Phase 10: Score, write, brief
 
@@ -264,9 +268,11 @@ Score per [severity-and-scoring.md](../../report-standard/severity-and-scoring.m
 
 | Category | Weight | Checks |
 | --- | --- | --- |
-| Security | 40 | K8S-001 (pod security), K8S-002 (RBAC), K8S-006 (secret-reader SAs) |
-| Network | 30 | K8S-003 (network policies) |
-| Reliability | 30 | K8S-004 (resource limits), K8S-005 (PDB/replicas) |
+| Workload hardening | 25 | K8S-001 (pod security admission), K8S-007 (host-namespace/privileged escape), K8S-008 (container restricted baseline) |
+| Identity & access | 20 | K8S-002 (wildcard/cluster-admin RBAC), K8S-006 (cluster-wide secret readers), K8S-009 (service-account token exposure) |
+| Network segmentation | 20 | K8S-003 (network policy presence), K8S-011 (default-deny baseline), K8S-010 (external exposure surface) |
+| Reliability & resilience | 20 | K8S-005 (PDB/replicas), K8S-012 (health probes), K8S-013 (replica spread) |
+| Resource governance | 15 | K8S-004 (requests + limits), K8S-014 (namespace quota/LimitRange) |
 
 Full check catalog and target profile at the top of [references/kubernetes-checks.md](references/kubernetes-checks.md). IDs are stable: the same defect gets the same ID every run, one finding per failed check, affected objects (namespace/kind/name) enumerated in `affected`. Compute `points_recoverable` per finding by re-running the scoring model with that check at full credit; `info` findings carry 0. Live-runtime (`K8SRT-*`) findings are always `info` with `points_recoverable: 0` and never enter this arithmetic — the snapshot can corroborate a posture finding's evidence (and upgrade its `status` to `validated-live`), but it never moves the score in either direction. The executive summary states the gap to target and the two or three highest-`points_recoverable` findings as the biggest levers.
 

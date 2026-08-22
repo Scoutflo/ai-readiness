@@ -65,7 +65,9 @@ Elevated tier: this skill mutates namespace labels, RBAC, NetworkPolicies, and w
 
 ```bash
 set -eu
-CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || { if [ -f "./.scoutflo/toolkit.yaml" ]; then CFG="./.scoutflo/toolkit.yaml"; else CFG="$HOME/.scoutflo/toolkit.yaml"; fi; }
+CFG="${SCOUTFLO_CONFIG:-}"
+[ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done
+[ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
 if [ ! -f "$CFG" ]; then
   # Multi-environment setup: a customer running prod+nonprod often has no default
   # toolkit.yaml but named variants (toolkit-prod.yaml, toolkit-nonprod.yaml). List
@@ -136,9 +138,25 @@ kubectl --context "$KUBE_CONTEXT" get ns <ns> -o json \
 
 `enforce=restricted` is **disruptive** (can reject running workloads' pods on their next admission) — never applied in the same step; it is a separate, per-namespace plan after `warn=restricted` shows zero violations.
 
+## Harden container security contexts
+
+K8S-007, K8S-008. Guarded → disruptive. Remove the node-escape surface and bring containers to the restricted baseline. These are workload-owner changes (they edit the pod template), so they go through the deploying repo/Helm values, announced, not `kubectl edit`:
+
+```yaml
+# ANNOUNCE this securityContext block for the flagged container; rollback = revert the manifest.
+securityContext:
+  runAsNonRoot: true
+  readOnlyRootFilesystem: true
+  allowPrivilegeEscalation: false
+  capabilities: { drop: ["ALL"] }   # add back only the specific caps the app proves it needs
+# and at pod level: remove privileged, hostNetwork/hostPID/hostIPC, and hostPath volumes.
+```
+
+Order matters: `readOnlyRootFilesystem: true` and dropping `ALL` caps can break an app that writes to `/` or needs a specific capability — announce a `warn=restricted` PSA dry-run (Enforce pod security, above) or a staging rollout first, verify the pod still starts and passes its probes, **then** apply. Removing `privileged`/`hostPath` from a legitimate host agent will break it — confirm the workload is an application workload, not a CNI/CSI/node-exporter DaemonSet, before flagging. Verify: the flagged container's `securityContext` shows the hardened values and the pod is `Running` and `Ready`.
+
 ## Tighten RBAC
 
-K8S-002, K8S-006. Guarded → disruptive. Replace a workload ServiceAccount's wildcard/cluster-admin binding with a least-privilege namespaced Role. Announce the new Role, confirm, apply, verify the workload's SA can still do what it legitimately needs, **then** remove the over-broad binding (removing it first is disruptive — it can break the running workload):
+K8S-002, K8S-006, K8S-009. Guarded → disruptive. Replace a workload ServiceAccount's wildcard/cluster-admin binding with a least-privilege namespaced Role. Announce the new Role, confirm, apply, verify the workload's SA can still do what it legitimately needs, **then** remove the over-broad binding (removing it first is disruptive — it can break the running workload):
 
 ```bash
 # 1. Announce + apply a scoped Role/RoleBinding (guarded). 2. Verify the SA retains needed access:
@@ -147,11 +165,16 @@ kubectl --context "$KUBE_CONTEXT" auth can-i "$VERB" "$RESOURCE" \
   --as="system:serviceaccount:${NS}:${SA}" -n "$NS"
 # 3. Only then announce removal of the wildcard ClusterRoleBinding (DISRUPTIVE, second confirmation):
 #    rollback = re-apply the backed-up ClusterRoleBinding yaml.
+# 4. Verify the reduction took (this must now return "no"):
+kubectl --context "$KUBE_CONTEXT" auth can-i list secrets --all-namespaces \
+  --as="system:serviceaccount:${NS}:${SA}"
 ```
+
+**K8S-009 (token exposure).** For a workload that never calls the Kubernetes API, set `automountServiceAccountToken: false` on the ServiceAccount (or the pod template) — announced as a manifest change, verified by the pod restarting healthy without the token mount. Do this *and* narrow the SA's RBAC: an unused token on a powerless SA is harmless, but the fix for a mounting pod whose SA can read secrets is both — remove the automount and cut the RBAC.
 
 ## Add network policies
 
-K8S-003. Guarded → disruptive. Apply a default-deny-ingress policy **with the allow-list in the same apply**, never default-deny alone (that severs all traffic until allows exist — disruptive):
+K8S-003, K8S-011, K8S-010. Guarded → disruptive. Apply a default-deny-ingress policy **with the allow-list in the same apply**, never default-deny alone (that severs all traffic until allows exist — disruptive):
 
 ```yaml
 # ANNOUNCE this manifest; rollback = kubectl delete networkpolicy <name> -n <ns>
@@ -163,7 +186,52 @@ spec:
   policyTypes: [Ingress]
   # plus the specific allow-from rules the app needs, shown and confirmed together
 ```
-Verify: `kubectl get networkpolicy -n <ns>` shows the policy and the app's known flows still connect.
+Verify: `kubectl get networkpolicy -n <ns>` shows the policy and the app's known flows still connect. The empty `podSelector: {}` above is exactly the **default-deny baseline (K8S-011)** — a namespace with only per-app allow policies and no default-deny still leaks; this manifest closes it. For **external exposure (K8S-010)**, the fix is usually *not* a new policy but a review: confirm each LoadBalancer/NodePort Service is meant to be public, front it with the ingress controller + WAF rather than a raw LoadBalancer where possible, and ensure the exposed workload is hardened (Harden container security contexts) and least-privileged (Tighten RBAC) — an internet-facing pod is the one place K8S-007/008/009 are never optional.
+
+## Add health probes
+
+K8S-012. Guarded write (workload-owner change through the manifest). Add readiness and liveness probes to the flagged container:
+
+```yaml
+# ANNOUNCE for the flagged container; rollback = revert the manifest.
+readinessProbe: { httpGet: { path: /healthz, port: 8080 }, initialDelaySeconds: 5, periodSeconds: 10 }
+livenessProbe:  { httpGet: { path: /livez,  port: 8080 }, initialDelaySeconds: 15, periodSeconds: 20 }
+```
+
+Use the app's real health endpoints and tune the thresholds to its startup time — a too-aggressive liveness probe restart-loops a slow-starting app (use `startupProbe` for those). Verify: the workload rolls out `Ready`, and a rollout no longer sends traffic to not-ready pods.
+
+## Spread replicas across failure domains
+
+K8S-013. Guarded write (workload-owner change). Add `topologySpreadConstraints` (or pod anti-affinity) so replicas land on distinct nodes:
+
+```yaml
+# ANNOUNCE for the workload's pod template; rollback = revert the manifest.
+topologySpreadConstraints:
+  - maxSkew: 1
+    topologyKey: kubernetes.io/hostname
+    whenUnsatisfiable: ScheduleAnyway   # DoNotSchedule only when you have spare nodes to absorb it
+    labelSelector: { matchLabels: { app: <app> } }
+```
+
+`whenUnsatisfiable: DoNotSchedule` on a cluster without spare node capacity leaves pods `Pending` — start with `ScheduleAnyway` and verify placement. Verify: `kubectl get pods -l app=<app> -o wide` shows the replicas on different nodes.
+
+## Set namespace quotas and LimitRanges
+
+K8S-014. Guarded write. Give each application namespace a LimitRange (per-container defaults) and a ResourceQuota (a namespace ceiling). The LimitRange is the cheap retro-fit for K8S-004 offenders — it applies defaults without editing every workload:
+
+```yaml
+# ANNOUNCE both; rollback = kubectl delete limitrange <name> -n <ns> / delete resourcequota <name> -n <ns>
+apiVersion: v1
+kind: LimitRange
+metadata: { name: default-limits, namespace: <ns> }
+spec:
+  limits:
+    - type: Container
+      default:        { cpu: "500m", memory: "512Mi" }
+      defaultRequest: { cpu: "100m", memory: "128Mi" }
+```
+
+A `ResourceQuota` that is set below current usage rejects new pods until usage drops — size it from observed usage first (`kubectl top pods -n <ns>`), announce the number, then apply. Verify: `kubectl get limitrange,resourcequota -n <ns>` shows both and new pods inherit the defaults.
 
 ## Set resource limits
 

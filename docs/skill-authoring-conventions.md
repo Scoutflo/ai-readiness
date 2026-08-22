@@ -197,6 +197,8 @@ Rules:
 
 Every audit skill conforms to the [report standard](../report-standard/README.md) in full: `findings.json` per the [schema](../report-standard/findings-schema.md), `report.md` per the [template](../report-standard/report-template.md), severity, status, scoring, and the end-to-end gate per [severity-and-scoring.md](../report-standard/severity-and-scoring.md).
 
+Every scored finding must also clear the [depth doctrine](../report-standard/depth-doctrine.md): a precise locus (the exact object and wrong value), a blast radius **computed from the live estate** (who/what/how many, not an adjective), the correlation chain it belongs to when one exists, an exact fix, and a verification step. A finding that only says "resource X is missing property Y" is what a free scanner already prints — it is not a Scoutflo finding. This is the difference between the product and a linter, and it is checked on every new or changed audit by maintainer review and live smoke, alongside correctness.
+
 The parts authors get wrong most often:
 
 - Register a finding-ID prefix and keep a stable check catalog. IDs never change between runs.

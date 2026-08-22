@@ -33,7 +33,9 @@ Outputs, per the [report standard](../../report-standard/README.md):
 
 ```bash
 set -eu
-CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || { if [ -f "./.scoutflo/toolkit.yaml" ]; then CFG="./.scoutflo/toolkit.yaml"; else CFG="$HOME/.scoutflo/toolkit.yaml"; fi; }
+CFG="${SCOUTFLO_CONFIG:-}"
+[ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done
+[ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
 if [ ! -f "$CFG" ]; then
   # Multi-environment setup: a customer running prod+nonprod often has no default
   # toolkit.yaml but named variants (toolkit-prod.yaml, toolkit-nonprod.yaml). List
