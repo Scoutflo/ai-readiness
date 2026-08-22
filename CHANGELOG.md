@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.126
+
+Contract-shape alignment with the agreed cross-repo design (field placements pinned by the platform side):
+
+- **`deployed_revision` is workload-level** — one live SHA per running workload, a sibling of `image`/`image_digest`, never nested inside `source_repo_evidence[]` (a revision is a property of what is running, not of a repo candidate). The Tier-2 ArgoCD block now emits it at the object level and Phase-3 composition lands it on each joined workload; the 40-hex-only and never-a-branch-name rules are unchanged. `repo-map.json`'s per-mapping `deployed_revision` mirrors the workload-level field.
+- **`default_branch` is per evidence entry** — inside each `source_repo_evidence[]` entry next to `candidate_repo`, because different candidates can have different defaults. Filled by whichever step observes it (in practice `map-repos`' live GitHub verification); cluster-side sources leave it null. The mapping-level copy in `repo-map.json` stays.
+- `branch_ref` stays per-entry (source-scoped deploy ref). All additive; both schemas stay v1.
+
+Gates: leak CLEAN, structure-check (15), run-tests (22 suites), plugin validate --strict; Tier-2 block re-verified live (object-level SHA on the synced app, null on never-synced).
+
 ## 0.1.125
 
 Edge-case fix wave from the end-to-end verification campaign (7 full skill runs against the real estate; 44/48 design expectations already MET — these close the 6 confirmed defects plus 7 smaller ones):
