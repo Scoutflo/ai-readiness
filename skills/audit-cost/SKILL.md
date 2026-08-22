@@ -37,7 +37,21 @@ This audit reads cost-recommendation and inventory surfaces for every **configur
 ```bash
 set -eu
 CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || { if [ -f "./.scoutflo/toolkit.yaml" ]; then CFG="./.scoutflo/toolkit.yaml"; else CFG="$HOME/.scoutflo/toolkit.yaml"; fi; }
-[ -f "$CFG" ] || { echo "missing $CFG; run /scoutflo:connect"; exit 1; }
+if [ ! -f "$CFG" ]; then
+  # Multi-environment setup: a customer running prod+nonprod often has no default
+  # toolkit.yaml but named variants (toolkit-prod.yaml, toolkit-nonprod.yaml). List
+  # them so the choice is directed, not a dead stall — but NEVER auto-pick an
+  # environment (auditing the wrong one is worse than asking).
+  ENVCFGS=$(for d in "./.scoutflo" "$HOME/.scoutflo"; do ls "$d"/toolkit-*.yaml 2>/dev/null; done)
+  if [ -n "$ENVCFGS" ]; then
+    echo "no default config at $CFG, but found environment-specific configs:"
+    printf '%s\n' "$ENVCFGS" | sed 's/^/  - /'
+    echo "re-run with SCOUTFLO_CONFIG=<one of the above> for the environment you want (never auto-picked), or run /scoutflo:connect to create a default"
+  else
+    echo "missing $CFG; run /scoutflo:connect"
+  fi
+  exit 1
+fi
 # Load the home-anchored secret store so a token added to ~/.scoutflo/env (by connect,
 # even mid-session) is seen here without re-exporting or opening a new terminal. It only
 # sets *_env variables; no secret value is printed. A profile that already sources it makes

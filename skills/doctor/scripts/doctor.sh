@@ -133,7 +133,15 @@ fi
 
 if [ ! -f "$CONFIG" ]; then
   note "doctor: config not found: ${CONFIG}"
-  note "fix: run /scoutflo:connect to create it from templates/toolkit.yaml.example"
+  # Multi-environment setup: offer named variants instead of a dead stall; never auto-pick.
+  ENVCFGS=$(for d in "./.scoutflo" "$HOME/.scoutflo"; do ls "$d"/toolkit-*.yaml 2>/dev/null; done)
+  if [ -n "$ENVCFGS" ]; then
+    note "doctor: no default config, but found environment-specific configs:"
+    printf '%s\n' "$ENVCFGS" | sed 's/^/  - /' >&2
+    note "fix: re-run with --config <one of the above> (or SCOUTFLO_CONFIG=...) for the environment you want; connect can also create a default"
+  else
+    note "fix: run /scoutflo:connect to create it from templates/toolkit.yaml.example"
+  fi
   exit 1
 fi
 if [ ! -r "$CONFIG" ]; then
