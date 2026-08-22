@@ -196,7 +196,7 @@ Swap `GRAFANA_TOKEN` for the exact `*_env` name of whatever you are setting (`DA
 
 ### 4c. Set it ONCE, globally — so you are never asked again
 
-A plain `export` lives only in the current shell, so it vanishes when you open a new terminal, start a new session, or `cd` elsewhere — and then `connect`/`doctor` would ask for the token again. **The fix is a single home-anchored secret file, `~/.scoutflo/env`, that your shell loads at startup.** Set a credential there once and every future session, terminal, and directory already has it. This is the recommended path; do it once and you are done.
+A plain `export` lives only in the current shell, so it vanishes when you open a new terminal, start a new session, or `cd` elsewhere — and then `connect`/`doctor` would ask for the token again. **The fix is a single home-anchored secret file, `~/.scoutflo/env`, that your shell loads at startup.** Set a credential there once and every future session, terminal, and directory already has it. This is the recommended path; do it once and you are done. (Every skill resolves the store as `$SCOUTFLO_ENV_FILE` → `./.scoutflo/env` → `~/.scoutflo/env`, first hit wins — so on a sandboxed surface where `$HOME` is not shell-writable, the write ladder above can fall back to a project-local `./.scoutflo/env` and everything still works; keep `.scoutflo/` git-ignored in that mode.)
 
 **macOS / Linux / Git Bash — one-time setup, then one line per credential:**
 
@@ -245,17 +245,32 @@ Confirmation gate, no exceptions: before anything is written to `~/.scoutflo/too
 Back up any existing config, then seed from the template shipped with this plugin. Fixed step: run as written.
 
 ```bash
-CONFIG="${SCOUTFLO_CONFIG:-$HOME/.scoutflo/toolkit.yaml}"                             # toolkit config location
+CONFIG="${SCOUTFLO_CONFIG:-}"; [ -n "$CONFIG" ] || { if [ -f "./.scoutflo/toolkit.yaml" ]; then CONFIG="./.scoutflo/toolkit.yaml"; else CONFIG="$HOME/.scoutflo/toolkit.yaml"; fi; }                             # toolkit config location
 TEMPLATE="${CLAUDE_PLUGIN_ROOT}/templates/toolkit.yaml.example"   # template shipped with this plugin
-mkdir -p "$HOME/.scoutflo"
-if [ -f "$CONFIG" ]; then cp "$CONFIG" "${CONFIG}.bak.$(date -u +%Y%m%d%H%M%S)"; fi
-if [ ! -f "$CONFIG" ]; then cp "$TEMPLATE" "$CONFIG"; fi
-chmod 600 "$CONFIG"
-ls -l "$CONFIG"
-# Expect: the file exists with -rw------- permissions.
+# WRITE PROBE: on sandboxed surfaces (the Claude Desktop app) shell writes to $HOME are
+# denied by the OS sandbox even though the CLI allows them. Probe once and pick the mode.
+if mkdir -p "$HOME/.scoutflo" 2>/dev/null && touch "$HOME/.scoutflo/.write-probe" 2>/dev/null; then
+  rm -f "$HOME/.scoutflo/.write-probe"; echo "config home: $HOME/.scoutflo (shell-writable)"
+else
+  echo "SANDBOXED SURFACE: shell cannot write $HOME/.scoutflo — see the write ladder below this block"
+fi
+if [ -f "$CONFIG" ]; then cp "$CONFIG" "${CONFIG}.bak.$(date -u +%Y%m%d%H%M%S)" 2>/dev/null || true; fi
+if [ ! -f "$CONFIG" ]; then cp "$TEMPLATE" "$CONFIG" 2>/dev/null || echo "shell copy denied — use the write ladder below"; fi
+chmod 600 "$CONFIG" 2>/dev/null || true
+ls -l "$CONFIG" 2>/dev/null || true
+# Expect: the file exists (ideally -rw-------). chmod failing on a sandboxed surface is
+# tolerable for toolkit.yaml (it holds no secret values, only variable NAMES).
 ```
 
 `${CLAUDE_PLUGIN_ROOT}` is set by the plugin runtime; running from a repo checkout instead, export it as the repo root first.
+
+**The write ladder (when the probe reports a sandboxed surface).** The plugin must work on every surface, so config writing degrades in exactly this order — never give up at rung 1:
+
+1. **Shell write to `$HOME/.scoutflo`** (the block above) — works in the CLI; denied by the Desktop app's OS sandbox.
+2. **File-writing tool to `$HOME/.scoutflo/toolkit.yaml`** — when the shell write is denied, write the file with the file-Write tool instead of shell redirection: it goes through the app's permission prompt (the user approves once), not the OS sandbox. Verify by reading the file back. Never compose config with `cat >`/`>>` on a sandboxed surface.
+3. **Project-local mode: `./.scoutflo/toolkit.yaml`** — when even the file tool is denied, write inside the working directory (always writable). Every skill resolves config in the order `$SCOUTFLO_CONFIG` → `./.scoutflo/toolkit.yaml` → `$HOME/.scoutflo/toolkit.yaml`, so project-local config is picked up automatically with zero extra setup. **Mandatory companion step:** immediately ensure `.scoutflo/` is git-ignored — `grep -qx '.scoutflo/' .gitignore 2>/dev/null || printf '.scoutflo/\n' >> .gitignore` — and tell the user this config is per-project, not global.
+
+The same ladder applies to the secret store `env` file (Step 4c): shell append → file tool → project-local `./.scoutflo/env` with the same `.gitignore` guard. When `chmod 600` is denied by the sandbox, give the user the exact one-liner to run in their own terminal (`chmod 600 ~/.scoutflo/env` — their shell is never sandboxed); never leave a secret file with open permissions silently.
 
 If the user asks to keep the config inside their project folder instead of `~/.scoutflo/`, explain the trade-off rather than refusing: home-anchoring is what makes credentials work from every folder and session without re-entry, and reports already live in their project folder (`./scoutflo-audits/`). If they still want it relocated (isolated estates, shared-machine policy), set it up with `export SCOUTFLO_CONFIG="<their-path>/toolkit.yaml"` persisted the same way as Step 4c — every skill honors that override.
 
@@ -269,7 +284,7 @@ Then apply the approved blocks from Step 5:
 Confirm the file parses:
 
 ```bash
-CONFIG="${SCOUTFLO_CONFIG:-$HOME/.scoutflo/toolkit.yaml}"   # toolkit config location
+CONFIG="${SCOUTFLO_CONFIG:-}"; [ -n "$CONFIG" ] || { if [ -f "./.scoutflo/toolkit.yaml" ]; then CONFIG="./.scoutflo/toolkit.yaml"; else CONFIG="$HOME/.scoutflo/toolkit.yaml"; fi; }   # toolkit config location
 if command -v yq >/dev/null 2>&1; then
   yq '. | keys | length' "$CONFIG" >/dev/null && echo "toolkit.yaml parses"
 else

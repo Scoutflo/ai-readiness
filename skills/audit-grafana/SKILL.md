@@ -33,7 +33,8 @@ GRAFANA_URL="https://grafana.example.com"   # grafana.url
 # even mid-session) is seen here without re-exporting or opening a new terminal. It only
 # sets *_env variables; no secret value is printed. A profile that already sources it makes
 # this a no-op. This mirrors what /scoutflo:doctor does, so doctor and this audit agree.
-[ -f "$HOME/.scoutflo/env" ] && . "$HOME/.scoutflo/env" || true
+SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.scoutflo/env" ]; then SCOUTFLO_ENV="./.scoutflo/env"; else SCOUTFLO_ENV="$HOME/.scoutflo/env"; fi; }
+[ -f "$SCOUTFLO_ENV" ] && . "$SCOUTFLO_ENV" || true
 # grafana.token_env names the variable; presence check only, never print the value.
 [ -n "${GRAFANA_TOKEN:-}" ] || { echo "GRAFANA_TOKEN is not set; run /scoutflo:connect"; exit 1; }
 command -v curl >/dev/null || { echo "curl is required"; exit 1; }

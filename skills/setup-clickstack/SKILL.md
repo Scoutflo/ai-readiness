@@ -52,7 +52,7 @@ Run before any real work. A failed check stops the skill with the exact failure 
 
 ```bash
 set -eu
-CFG="${SCOUTFLO_CONFIG:-$HOME/.scoutflo/toolkit.yaml}"
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || { if [ -f "./.scoutflo/toolkit.yaml" ]; then CFG="./.scoutflo/toolkit.yaml"; else CFG="$HOME/.scoutflo/toolkit.yaml"; fi; }
 [ -f "$CFG" ] || { echo "missing $CFG; run /scoutflo:connect"; exit 1; }
 # Pick up any credential added to the home-anchored store, even mid-session.
 [ -f "$HOME/.scoutflo/env" ] && . "$HOME/.scoutflo/env"

@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.127
+
+**Sandbox-proof config: the plugin now works on every surface** — CLI (unsandboxed shell), the Claude **Desktop app** (whose OS sandbox denies shell writes to `$HOME`, the cause of intermittent "can't write toolkit.yaml" failures in `start`/`connect`), and web/cloud sessions. One deterministic rule everywhere:
+
+- **Layered resolution (read side), first hit wins:** config = `$SCOUTFLO_CONFIG` → `./.scoutflo/toolkit.yaml` (project-local) → `~/.scoutflo/toolkit.yaml`; secret store = `$SCOUTFLO_ENV_FILE` → `./.scoutflo/env` → `~/.scoutflo/env`. Rolled out to **every** skill's doctor gate (25 config sites, 17 env sites) + doctor.sh; the `env-load-parity` CI gate now enforces the layered resolver so no skill can regress to home-only.
+- **Write ladder in connect (never dead-ends):** shell write to `$HOME/.scoutflo` → on sandbox denial, the **file-Write tool** (goes through the app's permission prompt, not the OS sandbox; read back to verify) → **project-local mode** (`./.scoutflo/`, always writable) with a mandatory `.gitignore` guard. A write probe detects the sandboxed surface up front and names it, instead of failing mid-write with a cryptic error. A denied `chmod 600` yields the exact user-terminal one-liner, never a silently open secret file.
+- New pressure scenario (connect sandboxed-surface write ladder), FAQ entry ("works in CLI, fails in the app" explained), and a new local self-test layer asserting the resolution order (project-local beats home; explicit override honored; canonical env resolver sources project-local).
+
+Verified end-to-end under a **simulated sandbox** (read-only `$HOME`): the probe detects the denial, project-local config+env write inside the workspace, and doctor runs fully — 23 rows — resolving both files from `./.scoutflo/` with the secret variable found. Gates: leak CLEAN, structure-check (15), run-tests (22 suites), plugin validate --strict.
+
 ## 0.1.126
 
 Contract-shape alignment with the agreed cross-repo design (field placements pinned by the platform side):

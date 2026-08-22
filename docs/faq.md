@@ -79,3 +79,7 @@ No. Bare `/doctor` is **Claude Code's own built-in** health command; it inspects
 
 **Something is broken. Where do I report it?**
 GitHub issues on this repository. Include the skill name and the terminal output around the failure; never paste credentials or full reports.
+
+## connect says it can't write toolkit.yaml (Claude Desktop app)
+
+The Desktop app runs shell commands in an OS sandbox scoped to your working directory, so shell writes to `~/.scoutflo/` are denied there (the CLI prompts and allows them — that's why it "works in the terminal"). This is handled: `connect` probes first and walks a write ladder — file-tool write to your home (approve the prompt once), else project-local `./.scoutflo/` (auto-git-ignored). Every skill resolves config as `$SCOUTFLO_CONFIG` → `./.scoutflo/toolkit.yaml` → `~/.scoutflo/toolkit.yaml`, so whichever location connect lands in just works. Same for the secret store (`$SCOUTFLO_ENV_FILE` → `./.scoutflo/env` → `~/.scoutflo/env`). One caveat: in web/cloud sessions the "home" is the session sandbox, not your machine — run connect in the CLI or Desktop app for durable setup.

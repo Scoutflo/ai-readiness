@@ -39,7 +39,7 @@ None of this is required to start; the default is fine for a first run.
 
 ```bash
 set -eu
-CFG="${SCOUTFLO_CONFIG:-$HOME/.scoutflo/toolkit.yaml}"
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || { if [ -f "./.scoutflo/toolkit.yaml" ]; then CFG="./.scoutflo/toolkit.yaml"; else CFG="$HOME/.scoutflo/toolkit.yaml"; fi; }
 
 # What the runs will ACTUALLY write to (only the env var threads through fresh shells).
 if [ -n "${SCOUTFLO_AUDIT_DIR:-}" ]; then EFFECTIVE="$SCOUTFLO_AUDIT_DIR"; EFFSRC="SCOUTFLO_AUDIT_DIR env"
