@@ -228,12 +228,12 @@ else
           managed_workloads: [ (.status.resources // [])[]
               | select(.kind == "Deployment" or .kind == "StatefulSet" or .kind == "DaemonSet")
               | { namespace: (.namespace // null), workload_name: .name, workload_type: (.kind | ascii_downcase) } ],
+          deployed_revision: (if ($sync | test("^[0-9a-f]{40}$")) then $sync else null end),
           source_repo_evidence: [ {
             candidate_repo: (repo_label($src.repoURL)),
             evidence_source: "argocd",
             confidence: "authoritative",
             subpath: ($src.path // null),
-            deployed_revision: (if ($sync | test("^[0-9a-f]{40}$")) then $sync else null end),
             branch_ref: (if (($src.targetRevision // "") != "") and (($src.targetRevision // "") | test("^[0-9a-f]{40}$") | not) then $src.targetRevision else null end),
             raw: ($src.repoURL + " @ " + ($src.targetRevision // "HEAD")) } ] }
         end' \
@@ -241,7 +241,7 @@ else
 fi
 ```
 
-Expected: one JSON object per Application. A Helm-chart source prints a `skipped` note and emits **no** evidence (a chart registry is not a source repo). Otherwise: `candidate_repo` as `owner/name`, `subpath` from `spec.source.path`, `branch_ref` from `targetRevision` when it is a ref, `deployed_revision` **only when the synced revision is a real 40-hex SHA** (multi-source apps read `status.sync.revisions[0]`; a never-synced Application yields `null`, never a branch name masquerading as a commit), and **`managed_workloads`** — the workloads this Application actually manages, from `status.resources`.
+Expected: one JSON object per Application. A Helm-chart source prints a `skipped` note and emits **no** evidence (a chart registry is not a source repo). Otherwise: `candidate_repo` as `owner/name`, `subpath` from `spec.source.path`, `branch_ref` from `targetRevision` when it is a ref, `deployed_revision` at the **object level** — only when the synced revision is a real 40-hex SHA (multi-source apps read `status.sync.revisions[0]`; a never-synced Application yields `null`, never a branch name masquerading as a commit) — and **`managed_workloads`**, the workloads this Application actually manages, from `status.resources`. At Phase-3 composition the Application's `deployed_revision` lands as a **workload-level attribute** (sibling of `image`/`image_digest`) on each joined workload, per the agreed contract shape — never nested inside the `source_repo_evidence[]` entries.
 
 **The join (how evidence reaches workloads):** `managed_workloads` is the mechanical join — in Phase 3, attach the Application's `source_repo_evidence` entry to each export workload whose `namespace` + `workload_name` + `workload_type` match a `managed_workloads` row. A never-synced Application has no `status.resources` and therefore joins to nothing: record it in the map as an unattached ArgoCD note ("Application X declares repo Y for namespace Z but has never synced") and let `map-repos` present it to the user — never guess a workload for it, and never attach by `dest_namespace` alone (a namespace is not a workload).
 

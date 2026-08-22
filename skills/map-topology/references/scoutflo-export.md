@@ -67,12 +67,14 @@ Everything here is derived from the same read-only inventory as `topology.md`. N
     "workload_type": "deployment",
     "image": "ghcr.io/acme/checkout:3.0.0",
     "image_digest": "sha256:abcd1234",
+    "deployed_revision": "8088f4c0d970abb09e250248cc97e35623447cb5",
     "source_repo_evidence": [
       {
         "candidate_repo": "acme/checkout",
         "evidence_source": "image_registry_path",
         "confidence": "heuristic",
         "subpath": null,
+        "default_branch": null,
         "raw": "ghcr.io/acme/checkout:3.0.0"
       }
     ]
@@ -91,7 +93,7 @@ Everything here is derived from the same read-only inventory as `topology.md`. N
 ```
 
 - Emit the cluster, every in-scope namespace (`kubernetes_namespace`), every workload, and one resource per observability backend named in the Integration watchpoints table.
-- Workload `resource_type` one of `kubernetes_deployment, kubernetes_stateful_set, kubernetes_daemon_set, kubernetes_job, kubernetes_cron_job`. **The four workload attributes (`cluster_id`, `namespace`, `workload_name`, `workload_type`) are mandatory: the import contract rejects workload resources without all four.** `image` (full ref) and `image_digest` are optional but capture them when known (the first container's image + resolved digest from the pod spec): the image is the one always-present breadcrumb toward the workload's build origin, even though a registry path alone never identifies a source repository (a package name can differ from the repo name, and a shared build image says nothing per-service).
+- Workload `resource_type` one of `kubernetes_deployment, kubernetes_stateful_set, kubernetes_daemon_set, kubernetes_job, kubernetes_cron_job`. **The four workload attributes (`cluster_id`, `namespace`, `workload_name`, `workload_type`) are mandatory: the import contract rejects workload resources without all four.** `image` (full ref), `image_digest`, and `deployed_revision` are optional but capture them when known — `deployed_revision` is **workload-level** (one live SHA per running workload, a sibling of `image`/`image_digest`, never nested inside `source_repo_evidence[]`): the exact commit that is live, from the OCI `org.opencontainers.image.revision` label (the standard companion to `image.source`, same registry fetch) or, when the workload is ArgoCD-managed, the Application's synced `status.sync.revision` — **only when it is a real 40-hex SHA** (a never-synced Application echoes its target ref, which is branch context, never a revision). This is the field that lets RCA name the culprit commit; never populate it with a branch name. Capture `image`/`image_digest` when known (the first container's image + resolved digest from the pod spec): the image is the one always-present breadcrumb toward the workload's build origin, even though a registry path alone never identifies a source repository (a package name can differ from the repo name, and a shared build image says nothing per-service).
 
 ### `source_repo_evidence[]` — tiered, typed service→repo evidence (optional, additive)
 
@@ -103,6 +105,7 @@ A workload may carry `source_repo_evidence`: an array of typed candidates for th
   "evidence_source": "image_registry_path",
   "confidence": "heuristic",
   "subpath": "services/checkout",
+  "default_branch": null,
   "raw": "ghcr.io/acme/checkout:3.0.0"
 }
 ```
@@ -111,7 +114,7 @@ A workload may carry `source_repo_evidence`: an array of typed candidates for th
 - `evidence_source` — one of `oci_image_source | argocd | image_registry_path | pod_annotation`.
 - `confidence` — `authoritative` (the publisher's own declaration: OCI `org.opencontainers.image.source`, or an ArgoCD Application spec) or `heuristic` (a registry-path parse, or an annotation that isn't a declared source). Name similarity is not evidence and never appears here — it is the last-resort fallback in the consumer, carrying no `source_repo_evidence` entry.
 - `subpath` — the service's subdirectory inside a monorepo, present **only** for sources that actually carry it (ArgoCD `spec.source.path`, a repo descriptor, or human confirmation downstream). A registry-path/OCI candidate is repo-level and leaves `subpath: null` — it must never claim a per-service subpath it did not observe.
-- `deployed_revision` (optional) — the exact commit SHA that is **live**, when a source actually carries it: ArgoCD's `status.sync.revision` (only when it is a 40-hex SHA — a never-synced Application echoes the target ref instead, which is NOT a revision), or the OCI `org.opencontainers.image.revision` label (the standard companion to `image.source`, same registry fetch). This is the field that lets RCA name the culprit commit; never populate it with a branch name.
+- `default_branch` (optional, per entry) — the candidate repo's default branch, next to `candidate_repo` because different candidates can have different defaults. Filled by whichever step actually observes it — in practice `map-repos`' live verification (GitHub returns it on the resolve/listing call); cluster-side sources (ArgoCD, image labels) don't know it and leave it null. Never asked, never guessed.
 - `branch_ref` (optional) — the branch/tag the source deploys from when the source states it (ArgoCD `spec.source.targetRevision` when it is a ref like `main`, not a SHA). Branch context for diffing history — distinct from `deployed_revision` and never a substitute for it.
 - `raw` — the exact source string the candidate was derived from, for auditability.
 
@@ -120,7 +123,7 @@ A workload may carry `source_repo_evidence`: an array of typed candidates for th
 | Tier | `evidence_source` | Authority | How obtained |
 | --- | --- | --- | --- |
 | 1 | `oci_image_source` | authoritative | `org.opencontainers.image.source` label — registry manifest/config fetch (not `kubectl`) |
-| 2 | `argocd` | authoritative (repo, `subpath`, `branch_ref`, and — when synced — `deployed_revision`) | ArgoCD Application CRs read via `kubectl` (`spec.source.repoURL` + `path` + `targetRevision`, `status.sync.revision`) |
+| 2 | `argocd` | authoritative (repo, `subpath`, `branch_ref`; a synced app also yields the **workload-level** `deployed_revision`) | ArgoCD Application CRs read via `kubectl` (`spec.source.repoURL` + `path` + `targetRevision`, `status.sync.revision`) |
 | 3 | `image_registry_path` | heuristic — must be live-verified | parse of the already-captured `image` ref (free) |
 | — | *(name similarity)* | fallback only | consumer-side; never written here |
 
