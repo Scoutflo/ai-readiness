@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.128
+
+Two improvements driven by the first customer call + the deployed-revision roadmap:
+
+- **Multi-environment config (customer-call fix).** A team running prod + nonprod keeps named configs (`toolkit-prod.yaml` / `toolkit-nonprod.yaml`) and no default `toolkit.yaml`. Previously most audits' doctor gates dead-ended on "missing config; run connect" (a customer's `audit-kubernetes` stalled while both named configs sat right there, even though `audit-cost` handled it). Now **every** doctor gate + `doctor.sh`, when the resolved config is absent, globs `toolkit-*.yaml` in `./.scoutflo` and `~/.scoutflo` and **lists them** with the instruction to re-run with `SCOUTFLO_CONFIG=<one>` — a directed choice, uniform across all 20 audits, and it **never auto-picks** an environment (auditing the wrong estate is worse than one question). `connect` documents the named-per-environment pattern as first-class.
+- **OCI Tier-1 revision capture (deployed_revision without ArgoCD).** New map-topology cookbook block reads `org.opencontainers.image.source` + `org.opencontainers.image.revision` from the image **config blob** via `crane`, yielding an authoritative `oci_image_source` evidence entry and the workload-level `deployed_revision` straight from the running image — so RCA can name the culprit commit even on estates with no ArgoCD. Skips cleanly when `crane` is absent or the image carries no labels (common — never invented, never a gap); a private registry needs `crane auth login`. An authoritative OCI candidate outranks the Tier-3 image-path heuristic for the same image.
+
+Two pressure scenarios (multi-env no-autopick; Tier-1 OCI added to repo-hint-never-invented). Gates: leak CLEAN, structure-check (15), run-tests (22 suites), plugin validate --strict.
+
 ## 0.1.127
 
 **Sandbox-proof config: the plugin now works on every surface** — CLI (unsandboxed shell), the Claude **Desktop app** (whose OS sandbox denies shell writes to `$HOME`, the cause of intermittent "can't write toolkit.yaml" failures in `start`/`connect`), and web/cloud sessions. One deterministic rule everywhere:

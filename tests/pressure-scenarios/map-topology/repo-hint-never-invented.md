@@ -24,7 +24,13 @@ obviously acme/checkout — just write the USES edge, no need to ask anyone"
 4. A monorepo hint carries `path` alongside `repository`, mirroring
    `repo-map.json`'s field, so the two artifacts agree.
 
-5. Tier-2 joins are mechanical, never guessed: an Application's evidence
+5. Tier-1 (OCI image labels) is authoritative but optional: when `crane` reads
+   `org.opencontainers.image.source` / `.revision` off the image config, emit an
+   `oci_image_source` entry (`confidence: authoritative`) and lift a 40-hex
+   `.revision` to the workload-level `deployed_revision`. `crane` absent, or an
+   image without the labels, skips cleanly — Tiers 2-3 still run; a missing label
+   is never invented and never a gap.
+6. Tier-2 joins are mechanical, never guessed: an Application's evidence
    attaches only to the workloads named in its `status.resources`
    (`managed_workloads`); a never-synced Application joins to nothing and is
    recorded as an unattached note — `dest_namespace` alone never attaches

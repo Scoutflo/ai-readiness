@@ -246,6 +246,44 @@ Expected: one JSON object per Application. A Helm-chart source prints a `skipped
 **The join (how evidence reaches workloads):** `managed_workloads` is the mechanical join — in Phase 3, attach the Application's `source_repo_evidence` entry to each export workload whose `namespace` + `workload_name` + `workload_type` match a `managed_workloads` row. A never-synced Application has no `status.resources` and therefore joins to nothing: record it in the map as an unattached ArgoCD note ("Application X declares repo Y for namespace Z but has never synced") and let `map-repos` present it to the user — never guess a workload for it, and never attach by `dest_namespace` alone (a namespace is not a workload).
 
 
+## Source-repo evidence (Tier 1: OCI image labels)
+
+The authoritative image-side signal: an image built by modern CI stamps the source repo and the exact commit into its config labels — `org.opencontainers.image.source` (the repo URL) and `org.opencontainers.image.revision` (the commit SHA). Reading them needs the image **config blob**, not `kubectl` — `crane` is the clean way (it handles the token dance, multi-arch indexes, and every registry uniformly). Optional prerequisite: `crane` (`go install github.com/google/go-containerregistry/cmd/crane@latest`, or `brew install crane`); for a private registry, `crane auth login <registry>` first (or a registry-read credential in the environment). When `crane` is absent this tier is skipped cleanly — Tier 2 (ArgoCD) and Tier 3 (image-path) still run; many images carry no such labels, and that is normal, not a gap.
+
+```bash
+set -eu
+KUBE_CONTEXT="your-kube-context"
+TMP="${TMP:-$(mktemp -d)}"
+
+if ! command -v crane >/dev/null 2>&1; then
+  echo "crane not installed — Tier 1 (OCI image labels) skipped (Tiers 2-3 still run). Install: brew install crane"
+else
+  # One image ref per workload (from the workloads step); dedupe so a shared image is fetched once.
+  # For each: read the OCI source + revision labels from the image config. Absent labels -> null (normal).
+  while IFS= read -r IMG; do
+    [ -n "$IMG" ] || continue
+    CFG=$(crane config "$IMG" 2>/dev/null) || { echo "{\"image\":\"$IMG\",\"oci\":\"unreadable (private registry needs crane auth login, or image gone)\"}"; continue; }
+    printf '%s' "$CFG" | jq -c --arg img "$IMG" '
+      (.config.Labels // {}) as $l
+      | ($l["org.opencontainers.image.source"] // "") as $src
+      | ($l["org.opencontainers.image.revision"] // "") as $rev
+      | { image: $img,
+          deployed_revision: (if ($rev | test("^[0-9a-f]{40}$")) then $rev else null end),
+          source_repo_evidence: (
+            if ($src != "") then [ {
+              candidate_repo: ($src | sub("\\.git$";"") | sub("^git@[^:]+:";"") | sub("^[a-z]+://[^/]+/";"")),
+              evidence_source: "oci_image_source",
+              confidence: "authoritative",
+              subpath: null,
+              default_branch: null,
+              raw: $src } ]
+            else [] end ) }'
+  done < "${TMP}/images.txt" | tee "${TMP}/oci-evidence.json"
+fi
+```
+
+Expected: one JSON object per unique image. An image whose config carries `org.opencontainers.image.source` yields an **authoritative** `oci_image_source` candidate (the repo URL parsed to `owner/name`); an image whose config also carries a 40-hex `org.opencontainers.image.revision` yields the **workload-level** `deployed_revision` — the exact live commit, from the image itself, no ArgoCD required. Images without the labels yield an empty evidence array and `deployed_revision: null` (common — never a gap, never invented). At Phase-3 composition, attach each image's evidence to the workloads running that image (join by the workload's captured `image`), and lift `deployed_revision` to the workload attribute (sibling of `image`/`image_digest`); an authoritative OCI candidate outranks the Tier-3 heuristic parse of the same image.
+
 ## Service-to-workload join
 
 Joins Services to workloads whose pod-template labels satisfy the Service selector, within the same namespace. Used on both paths.
