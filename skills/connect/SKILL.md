@@ -245,7 +245,9 @@ Confirmation gate, no exceptions: before anything is written to `~/.scoutflo/too
 Back up any existing config, then seed from the template shipped with this plugin. Fixed step: run as written.
 
 ```bash
-CONFIG="${SCOUTFLO_CONFIG:-}"; [ -n "$CONFIG" ] || { if [ -f "./.scoutflo/toolkit.yaml" ]; then CONFIG="./.scoutflo/toolkit.yaml"; else CONFIG="$HOME/.scoutflo/toolkit.yaml"; fi; }                             # toolkit config location
+CONFIG="${SCOUTFLO_CONFIG:-}"
+[ -n "$CONFIG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CONFIG="$_c"; break; }; done
+[ -n "$CONFIG" ] || CONFIG="$HOME/.scoutflo/toolkit.yaml"                             # toolkit config location
 TEMPLATE="${CLAUDE_PLUGIN_ROOT}/templates/toolkit.yaml.example"   # template shipped with this plugin
 # WRITE PROBE: on sandboxed surfaces (the Claude Desktop app) shell writes to $HOME are
 # denied by the OS sandbox even though the CLI allows them. Probe once and pick the mode.
@@ -268,13 +270,13 @@ ls -l "$CONFIG" 2>/dev/null || true
 
 1. **Shell write to `$HOME/.scoutflo`** (the block above) — works in the CLI; denied by the Desktop app's OS sandbox.
 2. **File-writing tool to `$HOME/.scoutflo/toolkit.yaml`** — when the shell write is denied, write the file with the file-Write tool instead of shell redirection: it goes through the app's permission prompt (the user approves once), not the OS sandbox. Verify by reading the file back. Never compose config with `cat >`/`>>` on a sandboxed surface.
-3. **Project-local mode: `./.scoutflo/toolkit.yaml`** — when even the file tool is denied, write inside the working directory (always writable). Every skill resolves config in the order `$SCOUTFLO_CONFIG` → `./.scoutflo/toolkit.yaml` → `$HOME/.scoutflo/toolkit.yaml`, so project-local config is picked up automatically with zero extra setup. **Mandatory companion step:** immediately ensure `.scoutflo/` is git-ignored — `grep -qx '.scoutflo/' .gitignore 2>/dev/null || printf '.scoutflo/\n' >> .gitignore` — and tell the user this config is per-project, not global.
+3. **Project-local mode: `./.scoutflo/toolkit.yaml`** — when even the file tool is denied, write inside the working directory (always writable). Every skill resolves config in the order `$SCOUTFLO_CONFIG` → `./.scoutflo/toolkit.yaml` → the `~/.scoutflo/active-config` pointer → `$HOME/.scoutflo/toolkit.yaml`, so project-local config is picked up automatically with zero extra setup. **Mandatory companion step:** immediately ensure `.scoutflo/` is git-ignored — `grep -qx '.scoutflo/' .gitignore 2>/dev/null || printf '.scoutflo/\n' >> .gitignore` — and tell the user this config is per-project, not global.
 
 The same ladder applies to the secret store `env` file (Step 4c): shell append → file tool → project-local `./.scoutflo/env` with the same `.gitignore` guard. When `chmod 600` is denied by the sandbox, give the user the exact one-liner to run in their own terminal (`chmod 600 ~/.scoutflo/env` — their shell is never sandboxed); never leave a secret file with open permissions silently.
 
 If the user asks to keep the config inside their project folder instead of `~/.scoutflo/`, explain the trade-off rather than refusing: home-anchoring is what makes credentials work from every folder and session without re-entry, and reports already live in their project folder (`./scoutflo-audits/`). If they still want it relocated (isolated estates, shared-machine policy), set it up with `export SCOUTFLO_CONFIG="<their-path>/toolkit.yaml"` persisted the same way as Step 4c — every skill honors that override.
 
-**Multiple environments (prod + nonprod), the recommended shape.** A team auditing more than one estate keeps a **named config per environment** — `~/.scoutflo/toolkit-prod.yaml`, `~/.scoutflo/toolkit-nonprod.yaml` — instead of one `toolkit.yaml`, and selects one per run with `export SCOUTFLO_CONFIG=~/.scoutflo/toolkit-<env>.yaml`. This is a first-class pattern: when a skill finds no default `toolkit.yaml` but sees `toolkit-*.yaml` variants, its doctor gate **lists them and asks which environment** rather than stalling — and it **never auto-picks** one, because auditing prod when you meant staging (or vice-versa) is worse than a one-line question. When you set up multiple environments here, write each `toolkit-<env>.yaml` (same structure, environment-specific `kubernetes.context` / account / URLs), tell the user to `export SCOUTFLO_CONFIG` for the environment they want before each audit, and note that `/scoutflo:audit-cost` and `/scoutflo:audit-all` can also ask which environment to cover when both configs are present.
+**Multiple environments (prod + nonprod), the recommended shape.** A team auditing more than one estate keeps a **named config per environment** — `~/.scoutflo/toolkit-prod.yaml`, `~/.scoutflo/toolkit-nonprod.yaml` — instead of one `toolkit.yaml`, and selects one per run with `export SCOUTFLO_CONFIG=~/.scoutflo/toolkit-<env>.yaml`. This is a first-class pattern: when a skill finds no default `toolkit.yaml` but sees `toolkit-*.yaml` variants, its doctor gate **lists them and asks which environment** rather than stalling — and it **never auto-picks** one, because auditing prod when you meant staging (or vice-versa) is worse than a one-line question. When you set up multiple environments here, write each `toolkit-<env>.yaml` (same structure, environment-specific `kubernetes.context` / account / URLs), then **write the pointer to the environment new terminals should default to** — `printf '%s\n' "$HOME/.scoutflo/toolkit-nonprod.yaml" > "$HOME/.scoutflo/active-config"` (nonprod is the safer default) — so a fresh session resolves that environment without re-exporting. A one-off `export SCOUTFLO_CONFIG=~/.scoutflo/toolkit-prod.yaml` overrides the pointer for a single prod run; this is what keeps "audit prod when you meant staging" from ever happening by accident. `/scoutflo:audit-cost` and `/scoutflo:audit-all` can also ask which environment to cover when both configs are present.
 
 Then apply the approved blocks from Step 5:
 
@@ -286,7 +288,9 @@ Then apply the approved blocks from Step 5:
 Confirm the file parses:
 
 ```bash
-CONFIG="${SCOUTFLO_CONFIG:-}"; [ -n "$CONFIG" ] || { if [ -f "./.scoutflo/toolkit.yaml" ]; then CONFIG="./.scoutflo/toolkit.yaml"; else CONFIG="$HOME/.scoutflo/toolkit.yaml"; fi; }   # toolkit config location
+CONFIG="${SCOUTFLO_CONFIG:-}"
+[ -n "$CONFIG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CONFIG="$_c"; break; }; done
+[ -n "$CONFIG" ] || CONFIG="$HOME/.scoutflo/toolkit.yaml"   # toolkit config location
 if command -v yq >/dev/null 2>&1; then
   yq '. | keys | length' "$CONFIG" >/dev/null && echo "toolkit.yaml parses"
 else
@@ -294,6 +298,19 @@ else
 fi
 # Expect: "toolkit.yaml parses" (or the fallback note when yq is absent).
 ```
+
+**Persist which config is active (so a new terminal just works).** The single most common support issue is a `SCOUTFLO_CONFIG` export that lived only in the old shell: the next terminal reports it "can't find the config" even though the file is right there. Writing a one-line pointer fixes it permanently — every skill resolves this pointer as a tier, so a new session, terminal, or directory finds the same config without re-exporting or re-running `connect`.
+
+```bash
+CONFIG="${SCOUTFLO_CONFIG:-}"
+[ -n "$CONFIG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CONFIG="$_c"; break; }; done
+[ -n "$CONFIG" ] || CONFIG="$HOME/.scoutflo/toolkit.yaml"
+printf '%s\n' "$CONFIG" > "$HOME/.scoutflo/active-config" 2>/dev/null \
+  && echo "active config remembered — new terminals will use: $CONFIG" \
+  || echo "(could not persist the pointer; set SCOUTFLO_CONFIG per session — see the write ladder)"
+```
+
+A one-off `export SCOUTFLO_CONFIG=<other>` still overrides this pointer for a single run, and re-running `connect` changes the remembered default. In the **multiple-environments** case below, point it at the environment new terminals should default to — never leave the default ambiguous.
 
 ## Step 7: Verify with doctor
 

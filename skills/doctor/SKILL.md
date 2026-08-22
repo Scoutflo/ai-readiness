@@ -39,7 +39,9 @@ None of this is required to start; the default is fine for a first run.
 
 ```bash
 set -eu
-CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || { if [ -f "./.scoutflo/toolkit.yaml" ]; then CFG="./.scoutflo/toolkit.yaml"; else CFG="$HOME/.scoutflo/toolkit.yaml"; fi; }
+CFG="${SCOUTFLO_CONFIG:-}"
+[ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done
+[ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
 
 # What the runs will ACTUALLY write to (only the env var threads through fresh shells).
 if [ -n "${SCOUTFLO_AUDIT_DIR:-}" ]; then EFFECTIVE="$SCOUTFLO_AUDIT_DIR"; EFFSRC="SCOUTFLO_AUDIT_DIR env"

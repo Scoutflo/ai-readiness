@@ -78,7 +78,9 @@ Resolve the target team from `toolkit.yaml` itself, not from a value typed into 
 
 ```bash
 set -eu
-CONFIG="${SCOUTFLO_CONFIG:-}"; [ -n "$CONFIG" ] || { if [ -f "./.scoutflo/toolkit.yaml" ]; then CONFIG="./.scoutflo/toolkit.yaml"; else CONFIG="$HOME/.scoutflo/toolkit.yaml"; fi; }
+CONFIG="${SCOUTFLO_CONFIG:-}"
+[ -n "$CONFIG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CONFIG="$_c"; break; }; done
+[ -n "$CONFIG" ] || CONFIG="$HOME/.scoutflo/toolkit.yaml"
 [ -f "$CONFIG" ] || { echo "missing $CONFIG; run /scoutflo:connect"; exit 1; }
 # Resolve digitalocean.team the same way doctor.sh's cfg() reads two-level
 # keys: yq when present, a sed fallback otherwise. "personal" when the key

@@ -42,7 +42,11 @@ set -eu
 
 # --- defaults and argument parsing -------------------------------------------
 
-CONFIG="${SCOUTFLO_CONFIG:-}"; [ -n "$CONFIG" ] || { if [ -f "./.scoutflo/toolkit.yaml" ]; then CONFIG="./.scoutflo/toolkit.yaml"; else CONFIG="$HOME/.scoutflo/toolkit.yaml"; fi; }
+CONFIG="${SCOUTFLO_CONFIG:-}"
+# Order: explicit > project-local > last-selected (connect persists it to
+# ~/.scoutflo/active-config so a new terminal remembers a multi-env choice) > home default.
+[ -n "$CONFIG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CONFIG="$_c"; break; }; done
+[ -n "$CONFIG" ] || CONFIG="$HOME/.scoutflo/toolkit.yaml"
 OUT_DIR=""
 SLACK_TEST=0
 MAX_TIME="${CURL_MAX_TIME:-10}"  # seconds; example, tune to your network latency

@@ -145,8 +145,9 @@ This is why `map-topology`'s own T1/T2 pre-check (in its own SKILL.md) exists: i
 | [estate-scope-checkpoint.md](estate-scope-checkpoint.md) | The shared estate-sizing thresholds (small/medium/large/xlarge) and the large-estate scope-pause every audit wires in |
 | [secret-redaction.md](secret-redaction.md) | The secret-redaction discipline: capture credentials by key/name only, never print or write a value |
 | [topology-readiness.md](topology-readiness.md) | The optional Scoutflo Topology Readiness section: the six per-service checks and how to render them |
+| [depth-doctrine.md](depth-doctrine.md) | The depth bar every scored finding must clear — precise locus, live-derived blast radius, correlation chains, exact fix + verification — so a finding is worth more than a free scanner's "X is missing" |
 
-Every audit must conform to the findings, scoring, and report-template contracts; `audit-cost` also conforms to cost-schema; and every audit carries the estate-scope and secret-redaction disciplines. Topology Readiness is optional (rendered when a topology export exists). Authoring rules for the skills themselves live in [../docs/skill-authoring-conventions.md](../docs/skill-authoring-conventions.md).
+Every audit must conform to the findings, scoring, and report-template contracts; `audit-cost` also conforms to cost-schema; every audit carries the estate-scope and secret-redaction disciplines; and every scored finding must clear the [depth doctrine](depth-doctrine.md). Topology Readiness is optional (rendered when a topology export exists). Authoring rules for the skills themselves live in [../docs/skill-authoring-conventions.md](../docs/skill-authoring-conventions.md).
 
 ## Exemptions
 
