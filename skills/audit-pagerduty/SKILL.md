@@ -241,7 +241,7 @@ Score per [severity-and-scoring.md](../../report-standard/severity-and-scoring.m
 
 | Category | Weight | ID range |
 | --- | ---: | --- |
-| Escalation and on-call | 30 | PD-001 to PD-007 |
+| Escalation and on-call | 30 | PD-001 to PD-009 |
 | Alert grouping and noise | 25 | PD-020 to PD-025 |
 | Actionability | 20 | PD-040 to PD-042 |
 | Incident health | 15 | PD-030 to PD-032 |
@@ -330,6 +330,8 @@ No `setup-pagerduty` ships yet, so every finding's `remediation` field names the
 | Missing or SPOF escalation (PD-001 to PD-003) | PagerDuty UI: People > Escalation Policies — add a second target or loop; API: escalation policy update |
 | Schedule gaps, dead references, unstaffed on-call (PD-004, PD-005) | People > Schedules — fill layers or overrides; re-point the policy at a live schedule |
 | Email-only or phantom responders (PD-006, PD-007) | Each user's profile > Contact Methods and Notification Rules; remove never-active invitees from targets |
+| Delayed first page (PD-008) | Each escalation-target user's profile > Notification Rules — add a 0-minute high-urgency rule on push/phone |
+| Single-participant rotation / human SPOF (PD-009) | People > Schedules — add a second participant to the layer, or add a staffed secondary layer/escalation level |
 | Orphaned, stale, or parked services (PD-010 to PD-012) | Service Directory — wire an integration, record dormancy, or retire the service |
 | Business-service mapping (PD-013) | Service Directory > Business Services — map technical services to the business services they serve |
 | Rulesets migration debt (PD-014) | Vendor migration guide: Rulesets to Event Orchestration; migrate rule by rule |

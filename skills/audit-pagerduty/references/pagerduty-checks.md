@@ -26,6 +26,8 @@ One permanent ID per check. IDs never change or get reused; retired checks keep 
 | PD-005 | Escalation and on-call | Every schedule referenced by an escalation policy resolves and has participants | high |
 | PD-006 | Escalation and on-call | Responders are reachable beyond email alone (contact-method hygiene) | medium |
 | PD-007 | Escalation and on-call | No invited-but-never-active responders inside escalation targets | medium |
+| PD-008 | Escalation and on-call | High-urgency notification rules do not impose a start delay before the first page | high |
+| PD-009 | Escalation and on-call | No production escalation target is a single-participant rotation (human SPOF) | high |
 | PD-010 | Service hygiene | No orphaned services: every active service has at least one integration | medium |
 | PD-011 | Service hygiene | No stale services: activity within the staleness window or a recorded reason | low |
 | PD-012 | Service hygiene | Service status reviewed: no service parked in maintenance indefinitely | medium |
@@ -190,6 +192,41 @@ jq '[.[] | select(.invitation_sent == true) | {name, role}]' "${RAW_DIR}/users.j
 # Expect: []. invitation_sent=true means the account never logged in; inside an
 # escalation target that is a phantom responder (PD-007).
 ```
+
+### 5.1 Notification-rule delay and human-SPOF rotations (PD-008, PD-009)
+
+> **Verify-pending.** These two checks are drafted against the documented PagerDuty REST API and adversarially reviewed, but have **not** been run against a live PagerDuty (none exists in the benchmark estate). Treat their status as unproven until a first live run against a real account with a read-only `PAGERDUTY_TOKEN` (see the doctor gate); the endpoints and fields below are from PagerDuty's public API docs, not confirmed against a live tenant here.
+
+Both extend the same escalation-target join PD-006 uses (users/schedules referenced by policies that active critical services point at), so they carry a real per-service blast radius rather than a global count.
+
+```bash
+# PD-008: a high-urgency notification rule with start_delay_in_minutes > 0 delays the FIRST page.
+# users.json was captured with notification_rules included (section 4). For each escalation-target
+# user, the minimum high-urgency start delay is the latency added before they are paged at all.
+jq -r '.[] | . as $u
+  | (([.notification_rules[]? | select(.urgency=="high")] ) as $hr
+     | if ($hr|length)==0 then "\($u.name): NO high-urgency rule (never paged high-urgency)"
+       else ($hr | map(.start_delay_in_minutes // 0) | min) as $d
+            | select($d > 0) | "\($u.name): high-urgency first page delayed \($d)m" end)' \
+  "${RAW_DIR}/users.json"
+# Blast radius: join the delayed users to the escalation targets of policies referenced by active
+# critical services (same set as PD-006); state the added MTTA minutes. Compounds PD-006 (email-only)
+# and PD-002 (single-target SPOF): a SPOF target who is also delay-configured means the entire
+# first-page path for that service starts N minutes late by design.
+
+# PD-009: an escalation target schedule with only one distinct participant is a human SPOF —
+# PD-004 still renders 100% coverage for it, so PD-004 alone reads healthy; PD-009 is what catches it.
+# For each schedule that is a target of a critical service's policy:
+curl -fsS --max-time 30 -H "Authorization: Token token=${PAGERDUTY_TOKEN}" \
+  "${PD_API}/schedules/${SCHEDULE_ID}" \
+  | jq '{id: .schedule.id, name: .schedule.name,
+         distinct_participants: ([.schedule.users[]?.id] | unique | length)}'
+# Blast radius: distinct_participants == 1 means one person is the sole responder for that service's
+# pages 24/7 — their phone off, PTO, or an untracked override gap and the page reaches nobody. Chains
+# with PD-004 (single-participant rotations still show 100% coverage) and PD-002.
+```
+
+Healthy: no escalation-target user delays their high-urgency first page; every critical-service schedule has ≥2 distinct participants (or a documented, staffed secondary layer). Fail (PD-008, high): a delayed first-page path on a critical service — state the minutes and the service. Fail (PD-009, high): a single-participant rotation on a critical service's escalation target — name the schedule, the service, and the sole participant (name only, never contact details). Remediation is inline (no `setup-pagerduty` ships): PD-008 → *User Profile > Notification Rules*, add a 0-minute high-urgency push/phone rule; PD-009 → *People > Schedules*, add a second participant or a staffed secondary layer/escalation level.
 
 ## 6. Service hygiene (PD-010 to PD-015)
 
