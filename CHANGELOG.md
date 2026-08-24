@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.138
+
+Report readability (team feedback) — the **"Where" field is now an explicit required table** whenever a finding affects more than one object, instead of a comma-separated sentence. [report-standard/report-template.md](report-standard/report-template.md) states it as a conformance requirement in both the finding skeleton (with the exact `| # | Affected |` table form) and the prose rules, so the format is identical no matter which model writes the report — a weaker model no longer has to infer that a multi-item list should be a table. Single-object findings stay inline. Applies to every audit's `report.md`. Gates: leak CLEAN, structure-check (15), run-tests (22 suites), plugin validate --strict.
+
 ## 0.1.137
 
 audit-aws promoted from verify-pending to **live-proven** — the three new checks were run read-only against a live Scoutflo AWS account (auth confirmed; no account id, profile, region, or hostname recorded).
