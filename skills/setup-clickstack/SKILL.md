@@ -358,6 +358,26 @@ curl -fsS --max-time 15 "${CH_URL}/" -H "X-ClickHouse-User: ${CH_USER}" -H "X-Cl
 
 Expected: exit 0 (`auth_type` is `sha256_password`, no longer `plaintext_password`). Then confirm with the service owner that the service authenticates successfully with the new secret; the change is not done until that client works again. **Rollback:** `ALTER USER ${TARGET_USER} IDENTIFIED WITH sha256_password BY '<owner-supplied>'` to a value the owner controls, then re-run the verify. TLS on the HTTP/native ports is the other half of CS-050 posture; it is a server-config change out of this skill's write scope, so record it as a plan with a named owner.
 
+## Manage storage capacity
+
+CS-060. The durable fix for a disk filling toward read-only, when shortening TTL (Set retention TTL) is not enough or not wanted. Three levers, each announced with the exact change and a rollback:
+- **Expand the disk / PVC** (announce the new size; on a StatefulSet PVC this is a `kubectl patch pvc` + a controller that supports volume expansion — confirm `allowVolumeExpansion: true` on the StorageClass first; rollback is not possible once grown, so confirm the target size explicitly).
+- **Tiered storage** — add an S3-backed `storage_policy` and move cold parts off local disk (`ALTER TABLE ... MOVE PARTITION ... TO DISK/VOLUME`); announce the policy and the tables, verify `system.disks` shows the new volume and parts moved.
+- **`keep_free_space_bytes`** on the disk config to make ClickHouse stop accepting writes *before* the OS runs out, turning a hard 243 NOT_ENOUGH_SPACE crash into a controlled backpressure.
+Verify: `system.disks` shows headroom restored and CS-060's days-to-full recomputes above threshold.
+
+## Manage merge pressure
+
+CS-030, CS-061 (code 252 TOO_MANY_PARTS). When inserts are rejected because a table has too many active parts (small-batch/high-frequency ingestion outrunning background merges): raise the collector's batch size / flush interval so it writes fewer, larger parts (the collector-side fix, preferred), or tune `parts_to_throw_insert`/`max_parts_in_total` only with a clear understanding that raising the throw threshold trades a hard reject for unbounded part growth. Announce the collector batch change; verify `system.parts` active-part count per table trends down and no fresh 252 in `system.errors`.
+
+## Fix collector pipeline
+
+CS-010, CS-011. When telemetry is stale or absent because the OTel collector stopped sending or is misconfigured (wrong endpoint, wrong database, dropped exporter): this is a collector-side change, not a ClickHouse one — announce the corrected exporter endpoint/database in the collector config, roll the collector, and verify `max(Timestamp)` on the affected `otel_*` table advances to within the freshness threshold and CS-061 shows no fresh Insert `ExceptionWhileProcessing` rows.
+
+## Create dashboard source
+
+CS-041. When HyperDX dashboards render blank because a source is disconnected or points at the wrong ClickHouse database/table: reconnect the source to the live database and confirm each critical-service dashboard resolves. Announce the source's target (host/database), verify a panel returns data live and the source health is green.
+
 ## Record and wrap up
 
 Append one entry per executed change to `${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/clickstack/changes.md`:

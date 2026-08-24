@@ -309,7 +309,7 @@ Score per [severity-and-scoring.md](../../report-standard/severity-and-scoring.m
 | Telemetry coverage | 20 | CS-010, CS-007 |
 | Ingestion freshness | 15 | CS-011 |
 | Retention | 10 | CS-020 |
-| ClickHouse health | 20 | CS-030 |
+| ClickHouse health | 20 | CS-030, CS-060, CS-061 |
 | HyperDX alerting | 20 | CS-040 |
 | Dashboards and sources | 5 | CS-041 |
 | Security posture | 10 | CS-050 |

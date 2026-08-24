@@ -529,6 +529,14 @@
     "SNTRY-014": {
       "setup_skill": "setup-sentry",
       "anchor": "alert-rule-taxonomy"
+    },
+    "CS-060": {
+      "setup_skill": "setup-clickstack",
+      "anchor": "manage-storage-capacity"
+    },
+    "CS-061": {
+      "setup_skill": "setup-clickstack",
+      "anchor": "manage-merge-pressure"
     }
   }
 }
