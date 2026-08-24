@@ -38,6 +38,7 @@ One permanent ID per check. IDs never change or get reused; retired checks keep 
 | GCP-005 | Alert routing and delivery | No disabled or unverified channels still referenced by policies | medium |
 | GCP-006 | Alert routing and delivery | Active snoozes reviewed; none silently muting a critical policy | medium |
 | GCP-007 | Alert routing and delivery | Alerting objects (policies AND channels) are visible in this project (zero of BOTH despite a readable Monitoring API is `blocked`, not a plain fail — a likely metrics-scope/project-visibility gap: alerting may live in the scoping project that monitors this one, or the identity sees only a subset of projects; confirm the metrics-scope scoping project and project access) | critical |
+| GCP-008 | Alert routing and delivery | This project's metrics scope actually includes the production projects whose resources must be monitored (the partial-scope case: some monitored, some silently absent) | high |
 | GCP-010 | Uptime and availability | Every active public serving endpoint has an uptime check | high |
 | GCP-011 | Uptime and availability | Every uptime check has an alert policy on its check_passed metric | high |
 | GCP-012 | Uptime and availability | SSL-expiry visibility for HTTPS endpoints | medium |
@@ -45,6 +46,7 @@ One permanent ID per check. IDs never change or get reused; retired checks keep 
 | GCP-014 | Uptime and availability | Multi-region checkers where regional failure matters | low |
 | GCP-015 | Uptime and availability | No checks against dead or migrated targets | medium |
 | GCP-016 | Uptime and availability | No disabled uptime check still referenced by a policy; failure logging on | medium |
+| GCP-017 | Uptime and availability | Every critical service with a Cloud Monitoring SLO carries a burn-rate alert policy (an SLO with no `select_slo_burn_rate` policy is a stated target nobody is paged on) | low |
 | GCP-020 | Compute VM coverage | CPU pressure policy on serving VMs, two tiers where stable | high |
 | GCP-021 | Compute VM coverage | Memory and disk coverage claimed only with agent metric evidence | high |
 | GCP-022 | Compute VM coverage | Ops Agent present on serving VMs | medium |
@@ -218,6 +220,24 @@ Expected: a positive channel count, no zero-channel policy lines, no disabled-or
 - ❌ `GCP-004 pass: four channels exist and all are enabled.`
 - ✅ `GCP-004 partial: channels exist and are enabled, but no Monitoring-generated notification was observed reaching any of them this run; routing stays configured.`
 
+### 5.1 Metrics-scope completeness (GCP-008)
+
+GCP-007 only trips when a project has zero policies AND zero channels. GCP-008 catches the more insidious PARTIAL case: the project's Cloud Monitoring **metrics scope** monitors some of the estate's projects but silently omits others — so alerting looks configured, yet a whole production project is invisible to it. Read the Metrics Scopes v1 API and diff `monitoredProjects[]` against the projects that should be monitored. Verified live read-only against a real project.
+
+```bash
+GCP_PROJECT="your-project-id"            # monitoring.project
+MON1="https://monitoring.googleapis.com/v1"
+TOKEN="$(gcloud auth print-access-token --project="$GCP_PROJECT")"   # user/ADC read token
+# The scoping project's metrics scope: which projects it actually monitors.
+curl -fsS --max-time 30 -H "Authorization: Bearer ${TOKEN}" \
+  "${MON1}/locations/global/metricsScopes/${GCP_PROJECT}" \
+  | jq -r '.monitoredProjects[]?.name'   # e.g. locations/global/metricsScopes/.../projects/<number>
+# The estate's projects, to diff expected-monitored against the monitored set above.
+gcloud projects list --format='value(projectId,projectNumber)'
+```
+
+Healthy: every production project whose resources must be watched appears in `monitoredProjects[]`. Fail (GCP-008, high): a production project is absent from the scope — name it, and state that every alert policy/uptime check in the scoping project cannot see that project's resources, so its outages page nobody here even though this project's own alerting looks complete. Verified live: on a real project the v1 read returns the monitored project set (e.g. one monitored project number) — the diff against `gcloud projects list` is the finding. Remediation: `setup-gcp#plan-out-of-scope-changes` (adding a monitored project changes the billing/quota surface — plan, don't silently apply).
+
 ## 6. Uptime and availability (GCP-010 to GCP-016)
 
 ```bash
@@ -257,6 +277,24 @@ head -c 200 "$BODY"; echo; rm -f "$BODY"
 Expected: `200`. A `401` means the check watches an auth-only endpoint and is a noise generator unless expected-status matching was configured deliberately (`GCP-013`). A `404`, `410`, or a parked page means a dead or migrated target (`GCP-015`); `000` means DNS or connect failure, which is either a real outage or a moved hostname; settle ownership before filing an outage. `GCP-014`: `regions` pinned to a single region for a globally used endpoint is the judgment call; note what would change it (single-region users, internal-only endpoint).
 
 `GCP-016`: the first list is uptime checks with `disabled: true` — a disabled check evaluates nothing, so any `check_id` from this list that also appears in a `check_passed` policy filter (cross-reference the GCP-011 capture) is a silent gap: the policy looks wired but can never fire. The second list is checks with `logCheckFailures: false` (failure logging off), where a failed probe leaves no Cloud Logging trail to diagnose from; report these as a lower-severity diagnosability gap. Both fields come straight from the `uptime-checks.json` capture, no extra call.
+
+### 6.1 SLO burn-rate coverage (GCP-017)
+
+A Cloud Monitoring **Service** with a defined SLO but no burn-rate alert policy is a stated availability target that pages nobody when it starts burning — the team wrote the objective and never wired the alarm. Read the Services and their SLOs (v3), then check whether any alert policy filters on `select_slo_burn_rate` for each SLO. Verified live read-only (returns cleanly on a project with zero Services — then it is `not-in-scope`, not a fail).
+
+```bash
+GCP_PROJECT="your-project-id"; MON="https://monitoring.googleapis.com/v3"
+TOKEN="$(gcloud auth print-access-token --project="$GCP_PROJECT")"
+# Cloud Monitoring Services (empty list => no SLOs defined => GCP-017 not-in-scope, stated).
+curl -fsS --max-time 30 -H "Authorization: Bearer ${TOKEN}" \
+  "${MON}/projects/${GCP_PROJECT}/services?pageSize=500" | jq -r '.services[]?.name'
+# For each service, its SLOs:
+curl -fsS --max-time 30 -H "Authorization: Bearer ${TOKEN}" \
+  "${MON}/projects/${GCP_PROJECT}/services/SERVICE_ID/serviceLevelObjectives" | jq -r '.serviceLevelObjectives[]?.name'
+# Then: does any alertPolicies[] condition filter on select_slo_burn_rate for that SLO? (from the GCP-002 policies capture)
+```
+
+Healthy: every SLO on a critical service has at least one burn-rate policy. Fail (GCP-017, low): an SLO with no burn-rate policy — name the service and SLO; the error budget can be fully consumed with no page. A project with zero Monitoring Services is `not-in-scope` (verified live: this shape returns an empty list cleanly), never a fabricated fail. Remediation: `setup-gcp#add-lb-alert-policies` (the burn-rate policy is authored the same way).
 
 ## 7. Compute VM coverage (GCP-020 to GCP-024)
 

@@ -324,8 +324,8 @@ Score per [severity-and-scoring.md](../../report-standard/severity-and-scoring.m
 
 | Category | Weight | ID range |
 | --- | ---: | --- |
-| Alert routing and delivery | 20 | GCP-001 to GCP-006 |
-| Uptime and availability | 15 | GCP-010 to GCP-016 |
+| Alert routing and delivery | 20 | GCP-001 to GCP-008 |
+| Uptime and availability | 15 | GCP-010 to GCP-017 |
 | Compute VM coverage | 15 | GCP-020 to GCP-024 |
 | GKE coverage | 15 | GCP-030 to GCP-033 |
 | Logs as a signal | 15 | GCP-050 to GCP-054 |
