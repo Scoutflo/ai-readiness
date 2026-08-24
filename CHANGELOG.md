@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.132
+
+Depth wave 4 — audit-grafana deepened to the [depth doctrine](report-standard/depth-doctrine.md), completing the benchmark-live wave (five audits now: kubernetes, lgtm, alert-routing, clickstack, grafana). Verified read-only against the self-hosted benchmark Grafana **v12.3.1** (basic-auth from the cluster admin secret, read into a variable and never printed; GET-only, zero mutation).
+
+- **Two new checks, endpoints proven live.** **GRAF-057** paused alert rules: an `isPaused==true` rule still counts toward coverage (GRAF-091) but evaluates nothing, so the service looks monitored and is not — read from `/api/v1/provisioning/alert-rules`. **GRAF-007** public dashboards: an enabled public dashboard is reachable with no auth and exposes its panel queries and data — read from `/api/dashboards/public-dashboards`. Both endpoints confirmed to exist and return valid JSON on Grafana 12.3.1 (the benchmark returns 0 for each — a clean pass, proving the filters work on a real instance, not an invented API).
+- **Seven existing checks deepened** from linter lines to computed blast radius + correlation (GRAF-001 empty-instance handling, GRAF-053/052/025/028/080/100), and a new **flagship**: the per-service incident-blindness cascade (a rule exists [green] → it is paused or its query errors live → the service is *counted as covered while monitoring nothing*).
+- Both new checks fold into existing categories (GRAF-057 → Alerting, GRAF-007 → Datasources), no reweighting. New pressure scenario.
+
+Gates: leak CLEAN, structure-check (15), run-tests (22 suites), plugin validate --strict. The cloud/SaaS audits (AWS, Azure, Sentry, Datadog, PagerDuty, JSM, Zenduty, DigitalOcean, Groundcover) are drafted + adversarially reviewed and ship next as clearly-flagged verify-pending increments (their provider mechanisms can't be run from here).
+
 ## 0.1.131
 
 Depth wave 3 — audit-clickstack deepened to the [depth doctrine](report-standard/depth-doctrine.md) and **live-proven** against the real benchmark ClickStack (ClickHouse 26.5 with 187M metric rows / 15M traces / 6.4M logs of live OTel data).

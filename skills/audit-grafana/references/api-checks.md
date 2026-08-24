@@ -235,6 +235,7 @@ Permanent IDs. Never renumber, never reuse a retired ID; deltas depend on stabil
 | GRAF-004 | datasources | medium | Each datasource returns usable data for a minimal domain query, not just a passing health probe |
 | GRAF-005 | datasources | low | No duplicate datasources point at the same backend with diverging configs |
 | GRAF-006 | datasources | low | The audit token is least-privilege; it cannot administer the org |
+| GRAF-007 | datasources | high | No enabled public dashboard exposes internal queries and data to the internet without auth (`/api/dashboards/public-dashboards`) |
 | GRAF-020 | dashboard-semantics | high | Every panel target succeeds when replayed live through `/api/ds/query` |
 | GRAF-021 | dashboard-semantics | high | No panel silently queries org-wide, account-wide, or all-environment scope while its title claims one service |
 | GRAF-022 | dashboard-semantics | medium | External-system panels filter by stable IDs, not text or slug matching |
@@ -251,6 +252,7 @@ Permanent IDs. Never renumber, never reuse a retired ID; deltas depend on stabil
 | GRAF-054 | alerting | low | Every paging rule has summary and runbook annotations |
 | GRAF-055 | alerting | medium | Each severity route has been proven live at least once; unproven routes are `configured`, not working |
 | GRAF-056 | alerting | low | Grouping, group wait, and repeat interval are tuned on high-volume routes |
+| GRAF-057 | alerting | high | No `isPaused==true` alert rule on a covered service silently monitors nothing (the rule exists so coverage counts it, but its evaluator is administratively off) |
 | GRAF-070 | query-hygiene | medium | Counter metrics are queried with `rate` or `increase`, never raw |
 | GRAF-071 | query-hygiene | low | Expensive expressions repeated across panels or rules are backed by recording rules |
 | GRAF-072 | query-hygiene | medium | Log stream labels are low-cardinality; IDs, users, and URLs stay in fields, not labels |
@@ -266,6 +268,31 @@ Permanent IDs. Never renumber, never reuse a retired ID; deltas depend on stabil
 | GRAF-103 | alerting | low | Paging contact points set `disableResolveMessage` deliberately; always-on resolved-message traffic roughly doubles a paging integration's notification volume |
 
 Remediation pointers: every GRAF finding points at `setup-grafana`, anchored to the section that fixes that class of defect (for example `setup-grafana#contact-points` for GRAF-050). GRAF-055 may alternatively point at `audit-alert-routing`, which proves delivery paths end to end.
+
+## Paused rules and public dashboards (GRAF-057, GRAF-007)
+
+Two exposures the presence-only checks miss: a rule that *exists* but is turned off, and a dashboard that is world-readable. Both endpoints verified live on Grafana 12.3.1 (read-only GET; they return valid JSON — an empty list is a clean pass, not an error).
+
+```bash
+# GRAF-057: alert rules that are administratively paused. A paused rule still counts toward
+# coverage (GRAF-091) but evaluates nothing — the service looks monitored and is not.
+curl -fsS --max-time 15 -H "Authorization: Bearer ${GRAFANA_TOKEN}" \
+  "${GRAFANA_URL}/api/v1/provisioning/alert-rules" \
+  | jq -r '[.[]? | select(.isPaused==true)] as $p
+           | "paused rules: \($p|length)", ($p[] | "  \(.title)\tservice=\(.labels.service // "-")\tseverity=\(.labels.severity // "-")")'
+# Join the paused rules' service labels against the topology critical list to size the blast radius.
+
+# GRAF-007: public (unauthenticated) dashboards. Each enabled one is reachable at
+# /public-dashboards/{accessToken} with NO auth, exposing its panel queries and data.
+curl -fsS --max-time 15 -H "Authorization: Bearer ${GRAFANA_TOKEN}" \
+  "${GRAFANA_URL}/api/dashboards/public-dashboards" \
+  | jq -r '(.publicDashboards // .) as $d
+           | if ($d|type)=="array" then "public dashboards: \($d|length)", ($d[] | select(.isEnabled==true) | "  ENABLED dashboardUid=\(.dashboardUid)")
+             else "public dashboards: \(($d.publicDashboards // [])|length)" end'
+```
+
+- **GRAF-057 (high):** any `isPaused==true` rule on a covered service — name the rule, its service, and severity, and state that the service's alerting coverage (GRAF-091) is illusory for as long as it stays paused. Blast radius is the count of covered critical services whose only rule is paused. Remediation `setup-grafana#alert-rules`.
+- **GRAF-007 (high):** any `isEnabled==true` public dashboard — join `dashboardUid` to the dashboard title and its panel expressions and state exactly what internal data and label values are world-readable (host class only, never a secret value). Remediation `setup-grafana#dashboards`. Verified live: the benchmark Grafana returns `0` for both (a clean pass), proving the endpoints and filters work on a real instance.
 
 ## Alert-hygiene noise signals (GRAF-100 to GRAF-103)
 
