@@ -717,3 +717,57 @@ curl -s -H "$AUTH" "${AM_URL}/api/v2/status" \
   || echo "no msteams_configs receiver found"
 echo "flag: each hit is an ALR-020 finding (medium) — migrate that receiver to msteamsv2_configs; the Office 365 connector msteams_configs relies on is being retired"
 ```
+
+## 14. Rule-evaluation health, live suppression, and page timing (ALR-021, ALR-022, ALR-023)
+
+Three checks that everything above can pass while the page still never lands: a rule that is *loaded* (ALR-001) but errors every evaluation; a paging alert that is firing but *suppressed right now*; and a route that pages, but late or muted at this clock. All read-only, all proven live against the benchmark (Prometheus + vmalert + Alertmanager).
+
+### 14.1 Rule-evaluation health (ALR-021)
+
+`/api/v1/rules` `health`/`lastError` is the **primary, engine-agnostic** signal — both Prometheus and vmalert expose it. The self-metric confirmation is **engine-gated**, because the metric names differ:
+
+```bash
+# Primary (works on Prometheus AND vmalert): a loaded rule that never actually fires.
+curl -s --max-time 15 -H "$AUTH" "${PROM_URL}/api/v1/rules" \
+  | jq -r '.data.groups[].rules[] | select(.type=="alerting") | select((.health // "ok") != "ok" or ((.lastError // "") != "")) | "\(.name) health=\(.health) lastError=\(.lastError)"'
+
+# Engine-gated self-metric confirmation. Detect the engine first (buildinfo/flags), then use ITS metrics:
+#  - Prometheus:  prometheus_rule_evaluation_failures_total ; and group overrun
+#                 prometheus_rule_group_last_duration_seconds > prometheus_rule_group_interval_seconds
+#  - vmalert:     vmalert_execution_errors_total, vmalert_alerting_rules_errors_total (per-alertname),
+#                 vmalert_recording_rules_errors_total ; vmalert has NO *_rule_group_interval_seconds
+#                 analog, so DROP the overrun query there (use vmalert_iteration_duration_seconds only as
+#                 an overrun proxy if wanted). Verified live: this benchmark's vmalert exposes
+#                 vmalert_alerting_rules_errors_total{alertname=...} and vmalert_iteration_duration_seconds,
+#                 and does NOT expose prometheus_rule_*.
+# On Prometheus:
+curl -s -G -H "$AUTH" --data-urlencode 'query=sum by (rule_group) (increase(prometheus_rule_evaluation_failures_total[1h]))' \
+  "${PROM_URL}/api/v1/query" | jq -r '.data.result[] | select((.value[1]|tonumber)>0) | "\(.metric.rule_group): \(.value[1]) eval failures/1h"'
+curl -s -G -H "$AUTH" --data-urlencode 'query=(prometheus_rule_group_last_duration_seconds > prometheus_rule_group_interval_seconds)' \
+  "${PROM_URL}/api/v1/query" | jq -r '.data.result[] | "\(.metric.rule_group): eval overran its interval"'
+# On vmalert (substitute the vmalert self-metrics; overrun query omitted — no interval-seconds analog):
+curl -s "${VMALERT_URL}/metrics" | grep -E '^vmalert_(execution_errors_total|alerting_rules_errors_total|recording_rules_errors_total)' || true
+```
+
+Fail (ALR-021, high): a rule is loaded but `health!="ok"` or carries a `lastError` — it has fired zero times and never will until the expression is fixed. Join each to its topology service and read `.labels.severity`: "`CheckoutErrorBudgetBurn` is loaded but `health=err lastError=\"vector cannot contain metrics with the same labelset\"` — checkout has a paging rule that has fired zero times." Blast radius is the count of paging rules with `health!=ok` and the count of critical services thereby left with a dead rule. An empty self-metric result **on the wrong engine** is `not observable`, never `healthy` — state which engine was detected. Remediation: fix the named rule's expression (the planned alert-rule setup skill owns this; today, point at the rule and the error).
+
+### 14.2 Live suppression of a paging alert (ALR-022)
+
+```bash
+curl -s --max-time 10 -H "$AUTH" "${AM_URL}/api/v2/alerts?active=true&silenced=true&inhibited=true" \
+  | jq -r '.[] | select((.labels.severity=="critical" or .labels.severity=="warning") and (.status.state=="suppressed")) | "\(.labels.alertname) ns=\(.labels.namespace // "-") silencedBy=\([.status.silencedBy[]?]|join(",")) inhibitedBy=\([.status.inhibitedBy[]?]|join(","))"'
+```
+
+Fail (ALR-022, high): an alert is active AND paging-severity AND `.status.state=="suppressed"` — a page not reaching a human *at this moment*, swallowed by a silence (`silencedBy`) or an inhibition (`inhibitedBy`). "`PaymentsDown` (critical) is active but suppressed right now, `inhibitedBy` an over-broad `ClusterDown` inhibit rule — the payments page is eaten by a correlation rule meant to reduce noise." Blast radius is the count of currently-suppressed paging alerts and which silence/inhibit id owns each. Distinct from the config-side stale-silence check (ALR-013, section 13.6) which reads silence *definitions*; this reads live routing *state*. Remediation: `setup-lgtm#add-severity-routes-and-inhibition` for over-broad inhibit rules; an unintended silence expires through the Alertmanager UI/amtool (as in ALR-013).
+
+### 14.3 Route timing and live-clock mute (ALR-023)
+
+This adds only the **live-clock and latency** axis; the dangling/misconfigured mute-interval *definition* error is already owned by section 13.4 — cross-reference it, do not re-report it here.
+
+```bash
+curl -s --max-time 15 -H "$AUTH" "${AM_URL}/api/v2/status" | jq -r '.config.original' > /tmp/alr-am-config.yaml
+grep -nE 'group_wait|group_interval|mute_time_intervals|active_time_intervals' /tmp/alr-am-config.yaml || echo 'no timing/mute keys in rendered config'
+date -u '+now UTC: %Y-%m-%d %H:%M %A'   # compare against any mute/active interval whose route pages 24/7
+```
+
+Fail (ALR-023, medium): a paging route sets a large `group_wait` (minutes) — that latency is added to MTTA on every incident before the first page leaves ("severity=critical route sets `group_wait: 5m`, so every critical page is delayed 5 minutes by design"); OR a `mute_time_intervals` on a 24/7 paging route covers the current UTC time, so that route is paging nobody at this moment. Blast radius is the group_wait seconds added to MTTA and whether a paging route is muted at the current clock. Verified live: the benchmark's default route is `group_wait: 10s` (fine) with no mute intervals. Remediation: `setup-lgtm#add-severity-routes-and-inhibition`.

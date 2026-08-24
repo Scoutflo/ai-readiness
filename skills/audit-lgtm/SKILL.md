@@ -324,6 +324,8 @@ Prove as much of the paging path as reading allows (commands in [references/back
 
 Reading receivers and counters proves configuration and past delivery, not future delivery. Findings here are `validated-live` for what the API showed and `configured` for anything whose delivery was not observed. The controlled test notification that upgrades `configured` to proven belongs to `/scoutflo:setup-lgtm`.
 
+**Flagship correlation — the per-service paging-path liveness chain.** The single highest-value output of this audit, and the cascade no free scanner assembles: for each critical service, thread the five links live and report them as **one** sentence rather than five isolated findings. Signal exists at real depth (LGTM-032) → a rule evaluator can actually see that service's series, including the split-backend trap where the series live in backend A but the only evaluator watches backend B (LGTM-012, LGTM-080–082) → a severity-labeled rule for it exists, is error-free, on-time, and evaluating fresh data (LGTM-035 + LGTM-004 + the new LGTM-007/LGTM-008) → its route matches a real, non-null, non-loopback receiver (LGTM-014/015) → that receiver's delivery-failure counter is flat, not rising (LGTM-013). Worked line: *"checkout has metrics, a dashboard, and a HighErrorRate{severity=page} rule — but that rule evaluates against a datasource whose ingestion is 8 min behind (LGTM-007), its route falls through to the default receiver at http://127.0.0.1:9095 (LGTM-014), and alertmanager_notifications_failed_total is climbing (LGTM-013): the page for the one service that matters most is silent, late, AND undeliverable, and every green dashboard hides it."* Rank the chain by its weakest link's `points_recoverable`; mark the delivery link `configured`, never `validated-live` (delivery proof is the setup-lane test-fire).
+
 ## Phase 7b: Alert hygiene (ruler-native noise controls)
 
 Phase 7 proved the paging path resolves to a receiver. This phase asks the narrower, backend-owned question: do the rule evaluators these stacks ship — vmalert, the Loki ruler, the Mimir ruler — carry the documented controls that keep the alert stream from becoming noise before it ever reaches Alertmanager? Every check is read-only and reads the ruler's own rules and config APIs (`/api/v1/rules`, `/flags`, `/config`, `/ruler/ring`). Commands are in [references/backend-checks.md](references/backend-checks.md) section 13. These checks join the Alert routing category (LGTM-070 to LGTM-073); they add no category and do not change its weight, they grow its denominator.
@@ -370,7 +372,7 @@ Score per [severity-and-scoring.md](../../report-standard/severity-and-scoring.m
 | Category | Weight | ID range |
 | --- | ---: | --- |
 | Service coverage | 20 | LGTM-030 to 039, 080 to 082 |
-| Metrics layer | 15 | LGTM-001 to 006 |
+| Metrics layer | 15 | LGTM-001 to 008 |
 | Logs layer | 15 | LGTM-020 to 025 |
 | Traces layer | 15 | LGTM-040 to 045 |
 | Alert routing | 15 | LGTM-010 to 018, 070 to 073 |
