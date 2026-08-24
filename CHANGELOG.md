@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.1.135
+
+Depth wave 7 — audit-gcp deepened and **live-proven** against real Cloud Monitoring on an internal GCP project (read-only, under a user identity with no impersonation). This closes the depth program: **all 16 provider audits are now deepened**, six of them live-proven (kubernetes, lgtm, alert-routing, clickstack, grafana, gcp).
+
+- **GCP-008 (new, live-proven)** — metrics-scope completeness. GCP-007 only trips when a project has zero policies AND zero channels; GCP-008 catches the insidious *partial* case: the Cloud Monitoring metrics scope monitors some estate projects but silently omits others, so this project's alerting looks complete while a whole production project is invisible to it. Reads the Metrics Scopes v1 API `monitoredProjects[]` and diffs against `gcloud projects list` (verified live: the v1 read returns the monitored project set).
+- **GCP-017 (new, live-proven)** — SLO burn-rate coverage. A Cloud Monitoring Service with an SLO but no `select_slo_burn_rate` policy is a stated target that pages nobody; a project with zero Services is `not-in-scope`, never a fabricated fail (verified live: the Services list returns empty cleanly on this project).
+- **Eight existing checks deepened** (GCP-001/002/005/010/020/030/040/050) to the doctrine bar, and a flagship paging-path-integrity cascade. Both new checks fold into existing categories (GCP-008 → Alert routing, GCP-017 → Uptime), no reweighting. New pressure scenario.
+
+Live reads confirmed on `scoutflo-external`: 14 alert policies (all wired to channels), 2 verified notification channels, 12 uptime checks, the metrics scope's monitored-project set, and an empty Services list handled as not-in-scope. Gates: leak CLEAN, structure-check (15), run-tests (22 suites), plugin validate --strict.
+
+**Depth program complete:** 16/16 provider audits deepened. Live-proven set (6): kubernetes, lgtm, alert-routing, clickstack, grafana, gcp. Verify-pending set (10): pagerduty, aws, azure, sentry, digitalocean, elk, jsm, datadog, zenduty, groundcover — deepened + reviewed, awaiting a live run against a real tenant.
+
 ## 0.1.134
 
 Depth wave 6 — the **cloud/SaaS audit wave**, deepened to the [depth doctrine](report-standard/depth-doctrine.md) across all nine providers we can't reach from here (AWS, Azure, Sentry, DigitalOcean, ELK, JSM, Datadog, Zenduty, Groundcover). These estates aren't in the benchmark, so every **new** check ships **verify-pending**: drafted against each provider's documented API, adversarially reviewed, mechanism-corrected, and carrying an explicit banner — its status is unproven until a first live run against a real tenant with a read-only token. No fabricated live observations anywhere; every command is strictly read-only.
