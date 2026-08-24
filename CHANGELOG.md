@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.137
+
+audit-aws promoted from verify-pending to **live-proven** — the three new checks were run read-only against a live Scoutflo AWS account (auth confirmed; no account id, profile, region, or hostname recorded).
+
+- **AWS-027** (ASG suspended safety processes), **AWS-028** (async Lambda no-DLQ), **AWS-035** (RDS event subscriptions) all executed read-only and returned valid, parseable JSON. The account is real and populated (CloudWatch alarms and EC2 instances confirmed present), but carries no Auto Scaling groups, Lambda functions, or RDS instances in the regions checked — so on this account the three are a clean **not-applicable** (empty list, correctly handled), which proves each mechanism end to end. A positive-finding case awaits an account that runs those resource types; the banners say exactly this.
+
+**Verification scoreboard: 11 of 16 live-proven** — kubernetes, lgtm, alert-routing, clickstack, grafana, gcp, sentry, datadog, zenduty, digitalocean, **aws**. Still verify-pending, honestly flagged: PagerDuty (stale token), ELK (API key lacks read scope on rules), Groundcover (needs backend id), Azure (no Scoutflo subscription exists). Gates: leak CLEAN, structure-check (15), run-tests (22 suites), plugin validate --strict.
+
 ## 0.1.136
 
 Verification pass — four cloud/SaaS audits promoted from verify-pending to **live-proven**, run read-only against Scoutflo's own accounts (ownership confirmed first; no account identifiers, org names, or hostnames recorded anywhere).
