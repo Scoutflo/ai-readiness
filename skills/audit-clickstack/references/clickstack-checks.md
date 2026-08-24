@@ -121,6 +121,8 @@ One permanent ID per check. IDs never change or get reused; retired checks keep 
 | CS-040 | HyperDX alerting | Alerts exist **and** route to a live receiver (webhook/Slack/PagerDuty); an alert wired to nothing is the core failure | critical |
 | CS-041 | HyperDX dashboards/sources | Dashboards exist and sources are connected for the critical services | medium |
 | CS-050 | Security posture | External `default` user requires a password; service users off `plaintext_password`; TLS on the wire; a least-privilege read-only user exists for audits | high |
+| CS-060 | ClickHouse health | Disk headroom vs telemetry growth — days-to-read-only before the disk fills and every INSERT is rejected (243 `NOT_ENOUGH_SPACE`) | high |
+| CS-061 | ClickHouse health | Write-path INSERT failures — collector writes rejected by ClickHouse (`query_log` Insert exceptions; disk-full 243, merge backlog 252 `TOO_MANY_PARTS`, profile/replica 164 `READONLY`, quota 201 `QUOTA_EXCEEDED`) | high |
 
 ## 3. CS-007 — empty / hidden-scope guardrail (run first)
 
@@ -274,6 +276,44 @@ chq "SELECT database, table, is_readonly, absolute_delay, queue_size
 - **Healthy target:** active-part counts per table are within your merge budget; `system.errors` shows no recently-spiking code tied to ingestion or storage; no mutation stuck with `is_done = 0` and a `latest_fail_reason`; on a clustered install, no read-only replica and delay/queue near zero.
 - **Finding (CS-030):** a table with runaway active parts (merge backlog), a spiking error `code` with a fresh `last_error_time`, a stuck mutation, or a lagging/read-only replica each names a specific ClickHouse health problem — quote the row(s) as evidence. An empty `system.replicas` on a single-node build is not a finding.
 - **Forbidden:** SELECT only — never `OPTIMIZE`, `SYSTEM ...`, or a mutation from the audit; see section 8.
+
+## 6b. Capacity headroom and write-path failures (CS-060, CS-061)
+
+Two failure modes CS-030 (part counts/errors right now) and CS-011 (freshness) each only half-see: the disk trending toward full, and INSERTs being actively rejected. Verified live against ClickHouse 26.5 — `system.disks` and the `system.parts` columns below (`min_time`, `bytes_on_disk`, `active`, `database`, `table`) are confirmed present; the discovery read still runs first, since the SSOT confirms the table, not every column.
+
+```bash
+# Confirm columns before use (never-invent-a-column).
+chq "SELECT name FROM system.columns WHERE database='system' AND table='parts'
+     AND name IN ('min_time','bytes_on_disk','active','database','table') FORMAT TabSeparated"
+
+# CS-060: disk headroom, per-table footprint, observed growth -> days-to-read-only.
+chq "SELECT name, free_space, total_space, round(100*(total_space-free_space)/total_space,1) AS used_pct
+     FROM system.disks ORDER BY used_pct DESC FORMAT TabSeparatedWithNames"
+chq "SELECT table, sum(bytes_on_disk) AS bytes, min(min_time) AS oldest, max(min_time) AS newest
+     FROM system.parts WHERE active AND database=currentDatabase() AND table LIKE 'otel_%'
+     GROUP BY table ORDER BY bytes DESC FORMAT TabSeparatedWithNames"
+# days_to_full = free_space / daily_growth, where daily_growth = bytes / age_days (newest-oldest).
+chq "SELECT name, value FROM system.merge_tree_settings
+     WHERE name IN ('parts_to_throw_insert','parts_to_delay_insert','max_parts_in_total') FORMAT TabSeparatedWithNames"
+
+# CS-061: the exact codes that reject a write. system.errors shows codes that have OCCURRED (value>0);
+# on the benchmark only 164 READONLY has fired (the profile-readonly read-user path). Write-path
+# rejection codes: 243 NOT_ENOUGH_SPACE (disk full), 252 TOO_MANY_PARTS (merge backlog), 164 READONLY
+# (profile-readonly user, OR a replica in Keeper-readonly state — the all-in-one build has no replicas,
+# so there it is only the profile path), 201 QUOTA_EXCEEDED. When reading 164, discount the single
+# READONLY row the section-1 readonly=1 probe itself adds on a profile-readonly user.
+chq "SELECT name, code, value, last_error_time FROM system.errors
+     WHERE last_error_time >= now() - INTERVAL 1 HOUR AND code IN (243,252,164,201,241,394)
+     ORDER BY value DESC FORMAT TabSeparatedWithNames"
+# Fresh rejected INSERTs from query_log (needs log_queries=1):
+chq "SELECT event_time, exception_code, count() AS n FROM system.query_log
+     WHERE type='ExceptionWhileProcessing' AND query_kind='Insert' AND event_time >= now() - INTERVAL 1 HOUR
+     GROUP BY event_time, exception_code ORDER BY event_time DESC LIMIT 20 FORMAT TabSeparatedWithNames"
+```
+
+- **Healthy (CS-060):** every disk's days-to-full is comfortably beyond your retention window. **Finding (CS-060, high):** a disk will hit read-only in N days at the observed growth rate — state the disk, `used_pct`, the dominant `otel_*` table by bytes, and the computed days-to-full. Blast radius: at 243 `NOT_ENOUGH_SPACE` **every** `otel_*` INSERT is rejected at once, not one table. Remediation `setup-clickstack#manage-storage-capacity` (or `#set-retention-ttl` to reclaim by shortening TTL).
+- **Healthy (CS-061):** no fresh Insert exceptions; no recent write-path error code. **Finding (CS-061, high):** fresh Insert `ExceptionWhileProcessing` rows or a spiking write-path code — name the code and what it means (243 disk-full → CS-060; 252 too-many-parts → `#manage-merge-pressure`; 164 profile/replica readonly; 201 quota). This is the check that distinguishes "collector stopped sending" (CS-011 stale, no insert exceptions) from "collector still sending, ClickHouse rejecting every write" (fresh exceptions) — remediation `setup-clickstack#fix-collector-pipeline` or the code-specific anchor.
+- **Forbidden:** SELECT only — never `ALTER`, `OPTIMIZE`, `SYSTEM`, or a mutation; see section 8.
 
 ## 7. HyperDX alerting and dashboards (CS-040, CS-041)
 

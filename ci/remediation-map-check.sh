@@ -44,6 +44,7 @@ audit_for_prefix() {
     K8S) echo audit-kubernetes ;;
     JSM) echo audit-jsm ;;
     GC) echo audit-groundcover ;;
+    CS) echo audit-clickstack ;;
     *) echo "" ;;
   esac
 }

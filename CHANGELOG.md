@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.131
+
+Depth wave 3 — audit-clickstack deepened to the [depth doctrine](report-standard/depth-doctrine.md) and **live-proven** against the real benchmark ClickStack (ClickHouse 26.5 with 187M metric rows / 15M traces / 6.4M logs of live OTel data).
+
+- **Two new ClickHouse-health checks, live-verified.** **CS-060** disk-headroom / days-to-read-only: from `system.disks` free/total, per-table `bytes_on_disk`, and observed daily growth it computes how many days until the disk fills and ClickHouse rejects every INSERT (proven: ~4GB/3-day growth on `otel_metrics_sum`, ~50 days headroom on the benchmark). **CS-061** write-path INSERT failures: reads `system.errors` and `query_log` Insert exceptions to distinguish "collector stopped sending" (CS-011 stale, no exceptions) from "collector still sending, ClickHouse rejecting every write" (fresh exceptions) — the gap CS-011 alone can't see.
+- **Corrected the ClickHouse error-code mechanism (adversarial-review catch, confirmed live).** Disk-full is **243 `NOT_ENOUGH_SPACE`**, a *distinct* trigger from **164 `READONLY`** (a profile-readonly user or a Keeper-readonly replica — and the all-in-one build has no replicas, so there 164 is only the profile path); merge backlog is **252 `TOO_MANY_PARTS`**, quota is **201 `QUOTA_EXCEEDED`**. Verified live: only 164 has fired on the benchmark (the read-only-user path), never 243 — because the disk is 32% used, exactly as the model predicts. New **flagship**: the self-concealing capacity cascade (weak retention → low headroom → 243 rejects all INSERTs → freshness stalls → every "last N min" HyperDX alert silently resolves), where "no alerts firing" is the symptom, not health.
+- Four new `setup-clickstack` remediation anchors (`manage-storage-capacity`, `manage-merge-pressure`, `fix-collector-pipeline`, `create-dashboard-source`); `audit_for_prefix` gains a `CS)` branch so ClickStack findings are machine-mapped (134 map entries verified); `system.parts` column-discovery guard kept per the never-invent-a-column rule.
+
+New pressure scenario (capacity-silences-alerting). Gates: leak CLEAN, structure-check (15), run-tests (22 suites), plugin validate --strict. Proven read-only via ClickHouse port-forward under a read-only identity.
+
 ## 0.1.130
 
 Depth wave, wave 2 — the two benchmark-backed observability audits deepened to the [depth doctrine](report-standard/depth-doctrine.md) and **live-proven** against the real benchmark stack (Prometheus v3.14 that remote-writes to VictoriaMetrics, vmalert, Alertmanager), each finding computing a blast radius from live data and naming its correlation chain.
