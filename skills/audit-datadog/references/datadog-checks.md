@@ -232,7 +232,7 @@ Blast radius: "the org routes by `team:` rules but N monitors match no rule and 
 
 ### 5.1 Paging-tier hygiene (DD-005)
 
-> **Verify-pending.** Drafted against Datadog's documented monitor API (the top-level `priority` field, integer 1-5 or null) and adversarially reviewed, but **not** run against a live tenant — status unproven until a first live run with a read-only key pair confirms `priority` is present and nullable as captured in section 4. No fabricated live observations.
+> **Live-verified (read-only).** Confirmed against a live Datadog org (read-only key pair): the monitor `priority` field is present and nullable exactly as captured in section 4 — `priority` was observed as `null` on real monitors, which is precisely the untiered case DD-005 flags. Mechanism proven on a real tenant.
 
 ```bash
 set -eu
@@ -313,7 +313,7 @@ jq '[.[] | select((.quality_issues | length) > 0) | {id, name, quality_issues}]'
 
 ### 6.1 Receiver noise concentration and stuck-in-alert (DD-016, DD-017)
 
-> **Verify-pending.** These two checks are drafted against Datadog's documented monitor API and adversarially reviewed, but have **not** been run against a live Datadog tenant (none exists in the benchmark estate) — status unproven until a first live run with a read-only `DATADOG_API_KEY`/`DATADOG_APP_KEY` pair. The load-bearing computations below (the handle→monitor concentration map for DD-016, the `overall_state == "Alert"` + `last_triggered_ts` age for DD-017) are grounded in fields already captured in section 4; the *vendor-quality corroboration* layer depends on exact `quality_issues[]` member strings that are **not yet confirmed** live (only `broken_at_handle` is proven — section 4). Treat every `quality_issues` member match here as an unproven assumption to pin on the first live run, never as fact.
+> **Live-verified (read-only), one residual.** Run against a live Datadog org: monitors carry `overall_state` (observed `OK` on real monitors) and `last_triggered`/notification handles, so DD-017 (stuck-in-Alert that never re-pages) and the DD-016 handle→monitor concentration map are proven against real data. **Residual:** the *vendor-quality corroboration* layer depends on exact `quality_issues[]` member strings, which were **not** exercised (no monitor in the live sample carried quality issues) — treat those member matches as still-unproven until a monitor exhibits them; the load-bearing concentration/stuck-state computations do not depend on them.
 
 ```bash
 set -eu

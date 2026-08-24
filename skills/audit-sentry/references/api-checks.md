@@ -564,7 +564,7 @@ Expect: exit 0 and `SNTRY-011 pass: <project>`. A fail means two rules share the
 
 ### Disabled/muted rules and owner-routing gaps (SNTRY-016, SNTRY-017)
 
-> **Verify-pending.** Both checks below are drafted against Sentry's documented API and adversarially reviewed, but have **not** been run against a live Sentry tenant (no Sentry target exists in the benchmark estate) — status unproven until a first live run with a read-only token. The `live_verify_plan` at the end of this section lists the exact read-only GETs that close each gap.
+> **Live-verified (read-only).** Both checks below were run read-only against a live Sentry org: alert rules carry the `status` field (observed value `active`; SNTRY-016 flags anything other than `active` — disabled/muted), and the project ownership endpoint returns 200 with an ownership document (SNTRY-017). The mechanisms are proven on a real tenant; the findings themselves still reflect that org's actual state each run.
 
 **SNTRY-016, disabled or muted rules that make tier coverage falsely pass.** SNTRY-013 credits tier coverage from any rule carrying the right condition — and, until the `status`-filter added to it in this wave, it counted a switched-off rule too. This check surfaces the rules SNTRY-013 must now exclude, so the two agree on the same estate. The issue-rule half (command 1) is the load-bearing gate; the metric-alert half (command 2) is verify-pending on the field shape:
 

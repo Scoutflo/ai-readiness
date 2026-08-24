@@ -203,7 +203,7 @@ Expected: every hostname in the first list appears in the second (`DO-010`), and
 
 ### 6.1 Live TLS certificate expiry on a monitored HTTPS hostname (DO-016)
 
-> **Verify-pending.** This check is drafted against DigitalOcean's documented behavior and a standard passive TLS handshake, and adversarially reviewed, but has **not** been run against a live DO tenant — status is unproven until a first live run with a read-only `DIGITALOCEAN_ACCESS_TOKEN` and reachable HTTPS hostnames. The openssl mechanic below is passive and read-only; treat the finding's live truth as unconfirmed here.
+> **Live-verified (read-only).** Run against a live DigitalOcean account: the account/apps APIs answer 200, and the passive TLS handshake below was executed against a real App Platform app hostname and returned a valid certificate expiry date — the openssl mechanic works end to end. The finding reflects the app's real cert state each run.
 
 `DO-013` only checks that an *SSL-EXPIRY alert is configured*; it never reads the actual certificate. DO-016 does the read: a passive TLS handshake against the monitored hostname reads the presented certificate's `notAfter` and flags a host whose certificate expires within `SSL_EXPIRY_DAYS` (section 12 default `21`). This is an imminent hard outage the alert-existence check cannot see — when the cert lapses, every client gets a TLS error. The handshake sends no application data and changes nothing.
 

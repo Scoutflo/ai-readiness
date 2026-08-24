@@ -173,7 +173,7 @@ jq 'length as $n | {schedule_count: $n}' "${tdir}/schedules.json"
 
 ### ZD-006 — Escalation level targets a named individual, not a rotation (single-human dependency)
 
-> **Verify-pending.** Drafted against Zenduty's documented API and adversarially reviewed, but NOT run against a live tenant — status unproven until a first live run with a read-only token. The `target_type`/`target_id` fields on an escalation rule are real (section 5 capture), but the integer `target_type` → `{user, schedule}` enum mapping is **UNVERIFIED** against a live account; confirm the enum before flagging.
+> **Live-verified (read-only), enum-semantics residual.** Run against a live Zenduty account: escalation-policy rule targets carry an integer `target_type` alongside a `target_id` (observed `target_type=2` with a real target id), confirming the field structure ZD-006 reads. **Residual:** the exact `target_type` integer→`{user, schedule}` semantic mapping needs a second sample (a schedule-typed target) or the vendor doc before flagging user-vs-schedule specifically; the structure and the presence of the field are proven live.
 
 An escalation level whose every target is a specific user (rather than an on-call schedule/rotation) pages nobody the moment that individual is on leave, changes phone, or leaves — there is no rotation to fall back to. This is distinct from ZD-003 (a rotation exists but is empty *now*) and ZD-001 (count-based SPOF: one rule / one target of any kind).
 
