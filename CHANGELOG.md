@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.136
+
+Verification pass — four cloud/SaaS audits promoted from verify-pending to **live-proven**, run read-only against Scoutflo's own accounts (ownership confirmed first; no account identifiers, org names, or hostnames recorded anywhere).
+
+- **audit-sentry** — SNTRY-016/017 confirmed: alert rules carry the `status` field (observed `active`; the check flags non-active/disabled) and the project ownership endpoint returns 200.
+- **audit-datadog** — DD-005 (monitor `priority` present and nullable) and DD-017 (`overall_state` present) confirmed on real monitors. Residual, now stated precisely in the reference: DD-016's `quality_issues[]` member-string corroboration was not exercised (no monitor in the live sample carried quality issues) — the load-bearing concentration/stuck-state logic does not depend on it.
+- **audit-zenduty** — ZD-006 field structure confirmed: escalation-rule targets carry an integer `target_type` with a `target_id`. Residual: the exact `target_type` → `{user,schedule}` mapping needs a second sample before flagging user-vs-schedule; ZD-017's `action_type` enum stays verify-pending.
+- **audit-digitalocean** — DO-016 fully proven: the passive TLS handshake ran against a real App Platform app and returned a valid certificate expiry date. DORT-001/002 (deployment phases) stay verify-pending (not exercised).
+
+**Verification scoreboard: 10 of 16 audits live-proven** — kubernetes, lgtm, alert-routing, clickstack, grafana, gcp (benchmark + internal cloud) plus sentry, datadog, zenduty, digitalocean (Scoutflo's own SaaS accounts). Still verify-pending, each honestly flagged in-product: **AWS** (reachable, but the CLI won't surface describe output in a non-interactive shell — verify from a terminal), **PagerDuty** (stale token), **ELK** (API key lacks read scope on rules), **Groundcover** (needs its backend id), **Azure** (no Scoutflo subscription exists to audit). Gates: leak CLEAN, structure-check (15), run-tests (22 suites), plugin validate --strict.
+
 ## 0.1.135
 
 Depth wave 7 — audit-gcp deepened and **live-proven** against real Cloud Monitoring on an internal GCP project (read-only, under a user identity with no impersonation). This closes the depth program: **all 16 provider audits are now deepened**, six of them live-proven (kubernetes, lgtm, alert-routing, clickstack, grafana, gcp).
