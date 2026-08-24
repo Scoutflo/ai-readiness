@@ -357,6 +357,28 @@ For `AZR-OPT-*` and every controlled-rollout / traffic-impacting / RBAC item def
 
 Recording the plan here keeps the finding traceable without smuggling a cluster change, an agent install, or a role grant through a "monitoring tweak" approval.
 
+## Review alert processing rules
+
+AZR-005. An alert processing rule (formerly "action rule") with a suppression on a live production scope silently stops alerts from that scope from ever notifying — the alerts still fire and resolve in the portal, but no action group runs. This is the highest-severity Azure alerting defect because it looks healthy everywhere except delivery. The fix is a scoped review, never a blanket delete:
+- Announce the exact rule (`az monitor alert-processing-rule list`), its `scopes`, its `conditions`, and the schedule/`enabled` state, and which live resources it currently mutes.
+- Confirm intent: a suppression bounded to a real maintenance window with an `endsAt` is legitimate; an open-ended or perpetually-renewed suppression on a production scope is the finding.
+- Narrow the scope or add a schedule with a real end (`az monitor alert-processing-rule update`), or disable the rule — announced, one change, with the prior state recorded for rollback.
+- Verify: the rule no longer covers the production scope at the current time, and a subsequent real alert on that scope reaches its action group (prove delivery via the action-group test in *Create and wire an action group*, not by assuming).
+
+## Investigate log ingestion
+
+AZR-041. A Log Analytics workspace that has stopped ingesting means every log-based alert and query over it is now blind — the query returns the last data and looks alive. The fix is upstream of the workspace, not the workspace itself:
+- Announce which tables stopped (`az monitor log-analytics query` for `Heartbeat`/table `_BilledSize` max TimeGenerated) and the last-seen timestamp per table.
+- Trace the source route: the resource's diagnostic setting still points at this workspace (*Enable diagnostic settings*), the Data Collection Rule / agent (AMA) is running, and the resource still exists. Fix whichever link broke — re-point the diagnostic setting, repair the DCR association, or restart the agent — announced as one change.
+- Verify: `Heartbeat | summarize max(TimeGenerated)` (or the affected table) advances to within minutes, and one previously-blind alert query returns fresh rows.
+
+## Add Prometheus rule groups
+
+AZR-033. Azure Monitor managed Prometheus can be collecting metrics while **zero** Prometheus rule groups consume them — so the metrics exist but nothing alerts on them. Collection without rules is a half-built pipeline. The fix authors the rule groups:
+- Announce the intended rule groups (a `Microsoft.AlertsManagement/prometheusRuleGroups` resource) scoped to the Azure Monitor workspace, with the specific PromQL expressions and `severity`/`for` per rule, mapped to the critical services from topology.
+- Confirm the expressions against live data first (query the managed Prometheus endpoint read-only), then apply the rule-group resource (Bicep/ARM/`az resource create`), one announced change.
+- Verify: the rule group appears in the Azure Monitor workspace, its rules show a recent evaluation, and a test condition routes to the intended action group.
+
 ## Record and wrap up
 
 Append one entry per executed change to `${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/azure/changes.md`:

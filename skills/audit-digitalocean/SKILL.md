@@ -220,9 +220,11 @@ Checks:
 
 All three reads are single cheap `jq` passes over the existing inventory, done once per run; they do not batch per app on the large path. As everywhere in this audit, a `401`/`403` while refreshing the policy list is an auth-scope finding that blocks these checks, never a clean or passing result.
 
-## Phase 4: Uptime and availability (DO-010 to DO-015)
+## Phase 4: Uptime and availability (DO-010 to DO-016)
 
-Commands in section 6. Every active public hostname has an uptime check (`DO-010`); each check carries a down alert (`DO-011`), a latency alert (`DO-012`), and an SSL-expiry alert (`DO-013`); multi-region checks where a single region would mask regional failure (`DO-014`); and no check monitors a dead, archived, or migrated target (`DO-015`). Probe every check target live and capture the status code as evidence.
+Commands in section 6. Every active public hostname has an uptime check (`DO-010`); each check carries a down alert (`DO-011`), a latency alert (`DO-012`), and an SSL-expiry alert (`DO-013`); multi-region checks where a single region would mask regional failure (`DO-014`); no check monitors a dead, archived, or migrated target (`DO-015`); and the live TLS certificate on each monitored HTTPS hostname is not already within the expiry window (`DO-016`). Probe every check target live and capture the status code as evidence. Deepen DO-010 past "hostname X has no uptime check" to the outage that goes undetected — DO-010 is the detection leg of the silent-outage cascade below.
+
+> **Verify-pending.** `DO-016` (live-cert read) is drafted against DigitalOcean's documented behavior and a passive TLS handshake and adversarially reviewed, but has **not** been run against a live DO tenant — status is unproven until a first live run with a read-only token and reachable HTTPS hostnames. Its openssl mechanic is passive/read-only; a connect failure / `000` or handshake error is a **BLOCKED** result cross-referenced to DO-010 (no check at all) and DO-060 (the host may have moved off DO), never a fabricated high fail — see section 6.1.
 
 - ❌ `Uptime pass: a check exists for the storefront hostname.`
 - ✅ `Uptime partial: the check exists but has no SSL-expiry alert (DO-013), and the target answered 404 this run, which makes it a noise source (DO-015), affected: storefront.`
@@ -239,6 +241,16 @@ Two current-spec refinements, both read from the app spec already captured in Ph
 - **Autoscaled without an alert on the scaled metric (folds into DO-033/DO-024).** A component with an `autoscaling` block (`min_instance_count`/`max_instance_count` plus a `metrics` object — `metrics.cpu.percent`, or the request-based `metrics.requests_per_second.per_instance` / `metrics.request_duration.p95_milliseconds`, GA May 2026) that has no App Platform alert rule on the metric it scales on is flying blind: it scales silently and pages nobody when it pins at `max_instance_count`. **Read this from the app spec's own `alerts` array (and `doctl apps list-alerts`), never from `doctl monitoring alert list`** — DO Monitoring alert policies have no App Platform metric type, so cross-referencing autoscaling against that surface is a category error. The finding is an autoscaled component whose app-spec `alerts` do not include the scaled metric (or at least a restart/CPU rule that would surface the pin).
 
 Thresholds you compare against come from the starting alert set in section 12 of the reference; every number there is an example to tune, not a prescription.
+
+### The flagship silent-outage cascade (assemble it in the findings, do not itemize)
+
+DigitalOcean's differentiator — the analog of the kubernetes external→cluster-secrets path, and the one chain no free scanner assembles because each leg lives in a different config surface and a different audit category. For a critical single-instance App Platform service: **DO-032** (`instance_count == 1`) + **DO-030** (a readiness `health_check` but `liveness_health_check == null`) + **DO-023** (no `RESTART_COUNT` alert) + **DO-010** (no uptime check) collapse into one finding: *"checkout runs one instance; when its process deadlocks, App Platform withholds traffic via the readiness probe so the instance shows unhealthy but is NEVER auto-restarted (no liveness probe), no restart alert fires (there is no restart to count), and no synthetic uptime check notices the site is down — so the service is fully hung and the first human signal is a customer complaint."* When the cascade holds, emit ONE correlated finding whose evidence names the other four IDs (with blast radius naming checkout's topology dependents) and **escalate DO-032 to `high`** — it is a live total-outage risk, not an isolated fact — rather than four independent "X is missing" lines. `DORT-001` (below) folds in as validated-live if a failed deployment is observed this run. The secondary chain is the security path: **DO-046** (publicly reachable managed DB) + **DO-062** (its creds plaintext `GENERAL` in an app spec) + **DO-047** (no logsink) = external→data with no audit trail. Full narratives and read commands are in [references/do-checks.md](references/do-checks.md) sections 7, 8, and 16.
+
+### App Platform live-runtime snapshot (DORT — evidence, not scored)
+
+> **Verify-pending.** `DORT-001`/`DORT-002` are drafted against DigitalOcean's documented App Platform deployment-phase API and adversarially reviewed, but have **not** been run against a live DO tenant — status is unproven until a first live run with a read-only token against an account carrying App Platform apps. The reads are ordinary read-only `doctl apps list`/`get`/`list-deployments` calls; treat the observations as unconfirmed until that first live run.
+
+A parallel non-scored lane, the DigitalOcean analog of the kubernetes `K8SRT-` snapshot: `area: live-runtime`, always severity `info` and `points_recoverable: 0`, never present in `score.categories` or `score.excluded`, so it adds live evidence without moving the score. Commands in [references/do-checks.md](references/do-checks.md) section 16. `DORT-001` names any app whose `active_deployment.phase` is `ERROR`/`CANCELED` (serving old code or down NOW) — when it coincides with DO-032 it turns the silent-outage cascade from hypothetical into validated-live this run. `DORT-002` surfaces a deployment wedged in `BUILDING`/`DEPLOYING`/`PENDING_BUILD`. A probe that returns nothing, times out, or is `401`/`403`-blocked is recorded `skipped` with the exact reason — never a fabricated phase.
 
 ## Phase 6: Managed databases (DO-040 to DO-048)
 
@@ -288,7 +300,7 @@ Score per [severity-and-scoring.md](../../report-standard/severity-and-scoring.m
 | Alert routing and delivery | 20 | DO-001 to DO-005, DO-070 to DO-072 |
 | App Platform alert coverage | 20 | DO-020 to DO-025 |
 | Managed databases | 20 | DO-040 to DO-048 |
-| Uptime and availability | 15 | DO-010 to DO-015 |
+| Uptime and availability | 15 | DO-010 to DO-016 |
 | App health checks and runtime | 10 | DO-030 to DO-033 |
 | Log forwarding | 10 | DO-050 to DO-052 |
 | Ownership and hygiene | 5 | DO-060 to DO-062 |

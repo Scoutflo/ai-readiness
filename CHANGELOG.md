@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.134
+
+Depth wave 6 — the **cloud/SaaS audit wave**, deepened to the [depth doctrine](report-standard/depth-doctrine.md) across all nine providers we can't reach from here (AWS, Azure, Sentry, DigitalOcean, ELK, JSM, Datadog, Zenduty, Groundcover). These estates aren't in the benchmark, so every **new** check ships **verify-pending**: drafted against each provider's documented API, adversarially reviewed, mechanism-corrected, and carrying an explicit banner — its status is unproven until a first live run against a real tenant with a read-only token. No fabricated live observations anywhere; every command is strictly read-only.
+
+- **~70 existing checks deepened** from linter lines ("X is missing") to the doctrine bar: the exact object, a blast radius computed from the provider's own data, the correlation chain, an exact fix, and a read-only verification.
+- **New checks (verify-pending), folded into existing categories with no reweighting:** AWS-027 (ASG self-healing process suspended), AWS-028 (async Lambda with no DLQ — silent event loss), AWS-035 (RDS with no failover event subscription); AZR-005 (alert-processing rule muting a live scope), AZR-033 (managed Prometheus collecting with zero rule groups), AZR-041 (Log Analytics workspace stopped ingesting), AZR-042 (Activity Log never exported); SNTRY-016/017 (disabled rules that falsely pass coverage; missing ownership rules); DO-016 (TLS cert expiry) + the non-scored DORT-001/002 live-runtime lane (the DO analog of K8SRT); ELK-005/006/014 (non-paging-only rule delivery, connector fan-in SPOF, stalled rule execution); JSM-018/033 (operator-snooze blackout, priority collapse); DD-005/016/017 (untiered priority, receiver noise concentration, stuck-alert never re-pages); ZD-006/017/031 (lone-individual escalation target, urgency-downgrade-to-non-paging, …); GC-014 (duplicate-monitor no-dedup paging).
+- **Each provider gained a flagship correlation** — the per-service silent-failure cascade no scanner assembles — and a new pressure scenario.
+- **setup-azure** gained three remediation sections the new Azure checks point at: `review-alert-processing-rules`, `investigate-log-ingestion`, `add-prometheus-rule-groups` (confirm-then-verify).
+
+The adversarial review + per-audit integration caught and corrected real mechanism errors before they shipped (a non-existent DigitalOcean firewall endpoint, a JSM `min_by` that operated on the wrong object and would have crashed live, Groundcover joins keyed on fields its summary endpoint doesn't return — gated honestly, not faked). Gates: leak CLEAN, structure-check (15), run-tests (22 suites), plugin validate --strict. These ship verify-pending by design; the benchmark-backed five (kubernetes, lgtm, alert-routing, clickstack, grafana) remain the live-proven set.
+
 ## 0.1.133
 
 Depth wave 5 (first cloud/SaaS increment) — audit-pagerduty deepened to the [depth doctrine](report-standard/depth-doctrine.md). PagerDuty has no live estate in the benchmark, so these two new checks are **verify-pending**: drafted against PagerDuty's documented REST API and adversarially reviewed, but not yet run against a live tenant — the reference marks them so explicitly, and their status must be treated as unproven until a first live run with a read-only `PAGERDUTY_TOKEN`.

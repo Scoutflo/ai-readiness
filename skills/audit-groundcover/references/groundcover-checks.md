@@ -26,6 +26,7 @@ One permanent ID per check. IDs never change or get reused; retired checks keep 
 | GC-011 | Notification noise | `statusFilters` deliberate; `Resolved` on high-churn monitors is resolve-noise | low |
 | GC-012 | Notification noise | `method` not `noNotifications` where it should page, and `connectedApps` route-bypass not used at scale | medium |
 | GC-013 | Notification noise | Every paging monitor resolves to a destination (not detect-but-page-nobody) | high |
+| GC-014 | Notification noise | No duplicate/overlapping monitors on the same target routing to the same destination (groundcover has no native dedup, so each duplicate is a separate page) — **verify-pending** | medium |
 | GC-020 | Health/silences | `isPaused` monitors judged against intent (a paused live-SLO monitor is a coverage gap) | medium |
 | GC-021 | Health/silences | No open-ended or blanket recurring silence (a broad permanent matcher is a standing blackout) | high |
 | GC-022 | Health/silences | No monitor stuck permanently firing or in evaluation error (runtime-state-gated) | high |
@@ -39,7 +40,7 @@ One permanent ID per check. IDs never change or get reused; retired checks keep 
 What 100/100 means per category; the checks above are this profile made executable.
 
 - **Monitor firing hygiene**: every monitor has a real `pendingFor`, hysteresis where it sits near a boundary, auto-resolve where the condition clears, and deliberate no-data and execution-error states — monitors fire on real conditions, not blips or their own broken queries.
-- **Notification noise**: re-notification is bounded or disabled, resolve-notifications are trimmed on churny monitors, routing goes through notification routes rather than ad-hoc `connectedApps`, and every paging monitor actually reaches a destination.
+- **Notification noise**: re-notification is bounded or disabled, resolve-notifications are trimmed on churny monitors, routing goes through notification routes rather than ad-hoc `connectedApps`, every paging monitor actually reaches a destination, and no two monitors watch the same target and destination (which — because groundcover has no native dedup — would page N times for one condition).
 - **Monitor health and silences**: no live-SLO monitor sits paused, no recurring silence is an open-ended blanket, and (where runtime state is readable) no monitor is stuck firing, erroring, or fully silenced.
 - **Coverage and destination liveness**: workflow-backed destinations are live, severity is used for prioritized routing, and every critical service has an evaluating monitor.
 
@@ -100,6 +101,9 @@ fi
 # there is an ARRAY, so hysteresis is read across the array, never as .model.thresholds.customResolveThreshold.
 # Skipped cleanly when yq is absent; any field still null afterwards is genuinely not exposed and its
 # check (GC-002/003/004/005/010-013) is not-in-scope-from-this-endpoint (sections 5-6), never a blanket finding.
+# The k8s target fields (namespace/workloadName/labels) captured here are the dedup key GC-014 groups on
+# (section 6.1) and the join key GC-013/GC-030/GC-032 resolve a monitor to its critical service; they too
+# live only in this YAML surface, so any join that needs them is gated on their presence, never asserted blind.
 if command -v yq >/dev/null 2>&1; then
   for UUID in $(jq -r '.[].uuid' "${RAW_DIR}/monitors.json"); do
     F="${RAW_DIR}/monitors/${UUID}.json"
@@ -114,7 +118,10 @@ if command -v yq >/dev/null 2>&1; then
             disableRenotification: .notificationSettings.disableRenotification,
             statusFilters: .notificationSettings.statusFilters,
             method: .notificationSettings.method,
-            connectedApps: .notificationSettings.connectedApps }' > "${F}.tmp" \
+            connectedApps: .notificationSettings.connectedApps,
+            namespace: (.namespace // .labels.namespace // null),
+            workloadName: (.workloadName // .labels.workloadName // null),
+            labels: (.labels // null) }' > "${F}.tmp" \
       && mv "${F}.tmp" "$F" || rm -f "${F}.tmp"
     sleep 0.3   # no documented rate limit; throttle defensively
   done
@@ -252,6 +259,43 @@ else
 fi
 ```
 
+## 6.1 Duplicate/overlapping monitors on the same target (GC-014)
+
+> **Verify-pending.** Drafted against groundcover's documented API and adversarially reviewed, but NOT run against a live tenant — status unproven until a first live run with a read-only token. The endpoint (`POST /api/monitors/list`) is confirmed, but the dedup key this check groups on (`namespace`/`workloadName`/`labels` + `connectedApps`) comes only from the per-monitor YAML enrichment in section 4, which was observed thin live (0/69 for `notificationSettings`); until a live run proves those fields are populated, treat GC-014's status as unproven and never assert a duplicate count you did not compute.
+
+groundcover is built on Keep and has **no native deduplication** (the ceiling stated in the SKILL). So if two or more monitors watch the same target — the same `(namespace, workloadName, type)` — and route to the same destination, one underlying condition opens N monitors and fires N separate pages. No per-monitor check in sections 5-7 can see this: each evaluates one monitor in isolation, and duplication is only visible *across* monitors. That is the genuinely-new failure class GC-014 exists for; it is not a re-slice of GC-010/GC-012.
+
+The dedup key (`namespace`/`workloadName` + `type` + `connectedApps`) lives only in the per-monitor YAML config enriched in section 4; `summary/query` does not carry it. When section 4 did not capture those fields, the group-by runs on null keys and proves nothing, so GC-014 is `not-in-scope-from-this-endpoint`, never a fabricated "no duplicates".
+
+```bash
+set -eu
+RUN_DATE="$(date -u +%Y-%m-%d)"
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/groundcover/${RUN_DATE}/raw"
+# Precondition: the dedup key fields must have been enriched in section 4 (k8s target + connectedApps).
+# When absent, GC-014 is not-in-scope-from-this-endpoint — the group-by on null keys would prove nothing.
+dedup_key_present() { jq -s -e 'any(.[]; ((.namespace // .workloadName // .labels.workloadName // .labels.namespace) != null) and (((.connectedApps // []) | length) > 0))' "${RAW_DIR}"/monitors/*.json >/dev/null 2>&1; }
+
+if dedup_key_present; then
+  # Group monitors by target identity + destination; any group with >1 monitor is a duplicate-paging set.
+  jq -s '[.[] | {title, type,
+        ns: (.namespace // .labels.namespace // null),
+        wl: (.workloadName // .labels.workloadName // null),
+        dest: ((.connectedApps // []) | sort | join(","))}]
+      | map(select((.ns != null or .wl != null) and .dest != ""))
+      | group_by([.ns, .wl, .type, .dest])
+      | map(select(length > 1))
+      | map({target: {namespace: .[0].ns, workload: .[0].wl, type: .[0].type},
+             destination: .[0].dest, duplicate_count: length, monitors: [.[].title]})' \
+    "${RAW_DIR}"/monitors/*.json
+else
+  echo "GC-014 not-in-scope-from-this-endpoint: monitor target identity (namespace/workloadName) and destination (connectedApps) not captured this run — dedup key unavailable"
+fi
+```
+
+Each group with `duplicate_count > 1` is one finding. Blast radius is computed, not asserted: the group's `duplicate_count` and its named `monitors` list is how many pages one condition sends — `checkout has 3 monitors on the same workload all routing to the same connectedApp, so a single checkout degradation pages the responder 3x`. Multiply by that destination's re-notify cadence (GC-010) for redundant pages/day, and note duplicates almost always share one severity/destination (GC-031), so they compound the same-priority storm. Healthy: no `(namespace, workloadName, type, destination)` group has more than one monitor, or the duplicates are deliberate (distinct conditions/severities) and documented — say which.
+
+Remediation is inline (no `setup-groundcover` ships): consolidate the duplicate set into one monitor under **Monitors > (the duplicate set)**, keeping the best-tuned one and removing the rest, or differentiate them deliberately (distinct conditions or severities) and record why. Verification (read-only): re-pull `POST /api/monitors/list` plus the section 4 enrichment and re-run the group-by; assert no target/destination group has `duplicate_count > 1` except the documented ones.
+
 ## 7. Monitor health and silences (GC-020 to GC-023)
 
 ```bash
@@ -308,7 +352,9 @@ jq -s '[.[].severity] | group_by(.) | map({severity: .[0], count: length})' "${R
 # All monitors at S1 (or all with no severity) is the finding; a spread across S1-S4 is healthy.
 ```
 
-**GC-032 (critical-service coverage)** is a judgment cross-map: for each critical service from `topology.md`, confirm at least one monitor evaluates for it (by the monitor's `labels`, `title`, or the k8s namespace/workload it targets). Name affected services; "three services have no monitor" is not a finding, "checkout, payments, and search have no groundcover monitor" is.
+**GC-032 (critical-service coverage)** is the flagship assembly point, and coverage means a **working paging path**, not monitor-presence. For each critical service from `topology.md`, a service is covered only when a monitor for it (by the monitor's `labels`, `title`, or the k8s namespace/workload it targets) is **evaluating** (not GC-020 paused), **not blanket-silenced** (GC-021), **routes to a destination** (not GC-013 empty / not GC-012 `noNotifications`), and that destination is a **live workflow provider** (not GC-030 `installed:false`/invalid/error). State per uncovered service which leg fails. Name affected services; "three services have no working path" is not a finding, "checkout, payments, and search route to an `installed:false` Slack provider" is.
+
+**Honesty gate:** every leg past monitor-existence keys off `method`/`connectedApps`/`labels`/`namespace`/`workloadName`, which `summary/query` does not carry and the section 4 YAML enrichment supplied 0/69 on the only estate observed. When those fields are absent this run, mark the destination/coverage legs `not-in-scope-from-this-endpoint` and state per service that the join could not be read — never assert the silent-paging cascade as computed without the join fields present (same discipline as `notif_present()` in section 6).
 
 **Notification-route overlap** is best-effort: groundcover's notification routes have no confirmed REST list endpoint and are BYOC-only. When routes cannot be read from the API, the report states that route overlap could not be assessed rather than asserting a clean routing bill; if the deployment exposes routes (or a Terraform state is available out of band), enumerate their match criteria for overlapping or catch-all routes.
 

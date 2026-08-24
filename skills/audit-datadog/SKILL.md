@@ -188,16 +188,18 @@ If `./scoutflo-audits/topology.md` exists, load it. Its service list is the crit
 
 Build the raw picture with the commands in [references/datadog-checks.md](references/datadog-checks.md) section 4: all monitors with messages, options, tags, and state; Datadog's own `quality_issues[]` per monitor; v2 downtimes; and SLOs with their attached monitor IDs. Judgment starts in Phase 3. A 403 on any surface is an auth/scope note attached to the checks that need it, naming the missing scope.
 
-## Phase 3: Monitor delivery (DD-001 to DD-004)
+## Phase 3: Monitor delivery (DD-001 to DD-005)
 
-Commands in section 5. Judge whether a monitor reaches a live target: every monitor names at least one `@handle` (`DD-001`, critical when a monitor notifies nobody), no monitor targets a dead handle — a Slack channel, webhook, or PagerDuty service that no longer resolves (`DD-002`, high), no monitor left in `draft` status masquerading as coverage (`DD-003`, high — drafts never notify), and org-level notification rules and config policies reviewed where the org uses them (`DD-004`).
+Commands in section 5. Judge whether a monitor reaches a live target: every monitor names at least one `@handle` (`DD-001`, critical when a monitor notifies nobody), no monitor targets a dead handle — a Slack channel, webhook, or PagerDuty service that no longer resolves (`DD-002`, high), no monitor left in `draft` status masquerading as coverage (`DD-003`, high — drafts never notify), org-level notification rules and config policies reviewed where the org uses them (`DD-004`, computing the routing fall-through set), and critical-service monitors carrying a `priority` so paging can be tiered rather than flat (`DD-005`, medium, **verify-pending** — section 5.1). DD-001/DD-002/DD-003 do not stop at a count: each joins the failing monitor to its `service:` tag and criticality so the finding names which service goes blind, and each is one of the suppressors the Phase-6 DD-033 effective-coverage flagship subtracts.
 
 - ❌ `Delivery pass: every monitor has a message.`
 - ✅ `Delivery partial: every monitor has a message, but six target @slack-prod-alerts which is not in the Slack integration's channel list (DD-002), and two are drafts (DD-003); affected: checkout, payments.`
 
-## Phase 4: Monitor noise (DD-010 to DD-015)
+## Phase 4: Monitor noise (DD-010 to DD-017)
 
-Commands in section 6. This is the alert-hygiene category. Recovery thresholds where a monitor has warning/critical thresholds and can flap (`DD-010`), deliberate no-data handling rather than a silent blind spot or a false page (`DD-011`), bounded renotification instead of forever (`DD-012`), evaluation and new-group delay where the query needs late data (`DD-013`), deliberate auto-resolve per type (`DD-014`), and Datadog's own `quality_issues[]` reviewed and reconciled with this audit (`DD-015`, info).
+Commands in section 6. This is the alert-hygiene category. Recovery thresholds where a monitor has warning/critical thresholds and can flap (`DD-010`, joined to the notification handle so the finding names where the flap noise lands), deliberate no-data handling rather than a silent blind spot or a false page (`DD-011`, isolating the dangerous notify_no_data=false heartbeats), bounded renotification instead of forever (`DD-012`), evaluation and new-group delay where the query needs late data (`DD-013`), deliberate auto-resolve per type (`DD-014`), and Datadog's own `quality_issues[]` reviewed and reconciled with this audit (`DD-015`, info).
+
+Two noise checks are **verify-pending** (section 6.1): receiver noise concentration — the real critical-service pages sharing a handle with many flap-prone/renotify-heavy monitors so they are statistically buried (`DD-016`, high, the doctrine's alert-fatigue worked example made executable for Datadog); and monitors stuck in `overall_state == "Alert"` so long they can never re-page a new breach (`DD-017`, medium). DD-016's load-bearing computation is the handle→monitor concentration map plus the DD-010/DD-012 noisy set — no unverified vendor string; the `quality_issues[]` corroboration (high-alert-volume / stuck member strings) is provisional until a live run pins the exact member strings, since only `broken_at_handle` is proven. Never present those regex members as fact.
 
 Honest ceiling, stated in the report every run: monitor options are metadata about intent; whether a monitor actually flapped is visible only in its state history, which this audit samples but does not exhaustively reconstruct. Event Management correlation exists in Datadog but has no public API for its rules, so this audit reports correlation as UI-only and does not score it.
 
@@ -207,7 +209,9 @@ Commands in section 7. Indefinitely muted monitors — a stuck/suppressed alert 
 
 ## Phase 6: Coverage and staleness (DD-030 to DD-034)
 
-Commands in section 8. Stale monitors paired with intent rather than flagged on age alone (`DD-030`), composite monitors whose constituent IDs all resolve (`DD-031` — a composite referencing a deleted monitor silently misfires), SLOs with an error-budget or burn-rate monitor attached (`DD-032`, high — an SLO nobody pages on is decoration), critical-service coverage (`DD-033`), and monitor tag hygiene for routing (`DD-034`).
+Commands in section 8. Stale monitors distinguished from dead ones by pairing `last_triggered_ts` with `overall_state` — a monitor stuck in persistent `No Data` because its metric vanished is a silent coverage hole, not a quiet-but-healthy monitor (`DD-030`); composite monitors whose constituent IDs all resolve, naming the service the broken aggregate gates (`DD-031` — a composite referencing a deleted monitor silently misfires); SLOs with an error-budget or burn-rate monitor attached, naming the SLO target/service and reading the trailing SLI-vs-target so the finding states whether the budget is already burning (`DD-032`, high); critical-service **effective** coverage (`DD-033`, the flagship — section 8.1); and monitor tag hygiene computed as routing fall-through against DD-004's rules, not a bare hygiene count (`DD-034`).
+
+**Flagship correlation — the effective-coverage blind-spot cascade (home: DD-033).** No free scanner assembles it, because it requires joining the critical-service→monitor map against every suppression mechanism at once. Per critical service, start from monitors tagged `service:X`, then subtract drafts (DD-003), no-`@handle` (DD-001), dead-handle (DD-002/`broken_at_handle`), indefinitely-silenced (DD-020), monitors whose tags match an active `end=null` downtime's scope (DD-021 tag-join — the single highest-value sub-computation), and heartbeats with `notify_no_data=false` (DD-011). What remains is the count that would actually page a human tonight. The differentiator line — *"service:payments shows 8 monitors in the Datadog UI but 0 that reach a human tonight: 2 drafts, 1 dead Slack handle, 3 under the open-ended env:prod downtime, 2 heartbeats with no-data off"* — is the direct Datadog analog of audit-kubernetes's external→cluster-secrets path: the customer's console shows 8 green monitors and cannot show that the service is effectively unmonitored. Assemble this in Phase 8 as one finding per critical service, ranked by `points_recoverable`, scoring coverage on **effective** (not inventory) monitors.
 
 ## Phase 7: Coverage matrix and topology readiness
 
@@ -228,10 +232,12 @@ Score per [severity-and-scoring.md](../../report-standard/severity-and-scoring.m
 
 | Category | Weight | ID range |
 | --- | ---: | --- |
-| Monitor delivery | 30 | DD-001 to DD-004 |
-| Monitor noise | 25 | DD-010 to DD-015 |
+| Monitor delivery | 30 | DD-001 to DD-005 |
+| Monitor noise | 25 | DD-010 to DD-017 |
 | Muting and downtime | 20 | DD-020 to DD-022 |
 | Coverage and staleness | 25 | DD-030 to DD-034 |
+
+The three checks added on the v0.1.134 depth pass fold into existing categories (DD-005 into Monitor delivery, DD-016/DD-017 into Monitor noise), so the weights are unchanged and still sum to 100. DD-005/DD-016/DD-017 are **verify-pending**: drafted against Datadog's documented API and adversarially reviewed, but not yet run against a live tenant (there is no Datadog org in the benchmark estate). They score like any other check once a live run confirms them; until then their findings carry the verify-pending caveat and never a fabricated live observation. See [references/datadog-checks.md](references/datadog-checks.md) sections 5.1 and 6.1.
 
 The full check catalog and the target profile (what 100 means per category) are at the top of [references/datadog-checks.md](references/datadog-checks.md). IDs are stable: the same defect gets the same ID every run, one finding per failed check, affected objects enumerated. Compute `points_recoverable` per finding by re-running the scoring model with that check at full credit; `info` findings and excluded categories carry 0. The executive summary states the gap to target and the two or three findings with the highest `points_recoverable` as the biggest levers.
 
@@ -318,7 +324,10 @@ No `setup-datadog` ships yet, so every finding's `remediation` field names the c
 | --- | --- |
 | Monitors with no target or a dead handle (DD-001, DD-002) | Monitor's Notify section — add or repair the `@handle`; fix the Slack/webhook/PagerDuty integration it points at |
 | Draft monitors (DD-003) | Monitor edit — publish the draft or delete it |
+| Un-prioritized critical-service monitors (DD-005) | Monitor edit — set a `priority` (P1-P5) so the receiver can tier a real page above a warning |
 | Missing recovery/no-data/renotify/auto-resolve (DD-010 to DD-014) | Monitor edit > Advanced options — set recovery thresholds, no-data handling, renotify caps |
+| Receiver noise concentration (DD-016) | Split the noisy monitors onto a separate ticket/low-urgency route, or tune them (recovery threshold, renotify cap), so the real page is not buried on the shared handle |
+| Stuck-in-Alert monitors (DD-017) | Monitor edit > Advanced options — fix the query/thresholds so the monitor can recover and re-alert on a fresh breach |
 | Vendor quality issues (DD-015) | Datadog's own Monitor quality view lists each issue with its fix |
 | Indefinite mutes and broad downtimes (DD-020 to DD-022) | Monitor > unmute, or Downtimes list — scope and time-bound the downtime |
 | Stale, composite-broken, untagged monitors (DD-030, DD-031, DD-034) | Monitor edit — retire stale monitors, repair composite references, add service/team tags |
