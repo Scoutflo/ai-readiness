@@ -32,6 +32,7 @@ One permanent ID per check. IDs never change or get reused; retired checks keep 
 | DO-013 | Uptime and availability | SSL-expiry alert on every HTTPS uptime check | medium |
 | DO-014 | Uptime and availability | Multi-region checks where regional failure matters | low |
 | DO-015 | Uptime and availability | No checks against dead, archived, or migrated targets | medium |
+| DO-016 | Uptime and availability | Live TLS certificate on a monitored HTTPS hostname is not within the expiry window now | high |
 | DO-020 | App Platform alert coverage | Deployment lifecycle alerts, failed and live at minimum | high |
 | DO-021 | App Platform alert coverage | Domain lifecycle alerts | medium |
 | DO-022 | App Platform alert coverage | CPU and memory alerts per active service component | high |
@@ -146,7 +147,31 @@ cat "${RAW_DIR}"/apps/*/alerts.json | jq -rs '.[][] | select((.disabled | not) a
 
 Expected: positive totals and no zero-destination lines. Each line is one affected object for the `DO-002` finding.
 
+**Deepen `DO-002` past the bare `policy <uuid> <type>` line (this is the depth bar, not the scanner line).** A zero-destination policy is not "a policy with no destination" — it is a *silent* detector: it fires into the void, and the first human-visible signal becomes the failure itself. Join each flagged policy's `.entities[]` UUID back to `databases.json` / `apps.json` to name the real resource and the exact consequence, and count the blast radius as *enabled zero-destination policies × the resources they nominally cover*:
+
+```bash
+set -eu
+RUN_DATE="$(date -u +%Y-%m-%d)"
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/digitalocean/${RUN_DATE}/raw"
+# For every enabled zero-destination policy, resolve its entities[] to a named DB/app so the
+# finding says WHAT silently pages nobody, not just the policy UUID.
+jq -r '.[] | select(.enabled and (.emails + (.slack_channels | length)) == 0)
+  | "policy \(.uuid) type=\(.type) entities=\((.entities // []) | join(","))"' \
+  "${RAW_DIR}/alert-policies.json" | while read -r line; do
+  ent="$(printf '%s\n' "$line" | sed -n 's/.*entities=//p')"
+  for e in $(printf '%s' "$ent" | tr ',' ' '); do
+    name="$(jq -r --arg e "$e" '.[] | select(.id == $e) | "db:\(.name)"' "${RAW_DIR}/databases.json" 2>/dev/null)"
+    [ -n "$name" ] || name="$(jq -r --arg e "$e" '.[] | select(.id == $e) | "app:\(.name)"' "${RAW_DIR}/apps.json" 2>/dev/null)"
+    echo "${line}  covers=${name:-unresolved-entity:$e}"
+  done
+done
+```
+
+Blast radius, stated concretely: e.g. *"the `v1/dbaas/disk` policy on `db-main` (entities[] → databases.json id) has emails + slack_channels == 0, so when disk crosses the threshold the notification fires into the void and the first human-visible signal is the engine flipping read-only."* Correlation: DO-002 chains with DO-001 (if this is the *only* routing gap anywhere, it is critical — nothing pages) and it is the silent detection leg of the DB-blindspot cascade (a zero-destination disk policy silently shadows DO-040/DO-042). Verification: re-run the section-5 jq — the policy's `(.emails + (.slack_channels | length))` must be `> 0`. Fix: `setup-digitalocean#fix-alert-routing`.
+
 `DO-003` is a judgment step: map each `slack_channels` value and email recipient class to the service and environment it should page. Weigh: a production database paging a general channel, one shared channel absorbing every service, or a channel named for a team that no longer owns the service. Slack incoming webhooks are bound to the channel they were installed in; a payload `channel` field does not re-route them, so the installed channel recorded here is the truth, not any override. Evidence is the channel-to-service table you assemble, quoting channel names only, never URLs.
+
+**Deepen `DO-003` from "shared channel" (an adjective) to a computed MTTA tax.** From the channel → service table (assembled across `alert-policies.json` `slack_channels` and each app's `alerts.json` `slack_channels`), count how many *distinct* services page into one shared channel. If a critical service's real page is one of N routed to the same channel, state N: that count is the MTTA tax during an incident — a responder scanning a channel carrying N services' alerts takes longer to spot the one that matters. "checkout pages into `#alerts` alongside 11 other services" is a blast radius; "shared channel" is not. Correlation: chains with DO-070 (shortest-window flapping into the same channel) into an overall paging-fatigue picture where genuine pages are buried. Verification: recompute the channel → service table — each critical service's paging channel is distinct from bulk/info channels. Fix: `setup-digitalocean#fix-alert-routing`.
 
 `DO-004`: reading destinations proves configuration, not delivery. Look for an observed DO-generated event: an alert visible in the channel history your team confirms, or a documented past incident page. Without one, the routing checks stay `configured` and `DO-004` scores `partial` at best. The controlled delivery proof lives in `setup-digitalocean#prove-alert-delivery`.
 
@@ -173,6 +198,34 @@ done
 ```
 
 Expected: every hostname in the first list appears in the second (`DO-010`), and each check shows alert types covering `down` (or `down_global`), `latency`, and `ssl_expiry` for HTTPS targets (`DO-011` to `DO-013`). `regions` with a single entry on a check whose users are global is the `DO-014` judgment call; say what evidence would change it (single-region user base, internal-only endpoint).
+
+**Deepen `DO-010` from "hostname X has no uptime check" to the outage that goes undetected.** Name the specific public hostname (from `apps.json` `domains` / `live_url`) that is absent from `uptime-checks.json` targets, then state what its absence removes: with no synthetic check, the *only external backstop* for that hostname is gone — a hung-but-still-503ing app produces no in-band alert either, so detection depends entirely on a customer reporting it. Correlation: DO-010 is the **detection leg of the flagship silent-outage cascade** (see section 16) — the synthetic is the last line of defense once the liveness (DO-030) and restart-alert (DO-023) legs are also missing. Verification: `doctl monitoring uptime list` shows a check whose target matches the hostname, and its `doctl monitoring uptime alert list` carries down/latency/ssl_expiry rules with destinations. Fix: `setup-digitalocean#fix-uptime-coverage` (create a down + latency + ssl-expiry check for the DNS-verified target — non-disruptive write).
+
+### 6.1 Live TLS certificate expiry on a monitored HTTPS hostname (DO-016)
+
+> **Verify-pending.** This check is drafted against DigitalOcean's documented behavior and a standard passive TLS handshake, and adversarially reviewed, but has **not** been run against a live DO tenant — status is unproven until a first live run with a read-only `DIGITALOCEAN_ACCESS_TOKEN` and reachable HTTPS hostnames. The openssl mechanic below is passive and read-only; treat the finding's live truth as unconfirmed here.
+
+`DO-013` only checks that an *SSL-EXPIRY alert is configured*; it never reads the actual certificate. DO-016 does the read: a passive TLS handshake against the monitored hostname reads the presented certificate's `notAfter` and flags a host whose certificate expires within `SSL_EXPIRY_DAYS` (section 12 default `21`). This is an imminent hard outage the alert-existence check cannot see — when the cert lapses, every client gets a TLS error. The handshake sends no application data and changes nothing.
+
+```bash
+set -eu
+HOST="www.example.com"   # each monitored HTTPS hostname from apps.json domains/live_url
+SSL_EXPIRY_DAYS="21"     # section 12 default; alert when the cert expires within this many days
+# Read the presented cert's expiry (passive, read-only). A 000/handshake error is BLOCKED, not a fail.
+END="$(echo | openssl s_client -servername "$HOST" -connect "${HOST}:443" 2>/dev/null | openssl x509 -noout -enddate 2>/dev/null)"
+if [ -z "$END" ]; then
+  echo "BLOCKED ${HOST}: no TLS handshake / no cert presented (connect failure or moved host) — cross-ref DO-010/DO-060, do NOT file a high fail"
+else
+  echo "${HOST} ${END}"
+  # checkend N: exit non-zero => cert expires within N seconds (here SSL_EXPIRY_DAYS days).
+  echo | openssl s_client -servername "$HOST" -connect "${HOST}:443" 2>/dev/null \
+    | openssl x509 -noout -checkend "$((SSL_EXPIRY_DAYS * 86400))" >/dev/null 2>&1 \
+    && echo "  ok: not within ${SSL_EXPIRY_DAYS}d" \
+    || echo "  DO-016 fail: expires within ${SSL_EXPIRY_DAYS}d — name the host and the exact enddate above"
+fi
+```
+
+Blast radius: name the host and the exact `notAfter`; an imminent expiry is a whole-audience TLS outage on that hostname. Correlation: on App Platform managed domains Let's Encrypt auto-renews, so an imminent expiry usually means domain validation broke because the CNAME moved off DO — the same root cause `DO-060` detects; if `DO-013` also fails (no expiry alert), the outage arrives with no warning at all. Blocked path, stated explicitly per the depth doctrine: a connect failure / `000` or a handshake error is a **BLOCKED** result cross-referenced to DO-010 (no check at all) and DO-060 (the hostname may have moved off DO), **never** a fabricated high fail — you cannot compute a cert-expiry blast radius for a cert you could not read. Verification: re-run the `checkend` probe after renewal; it must exit `0` (not within the window). Fix: `setup-digitalocean#fix-uptime-coverage`.
 
 `DO-015`: probe every enabled check target live. The status code is the evidence, so `-f` is dropped:
 
@@ -218,7 +271,11 @@ Expected shape: lifecycle rules (`DEPLOYMENT_FAILED`, `DEPLOYMENT_LIVE`, `DOMAIN
 
 `DO-030` also reads `liveness_health_check` (a distinct block from the readiness `health_check`, GA June 2025). Readiness withholds traffic from an unhealthy instance; liveness *restarts* a hung one. A component with a `health_check` but `liveness_health_check == null` never auto-restarts on a hang — flag it as a DO-030 gap distinct from having no health check at all. Both blocks share the same sub-fields (`http_path`, `port`, `initial_delay_seconds`, `period_seconds`, `timeout_seconds`, `success_threshold`, `failure_threshold`), with liveness defaults `initial_delay_seconds: 5`, `failure_threshold: 18`.
 
-`DO-032`: `instance_count` of 1 on a production service is a named fact with `high` impact when the service is critical; pair it with the deployment history (frequent restarts make it worse). `DO-033`: record whether autoscaling is configured and on what metric. Recommending scaling *thresholds* is out of audit scope, but a component with an `autoscaling` block whose `metrics` object is set (`metrics.cpu.percent`, or the request-based `metrics.requests_per_second.per_instance` / `metrics.request_duration.p95_milliseconds`, GA May 2026) and **no app-spec alert rule on the metric it scales on** is silently scaling and pages nobody when it pins at `max_instance_count`. Read the alert side from the same spec's per-service `alert_rules` (and the live `apps/<id>/alerts.json`), never from `doctl monitoring alert list` — DO Monitoring policies carry no App Platform metric type, so cross-referencing there is a category error. The finding is autoscaling configured with no corresponding App Platform alert (`CPU_UTILIZATION`, `RESTART_COUNT`, or a request-rate rule) that would surface the pin. Enabling scaling changes is traffic-impacting even in the setup lane.
+**Deepen the `liveness_health_check == null` gap to what a hang costs on this specific service (not "liveness is missing").** Name the exact component and its `instance_count`: when its process deadlocks, App Platform stops routing to it (readiness) so it shows unhealthy but is **never auto-restarted**; on a single-instance service (join DO-032) that is a hang lasting until a human manually redeploys. Correlation: this is the **center leg of the flagship silent-outage cascade** (DO-032 + DO-023 + DO-010, see section 16). Verification: `doctl apps get <id>` shows the service's `liveness_health_check` non-null; probe its `http_path` live and confirm `200` with no auth/Origin/session (the section-6 status-code block). Fix: `setup-digitalocean#harden-health-checks` (add a `liveness_health_check` stanza — controlled rollout: the spec edit redeploys; roll one app at a time).
+
+`DO-032`: `instance_count` of 1 on a production service is a named fact with `high` impact when the service is critical; pair it with the deployment history (frequent restarts make it worse). **Deepen it past the isolated `instance_count=1` fact — that fact is exactly what a scanner prints; the value is the cascade it triggers.** Blast radius, computed from live data: from `apps.json` / the spec join the single-instance service to `topology.md` dependents — with `instance_count == 1`, any instance restart, node recycle, or failed deploy is a **full outage window** for that service and everything downstream of it (name the dependents). Query the single-instance services with `doctl apps get <id> -o json | jq '.spec.services[] | select((.instance_count // 1) == 1) | .name'`, then cross-reference topology dependents.
+
+> **THE FLAGSHIP CASCADE (assemble it, do not itemize).** For a critical single-instance App Platform service: **DO-032** (`instance_count == 1`) + **DO-030** (a readiness `health_check` but `liveness_health_check == null`) + **DO-023** (no `RESTART_COUNT` alert) + **DO-010** (no uptime check) collapse into one finding: *"`checkout` runs one instance; when its process deadlocks, App Platform withholds traffic via the readiness probe so the instance shows unhealthy but is NEVER auto-restarted (no liveness probe), no restart alert fires (there is no restart to count), and no synthetic uptime check notices the site is down — so the service is fully hung and the first human signal is a customer complaint."* No free scanner assembles this: each leg lives in a different config surface and a different audit category, and it hinges on the App-Platform liveness-vs-readiness split (GA June 2025) and the hard App-Platform-vs-DO-Monitoring boundary. When the cascade holds, **escalate DO-032 to `high`** (a live total-outage risk, not an isolated fact) and emit ONE correlated finding whose evidence names the other four IDs, rather than four independent "X is missing" lines. `DORT-001` (section 16) upgrades this from hypothetical to validated-live whenever an active deployment is observed in a failed phase this run. Fix for the DO-032 leg: `setup-digitalocean#plan-traffic-impacting-changes` (scale to `instance_count >= 2`; plan-only, traffic-impacting, redeploys) — note this only closes the cascade when the other three legs are also fixed. Verification: `doctl apps get <id> -o json | jq '.spec.services[].instance_count'` returns `>= 2` for the critical service. `DO-033`: record whether autoscaling is configured and on what metric. Recommending scaling *thresholds* is out of audit scope, but a component with an `autoscaling` block whose `metrics` object is set (`metrics.cpu.percent`, or the request-based `metrics.requests_per_second.per_instance` / `metrics.request_duration.p95_milliseconds`, GA May 2026) and **no app-spec alert rule on the metric it scales on** is silently scaling and pages nobody when it pins at `max_instance_count`. Read the alert side from the same spec's per-service `alert_rules` (and the live `apps/<id>/alerts.json`), never from `doctl monitoring alert list` — DO Monitoring policies carry no App Platform metric type, so cross-referencing there is a category error. The finding is autoscaling configured with no corresponding App Platform alert (`CPU_UTILIZATION`, `RESTART_COUNT`, or a request-rate rule) that would surface the pin. Enabling scaling changes is traffic-impacting even in the setup lane.
 
 `DO-062` (hygiene, scored in section 10's category): from the redacted env list, any key matching secret shapes stored as `GENERAL`:
 
@@ -233,6 +290,8 @@ doctl apps get "$APP_ID" -o json | jq -r '(if type=="array" then .[0] else . end
 ```
 
 Expected: no output. Each line names a key only; the value is never read.
+
+**Deepen `DO-062` from "key X is GENERAL" to who can read the value.** A `GENERAL` env var's value is returned in **plaintext** by `doctl apps get` / the API to any principal with app-read scope — *including the read-only audit token this run used*. Naming the key (e.g. `DATABASE_URL`, an API secret) makes the exposure concrete: a leaked or over-scoped read token exfiltrates it with one GET. (This is why the audit reads key names and types only — it never captures the value, precisely because the value is retrievable.) Correlation: DO-062 is the **middle leg of the external→data security chain** when the key is a DB credential and `DO-046` shows that DB is publicly reachable: DO-046 (public DB) + DO-062 (its creds plaintext GENERAL) + DO-047 (no logsink so a breach leaves no audit trail) = a direct external→data path with no forensic trail. Verification: `doctl apps get <id>` shows the key with `type: SECRET` and its value field null/encrypted. Fix: `setup-digitalocean#move-secret-env-vars` (change the env type to `SECRET` — controlled rollout: redeploys, and the value must be re-supplied once, since `SECRET` values are write-only).
 
 ## 8. Managed databases (DO-040 to DO-048)
 
@@ -249,16 +308,18 @@ jq -r '.[] | select(.type | startswith("v1/dbaas/")) |
 
 Read per production cluster UUID: a CPU-class, a memory-class, and a disk-class policy present (`DO-040` to `DO-042`). Policy `type` strings are account-observable facts; take the accepted spellings from this very output rather than from docs or memory.
 
+**Deepen `DO-040`/`DO-041`/`DO-042` past "policy missing for db X" — the blast radius is the dependent-service set, not "no policy".** For the **disk** policy (DO-042): from `databases.json` name the cluster, its `size` / `num_nodes`, and its `topology.md` dependents; a managed engine that hits disk-full flips to **READ-ONLY**, so every *writing* service errors at once — name them. For **CPU/memory** (DO-040/DO-041): saturation drives query latency straight into the dependent app's p95 — name the dependent services whose latency degrades. Correlation, the **DB-blindspot cascade**: DO-040/041/042 (no resource policy) + DO-045 (`num_nodes == 1`, no standby to absorb load) + DO-044 (no backup, cannot recover) + DO-047 (no logsink, cannot diagnose after the fact) — a database that is unwatched, has no standby, no recovery point, and no queryable logs. Fix: `setup-digitalocean#set-database-alert-policies` (two named tiers — warn at `DB_WARN_PCT`, saturation at `DB_SAT_PCT` — per metric). Verification: `doctl monitoring alert list` shows a `v1/dbaas/<metric>` policy whose `entities[]` include the DB id, for each of cpu/mem/disk, each with `>= 1` destination.
+
 `DO-043`, the noise gate: flag thresholds around 50 percent routed to a paging channel without a written owner-approved reason (managed engines often sit at 50 percent from cache residency alone), and flag duplicate coverage where a generic policy and a named tier watch the same database and metric. A sane starting shape is two named tiers per metric: warning at `DB_WARN_PCT` and saturation at `DB_SAT_PCT` over `DB_WINDOW` (section 12; examples, tune per workload).
 
 - ❌ `DO-043 fail filed because the CPU policy uses 65 percent instead of 80.`
 - ✅ `DO-043 fail filed because db-main has both "CPU is running high" at 50 percent and a named warning tier at 80 percent for the same metric, paging twice with no documented reason.`
 
-`DO-044`: `doctl databases backups <id>` lists recent backups with timestamps; an empty list on an engine that supports backups is the finding, with the command output as evidence. `DO-045`: `num_nodes` of 1 on a production cluster means no standby; record it. The fix (adding nodes) is traffic-impacting and lands in the setup skill's plan section, not its write scope. `DO-046`: the firewall listing should name specific droplets, tags, Kubernetes clusters, or app components; a rule open to broad public ranges, or drift against the source list your team expects, is the finding (quote rule types and counts, not addresses, in the Slack-safe report body). `DO-047`: `logsinks.json` empty is a `fail` for production unless a written decision says logs stay in DO; quote the decision when it exists. `DO-048`: list which engine signals your plan exposes (connections, replication or failover state, slow queries) and whether anything watches them; absence with no compensating signal is the finding.
+`DO-044`: `doctl databases backups <id>` lists recent backups with timestamps; an empty list on an engine that supports backups is the finding, with the command output as evidence. **Deepen it from "empty backup list" to a recovery-cost statement.** From `databases.json` name the cluster and its `topology.md` dependents; an empty backup list = **unbounded RPO** — an accidental drop, corruption, or bad migration on the data backing [dependents] is *unrecoverable*, not merely "no backups". Correlation: chains with DO-045 (`num_nodes == 1`) — the single copy of the data has neither a standby nor a recovery point, so one disk failure is permanent data loss. Verification: `doctl databases backups <id>` returns at least one dated entry. Fix: `setup-digitalocean#plan-traffic-impacting-changes` (backup enablement is a cluster setting; record a plan with a named owner — plan-only). `DO-045`: `num_nodes` of 1 on a production cluster means no standby; record it. The fix (adding nodes) is traffic-impacting and lands in the setup skill's plan section, not its write scope. `DO-046`: the firewall listing should name specific droplets, tags, Kubernetes clusters, or app components; a rule open to broad public ranges, or drift against the source list your team expects, is the finding (quote rule types and counts, not addresses, in the Slack-safe report body). **Deepen it from "a rule open to broad ranges" to computed reachability, and read it only through the verified path.** An empty `trusted_sources` list OR a `0.0.0.0/0` rule means the managed DB's public connection endpoint is reachable from the internet: state the DB and that its public host answers. Read it with `doctl databases firewalls list <id>` (the primary read already used in section 4); if a curl fallback is needed it MUST be the **singular** `GET https://api.digitalocean.com/v2/databases/<id>/firewall` and parse `.rules[]` — there is no `/firewall_rules` path (it does not exist, the same plural/singular trap the logsink path documents in section 4), and it stays read-only (GET only). A DB with no restricting rule is publicly *dialable*, not merely "unrestricted". Correlation: the **security flagship (secondary chain)** — DO-046 (publicly reachable DB) + DO-062 (its connection creds plaintext `GENERAL` in an app spec any app-read token can dump) + DO-047 (no logsink so a breach leaves no audit trail) = a direct external→data path. Verification: `doctl databases firewalls list <id>` shows only specific named sources and no `0.0.0.0/0` rule. Fix: `setup-digitalocean#plan-traffic-impacting-changes` (restrict `trusted_sources` to specific droplets/tags/k8s clusters/app components — traffic-impacting; plan-only). `DO-047`: `logsinks.json` empty is a `fail` for production unless a written decision says logs stay in DO; quote the decision when it exists. `DO-048`: list which engine signals your plan exposes (connections, replication or failover state, slow queries) and whether anything watches them; absence with no compensating signal is the finding.
 
 ## 9. Log forwarding (DO-050 to DO-052)
 
-From the section 7 redacted summary, `log_destinations` per service answers `DO-050`: empty on production apps means runtime logs live only in DO's short-lived runtime view. `DO-051` is a judgment step over the team's own answers: which backend, what retention, what redaction before shipping, what index or stream naming, who owns cost and access. A backend with none of those answered is `partial`, not `pass`.
+From the section 7 redacted summary, `log_destinations` per service answers `DO-050`: empty on production apps means runtime logs live only in DO's short-lived runtime view. **Deepen it from "no log_destinations on app X" to the RCA cost.** Name the app; with no forwarded destination its runtime logs live only in DO's short-lived, non-historically-queryable runtime view, so during and after an incident there is **no queryable log history for this service** — RCA is blind exactly when it is needed. Correlation: chains with DO-047 (DB logsink absent) — if both the app and its backing DB are unforwarded, the *entire request path* is un-investigable post-incident. Verification: `doctl apps get <id>` shows the service's `log_destinations` non-empty and pointing at the chosen backend. Fix: `setup-digitalocean#enable-app-log-forwarding` (add a `log_destination` to the chosen backend — controlled rollout: spec edit redeploys). `DO-051` is a judgment step over the team's own answers: which backend, what retention, what redaction before shipping, what index or stream naming, who owns cost and access. A backend with none of those answered is `partial`, not `pass`.
 
 `DO-052`: App Platform log destinations and managed-database logsinks are different surfaces with different supported backend lists (historically: Papertrail, Datadog, Logtail, and OpenSearch for apps; rsyslog, Elasticsearch, and OpenSearch for database logsinks). The lists change; verify against current DigitalOcean docs at run time and record what your account actually accepts. Promising one universal log path without checking both lists is the failure this check exists to catch.
 
@@ -538,3 +599,40 @@ jq -r '
 ```
 
 Expected: no output when the estate uses tag-scoped policies. Each line names one collapsible group with its policy UUIDs as the affected objects. This is the fleet-shape duplicate only; threshold-value duplicates and 50-percent-style pages on the same entity and metric stay with DO-043 in the Managed databases category, so the two checks never double-count the same policy.
+
+## 16. Live-runtime snapshot (DORT — evidence, not scored)
+
+> **Verify-pending.** These two checks are drafted against DigitalOcean's documented App Platform deployment-phase API and adversarially reviewed, but have **not** been run against a live DO tenant — status is unproven until a first live run with a read-only `DIGITALOCEAN_ACCESS_TOKEN` against an account carrying App Platform apps. The reads below are ordinary `doctl apps list`/`get`/`list-deployments` calls (read-only); treat the observations as unconfirmed until that first live run.
+
+This is the DigitalOcean analog of the kubernetes `K8SRT-` lane: a **parallel non-scored** section per the [findings schema](../../report-standard/findings-schema.md). Its IDs carry `area: live-runtime`, always severity `info` and `points_recoverable: 0`, and **never** appear in `score.categories` or `score.excluded`. It adds live blast-radius evidence without perturbing any scored weight. Snapshot facts are tagged `[live@<ISO8601>]`. The audit already pulls deployment history into inventory (section 4); this section surfaces a *currently* failed or wedged deployment as evidence, turning the DO-032 cascade from hypothetical into validated-live when it is happening this run.
+
+| ID | Signal | Emit only when this exact field is observed |
+| --- | --- | --- |
+| DORT-001 | An app's active deployment is in a failed / non-live phase now | `active_deployment.phase` is `ERROR` or `CANCELED` (the app is serving old code or is down NOW) |
+| DORT-002 | A deployment is wedged in an in-progress phase | `in_progress_deployment.id != null` with phase `BUILDING`/`DEPLOYING`/`PENDING_BUILD` (a rollout that never went live) |
+
+```bash
+set -eu
+NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+# DORT-001: active deployment phase per app. ERROR/CANCELED = the app is serving old code or is down now.
+doctl apps list -o json | jq -r '.[]
+  | "\(.spec.name)\tactive_phase=\(.active_deployment.phase // "none")\tin_progress=\(.in_progress_deployment.id // "-")"'
+# For any app whose active_phase is ERROR/CANCELED, pull its recent deployment history for the cause:
+APP_ID="your-app-id"   # an app flagged above
+doctl apps list-deployments "$APP_ID" -o json | jq -r '.[0:3][]
+  | "\(.id)\tphase=\(.phase)\tcause=\(.cause)\tupdated=\(.updated_at)"'
+
+# DORT-002: apps with a wedged in-progress deployment (never went live).
+doctl apps list -o json | jq -r '.[] | select(.in_progress_deployment.id != null)
+  | "\(.spec.name)\tin_progress=\(.in_progress_deployment.id)"'
+doctl apps get "$APP_ID" -o json | jq '(if type=="array" then .[0] else . end)
+  | {name: .spec.name, in_progress_phase: .in_progress_deployment.phase, in_progress_cause: .in_progress_deployment.cause}'
+echo "snapshot taken [live@${NOW}]"
+```
+
+This section has no pass/fail. A probe that returns nothing, times out, or is `401`/`403`-blocked is recorded `skipped, reason: <exact error>` — verdict unknown, never healthy; never fabricate a phase you did not read. What the observations feed:
+
+- **DORT-001** names any app whose `active_deployment.phase` is `ERROR`/`CANCELED` — the app is serving old code or is down NOW — rather than only checking that a `DEPLOYMENT_FAILED` alert rule exists (DO-020). When it coincides with **DO-032** (single instance), it upgrades that finding from hypothetical to **validated-live**: the outage the flagship cascade predicts is happening this run. Feeds DO-020 (was the `DEPLOYMENT_FAILED` alert supposed to fire?) and DO-032/DO-030.
+- **DORT-002** surfaces an app stuck in `BUILDING`/`DEPLOYING`/`PENDING_BUILD` — a wedged rollout that never went live; on a single-instance app this can mean the new instance never comes up while the old one is torn down. Corroborates DO-020 and the DO-032 cascade; a wedged rollout beside a missing `DEPLOYMENT_FAILED` alert is a real, currently-live blind spot.
+
+Remediation for both is `setup-digitalocean#add-app-platform-alerts` (add the App Platform lifecycle alert so the next failed/wedged deployment pages a human); the deployment itself is fixed by the app owner, not this toolkit.

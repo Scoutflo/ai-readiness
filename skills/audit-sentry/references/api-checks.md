@@ -264,7 +264,9 @@ curl -fsS --max-time 15 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
   && echo "SNTRY-002 pass: ${PROJECT}" || echo "SNTRY-002 fail: ${PROJECT}"
 ```
 
-Expect: exit 0 and `SNTRY-002 pass: <project>`. The assertion requires `dataScrubber` and `dataScrubberDefaults` both `true`, a non-empty `sensitiveFields` array, and `scrapeJavaScript` `false`; treat `scrubIPAddresses: false` as a judgment call, not an automatic fail, only when your team has a recorded policy reason to keep IPs. Any production project the assertion fails is a high finding; PII that reaches Sentry cannot be unsent after the fact.
+Expect: exit 0 and `SNTRY-002 pass: <project>`. The assertion requires `dataScrubber` and `dataScrubberDefaults` both `true`, a non-empty `sensitiveFields` array, and `scrapeJavaScript` `false`; treat `scrubIPAddresses: false` as a judgment call, not an automatic fail, only when your team has a recorded policy reason to keep IPs. Any production project the assertion fails is a high finding.
+
+**Blast radius — quantify what is already stored, do not restate the principle.** "PII that reaches Sentry cannot be unsent" is a scanner line until you attach the volume already retained. Join the failing project's numeric id to `stats-projects.json` accepted-error count for the same window: *"this project accepted E error events in 14d with scrubbing off — E events of raw request bodies, headers, and user context are already retained and unrecoverable."* Reuse the numeric-id volume snippet from SNTRY-001 (same `stats-projects.json`, same `accepted` outcome). When SNTRY-010 shows accepted volume in the replay or profile categories for the same project, **escalate**: session replays carry DOM snapshots and keystrokes — far higher-fidelity PII than an error payload — so the same E is a worse breach. **Correlate:** SNTRY-010 (live replay/profile ingestion raises the PII fidelity), SNTRY-003 (an unlimited key removes the volume ceiling on the unscrubbed ingestion), and SNTRY-105 (no inbound filters means bot/extension junk also lands unscrubbed).
 
 **SNTRY-003, client-key rate limits.** Every active key on every project needs a limit:
 
@@ -285,6 +287,19 @@ curl -fsS --max-time 15 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
 ```
 
 Expect: exit 0 and `SNTRY-003 pass: <project>`. `rateLimit: null` on an active key means one crash loop or one leaked DSN can burn the whole project quota; a fail exit files per project with the key names (never the DSN) in `affected`.
+
+**Blast radius — check whether the burn is already live, do not leave it hypothetical.** An unlimited key that is calm today scores the same as one actively dropping fatal events unless you join it to the org-wide drop outcomes the audit already pulled. Read `stats-outcomes.json` for org-wide `rate_limited`/`abuse`/`cardinality_limited` totals in the window:
+
+```bash
+set -eu
+STATS="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/sentry/$(date -u +%Y-%m-%d)/raw/stats-outcomes.json"
+jq -r '
+  [ .groups[]? | select(.by.outcome == "rate_limited" or .by.outcome == "abuse" or .by.outcome == "cardinality_limited")
+    | .totals["sum(quantity)"] ] | add // 0
+  | "SNTRY-003 org-wide drops to rate_limited/abuse/cardinality in window: \(.) events"' "$STATS"
+```
+
+If that count D is nonzero, state the shared-quota mechanism: *"key `<name>` on `<project>` is unlimited AND the org already dropped D events to rate_limited/abuse in 14d — on a shared org quota, one noisy project's crash loop is already crowding out real fatal events from other projects."* If D is zero, state the ceiling honestly: *"unbounded, not yet firing."* Do **not** attribute the specific D drops to this specific key — the outcomes stats are org-wide and per-key attribution is not provable from `stats_v2`; D is the shared-quota pressure the unlimited key contributes to, not proof this key caused those drops. **Correlate:** SNTRY-008 (the live drop outcomes *are* the shared-quota evidence — same numbers, joined), SNTRY-002 (unlimited + unscrubbed = unbounded PII), SNTRY-105 (filters would relieve the same quota).
 
 **SNTRY-004, environments.** Confirm the environment your production traffic actually runs under exists:
 
@@ -352,7 +367,42 @@ curl -fsS --max-time 15 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
   && echo "SNTRY-001 pass: ${PROJECT}" || echo "SNTRY-001 fail: ${PROJECT}"
 ```
 
-Expect: exit 0 and `SNTRY-001 pass: <project>`. A nonzero-length match (exit 1, `SNTRY-001 fail`) is the finding; it pages every project member on every issue Sentry marks high priority, which trains the team to ignore Sentry notifications.
+Expect: exit 0 and `SNTRY-001 pass: <project>`. A nonzero-length match (exit 1, `SNTRY-001 fail`) is the finding: an unowned `createdBy == null` high-priority rule with a `NotifyEmailAction targetType=Members` action.
+
+**Blast radius — compute the fan-out, never assert it.** The pass/fail above finds the unowned rule; the finding's blast radius is the fan-out it causes, and both numbers are already in the estate this run pulled. Join the org member count with this project's accepted-error volume: *"the unowned high-priority rule pages all N org members on every high-priority issue; this project accepted E error events in the 14d window, so it is E pages fanned to N inboxes — the mechanism that trains the whole org to filter Sentry to a folder."* The member count needs `member:read`, which is an **optional** ownership add-on in the doctor gate, not the base `org:read`+`project:read`+`alerts:read` recipe, so the fan-out quantifier degrades to `blocked` on a 403 while the `createdBy == null` finding still stands on its own — never emit a fabricated member count N:
+
+```bash
+set -eu
+SENTRY_HOST="us.sentry.io"   # sentry.host
+SENTRY_ORG="your-org-slug"   # sentry.org
+PROJECT="your-project-slug"  # from projects.json
+API="https://${SENTRY_HOST}/api/0"
+[ -n "${SENTRY_TOKEN:-}" ] || { echo "SENTRY_TOKEN is not set; run /scoutflo:connect"; exit 1; }
+
+# Member count for the fan-out. 403 => member:read absent: file the fan-out sub-part
+# blocked, never invent N. The createdBy==null finding above does not depend on this.
+mem="$(mktemp)"
+code=$(curl -s -o "$mem" -w '%{http_code}' --max-time 15 \
+  -H "Authorization: Bearer ${SENTRY_TOKEN}" "${API}/organizations/${SENTRY_ORG}/members/")
+if [ "$code" = "200" ]; then
+  echo "org members: $(jq 'length' "$mem")"
+elif [ "$code" = "403" ]; then
+  echo "SNTRY-001 fan-out sub-part blocked: member:read absent (http 403); report the unowned rule without a member count"
+else
+  echo "SNTRY-001 member count blocked: members read returned ${code}"
+fi
+rm -f "$mem"
+
+# Accepted-error volume for THIS project, by NUMERIC id (never a slug search), from stats-projects.json.
+PROJECT_ID="42"   # resolve from projects.json by slug; stats_v2 groups by numeric project id
+STATS="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/sentry/$(date -u +%Y-%m-%d)/raw/stats-projects.json"
+jq -r --arg pid "$PROJECT_ID" '
+  [ .groups[]? | select((.by.project | tostring) == $pid) | select(.by.outcome == "accepted")
+    | .totals["sum(quantity)"] ] | add // 0
+  | "SNTRY-001 accepted-error volume for project \($pid): \(.) events in window"' "$STATS"
+```
+
+**Correlate:** SNTRY-001 chains with SNTRY-014 (it is the canonical un-tuned noise source) and with SNTRY-005/SNTRY-013 — if this default rule is the *only* rule on the project, the noise finding and the "no immediate tier reaching a live receiver" finding are the same gap seen twice; say so and rank them as one story.
 
 **SNTRY-005, receiver liveness.** Cross-check every rule action against the live integrations list. An action is proven only when its referenced integration exists and is active:
 
@@ -422,7 +472,8 @@ curl -fsS --max-time 15 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
   "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/" \
   | tee /dev/stderr \
   | jq -e --arg imm "$IMMEDIATE_RE" --arg rev "$REVIEW_RE" '
-      [ .[] | { environment: (.environment // "all"), conditions: [ .conditions[].id ] } ] as $rules
+      [ .[] | select((.status // "active") == "active")
+            | { environment: (.environment // "all"), conditions: [ .conditions[].id ] } ] as $rules
       | ($rules | any(.conditions | any(test($imm)))) as $has_immediate
       | ($rules | any(.conditions | any(test($rev)))) as $has_review
       | $has_immediate and $has_review' >/dev/null \
@@ -431,6 +482,8 @@ curl -fsS --max-time 15 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
 ```
 
 Expect: exit 0 and `SNTRY-013 pass: <project>`. The assertion checks tier presence only; still confirm by eye that each tier's `environment` is set to your production environment name or intentionally `all` on a single-environment project. A project with only review-tier conditions, or with every rule scoped to `all` on a multi-environment project, is a coverage gap.
+
+**Tier presence excludes non-active rules (gated by SNTRY-016).** The `select((.status // "active") == "active")` filter above is load-bearing: without it a `status: disabled` immediate rule would still satisfy tier presence, so a project reads as covered while the rule that is supposed to page fires nothing. SNTRY-013 and SNTRY-016 must agree on the same estate — a disabled immediate rule that this filter drops from tier coverage is exactly what SNTRY-016 files as a finding. If you ever loosen this filter, SNTRY-016 and SNTRY-013 disagree and a switched-off rule silently credits coverage again.
 
 **SNTRY-014, noise posture.** From the same rule dump:
 
@@ -505,7 +558,95 @@ curl -fsS --max-time 15 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
   && echo "SNTRY-011 pass: ${PROJECT}" || echo "SNTRY-011 fail: ${PROJECT}"
 ```
 
-Expect: exit 0 and `SNTRY-011 pass: <project>`. A fail means two rules share the exact same condition set and both page on the same trigger, doubling notifications for one event. Also check `uptime.json` for the project: a Sentry uptime monitor duplicating an external synthetic tool your team already treats as the source of truth is the same class of defect; record which tool wins in the finding.
+Expect: exit 0 and `SNTRY-011 pass: <project>`. A fail means two rules share the exact same condition set and both page on the same trigger.
+
+**Blast radius — name the receiver being doubled, do not stop at "double-page."** "Two rules share a condition set" does not tell the reader whether it doubles one on-call's pages or is harmless. Resolve both duplicate rules' actions to their integration ids in `integrations.json` (the SNTRY-005 join above already extracts `integration_id` per action) and name the shared target: *"rules R1 and R2 on `<project>` carry the same condition set and both route to Slack integration id X / PagerDuty service Y — one incident fires two pages to the same on-call."* For an issue-rule-versus-metric-alert overlap (a `/rules/` rule and an `alert-rules/` metric alert on the same signal), note that the two pages **cannot be deduplicated**: they originate from different object types with no shared fingerprint, so grouping never collapses them. **Correlate:** SNTRY-005 (the shared receiver is the join key), SNTRY-014 (contributes to the same responder-fatigue story), SNTRY-103 (a metric alert is the other half of an issue/metric overlap). Also check `uptime.json` for the project: a Sentry uptime monitor duplicating an external synthetic tool your team already treats as the source of truth is the same class of defect; record which tool wins in the finding.
+
+### Disabled/muted rules and owner-routing gaps (SNTRY-016, SNTRY-017)
+
+> **Verify-pending.** Both checks below are drafted against Sentry's documented API and adversarially reviewed, but have **not** been run against a live Sentry tenant (no Sentry target exists in the benchmark estate) — status unproven until a first live run with a read-only token. The `live_verify_plan` at the end of this section lists the exact read-only GETs that close each gap.
+
+**SNTRY-016, disabled or muted rules that make tier coverage falsely pass.** SNTRY-013 credits tier coverage from any rule carrying the right condition — and, until the `status`-filter added to it in this wave, it counted a switched-off rule too. This check surfaces the rules SNTRY-013 must now exclude, so the two agree on the same estate. The issue-rule half (command 1) is the load-bearing gate; the metric-alert half (command 2) is verify-pending on the field shape:
+
+```bash
+set -eu
+# Resolved from ~/.scoutflo/toolkit.yaml
+SENTRY_HOST="us.sentry.io"   # sentry.host
+SENTRY_ORG="your-org-slug"   # sentry.org
+PROJECT="your-project-slug"  # from projects.json
+API="https://${SENTRY_HOST}/api/0"
+[ -n "${SENTRY_TOKEN:-}" ] || { echo "SENTRY_TOKEN is not set; run /scoutflo:connect"; exit 1; }
+
+# Command 1 (load-bearing): issue rules whose status is not active. `status` on an issue
+# rule is the string "active"/"disabled"; default to active when the key is absent.
+curl -fsS --max-time 15 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
+  "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/" \
+  | tee /dev/stderr \
+  | jq -r '.[] | select((.status // "active") != "active")
+      | "\(.id)\t\(.name)\tstatus=\(.status)\tactions=\((.actions|length))\tconditions=\([.conditions[]?.id]|join(","))"'
+# Any row is a rule that is present (so SNTRY-013 could once credit it) but switched off:
+# it fires nothing. Cross-check the row's conditions against the SNTRY-013 immediate/review
+# tiers — a disabled immediate-tier rule on a production project is the finding.
+
+# Command 2 (VERIFY-PENDING metric-alert half): do NOT assert a string `status` on metric
+# alerts. Sentry's metric-alert (AlertRule) serializer is documented to return `status` as an
+# integer enum, so a string compare would be wrong. Gate on the OBSERVED type until a live run
+# confirms the shape: only compare when it actually is a string. Fixed the ASCII pipe here.
+curl -fsS --max-time 30 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
+  "${API}/organizations/${SENTRY_ORG}/alert-rules/" \
+  | jq -r '.[] | select((.status | type) == "string" and (.status | ascii_downcase) != "active")
+      | "\(.name)\tstatus=\(.status)"'
+# On a live tenant, if `status` proves to be an integer enum, replace the guard with the
+# documented enum value for "disabled" (confirm via the live_verify_plan) before scoring the
+# metric-alert half; until then it reports nothing rather than a wrong result.
+```
+
+Healthy: command 1 prints no rows (every rule is active). Fail (SNTRY-016, high): a disabled/muted rule whose conditions match an immediate or review tier — quantify with the SNTRY-001 accepted-error volume snippet for the project (*"checkout's only regression rule is `status=disabled`, so a fatal regression matches a switched-off rule and pages nobody; this project accepted E errors in the window and the coverage matrix currently scores it green"*). **Correlate:** SNTRY-016 directly gates SNTRY-013 (tier presence now excludes non-active rules) and SNTRY-012 (a disabled immediate rule is functionally no coverage); it chains with SNTRY-005 into the silent-incident flagship. Remediation `setup-sentry#alert-rule-taxonomy`; verification: re-GET `/projects/{org}/{project}/rules/` → the rule crediting the tier has `status == "active"`.
+
+**SNTRY-017, rules route to issue owners but the project has no ownership rules.** A notify action with `targetType: IssueOwners` delegates delivery to whoever owns the matching code path; with no ownership rules, delivery falls through per the project's fallthrough setting — to every member (noise, mirrors SNTRY-001) or, with fallthrough off, to nobody (silent):
+
+```bash
+set -eu
+# Resolved from ~/.scoutflo/toolkit.yaml
+SENTRY_HOST="us.sentry.io"   # sentry.host
+SENTRY_ORG="your-org-slug"   # sentry.org
+PROJECT="your-project-slug"  # from projects.json
+API="https://${SENTRY_HOST}/api/0"
+[ -n "${SENTRY_TOKEN:-}" ] || { echo "SENTRY_TOKEN is not set; run /scoutflo:connect"; exit 1; }
+
+# Rules that route to issue owners.
+curl -fsS --max-time 15 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
+  "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/" \
+  | tee /dev/stderr \
+  | jq -r '.[] | . as $r | .actions[]? | select((.targetType // "") == "IssueOwners")
+      | "\($r.id)\t\($r.name)\ttargetType=IssueOwners"'
+
+# Ownership raw rules + fallthrough posture. VERIFY-PENDING: confirm the /ownership/ shape and
+# the exact fallthrough field name against a live org before scoring (see live_verify_plan).
+own="$(mktemp)"
+code=$(curl -s -o "$own" -w '%{http_code}' --max-time 15 \
+  -H "Authorization: Bearer ${SENTRY_TOKEN}" "${API}/projects/${SENTRY_ORG}/${PROJECT}/ownership/")
+if [ "$code" = "200" ]; then
+  jq -r '{raw_empty: ((.raw // "") | length == 0), fallthrough: (.fallthrough // .fallthroughChoice // null), autoAssignment: (.autoAssignment // null)}' "$own"
+elif [ "$code" = "403" ]; then
+  echo "SNTRY-017 blocked: /ownership/ returned 403 (scope); a 403 is NOT a clean pass"
+else
+  echo "SNTRY-017 blocked: /ownership/ returned ${code}; record the code as evidence"
+fi
+rm -f "$own"
+```
+
+Healthy: no owner-routed rule, or owner-routed rules with a non-empty `raw` ownership set. Fail (SNTRY-017, medium): an owner-routed rule with empty ownership `raw` — name the direction, *"the immediate rule on `<project>` routes to issue owners, but ownership raw is empty and fallthrough is off — matched issues notify nobody"* (or fallthrough on → pages everyone, mirroring SNTRY-001). A 403 on `/ownership/` blocks the check with the code as evidence, never a clean pass. **Correlate:** SNTRY-005 (owner-routed actions are a receiver-liveness blind spot the current SNTRY-005 chat/email classifier does not cover) and SNTRY-001 (fallthrough-to-all is the same over-paging failure). Remediation `setup-sentry#receiver-wiring`; verification: re-GET `/projects/{org}/{project}/ownership/` → non-empty `raw` for the owner-routed rule's paths, or the rule re-pointed at a concrete team/integration target.
+
+**live_verify_plan (read-only GETs that lift verify-pending on SNTRY-016/017):**
+
+1. `GET /organizations/{org}/alert-rules/` → `jq '.[0].status, (.[0].status|type)'` — confirm whether metric-alert `status` is int or string, then fix SNTRY-016 command 2 accordingly.
+2. `GET /projects/{org}/{project}/rules/` → `jq '.[0].status'` — confirm issue-rule `status` is the string `active`/`disabled` command 1 relies on.
+3. `GET /projects/{org}/{project}/ownership/` → `jq '{raw, fallthrough, fallthroughChoice, autoAssignment}'` — confirm the `/ownership/` shape and the exact fallthrough field name for SNTRY-017.
+4. `GET /projects/{org}/{project}/rules/` → `jq '[.[].actions[]?|select(.targetType=="IssueOwners")]'` — confirm `NotifyEmailAction targetType=IssueOwners` for SNTRY-017.
+5. `curl -o /dev/null -w '%{http_code}' GET /organizations/{org}/members/` — confirm `member:read` is present (200) before SNTRY-001 computes a member count; a 403 means SNTRY-001 files the fan-out sub-part blocked, never a fabricated N.
+
+All five are GETs; nothing here mutates the org.
 
 ## Integration and source context checks
 
@@ -605,6 +746,8 @@ Permanent IDs. Never renumber, never reuse a retired ID; deltas depend on stabil
 | SNTRY-013 | alert-rules-and-routing | high | Every production project has at least one immediate-tier and one review-tier rule, correctly environment-scoped by the rule's own `environment` field |
 | SNTRY-014 | alert-rules-and-routing | medium | No rule pages on unfiltered every-event conditions or re-pages below your frequency floor |
 | SNTRY-015 | alert-rules-and-routing | high | Workflow-engine orgs (capability-gated): no detector with an empty `workflowIds` array — a detector connected to no automation notifies nobody; `not-in-scope` on classic-model orgs where the endpoint 404s |
+| SNTRY-016 | alert-rules-and-routing | high | *(verify-pending)* No disabled or muted alert rule is silently crediting tier coverage: a `status != active` issue rule still satisfies SNTRY-013 today, so a service reads covered while its immediate-tier rule fires nothing |
+| SNTRY-017 | alert-rules-and-routing | medium | *(verify-pending)* Rules that route to issue owners (`targetType: IssueOwners`) have real ownership rules behind them; empty ownership with fallthrough off notifies nobody, fallthrough on pages everyone |
 | SNTRY-101 | alert-rules-and-routing | medium | Every notifying issue rule gates with a non-empty `filters` set; a broad trigger with an empty `filters` array fires un-tuned (every-event/frequency subset stays owned by SNTRY-014) |
 | SNTRY-102 | alert-rules-and-routing | medium | On a multi-environment project, every notifying issue rule sets its own `environment`; a null `environment` runs the rule across all environments and pages on dev/staging noise |
 | SNTRY-103 | alert-rules-and-routing | medium | Every metric alert sets `resolveThreshold`, pairs a `warning` trigger with `critical`, and uses a `timeWindow` (or `comparisonDelta`/`detectionType`) wide enough not to flap on transients |

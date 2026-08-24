@@ -32,6 +32,7 @@ One permanent ID per check. IDs never change or get reused; retired checks keep 
 | JSM-015 | Alert noise | Sources set a stable `alias` so dedup collapses repeats | medium |
 | JSM-016 | Alert noise | Global/team alert policies present and enabled for normalization and priority | medium |
 | JSM-017 | Alert noise | No active maintenance window that is a permanent blackout of a live integration/policy | high |
+| JSM-018 | Alert noise | Operator-snoozed alerts are a human-driven suppression blackout, distinct from policy suppress (JSM-012) | medium |
 | JSM-020 | Coverage/health | Heartbeats responsive; no live source in `Unresponsive`/unintended `Off` | critical |
 | JSM-021 | Coverage/health | Critical services from topology each covered by a team and a routing path | high |
 | JSM-022 | Coverage/health | Teams audited named; teams not audited named as uncovered, not silently dropped | medium |
@@ -40,6 +41,7 @@ One permanent ID per check. IDs never change or get reused; retired checks keep 
 | JSM-030 | Actionability | Open alerts unacknowledged past the aging threshold | high |
 | JSM-031 | Actionability | MTTA (createdAt to ackTime) against target where humans acked | medium |
 | JSM-032 | Actionability | Share of alerts closed with no acknowledgement (auto-close-heavy = noise proxy) | medium |
+| JSM-033 | Actionability | Priority collapse: the live alert population lands at one priority, so priority-keyed routing/normalization is inert | medium |
 
 ## 3. Target profile
 
@@ -107,8 +109,17 @@ while IFS="$(printf '\t')" read -r TEAM_ID TEAM_NAME; do
         rules: [.rules[]? | {condition, notifyType, delay, recipient_type: .recipient.type}]}]' \
     > "${tdir}/escalations.json"
   curl -fsS --max-time 30 -u "$AUTH_USER" "${JSM_BASE}/teams/${TEAM_ID}/routing-rules?size=100" \
-    | jq '[.values[]? | {id, name, isDefault, order, notify_type: .notify.type, notify_id: .notify.id}]' \
+    | jq '[.values[]? | {id, name, isDefault, order, notify_type: .notify.type, notify_id: .notify.id,
+        criteria_type: (.criteria.type // null),
+        criteria_conditions: [((.criteria.conditions) // [])[] | {field, operation, expectedValue}]}]' \
     > "${tdir}/routing-rules.json"
+  # `criteria` is the priority/tag/message gate a routing rule matches on (fields, not secrets):
+  # a rule with a `priority`-equals-`P1` condition is the branch that only fires for a real P1.
+  # Capturing it is what lets JSM-016/JSM-033 *observe* a never-fired priority branch instead of
+  # asserting one. Verify-pending: whether `criteria`/`conditions` are exposed on the routing-rules
+  # list for this tenant is confirmed at first live-smoke (the `// null`/`// []` guards keep this
+  # capture safe if the field is absent — the join then degrades to "criteria unreadable", never a
+  # fabricated branch). See sections 6.1 and 8.1.
   curl -fsS --max-time 30 -u "$AUTH_USER" "${JSM_BASE}/teams/${TEAM_ID}/heartbeats?size=100" \
     | jq '[.values[]? | {name, enabled, status, interval, intervalUnit}]' > "${tdir}/heartbeats.json"
 done < "${RAW_DIR}/teams.tsv"
@@ -140,6 +151,22 @@ jq '[.[] | {id, name, rule_count: (.rules | length),
   "${tdir}/escalations.json"
 # Expect: rule_count >= 2 OR (has_repeat and has_if_not_acked) on production teams. A team with
 # an empty escalations.json ([]) is JSM-001 critical; one rule, no repeat, is the SPOF shape.
+#
+# JSM-002 blast radius (compute, do not assert "no repeat is risky"): resolve the escalation's
+# tier-1 recipient (rules[0].recipient -> a single schedule/user), then join JSM-032's
+# close-without-ack share for THIS team. A single-step, no-repeat, no-if-not-acked policy whose
+# tier-1 is one schedule means: every alert this team already closed unacked (JSM-032's count for
+# the team) was a page the sole on-call missed with NO second notification and NO tier-2 — it was
+# silently dropped. State it as "platform escalation is one rule, no repeat, no if-not-acked; tier-1
+# is schedule S; 22% of this team's last-window alerts closed unacked (JSM-032, 220/1000, 20k
+# window) — each is a missed page with no backup", never "the missing repeat is risky".
+#   Correlation: chains with JSM-001 (SPOF escalation shape), JSM-032 (unacked-close share = live
+#   proof the missing repeat already bites), and JSM-004 (if tier-1's schedule is unstaffed the
+#   FIRST page also lands nowhere) — this is the human leg of the flagship silent-paging-path.
+#   Exact fix: add `repeat.count >= 2` with a `repeat.waitInterval`, plus an `if-not-acked` rule
+#   escalating to a DISTINCT tier-2 schedule (JSM > Operations > Teams > (team) > Escalations — add
+#   an if-not-acked step and set Repeat). Verification: re-read GET /v1/teams/{teamId}/escalations
+#   -> `.repeat.count > 1` and a rule with `condition: "if-not-acked"` present; read-only.
 
 # JSM-003: routing rules that notify a schedule — resolve each target schedule's rotation.
 jq -r '[.[] | select(.notify_type == "schedule") | .notify_id] | .[]' "${tdir}/routing-rules.json" \
@@ -155,6 +182,22 @@ jq '[.[] | select(.enabled == false or .rotation_count == 0) | {id, name, enable
   "${RAW_DIR}/schedules.json"
 # Pair with an on-call read to confirm nobody is on call NOW for a referenced schedule:
 #   GET ${JSM_BASE}/schedules/{scheduleId}/on-calls  -> empty onCallParticipants = unstaffed now.
+#
+# JSM-004 blast radius (name the SERVICES, not just the schedule): join backwards from the empty
+# schedule to the routing rules that target it (JSM-003), then to the critical services those rules
+# carry (JSM-021 / topology.md). "schedule S has rotation_count=0 and on-calls returns empty
+# onCallParticipants right now; S is the routing target for checkout and payments — both critical
+# services are unpaged THIS INSTANT." An unstaffed schedule that is the sole path for a critical
+# service is a live delivery outage, not a hygiene note.
+#   Correlation: chains with JSM-003 (empty-schedule routing join) and JSM-021 (critical-service
+#   coverage) — this is the delivery leg of the flagship silent-paging-path. Exact fix: fill the
+#   rotation or retarget routing at a staffed schedule (Team > Schedules — add/repair a rotation; or
+#   Routing rules — retarget). Verification: re-read /v1/schedules/{id}/on-calls -> non-empty
+#   onCallParticipants; read-only.
+#   Verify-pending ambition (flag at live-smoke, do NOT claim now): whether v1 Operations exposes a
+#   FUTURE on-call query (`/v1/schedules/{id}/on-calls?date=<future-ISO8601>` or a timeline endpoint)
+#   to catch a gap that opens later tonight. Only the current on-call read is confirmed, so scope the
+#   finding to "now" unless the future query verifies live.
 
 # JSM-005: integrations on a live path that are disabled (nothing can create alerts).
 jq '[.[] | select(.enabled == false) | {id, name, type, teamId}]' "${RAW_DIR}/integrations.json"
@@ -179,9 +222,46 @@ jq '[.[] | {id, name, enabled,
     auto_restart_repeat: (.autoRestartAction.maxRepeatCount // null),
     auto_restart_wait: (.autoRestartAction.waitDuration // null)}]' \
   "${tdir}/notification-policies.json"
-# No deduplicationAction on a team with chatty sources = JSM-010. No autoCloseAction = JSM-013
-# (alerts pile up stuck-open). autoRestartAction with a short waitDuration and a high
-# maxRepeatCount on a paging policy = JSM-014 (re-page storm).
+# Presence is only the trigger. The FINDING must carry blast radius computed from the live stream
+# (the query below), never "no dedup is noisy": No deduplicationAction on a team with chatty sources
+# = JSM-010. No autoCloseAction = JSM-013 (alerts pile up stuck-open). autoRestartAction with a short
+# waitDuration and a high maxRepeatCount on a paging policy = JSM-014 (re-page storm).
+
+# JSM-010 / JSM-013 blast radius — computed from the live alert stream for THIS team, so the finding
+# carries a number, not an adjective. Resolve JSM_BASE as elsewhere (fresh shell); TEAM_NAME is the
+# team whose policies you judged above.
+JSM_SITE="your-site.atlassian.net"   # jsm.site
+CLOUD_ID="${JSM_CLOUD_ID:-}"
+[ -n "$CLOUD_ID" ] || CLOUD_ID="$(curl -fsS --max-time 10 "https://${JSM_SITE}/_edge/tenant_info" | jq -r '.cloudId')"
+[ -n "$CLOUD_ID" ] || { echo "could not resolve JSM cloud_id (set jsm.cloud_id or check jsm.site)"; exit 1; }
+JSM_BASE="https://api.atlassian.com/jsm/ops/api/${CLOUD_ID}/v1"
+TEAM_NAME="platform"   # the team whose notification policies you judged; loop over the audited teams
+curl -fsS --max-time 30 -u "${JSM_EMAIL}:${JSM_API_TOKEN}" \
+  --get --data-urlencode "query=status: open AND teams: ${TEAM_NAME}" \
+  --data-urlencode "size=100" --data-urlencode "sort=createdAt" --data-urlencode "order=desc" \
+  "${JSM_BASE}/alerts" \
+  | jq '{sampled: (.values | length),
+      recurring_aliases: ([.values[] | select((.count // 1) > 1)] | length),
+      repeat_notifications: ([.values[] | ((.count // 1) - 1)] | add // 0),
+      oldest_open: (.values | min_by(.createdAt).createdAt // null)}'
+# JSM-010: repeat_notifications = sum(count-1) is the extra pages a missing deduplicationAction let
+# through — "payments has no deduplicationAction; 34 aliases recurred, sum(count-1)=190 repeat
+# notifications the sole on-call received this window." The number is the blast radius, not "noisy".
+#   Correlation: chains with JSM-015 (no stable alias means dedup cannot collapse anything even if
+#   configured) and JSM-031 (repeat volume inflates MTTA); when the same team is also single-step
+#   escalation (JSM-002) the on-call drowns before the page that matters. Exact fix: add a
+#   notification-policy deduplicationAction (`deduplicationActionType: frequency-based`) with a
+#   countValueLimit/window sized to the observed recurrence (Team > Policies (Notification) > add a
+#   De-duplication action). Verification: re-sample this query next run — recurring_aliases and
+#   repeat_notifications must fall toward the countValueLimit ceiling; read-only.
+# JSM-013: a `sampled` at the 100 cap with a very old `oldest_open` is the stuck-open pile a missing
+# autoCloseAction leaves — "ingest has no autoCloseAction; 100 open (list cap hit), oldest 43 days —
+# the 3 real active pages are buried in a 100-deep haystack", which is exactly the pile JSM-030
+# aging surfaces. Cite JSM-030's sampled count as JSM-013's live proof and mark JSM-013
+# validated-live. Exact fix: set autoCloseAction.waitDuration on the notification policy for source
+# classes that self-resolve, sized above the source's own recovery interval (Team > Policies
+# (Notification) > Auto-Close action). Verification: re-run the `status: open` query next run;
+# sampled and oldest-age must drop; read-only.
 
 # JSM-011 + JSM-012: delay and blanket suppression.
 jq '[.[] | select(.suppress == true or .delayAction != null)
@@ -190,11 +270,33 @@ jq '[.[] | select(.suppress == true or .delayAction != null)
 # A policy with suppress=true AND a broad filter (matches all / no conditions) is JSM-012 high:
 # it masks real alerts indefinitely. A narrow, deliberate delayAction is fine (JSM-011 judgment).
 
-# JSM-016: global + team alert policies present and enabled.
-jq '[.[] | {id, name, type, enabled, continue, priority_override: .updatePriority}]' \
+# JSM-016: global + team alert policies present and enabled — and, specifically, whether ANY
+# enabled policy actually normalizes priority (updatePriority=true), which is what makes the
+# downstream priority-keyed routing branch reachable.
+jq '{policies: [.[] | {id, name, type, enabled, continue, priority_override: .updatePriority,
+        priority_value: (.priorityValue // null)}],
+     enabled_priority_normalizers: ([.[] | select(.enabled == true and .updatePriority == true)] | length)}' \
   "${RAW_DIR}/alert-policies.json"
-# No alert policies, or all enabled=false, = JSM-016: nothing normalizes or re-prioritizes
-# noisy sources before alerts are created.
+# JSM-016 blast radius (compute, do not call it hygiene): join enabled_priority_normalizers (from
+# THIS query) to the live priority distribution (JSM-033) and to the routing-rule criteria captured
+# in section 4. When enabled_priority_normalizers=0, nothing sets priority before creation, so the
+# JSM-033 distribution collapses to the default (e.g. "96% of the last 100 alerts arrive at default
+# P3"); a routing rule whose criteria match `priority == P1` is then a branch that has never fired —
+# a genuine P1 from source Y lands as P3 and takes the default path. The 96% and the never-matched
+# routing criterion are the blast radius.
+#   Correlation (corrected — the priority gate is on ROUTING criteria and notification/alert-policy
+#   filters, NOT on escalations, which key only on if-not-acked/if-not-closed): JSM-033 (collapsed
+#   distribution) -> JSM-016 (no enabled policy normalizes priority) -> JSM-003 (the routing rule
+#   whose priority criterion therefore never matches). Do NOT attribute a "priority branch" to an
+#   escalation step (JSM-002). Exact fix: enable a global/team alert policy with `updatePriority:
+#   true` + `priorityValue` rules keyed on source/message filters so critical sources normalize to
+#   P1/P2 before creation (Global/Team Alert policies > add an Update-priority policy). Verification:
+#   re-run the JSM-033 distribution query — the P1/P2 share must rise for the normalized sources, and
+#   the priority-matching routing criterion becomes reachable; read-only.
+#   Verify-pending: observing the "never-fired routing branch" as a COMPUTED fact depends on the
+#   section-4 `criteria` capture being exposed for this tenant (confirmed at first live-smoke). Until
+#   then, JSM-016's computable-now signal is enabled_priority_normalizers joined to the JSM-033
+#   distribution; the specific dead routing criterion is stated as a verify-pending join, not asserted.
 
 # JSM-017: active maintenance windows that disable a live integration or policy.
 jq '[.[] | select(.status == "active")
@@ -218,10 +320,69 @@ curl -fsS --max-time 30 -u "${JSM_EMAIL}:${JSM_API_TOKEN}" \
   "${JSM_BASE}/alerts?size=100&sort=createdAt&order=desc" \
   | jq '{sampled: (.values | length),
       with_alias: ([.values[] | select((.alias // "") != "")] | length),
-      deduped: ([.values[] | select((.count // 1) > 1)] | length)}'
-# with_alias well below sampled = sources not setting alias (JSM-015). deduped > 0 is healthy
-# evidence dedup works. This is a sampled signal within the 20k cap, not a full-history count.
+      deduped: ([.values[] | select((.count // 1) > 1)] | length),
+      worst_unaliased_fingerprint: ([.values[] | select((.alias // "") == "") | .message]
+        | group_by(.) | map({message: .[0], duplicates: length}) | sort_by(-.duplicates) | .[0] // null)}'
+# JSM-015 blast radius (translate the ratio into the multiplier a responder feels, don't stop at the
+# ratio): with_alias well below sampled = sources not setting a stable alias, so identical conditions
+# arrive as N separate alerts instead of one with count=N. worst_unaliased_fingerprint names the
+# concrete case — "with_alias=12/100; the 'DiskFull on host-A' message created 47 separate alerts this
+# window instead of one deduped alert with count=47." The 47 is the duplication multiplier; deduped>0
+# is healthy evidence dedup works. Sampled within the 20k cap, not a full-history count.
+#   Correlation: chains with JSM-010 (policy dedup is useless without a stable alias key — a missing
+#   alias defeats a configured deduplicationAction) and JSM-031 (each duplicate is a fresh
+#   notification inflating MTTA). Fold the flapping observation here too: alerts whose
+#   closeTime - createdAt is seconds and that recur under one fingerprint are transient noise even
+#   when aliased. Exact fix: fix the SENDING tool's payload to set a stable `alias` — this is an
+#   UPSTREAM fix, so remediation points at that tool's own audit (audit-lgtm/grafana/sentry names it),
+#   NOT a JSM UI change. Verification: re-sample this stream; the recurring condition collapses to one
+#   alert with count>1 and a populated alias; read-only.
 ```
+
+### 6.1 Operator-snoozed alerts — a human-driven blackout (JSM-018)
+
+> **Verify-pending.** Drafted against JSM Operations' documented API and adversarially reviewed, but NOT run against a live tenant — status unproven until a first live run with a read-only token (`JSM_EMAIL` + `JSM_API_TOKEN`). The scored signal below rests only on fields the contract confirms (the `status` enum value `snoozed`, plus `alias`/`message`/`createdAt`); the per-alert `snoozed`/`snoozedUntil` fields in the second command are NOT confirmed for this API and are gated behind their own verify-pending note — do not treat them as computable until live-smoke shows `/v1/alerts/{id}` returns them.
+
+Snooze is the third suppression channel and the only one a human drives per alert, so a policy audit (JSM-012, which reads config `suppress`) can never see it. A service whose alerts are chronically snoozed is one a responder has decided not to look at — the opposite of what the config claims.
+
+```bash
+set -eu
+JSM_SITE="your-site.atlassian.net"   # jsm.site
+CLOUD_ID="${JSM_CLOUD_ID:-}"
+[ -n "$CLOUD_ID" ] || CLOUD_ID="$(curl -fsS --max-time 10 "https://${JSM_SITE}/_edge/tenant_info" | jq -r '.cloudId')"
+[ -n "$CLOUD_ID" ] || { echo "could not resolve JSM cloud_id (set jsm.cloud_id or check jsm.site)"; exit 1; }
+JSM_BASE="https://api.atlassian.com/jsm/ops/api/${CLOUD_ID}/v1"
+
+# JSM-018 (SCORED signal — confirmed fields only): the live snoozed population and its top
+# recurring message. `status: snoozed` is a confirmed queryable status; values/alias/message/
+# createdAt are confirmed flat fields.
+curl -fsS --max-time 30 -u "${JSM_EMAIL}:${JSM_API_TOKEN}" \
+  --get --data-urlencode "query=status: snoozed" --data-urlencode "size=100" \
+  --data-urlencode "sort=createdAt" --data-urlencode "order=desc" \
+  "${JSM_BASE}/alerts" \
+  | jq '{snoozed_sampled: (.values | length),
+      oldest: (.values | min_by(.createdAt).createdAt // null),
+      with_alias: ([.values[] | select((.alias // "") != "")] | length),
+      by_message: ([.values[].message] | group_by(.) | map({m: .[0], n: length}) | sort_by(-.n) | .[0:5])}'
+# Blast radius (computed from the query above): snoozed_sampled = how many active alerts a responder
+# has hand-muted, and by_message names WHAT they muted — "18 alerts snoozed, the top recurring message
+# is the payments-latency alert (7 of 18): responders are hand-muting the exact signal that should
+# page, and a JSM-012 policy audit would never see it because it is operator behavior, not config."
+```
+
+```bash
+# JSM-018 (VERIFY-PENDING sub-signal — do NOT score off this until live-smoke confirms the fields):
+# whether a per-alert snooze horizon exposes de-facto permanent suppression. `/v1/alerts/{id}` MAY
+# return `snooze`/`snoozedUntil`; neither is confirmed by the contract. A snooze pushed far into the
+# future is de-facto permanent suppression — but only report it once live-smoke shows these fields.
+curl -fsS --max-time 30 -u "${JSM_EMAIL}:${JSM_API_TOKEN}" \
+  "${JSM_BASE}/alerts/EXAMPLE_ALERT_ID" \
+  | jq '{status, snoozedUntil: (.snoozedUntil // null)}'
+# If snoozedUntil is present and years out, that is a permanent blackout hiding as a snooze. If the
+# field is absent, say so — the finding stays scoped to the snoozed_sampled + by_message signal above.
+```
+
+Healthy: `snoozed_sampled` is low and no single message dominates. Fail (JSM-018, medium): a meaningful snoozed population whose top messages are real paging signals — name the count and the top message (never a responder's identity). Correlation: complements JSM-012 (policy suppress = config blackout) and JSM-032 (close-without-ack = noise proxy); a service whose alerts are chronically snoozed AND close unacked is one nobody trusts. Remediation is inline (no `setup-jsm` ships): this has no JSM config object — the fix is a responder-process review plus fixing the noisy source (its own audit names the tool), since JSM has no bulk snooze-policy object to tune. Verification: re-sample the `status: snoozed` query next run — `snoozed_sampled` and the dominant message's share must fall; read-only.
 
 ## 7. Coverage and health (JSM-020 to JSM-023)
 
@@ -287,6 +448,44 @@ curl -fsS --max-time 30 -u "${JSM_EMAIL}:${JSM_API_TOKEN}" \
 # proxy for "these pages were noise". Both figures state the sampled size and that it is bounded
 # by the 20k retrieval cap, never presented as full-account analytics.
 ```
+
+### 8.1 Priority collapse — priority-keyed routing is inert (JSM-033)
+
+> **Verify-pending.** Drafted against JSM Operations' documented API and adversarially reviewed, but NOT run against a live tenant — status unproven until a first live run with a read-only token. The `.priority` field is confirmed by the contract; its observed label domain (P1..P5) and the routing-rule `criteria` capture that turns "the P1 branch never fired" from an assertion into a computed fact are both confirmed at first live-smoke. The `group_by` below works for any label set, so the distribution figure holds regardless.
+
+When every alert lands at one priority (usually the default), priority is dead metadata: any routing-rule criterion or notification/alert-policy filter keyed on `priority == P1` never matches, so its branch never fires. This is the live-outcome complement to JSM-016 (which reads whether a policy *would* normalize priority) — JSM-033 reads whether priority *actually varies* in the stream.
+
+```bash
+set -eu
+JSM_SITE="your-site.atlassian.net"   # jsm.site
+CLOUD_ID="${JSM_CLOUD_ID:-}"
+[ -n "$CLOUD_ID" ] || CLOUD_ID="$(curl -fsS --max-time 10 "https://${JSM_SITE}/_edge/tenant_info" | jq -r '.cloudId')"
+[ -n "$CLOUD_ID" ] || { echo "could not resolve JSM cloud_id (set jsm.cloud_id or check jsm.site)"; exit 1; }
+JSM_BASE="https://api.atlassian.com/jsm/ops/api/${CLOUD_ID}/v1"
+
+# JSM-033: priority distribution of the recent closed stream. dominant_share is the collapse metric.
+curl -fsS --max-time 30 -u "${JSM_EMAIL}:${JSM_API_TOKEN}" \
+  --get --data-urlencode "query=status: closed" --data-urlencode "size=100" \
+  --data-urlencode "sort=createdAt" --data-urlencode "order=desc" \
+  "${JSM_BASE}/alerts" \
+  | jq '{sampled: (.values | length),
+      dist: ([.values[].priority] | group_by(.) | map({priority: .[0], n: length}) | sort_by(-.n)),
+      dominant_share: (if (.values | length) > 0
+        then (([.values[].priority] | group_by(.) | map(length) | max) / (.values | length))
+        else null end)}'
+# Also glance at the open stream so the finding is not closed-only:
+curl -fsS --max-time 30 -u "${JSM_EMAIL}:${JSM_API_TOKEN}" \
+  --get --data-urlencode "query=status: open" --data-urlencode "size=100" \
+  "${JSM_BASE}/alerts" \
+  | jq '[.values[].priority] | group_by(.) | map({priority: .[0], n: length}) | sort_by(-.n)'
+# Blast radius (computed from dominant_share): "96% of the last 100 alerts are P3 (the default);
+# nothing normalizes priority (JSM-016 enabled_priority_normalizers=0), so a routing rule whose
+# criteria match priority=P1 (section 4 criteria capture) never fires — a real P1 arrives as P3 and
+# takes the default path." The 96% and the never-matched criterion are the blast radius, joined to
+# JSM-016 and JSM-003.
+```
+
+Healthy: priority varies with real urgency and `dominant_share` is well below 1.0. Fail (JSM-033, medium): a collapsed distribution (e.g. `dominant_share` ~0.96 at the default priority) while a priority-keyed routing/notification branch exists — state the share, the dominant priority, and the branch it strands. Correlation (corrected — priority gating is on routing criteria and policy filters, NOT escalations): JSM-033 (collapsed distribution) -> JSM-016 (no enabled policy normalizes priority) -> JSM-003 (the routing criterion that therefore never matches). Also feeds JSM-031: if every alert is one priority, MTTA/aging thresholds cannot be tiered by urgency. Remediation is inline (no `setup-jsm` ships): Global/Team Alert policies > add Update-priority rules keyed on source/message filters so critical sources normalize to P1/P2 before creation. Verification: re-run this distribution query — the P1/P2 share must rise for the normalized sources and `dominant_share` fall; read-only.
 
 ## 9. Rate-limit handling (all sections)
 

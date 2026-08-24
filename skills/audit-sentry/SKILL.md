@@ -266,8 +266,8 @@ Expected: counts print and the raw dir holds one JSON file per surface plus one 
 
 Checks SNTRY-002, SNTRY-003, SNTRY-004 (snippets in [references/api-checks.md](references/api-checks.md#project-configuration-checks)):
 
-1. **Privacy scrubbing (SNTRY-002).** Org defaults and every production project: data scrubber on, default scrubbers on, a non-empty sensitive-fields list, IP scrubbing deliberate, JavaScript source scraping off unless intentionally required. A production project sending real user traffic with scrubbing off is a high finding; PII that reaches Sentry cannot be unsent.
-2. **Client-key rate limits (SNTRY-003).** Every active key on a production project carries a rate limit. An unlimited key means one crash loop or one leaked DSN burns the whole quota and drowns real errors.
+1. **Privacy scrubbing (SNTRY-002).** Org defaults and every production project: data scrubber on, default scrubbers on, a non-empty sensitive-fields list, IP scrubbing deliberate, JavaScript source scraping off unless intentionally required. A production project sending real user traffic with scrubbing off is a high finding. Do not stop at "scrubbing is off": quantify what is already stored by joining the failing project's numeric id to `stats-projects.json` accepted-error volume (*"E error events accepted in 14d with scrubbing off — E events of raw request bodies, headers and user context already retained and unrecoverable"*), and escalate when SNTRY-010 shows live replay/profile volume for the same project (DOM snapshots and keystrokes are higher-fidelity PII than error payloads). Blast-radius join in [references/api-checks.md](references/api-checks.md#project-configuration-checks).
+2. **Client-key rate limits (SNTRY-003).** Every active key on a production project carries a rate limit. An unlimited key means one crash loop or one leaked DSN burns the whole quota and drowns real errors. Check whether the burn is already live, not hypothetical: join the unlimited key to the org-wide `rate_limited`/`abuse`/`cardinality_limited` drop count D in `stats-outcomes.json` — nonzero D is the shared-quota pressure the unlimited key contributes to (state the mechanism, but never attribute the specific drops to the specific key; per-key attribution is not provable from `stats_v2`), and D==0 is stated honestly as "unbounded, not yet firing." Snippet in [references/api-checks.md](references/api-checks.md#project-configuration-checks).
 3. **Environments (SNTRY-004).** Each active project distinguishes at least a production environment (`ENV_REQUIRED="production"` is the example baseline, tune to your promotion flow). A project with no environments cannot scope alerts or releases to production, so every rule fires on dev noise too.
 
 Default-rule noise is checked with the other rule checks in Phase 3.
@@ -283,13 +283,15 @@ Judge the rule set against the two-tier model. The recommended baseline is two t
 - **Immediate**: fatal events, new unhandled errors, regressions, escalations, user-impact and error-surge thresholds. Routed where your on-call actually looks.
 - **Review**: first-seen issues, frequency trends, warning-level signals. Routed to a channel your team reads within working hours.
 
-Checks SNTRY-001, SNTRY-005, SNTRY-011, SNTRY-013, SNTRY-014 (payload details in [references/api-checks.md](references/api-checks.md#alert-rule-checks)):
+Checks SNTRY-001, SNTRY-005, SNTRY-011, SNTRY-013, SNTRY-014, SNTRY-016, SNTRY-017 (payload details in [references/api-checks.md](references/api-checks.md#alert-rule-checks)):
 
-1. **Default auto-created rule (SNTRY-001).** Projects created without `defaultRules: false` carry an auto-created notify-everyone rule (`createdBy` is null). It pages all members about everything, which trains everyone to ignore Sentry.
+1. **Default auto-created rule (SNTRY-001).** Projects created without `defaultRules: false` carry an auto-created notify-everyone rule (`createdBy` is null). Do not stop at "the default rule exists": compute the fan-out it causes. Join the org member count (needs `member:read`, an **optional** ownership scope — degrade the fan-out sub-part to `blocked` on a 403 and never fabricate a member count) with this project's accepted-error volume: *"pages all N org members on every high-priority issue; this project accepted E errors in 14d — E pages fanned to N inboxes."* If this is the only rule on the project, it is the same gap SNTRY-005/SNTRY-013 see (no immediate tier reaching a live receiver). Blast-radius join in [references/api-checks.md](references/api-checks.md#alert-rule-checks).
 2. **Receiver liveness (SNTRY-005).** Cross-check every non-email action against the live integrations list: the referenced integration exists and is `active`, and chat actions carry a channel ID, not just a display name. Rules whose only action is email are `configured`, a temporary path, never a proven paging route. An org where no rule reaches any live receiver escalates this to critical.
-3. **Tier coverage (SNTRY-013).** Each production project has at least one immediate-tier and one review-tier rule. Also verify environment scoping: the rule-level `environment` field is the only environment scope; a `latest_adopted_release` filter scopes by release-adoption stage and silently does not mean "production".
+3. **Tier coverage (SNTRY-013).** Each production project has at least one immediate-tier and one review-tier rule. Tier presence now **excludes non-active rules** (a `select((.status // "active") == "active")` filter added this wave, so a `status: disabled` rule can no longer credit coverage — this is what makes SNTRY-013 and SNTRY-016 agree on the same estate). Also verify environment scoping: the rule-level `environment` field is the only environment scope; a `latest_adopted_release` filter scopes by release-adoption stage and silently does not mean "production".
 4. **Noise posture (SNTRY-014).** Flag every-event conditions with paging actions, re-page frequencies below `FREQ_FLOOR_MIN="30"` minutes (example, tune to your volume), and rules that page on warning-level noise.
-5. **Duplicate paths (SNTRY-011).** One primary alerting surface per signal: identical condition sets across rules, issue rules duplicating metric alerts, and Sentry uptime monitors duplicating an external synthetic tool all double-page the same incident.
+5. **Duplicate paths (SNTRY-011).** One primary alerting surface per signal: identical condition sets across rules, issue rules duplicating metric alerts, and Sentry uptime monitors duplicating an external synthetic tool all double-page the same incident. Name the shared receiver being doubled (resolve both rules' actions to their integration ids), not just "double-page"; an issue-rule-vs-metric-alert overlap cannot be deduplicated (different object types, no shared fingerprint).
+6. **Disabled or muted rules (SNTRY-016, verify-pending).** A rule present in `rules.json` but with `status != active` fires nothing, yet before this wave still satisfied SNTRY-013's tier-presence test — so a service read as covered while its immediate-tier rule was switched off. List every non-active issue rule and cross-check its conditions against the tiers; a disabled immediate rule on a production project is the finding, quantified with the project's accepted-error volume. The metric-alert half is drafted verify-pending on the `status` field shape. See [references/api-checks.md](references/api-checks.md#disabledmuted-rules-and-owner-routing-gaps-sntry-016-sntry-017).
+7. **Owner-routing gap (SNTRY-017, verify-pending).** A rule action with `targetType: IssueOwners` delegates delivery to code-path owners; with empty ownership `raw`, delivery falls through — to everyone (noise, mirrors SNTRY-001) or, fallthrough off, to nobody (silent). A 403 on `/ownership/` blocks the check, never a clean pass. Drafted verify-pending on the `/ownership/` shape and fallthrough field name. See [references/api-checks.md](references/api-checks.md#disabledmuted-rules-and-owner-routing-gaps-sntry-016-sntry-017).
 
 ## Phase 4: Integrations and source context
 
@@ -305,11 +307,11 @@ Checks SNTRY-006. Release health signals, judged live:
 
 ## Phase 6: Cron and uptime monitors
 
-Checks SNTRY-007. From `monitors.json` plus a re-fetch per suspect monitor:
+Checks SNTRY-007. From `monitors.json` plus a re-fetch per suspect monitor. Do not stop at "monitor has no check-ins" — name the underlying job and whether a critical service depends on it, so the finding reads as a fire, not a scanner row:
 
-- A monitor in an active state that has never received a check-in is a false-page risk and proves the job is not instrumented; it should be paused or the check-ins shipped.
+- A monitor in an active state that has never received a check-in is a false-page risk and proves the job is not instrumented. Name it by the job it guards: *"monitor `<slug>` for the nightly `<job>` is active with zero check-ins — either the job is not instrumented (a failed backup/settlement job pages nobody) or the monitor will false-page on its next expected window."* It should be paused or the check-ins shipped.
 - A monitor in error or missed state right now is an incident signal: is anyone acting on it?
-- Compare the monitor list against the scheduled jobs your team runs (topology.md or your job inventory). Jobs with no monitor are silent-failure candidates; record them in `affected` by job name.
+- Compare the monitor list against the scheduled jobs your team runs (topology.md or your job inventory). A scheduled job in topology.md with **no** monitor at all is the silent-failure candidate — record it in `affected` by job name, and when that job is a batch dependency of a critical service (settlement, billing, backup), that dependency is the blast radius, feeding the SNTRY-012 owner/coverage row.
 - Uptime monitors: if another tool is your uptime source of truth, Sentry uptime duplicating it belongs under SNTRY-011.
 
 ## Phase 7: Volume, quota, and privacy-sensitive ingestion
@@ -343,10 +345,12 @@ Per-project hygiene (SNTRY-101, 102, 105) batches with the same worklist as Phas
 
 Judge coverage per critical service from topology.md, using its canonical names. Per service:
 
-1. A Sentry project (or explicit shared-project mapping) owns this service's errors, unless the boundary decision assigns them to the metrics and logs stack; boundary rows are `not-in-scope`, stated.
-2. Recent accepted events exist for that project, counted by numeric project ID from `stats-projects.json`. A mapped project with zero accepted events in the window is a dead project (SNTRY-012).
-3. Both alert tiers exist for the project and route to a live receiver (from Phase 3 results).
-4. An owner exists: the project maps to a team with members, or ownership rules assign issues somewhere real.
+1. A Sentry project (or explicit shared-project mapping) owns this service's errors, unless the boundary decision assigns them to the metrics and logs stack; boundary rows are `not-in-scope`, stated. A critical service with **no** mapped project at all is fully blind — state it as zero visibility, the highest-severity coverage row.
+2. Recent accepted events exist for that project, counted by numeric project ID from `stats-projects.json` (never a slug search). A mapped project with zero accepted events in the window is a dead project (SNTRY-012). When it does carry volume, that count is the blast radius, not a checkbox: *"checkout maps to project `<id>` which accepted E errors in 14d but has no immediate-tier rule routing to a live receiver — E/day real errors on a critical service reach nobody."*
+3. Both alert tiers exist for the project and route to a live receiver (from Phase 3 results), and — per SNTRY-016 — the crediting rules are `status: active`, not switched off.
+4. An owner exists: the project maps to a team with members, or ownership rules assign issues somewhere real (SNTRY-017 is the dedicated check behind this row — an owner-routed rule with empty ownership `raw` is not "somewhere real").
+
+**Flagship correlation — the silent-incident cascade (assemble it here, per service).** This is Sentry's answer to what the skill's own description promises ("asks whether Sentry paging actually works"), and no free scanner assembles it. For each critical service, resolve its mapped project (SNTRY-012), then chain the routing checks into **one** per-service verdict quantified from the estate's own numbers: *"checkout maps to project id 42 which accepted 1,900 error events in 14d (stats-projects.json), but its only immediate-tier rule is `status=disabled` (SNTRY-016) — and even enabled it routes solely to Slack integration id 7, absent/inactive in integrations.json (SNTRY-005) — while rate limits already dropped D events at ingest (SNTRY-008): a fatal regression in checkout is dropped before it becomes an issue or fires a rule that reaches no live receiver. The incident is invisible."* Emit this as a single finding per affected service (ranked by `points_recoverable`), not four isolated green-looking rows; each member check names the others in its evidence so `/scoutflo:rca` and the correlation view consume the join.
 
 One row per service: `Service | Ready | Project | Events | Alert tiers | Receiver | Owner | Gap`, using `pass` / `partial` / `fail` / `blocked` / `not-in-scope`. Name services in findings: "checkout and payments have no error tracking" is a finding, "two services lack coverage" is not. When live discovery contradicts topology.md, propose an update in the report; only the mapping skill and you edit that file.
 
@@ -356,7 +360,7 @@ Then render the Scoutflo Topology Readiness section per [topology-readiness.md](
 
 | Category | Weight | Checks |
 | --- | ---: | --- |
-| Alert rules and routing | 25 | SNTRY-001, 005, 011, 013, 014, 015, 101, 102, 103, 104, 105 |
+| Alert rules and routing | 25 | SNTRY-001, 005, 011, 013, 014, 015, 016, 017, 101, 102, 103, 104, 105 |
 | Privacy and data protection | 15 | SNTRY-002, 010 |
 | Project configuration | 15 | SNTRY-003, 004 |
 | Releases and source context | 15 | SNTRY-006, 009 |

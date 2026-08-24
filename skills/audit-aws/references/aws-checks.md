@@ -37,11 +37,14 @@ One permanent ID per check. IDs never change or get reused; retired checks keep 
 | AWS-024 | Compute health and coverage | Error-rate and throttle alarms per critical Lambda function | high |
 | AWS-025 | Compute health and coverage | Concurrency/duration alarms where latency-sensitive or concurrency-capped | medium |
 | AWS-026 | Compute health and coverage | X-Ray tracing reviewed where the team has adopted it | info |
+| AWS-027 | Compute health and coverage | No ASG has a safety process suspended (HealthCheck / ReplaceUnhealthy / AlarmNotification) — self-healing is not switched off | high |
+| AWS-028 | Compute health and coverage | Async Lambda has a dead-letter queue or on-failure destination (failed events are not dropped silently) | high |
 | AWS-030 | Managed databases | Multi-AZ enabled per production RDS instance | high |
 | AWS-031 | Managed databases | Automated backup retention window > 0 days | high |
 | AWS-032 | Managed databases | Storage autoscaling enabled | medium |
 | AWS-033 | Managed databases | Replication-lag alarm per read replica | medium |
 | AWS-034 | Managed databases | CPU, connection, and freeable-memory alarms present | high |
+| AWS-035 | Managed databases | Production RDS has an event subscription for failover / availability / low-storage events (on a confirmed topic) | medium |
 | AWS-040 | Uptime and availability | Route53 health check per active public serving endpoint | high |
 | AWS-041 | Uptime and availability | ALB/NLB target-group health check configured and probed live | high |
 | AWS-042 | Uptime and availability | Synthetics canaries, where used, carry a failure alarm | medium |
@@ -133,7 +136,8 @@ aws_cli elbv2 describe-target-groups --output json \
 aws_cli logs describe-log-groups --output json \
   | jq '[.logGroups[] | {name: .logGroupName, retention_days: (.retentionInDays // null)}]' > "${RAW_DIR}/log-groups.json"
 aws_cli cloudtrail describe-trails --output json \
-  | jq '[.trailList[] | {name: .Name, multi_region: .IsMultiRegionTrail, is_org_trail: .IsOrganizationTrail}]' > "${RAW_DIR}/cloudtrail.json"
+  | jq '[.trailList[] | {name: .Name, multi_region: .IsMultiRegionTrail, is_org_trail: .IsOrganizationTrail,
+      log_file_validation: .LogFileValidationEnabled}]' > "${RAW_DIR}/cloudtrail.json"
 aws_cli configservice describe-configuration-recorder-status --output json \
   | jq '[.ConfigurationRecordersStatus[] | {name: .name, recording: .recording}]' > "${RAW_DIR}/config-recorders.json" \
   || echo '[]' > "${RAW_DIR}/config-recorders.json"
@@ -158,7 +162,11 @@ jq -r '.[] | select(.state == "INSUFFICIENT_DATA") | "\(.name): namespace=\(.nam
 jq -r '.[] | select((.description | length) < 40) | .name' "${RAW_DIR}/alarms.json"
 ```
 
-Expected: cross-reference the first list's resource IDs against the section 4 inventories (`rds.json`, `target-groups.json`, `asgs.json`, `lambda.json`); any critical resource id absent from the list is the `AWS-001` finding, named exactly. `AWS-004` is not automatically a fail: an alarm in `INSUFFICIENT_DATA` because the resource is genuinely new or paused is a note, not a defect; an alarm in `INSUFFICIENT_DATA` for a live, serving resource because its dimension filter names the wrong resource id is the real finding. `AWS-002`, `AWS-005`, and `AWS-006` are judgment steps: read the alarm's `Threshold`/`ComparisonOperator` pair (or the composite alarm's `AlarmRule`) against the resource's known load pattern, and check `cloudwatch list-dashboards`/`get-dashboard` for a view naming this service.
+Expected: cross-reference the first list's resource IDs against the section 4 inventories (`rds.json`, `target-groups.json`, `asgs.json`, `lambda.json`); any critical resource id absent from the list is the `AWS-001` finding, named exactly.
+
+**AWS-001 is not "resource X has no alarm" — that is the Trusted Advisor line, free in thirty seconds. The finding is the computed blast radius.** Take each un-alarmed resource id from the diff above and join it to `./scoutflo-audits/topology-export.json`: resolve the resource to the critical services that back it via the `MONITORED_BY`/`service` (and mirrored `serviceName`) edge attributes, and state who dies unwatched and how many. For example: *"`db-primary` has zero CloudWatch alarms and backs `checkout` + `orders` (2 critical services, resolved from the `service` edges in topology-export.json) — a saturation event tonight pages nobody for either."* The number is the count of critical-service edges pointing at the un-alarmed resource; when no topology export exists, fall back to the resource's `service`/`Name` tag and say the join was inferred, never dropped. A zero-alarm resource is the **head of the flagship silent-page chain** — its strongest form, because there is not even an alarm to fail to deliver — so name the downstream links it feeds: AWS-034 (which specific RDS metric alarm is the one missing), AWS-024 (Lambda `Errors`/`Throttles`). Exact fix, per resource kind, never a bare "add an alarm": RDS → a two-tier `CPUUtilization` + `DatabaseConnections` + `FreeableMemory` set; ALB → an `HTTPCode_Target_5XX_Count` ratio; Lambda → `Errors` + `Throttles`, all with the section 12 starting thresholds; remediation `setup-aws#add-cloudwatch-alarms`. Verify by re-running the diff (the resource id now appears in the alarm-dimension id set) *and* `aws cloudwatch describe-alarms --alarm-names <name>` showing `StateValue != INSUFFICIENT_DATA` — which proves the dimension filter matched a live metric, not merely that an alarm object exists.
+
+`AWS-004` is not automatically a fail: an alarm in `INSUFFICIENT_DATA` because the resource is genuinely new or paused is a note, not a defect; an alarm in `INSUFFICIENT_DATA` for a live, serving resource because its dimension filter names the wrong resource id is the real finding. `AWS-002`, `AWS-005`, and `AWS-006` are judgment steps: read the alarm's `Threshold`/`ComparisonOperator` pair (or the composite alarm's `AlarmRule`) against the resource's known load pattern, and check `cloudwatch list-dashboards`/`get-dashboard` for a view naming this service.
 
 **AWS-007 (Application Signals SLO burn-rate alarm).** Only where the account uses Application Signals; when `list-service-level-objectives` returns empty or the service is not enabled, AWS-007 is `not-in-scope`, never a fail.
 
@@ -376,7 +384,7 @@ Expected: at least one past `ALARM` transition your team can confirm reached the
 
 ## 7. Compute health and coverage (AWS-020 to AWS-026)
 
-`AWS-020`: cross-reference `ec2.json` instance IDs against alarm dimensions naming `InstanceId` with a `StatusCheckFailed` or `StatusCheckFailed_System`/`StatusCheckFailed_Instance` metric; any serving instance absent from that set is the finding. `AWS-021`: from `asgs.json`, an ASG whose `health_check_type` is `EC2` when it fronts a load balancer (should be `ELB`) or whose `grace_period` is shorter than the service's own startup time is the finding. `AWS-022`: cross-reference `ecs-services.json` desired-vs-running counts against alarm dimensions naming `ServiceName`; a service with a persistent desired-running gap and no alarm is the finding.
+`AWS-020`: cross-reference `ec2.json` instance IDs against alarm dimensions naming `InstanceId` with a `StatusCheckFailed` or `StatusCheckFailed_System`/`StatusCheckFailed_Instance` metric; any serving instance absent from that set is a candidate. **"instance X has no StatusCheckFailed alarm" is a scanner line that mis-sizes severity by ignoring whether the instance is disposable.** Join each un-alarmed running instance to `asgs.json` / `aws autoscaling describe-auto-scaling-instances`: an instance that is NOT a member of any ASG (a *pet*) and serves a critical service stays dead until a human notices, so the missing `StatusCheckFailed_System` alarm (the one that also drives EC2 auto-recovery) is the only backstop — this is the real fail; an ASG *member* is auto-replaced, so the same gap is lower severity there. The number is pet instances mapped to a critical-service tag; name the instance id and its service. This crosses the NEW AWS-027 (ASG suspended processes): a member assumed safe *by* auto-replacement is not safe when `ReplaceUnhealthy`/`HealthCheck` is suspended, at which point the per-instance `StatusCheckFailed` alarm becomes the only backstop again — together they are the AWS "HA that isn't HA" trap (analogous to K8S-013). Exact fix: for pets, `StatusCheckFailed_System` (auto-recovery) + `StatusCheckFailed_Instance` alarms per instance (`setup-aws#add-compute-health-alarms`); for members, fix the ASG health-check type/grace (AWS-021) instead of per-instance alarms. Verify with `describe-alarms` showing a `StatusCheckFailed` alarm dimensioned to the `InstanceId`, in `OK` (not `INSUFFICIENT_DATA`) state. `AWS-021`: from `asgs.json`, an ASG whose `health_check_type` is `EC2` when it fronts a load balancer (should be `ELB`) or whose `grace_period` is shorter than the service's own startup time is the finding. `AWS-022`: cross-reference `ecs-services.json` desired-vs-running counts against alarm dimensions naming `ServiceName`; a service with a persistent desired-running gap and no alarm is the finding.
 
 `AWS-023`, Container Insights presence:
 
@@ -394,13 +402,99 @@ Container Insights itself is a CloudWatch agent add-on, not a `describe-cluster`
 - ❌ `Scored compute coverage 100: alarms exist for CPU and errors on every resource type.`
 - ✅ `Scored compute coverage 65: EC2 and Lambda are covered, but 2 of 3 ECS services have no desired-vs-running signal and the EKS cluster shows zero ContainerInsights metrics, so cluster health is unproven (AWS-022 fail, AWS-023 fail).`
 
-## 8. Managed databases (AWS-030 to AWS-034)
+## 7A. Self-healing and async-failure checks (AWS-027, AWS-028)
 
-From `rds.json`: `AWS-030` fails on any non-replica instance with `multi_az: false`. `AWS-031` fails on `backup_retention_days: 0`. `AWS-032` fails when `storage_autoscaling: false` (no `MaxAllocatedStorage` set). `AWS-033`: for every instance where `is_replica: true`, confirm an alarm exists on the `ReplicaLag` metric with a dimension matching that instance id; absence is the finding. `AWS-034`: cross-reference instance ids against alarm dimensions naming `DBInstanceIdentifier` with `CPUUtilization`, `DatabaseConnections`, and `FreeableMemory` metrics; any production instance missing one of the three is the finding, named per metric.
+> **Verify-pending.** Drafted against AWS's documented Auto Scaling and Lambda APIs and adversarially reviewed, but NOT run against a live tenant — status unproven until a first live run with a read-only token. The endpoints, fields, and enums below are from AWS's public API docs; no live AWS estate was reachable when these were authored (the benchmark estate is GKE). Every command is read-only (`describe-*`/`get-*`/`list-*`).
+
+Both open failure classes no existing check reaches: an ASG that reads as resilient (N instances desired) but whose resilience mechanism is switched off, and an async Lambda that silently discards failed events. Both fold into the **Compute health and coverage** category.
+
+### 7A.1 ASG safety process suspended (AWS-027)
+
+```bash
+set -eu
+AWS_PROFILE_CFG=""           # aws.profile
+AWS_REGION_CFG="us-east-1"   # aws.region
+aws_cli() {
+  if [ -n "$AWS_PROFILE_CFG" ]; then
+    aws --profile "$AWS_PROFILE_CFG" ${AWS_REGION_CFG:+--region "$AWS_REGION_CFG"} "$@"
+  else
+    aws ${AWS_REGION_CFG:+--region "$AWS_REGION_CFG"} "$@"
+  fi
+}
+# ASGs with any process in SuspendedProcesses; HealthCheck/ReplaceUnhealthy/AlarmNotification
+# are the safety-critical ones (Launch/Terminate/ScheduledActions suspension is often deliberate).
+aws_cli autoscaling describe-auto-scaling-groups --output json \
+  | jq -r '.AutoScalingGroups[]
+      | select((.SuspendedProcesses // []) | length > 0)
+      | "\(.AutoScalingGroupName)\tsuspended=\([.SuspendedProcesses[].ProcessName] | join(","))\tdesired=\(.DesiredCapacity)"'
+# Per-instance health/lifecycle, to name which members sit unguarded behind a suspended process.
+aws_cli autoscaling describe-auto-scaling-instances --output json \
+  | jq -r '.AutoScalingInstances[] | "\(.AutoScalingGroupName)\t\(.InstanceId)\t\(.HealthStatus)\t\(.LifecycleState)"'
+```
+
+Expected: no ASG lists `HealthCheck`, `ReplaceUnhealthy`, or `AlarmNotification` in `suspended=`. An ASG with one of those suspended has silently lost its self-healing or scaling response: a failed instance is never replaced and scaling alarms are ignored, yet the group's `DesiredCapacity` still reads as if it were resilient. Blast radius: join the ASG to the critical service it fronts (tag / topology) and quote `desired=`, e.g. *"`asg-checkout-web` (fronts `checkout`, desired=3) has `ReplaceUnhealthy` + `HealthCheck` suspended — a hung instance stays in rotation serving errors and is never cycled out."* The number is ASGs with a safety process suspended × the critical services they front. Correlation: AWS-020 (once `ReplaceUnhealthy` is suspended, a per-instance `StatusCheckFailed` alarm is the ONLY backstop) and AWS-021 (health-check type/grace). Fix: resume the process (`setup-aws#add-compute-health-alarms` records it as a plan; resuming a process changes ASG behavior and is out of the audit's read-only lane). Verify with `describe-auto-scaling-groups` showing an empty `SuspendedProcesses` for the group. A deliberately suspended process during a known maintenance window is a note with an owner, not a fail — confirm intent before filing.
+
+### 7A.2 Async Lambda with no DLQ or on-failure destination (AWS-028)
+
+```bash
+set -eu
+AWS_PROFILE_CFG=""           # aws.profile
+AWS_REGION_CFG="us-east-1"   # aws.region
+aws_cli() {
+  if [ -n "$AWS_PROFILE_CFG" ]; then
+    aws --profile "$AWS_PROFILE_CFG" ${AWS_REGION_CFG:+--region "$AWS_REGION_CFG"} "$@"
+  else
+    aws ${AWS_REGION_CFG:+--region "$AWS_REGION_CFG"} "$@"
+  fi
+}
+FN_NAME="your-function-name"   # each critical function from lambda.json
+# DeadLetterConfig covers async (event) invokes; the event-invoke config's OnFailure destination is
+# the newer path; event-source mappings (SQS/Kinesis/DynamoDB streams) carry their own OnFailure.
+aws_cli lambda get-function-configuration --function-name "$FN_NAME" \
+  --query '{dlq:DeadLetterConfig,runtime:Runtime,timeout:Timeout}' --output json
+aws_cli lambda get-function-event-invoke-config --function-name "$FN_NAME" \
+  --query 'DestinationConfig' --output json 2>/dev/null || echo 'no event-invoke config'
+aws_cli lambda list-event-source-mappings --function-name "$FN_NAME" \
+  --query 'EventSourceMappings[].{src:EventSourceArn,onfail:DestinationConfig.OnFailure}' --output json
+```
+
+Expected: an async-invoked function (EventBridge/S3/SNS trigger, or an event-source mapping) has EITHER a `DeadLetterConfig` OR an `OnFailure` destination. A function with neither drops the event permanently once retries exhaust — invisible data loss, not merely a missing alarm. Blast radius, joined to topology: *"`payments-callback` (critical, async via SNS) has no DLQ and no `OnFailure` destination — a downstream 5xx during a deploy silently discards payment callbacks with no replay path."* The number is async critical functions with neither. Nuance, exactly like AWS-026's X-Ray-adoption judgment: a function only ever invoked *synchronously* (behind API Gateway/ALB) marks this `not-in-scope`, not a fail — a synchronous caller gets the error back and owns the retry. Correlation with AWS-024: an `Errors` alarm tells you it failed; the DLQ/destination is what lets you REPLAY the lost event — an alarm with no DLQ means you know you lost data but cannot recover it. Complementary, not redundant. Fix: add a DLQ or `OnFailure` destination (`setup-aws#add-compute-health-alarms`; adding a destination changes function behavior, so it is a plan-only config write, never executed by the audit). Verify with `get-function-event-invoke-config` returning a non-empty `DestinationConfig.OnFailure`, or `get-function-configuration` showing a `DeadLetterConfig.TargetArn`.
+
+## 8. Managed databases (AWS-030 to AWS-035)
+
+From `rds.json`: `AWS-030` fails on any non-replica instance with `multi_az: false`. **The finding is not the config flag ("Multi-AZ disabled, backup 0 days") — that reads like a scanner. Join the instance to its backing critical services and state RPO/RTO concretely.** From topology-export.json, resolve which critical services depend on this instance, then: *"`db-primary` (backs `payments`, critical) has `MultiAZ=false` AND `BackupRetentionPeriod=0` — a single-AZ failure is a full `payments` outage with an RPO of everything since the last manual snapshot."* The number is dependent critical services + the literal retention window in days from `rds.json`. Correlation: the NEW AWS-035 — Multi-AZ ON but no `failover` RDS event subscription means the failover works but is invisible (nobody learns the primary flipped); Multi-AZ OFF plus no event subscription is doubly blind — plus AWS-034 (resource-pressure alarms) and AWS-032 (storage autoscaling vs low-storage events). Exact fix: enable Multi-AZ (**traffic-impacting**: a brief failover during conversion — plan-only with a named owner, never automated), set `BackupRetentionPeriod` to the compliance window, AND add the RDS failover/low-storage event subscription (AWS-035); remediation `setup-aws#harden-managed-databases`. Verify with `describe-db-instances` showing `MultiAZ=true` and `BackupRetentionPeriod>0`, and `describe-event-subscriptions` showing an `Enabled` subscription covering `failover` and `low storage` for this instance id. `AWS-031` fails on `backup_retention_days: 0`. `AWS-032` fails when `storage_autoscaling: false` (no `MaxAllocatedStorage` set). `AWS-033`: for every instance where `is_replica: true`, confirm an alarm exists on the `ReplicaLag` metric with a dimension matching that instance id; absence is the finding. `AWS-034`: cross-reference instance ids against alarm dimensions naming `DBInstanceIdentifier` with `CPUUtilization`, `DatabaseConnections`, and `FreeableMemory` metrics; any production instance missing one of the three is the finding, named per metric.
+
+### 8.1 RDS event subscription for failover / availability / low-storage (AWS-035)
+
+> **Verify-pending.** Drafted against AWS's documented RDS Events API and adversarially reviewed, but NOT run against a live tenant — status unproven until a first live run with a read-only token. The endpoints, `SourceType` values, and event categories below are from AWS's public API docs; no live AWS estate was reachable when this was authored. Both commands are read-only.
+
+```bash
+set -eu
+AWS_PROFILE_CFG=""           # aws.profile
+AWS_REGION_CFG="us-east-1"   # aws.region
+aws_cli() {
+  if [ -n "$AWS_PROFILE_CFG" ]; then
+    aws --profile "$AWS_PROFILE_CFG" ${AWS_REGION_CFG:+--region "$AWS_REGION_CFG"} "$@"
+  else
+    aws ${AWS_REGION_CFG:+--region "$AWS_REGION_CFG"} "$@"
+  fi
+}
+# RDS event subscriptions ride a channel SEPARATE from CloudWatch metric alarms; cats= must cover
+# failover / availability / low storage, enabled=true, and topic= must be a CONFIRMED topic (AWS-011).
+aws_cli rds describe-event-subscriptions --output json \
+  | jq -r '.EventSubscriptionsList[]
+      | "\(.CustSubscriptionId)\tsrc=\(.SourceType)\tenabled=\(.Enabled)\tcats=\((.EventCategoriesList // []) | join(","))\ttopic=\(.SnsTopicArn)"'
+# Recent db-instance events over the retained window (20160 minutes = 14 days, the RDS maximum),
+# to see whether a real failover/low-storage event has fired that a subscription would have carried.
+aws_cli rds describe-events --source-type db-instance --duration 20160 --output json \
+  | jq -r '.Events[] | "\(.SourceIdentifier)\t\(.Date)\t\(.EventCategories | join(","))\t\(.Message)"'
+```
+
+Expected: every production instance is covered by an `enabled=true` subscription whose `cats=` includes `failover`, `availability`, and `low storage` (an empty `EventCategoriesList` means *all* categories, which also satisfies this), pointing at a confirmed SNS topic. RDS failover, availability, and low-storage events are emitted on RDS Events, not on CloudWatch — so a Multi-AZ production instance (AWS-030) with no such subscription means a real AZ failover completes with nobody notified (the DB "recovered" but the on-call never learned the primary flipped), and a low-storage warning that precedes a disk-full outage is silent. Cross-check the subscription's `SnsTopicArn` against AWS-011: a subscription to a `PendingConfirmation` topic notifies nobody. Blast radius: production instances with no enabled, confirmed subscription for those categories × their dependent critical services. Correlation: THE join with AWS-030/031/032 — Multi-AZ, backups, and storage autoscaling are the mechanisms; the event subscription is what makes them observable — and its `SnsTopicArn` feeds the flagship silent-page chain through AWS-011's confirmation check. Severity `medium` (a notification-channel gap, not an availability loss). Fix: add the subscription on a confirmed topic (`setup-aws#harden-managed-databases`). Verify with `describe-event-subscriptions` showing an `Enabled` subscription covering those categories for the instance id.
 
 ## 9. Uptime and availability (AWS-040 to AWS-043)
 
-`AWS-040`: compare the service list's public hostnames against `route53-health-checks.json` targets; any active public hostname absent from the checked list is the finding. `AWS-041`: from `target-groups.json`, any `health_check_enabled: false` on a target group serving production traffic is the finding; then probe live health:
+`AWS-040`: compare the service list's public hostnames against `route53-health-checks.json` targets; any active public hostname absent from the checked list is a candidate. **But crediting any existing health check is a scanner miss: a health check wired to no failover record and watched by no alarm is decoration that ejects nothing and pages nobody.** For each health check, join two reads — `aws route53 list-resource-record-sets --hosted-zone-id <id>` (does any record reference this `HealthCheckId` in a failover/latency policy?) and `describe-alarms` (does any alarm ride its `AWS/Route53` `HealthCheckStatus` metric?). A check referenced by neither, on a public hostname backing a critical service, is inert: *"the health check on `api.example.com` is attached to no failover record set and no alarm — when it goes unhealthy, DNS keeps sending traffic to the dead endpoint and no page fires."* The number is inert checks mapped to critical public hostnames. Correlation: AWS-041 (target-group health ejects backends but pages nobody) and AWS-001/010 (is there an alarm to page at all) — the uptime story only closes when a health check either fails over DNS or pages a human. Exact fix: attach the check to a failover routing policy, OR add a CloudWatch alarm on its `HealthCheckStatus` routed to a confirmed paging topic; remediation `setup-aws#fix-uptime-coverage`. Verify with `list-resource-record-sets` showing a record referencing the `HealthCheckId`, OR `describe-alarms` showing an alarm on `HealthCheckStatus` for this check id with a non-empty `AlarmActions`. `AWS-041`: from `target-groups.json`, any `health_check_enabled: false` on a target group serving production traffic is the finding; then probe live health:
 
 ```bash
 set -eu
@@ -433,7 +527,7 @@ Expected: `200`. A `404`, `410`, or a parked page means the check watches a dead
 
 ## 10. Log forwarding and account-level observability (AWS-050 to AWS-056)
 
-`AWS-050`: from `log-groups.json`, cross-reference critical-service log group names against `aws logs describe-subscription-filters --log-group-name <name>`; an empty result on a critical group's log group is the finding unless the team has a written decision that logs stay local to CloudWatch. `AWS-051`: any critical log group with `retention_days: null` (meaning "Never expire") is the finding. `AWS-052`: from `cloudtrail.json`, at least one trail with `multi_region: true` must exist and be actively logging (`aws cloudtrail get-trail-status --name <trail>` returns `IsLogging: true`); absence is a critical, account-wide gap. `AWS-053`: from `config-recorders.json`, any recorder with `recording: false`, or an empty list entirely, is the finding. `AWS-054`: from `flow-logs.json`, any VPC carrying critical workloads absent from the list, or present with `status` other than `ACTIVE`, is the finding. `AWS-055` is a judgment step over the team's own answers: which backend receives forwarded logs, what retention, what redaction, who owns cost and access; a backend with none of those answered is `partial`, not `pass`.
+`AWS-050`: from `log-groups.json`, cross-reference critical-service log group names against `aws logs describe-subscription-filters --log-group-name <name>`; an empty result on a critical group's log group is a candidate unless the team has a written decision that logs stay local to CloudWatch. **"log group X has no subscription filter / retention=null" carries no incident consequence and no service — deepen it, and distinguish the opposite failure (a short-but-finite retention) from a healthy one.** Join critical-service log groups (name pattern from topology) to their retention and subscription-filter state: *"`/aws/lambda/payments-callback` has `retentionInDays=null` and no subscription filter — nothing forwards to the central sink, so a cross-service incident can only be reconstructed one log group at a time,"* or the inverse *"`retentionInDays=1` on the `checkout` ALB access logs — a slow-burn incident opened Friday has no logs by Monday."* The number is critical-service log groups with null or sub-window retention and/or no forwarding. Correlation with AWS-052: no central app logs + no API-call trail is a single "no forensic story after an incident" cascade. Exact fix: add a subscription filter to the central sink for each critical group; set finite retention to the compliance window (never null, never 1 day on an incident-relevant group); remediation `setup-aws#enable-account-observability`. Verify with `describe-subscription-filters --log-group-name <name>` returning a filter and `describe-log-groups` showing `retentionInDays` at the compliance value. `AWS-051`: any critical log group with `retention_days: null` (meaning "Never expire") is the finding. `AWS-052`: from `cloudtrail.json`, at least one trail with `multi_region: true` must exist and be actively logging (`aws cloudtrail get-trail-status --name <trail>` returns `IsLogging: true`); absence is a critical, account-wide gap. **On top of that existing `IsLogging`/multi-region check, add two things the checkbox misses.** First, `describe-trails` also carries `LogFileValidationEnabled` — without it, delivered log files can be tampered with undetectably, so verify it is `true`. Second, state the forensic blast radius rather than reporting a checkbox: a trail that exists with `IsLogging=false`, or single-region, means API activity in other regions (and everything after any `StopLogging`) is unrecorded — *after a credential compromise you cannot reconstruct which resources the attacker touched or created.* Judge this once for the account, not per service, and state it as an account-wide gap. Fix: ensure one multi-region trail with `IsLogging=true` delivering to a locked-down S3 bucket with log-file validation enabled; remediation `setup-aws#enable-account-observability`. Verify with `get-trail-status --name <trail>` returning `IsLogging=true` and `describe-trails` showing `IsMultiRegionTrail=true` and `LogFileValidationEnabled=true`. `AWS-053`: from `config-recorders.json`, any recorder with `recording: false`, or an empty list entirely, is the finding. `AWS-054`: from `flow-logs.json`, any VPC carrying critical workloads absent from the list, or present with `status` other than `ACTIVE`, is the finding. `AWS-055` is a judgment step over the team's own answers: which backend receives forwarded logs, what retention, what redaction, who owns cost and access; a backend with none of those answered is `partial`, not `pass`.
 
 `AWS-056`: CloudWatch Logs anomaly detectors in a broken state. Read-only `list-log-anomaly-detectors`:
 
