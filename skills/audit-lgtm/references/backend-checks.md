@@ -32,6 +32,8 @@ One permanent ID per check. IDs never change or get reused; retired checks keep 
 | LGTM-004 | Metrics layer | Rule groups load and evaluate without errors | high |
 | LGTM-005 | Metrics layer | Scrape or ingestion targets healthy | medium |
 | LGTM-006 | Metrics layer | Multi-tenant path or header verified (single-tenant: not-in-scope) | high |
+| LGTM-007 | Metrics layer | Ingestion freshness: newest queryable sample is recent, write-path not lagging | high |
+| LGTM-008 | Metrics layer | Rule-evaluation lag: no rule group evaluates slower than its own interval | medium |
 | LGTM-010 | Alert routing | Alertmanager reachable, config parses, cluster ready | critical |
 | LGTM-011 | Alert routing | At least one real receiver defined | critical |
 | LGTM-012 | Alert routing | vmalert loads rules and points at a live notifier | critical |
@@ -169,6 +171,43 @@ curl -fsS --max-time 10 -H "$AUTH" "${METRICS_URL}/api/v1/rules" \
 ```
 
 Expected: `/-/ready` returns ready text; `up` returns more than zero series; the down-targets list is empty; the evaluation-error list is empty. Failure shapes: `up` returning `0` series means nothing is being scraped (LGTM-003 fail, and every coverage check downstream will fail with it); persistent down targets for namespaces you monitor is LGTM-005; any `lastError` line is LGTM-004 with the line as evidence. Connection refused or 404 on `/api/v1/query` means wrong backend or wrong path prefix; go back to section 1.
+
+**Depth (per the [depth doctrine](../../report-standard/depth-doctrine.md)) — do not stop at the binary.** These three checks are the ones most likely to read like a free health banner, so each carries a computed blast radius and a correlation, not a status line:
+- **LGTM-001 (down/unreachable)** is the root of a cascade, not a yes/no: when the metrics store is down, pull `/api/v1/rules` first and state what goes dark — "this store is the sole datasource for the N alerting rules LGTM-004 inventoried, M at `severity=page`; while it is unreachable every one evaluates to no-data and pages nothing, and the K critical services whose rule lives here are unmonitored." Chains to LGTM-004 → LGTM-035 (per-service alerts silent) → LGTM-032/030 (coverage queries return empty and must be read as backend-down, never a false LGTM-030). Remediation: this is an availability incident (restore/scale the store), then close the HA gap that let one instance take the alert plane down (`setup-lgtm#enable-ha`).
+- **LGTM-004 (rule `lastError`)** never stops at the raw line: for each rule with a non-empty `lastError`, resolve `.name`/`.labels`/`.query` to a topology critical service and read `.labels.severity`, and use `.lastEvaluation` to say how long it has been broken — "`HighErrorRate{service=checkout}` severity=page has carried a PromQL parse error for 3 days; checkout's only error-rate page has not evaluated once — a spike tonight fires nothing." Chains to LGTM-035 and, when it is the service's only alerting path, LGTM-030. Fix the specific error the string names on the named rule (remediation `setup-lgtm`).
+- **LGTM-005 (down targets)** — the sharp edge is *staleness, not absence*: map each down target's `job`/`namespace`/`pod` to the critical set and state "these targets are now stale, so dashboards and rules read the last-scraped value and look alive while the pods may be dead; a saturation or error there is invisible until scrape resumes." Chains to LGTM-032 (depth queries return stale-but-covered-looking data), LGTM-030, and LGTM-007 (staleness is the shared root); if the pod is crash-looping, cross-reference audit-kubernetes K8SRT-001. Fix the scrape for the named job (ServiceMonitor/PodMonitor selector, target port, or a relabel drop rule) — remediation `setup-lgtm`.
+
+## 2b. Ingestion freshness and rule-evaluation lag (LGTM-007, LGTM-008)
+
+Two failure modes a green `up` and an error-free rule list both hide: data that is minutes stale while `up==1`, and a rule group that runs slower than its own interval so the page fires late against old data. Both are read-only and proven live against the benchmark Prometheus (which remote-writes to VictoriaMetrics).
+
+```bash
+# LGTM-007: age of the newest queryable sample per target. time()-timestamp(up) returns the real
+# scrape age (verified 0.4s..100s across 44 targets on the benchmark — it does NOT collapse to 0).
+# DETECTION CEILING = the staleness horizon: once a target is silent past the lookback window, up
+# goes stale/absent and this stops returning it — that regime is LGTM-005, not this check. The
+# subquery widens the detection window to a target last seen up to 15m ago.
+curl -fsS --max-time 10 -H "$AUTH" --get --data-urlencode 'query=time() - timestamp(up)' \
+  "${METRICS_URL}/api/v1/query" | jq -r '[.data.result[].value[1]|tonumber] | "max_sample_age_s=\(max) targets=\(length)"'
+curl -fsS --max-time 10 -H "$AUTH" --get --data-urlencode 'query=time() - max_over_time(timestamp(up)[15m:1m])' \
+  "${METRICS_URL}/api/v1/query" | jq -r '[.data.result[].value[1]|tonumber] | "max_age_15m_window_s=\(max)"'
+
+# Write-path high-water mark (remote-write / Mimir / VM-cluster topologies). On a direct-scrape
+# Prometheus that remote-writes (benchmark -> victoria-metrics ...:8428/api/v1/write) these exist and
+# samples_pending is the live backlog gauge; absent on a pure local-TSDB Prometheus (the fallback fires).
+curl -fsS --max-time 10 -H "$AUTH" "${METRICS_URL}/metrics" \
+  | grep -E '^prometheus_remote_storage_(highest_timestamp_in_seconds|queue_highest_sent_timestamp_seconds|samples_pending)' \
+  || echo 'no remote_write self-metrics (direct-scrape local TSDB, or non-Prometheus backend)'
+
+# LGTM-008: a rule group evaluating slower than its own interval — fires late even with no lastError.
+curl -fsS --max-time 10 -H "$AUTH" "${METRICS_URL}/api/v1/rules" \
+  | jq -r '.data.groups[] | select((.evaluationTime // 0) > (.interval // 0)) | "\(.name) eval=\(.evaluationTime)s > interval=\(.interval)s file=\(.file)"'
+curl -fsS --max-time 10 -H "$AUTH" --get \
+  --data-urlencode 'query=prometheus_rule_group_last_duration_seconds > prometheus_rule_group_interval_seconds' \
+  "${METRICS_URL}/api/v1/query" | jq -r '.data.result[]? | "\(.metric.rule_group) over-interval"'
+```
+
+Healthy: newest sample under one scrape interval old for every target; no group over its interval (benchmark: max age ~100s, both storefront groups eval in ~0.002s vs a 60s interval). Fail (**LGTM-007**, high): a target's newest sample is minutes old while `up` still reads 1 — every rule with `for: Nm` on it pages ~N+lag late; name the critical services (topology) in the lagging set and state the computed delay, which *is* the blast radius. Distinct from LGTM-005: a target can be `up` while ingestion lags in a remote-write/Mimir/VM topology. Fail (**LGTM-008**, medium): a group's `evaluationTime` exceeds its `interval` — every rule in it, including an SLO burn-rate page, evaluates late and can skip windows; a rule with no `lastError` (LGTM-004 passes) can still be silently late here. Both chain to LGTM-005 (up-but-stale from the read side), LGTM-001 (the extreme of lag is unreachability), and LGTM-035 (the service's page is delayed). Remediation: `setup-lgtm#enable-ha`.
 
 ## 3. Mimir specifics (LGTM-001, LGTM-003, LGTM-004, LGTM-006)
 

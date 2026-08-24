@@ -129,15 +129,18 @@ One permanent ID per check. IDs never change or get reused; retired checks keep 
 | ALR-018 | Alert hygiene | Resolve-notification volume on paging receivers is deliberate, not accidental | info |
 | ALR-019 | Route matching | No route/inhibition matcher pins `le`/`quantile` to an integer value that Prometheus 3.x normalizes to a float | high |
 | ALR-020 | Config integrity | No receiver on the deprecated `msteams_configs` delivery path (retired Office 365 connector) | medium |
+| ALR-021 | Rule presence | Loaded alert rules actually evaluate — `health==ok`, no `lastError`, no evaluation overrun (engine-gated) | high |
+| ALR-022 | Dispatch proof | No paging-severity alert is silently suppressed right now (a silence or inhibition swallowing a live page) | high |
+| ALR-023 | Route matching | Paging routes do not delay or mute the first page (large `group_wait`, or a mute interval active at the current clock) | medium |
 
 Category weights for scoring:
 
 | Category | Weight | IDs |
 | --- | ---: | --- |
 | Config integrity | 20 | ALR-002, ALR-003, ALR-020 |
-| Dispatch proof | 20 | ALR-005, ALR-006, ALR-009 |
-| Route matching | 15 | ALR-004, ALR-011, ALR-019 |
-| Rule presence | 15 | ALR-001 |
+| Dispatch proof | 20 | ALR-005, ALR-006, ALR-009, ALR-022 |
+| Route matching | 15 | ALR-004, ALR-011, ALR-019, ALR-023 |
+| Rule presence | 15 | ALR-001, ALR-021 |
 | Alert hygiene | 15 | ALR-012, ALR-013, ALR-014, ALR-015, ALR-016, ALR-017, ALR-018 |
 | Triage metadata | 10 | ALR-007, ALR-008 |
 | Reachability | 5 | ALR-010 |
@@ -436,6 +439,8 @@ Every finding's `remediation` field points at the fix, so "Next safe actions" in
 | ALR-004: matcher gaps; ALR-011: receiver flooding | `setup-lgtm#add-severity-routes-and-inhibition` for matcher gaps, `setup-lgtm#quiet-noisy-rules` for receiver flooding; route additions follow the confirm-then-verify setup loop |
 | ALR-005, ALR-006: delivery failures, integration mismatch | `setup-lgtm#fix-default-receiver` |
 | ALR-001, ALR-007: missing rules, missing triage metadata | `references/verification-chain.md#9-triage-metadata-contract-alr-007`; a dedicated alert-rule setup skill taking these IDs as input is planned |
+| ALR-021: loaded rule that errors/overruns | `references/verification-chain.md#141-rule-evaluation-health-alr-021` for the engine-gated evidence; the rule-expression fix belongs to the planned alert-rule setup skill (point at the named rule and its `lastError`) |
+| ALR-022: paging alert suppressed live; ALR-023: page delayed/muted | `setup-lgtm#add-severity-routes-and-inhibition` for over-broad inhibit rules and route-timing; an unintended silence expires through the Alertmanager UI (as in ALR-013) |
 | ALR-008: unproven error-tracker handoff | `/scoutflo:audit-sentry` to audit the tracker side; `/scoutflo:setup-sentry` to fix it |
 | ALR-010: DNS or ingress drift | Fix through your ingress change process, then re-run `/scoutflo:doctor` |
 | ALR-012, ALR-014: flapping, missing `for`/`keep_firing_for` | `references/verification-chain.md` section 13 for the target `for` and `keep_firing_for` shapes; the planned alert-rule setup skill takes these IDs as input |
