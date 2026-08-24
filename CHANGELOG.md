@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.133
+
+Depth wave 5 (first cloud/SaaS increment) — audit-pagerduty deepened to the [depth doctrine](report-standard/depth-doctrine.md). PagerDuty has no live estate in the benchmark, so these two new checks are **verify-pending**: drafted against PagerDuty's documented REST API and adversarially reviewed, but not yet run against a live tenant — the reference marks them so explicitly, and their status must be treated as unproven until a first live run with a read-only `PAGERDUTY_TOKEN`.
+
+- **PD-008** high-urgency notification-rule start delay: a responder whose high-urgency rule sets `start_delay_in_minutes > 0` has their *first* page delayed by design; joined to the escalation targets of critical-service policies (the PD-006 join), it states the added MTTA minutes, and compounds PD-006 (email-only) and PD-002 (single-target).
+- **PD-009** human-SPOF rotation: an escalation-target schedule with one distinct participant is a single point of failure — and PD-004's 100% coverage does *not* clear it (one person covering 100% is still a SPOF). New **flagship**: the silent-page path (policy present → single target → one participant → delayed first page) that passes every individual checkbox yet is provably broken end to end.
+- Both fold into Escalation and on-call (weight 30), no reweight; remediation is inline PagerDuty UI (no `setup-pagerduty` ships). New pressure scenario.
+
+Gates: leak CLEAN, structure-check (15), run-tests (22 suites), plugin validate --strict. The remaining cloud/SaaS audits (AWS, Azure, Sentry, Datadog, DigitalOcean, JSM, Zenduty, Groundcover) follow the same verify-pending pattern; several need a live tenant or provider-doc verification before their new checks can be confirmed.
+
 ## 0.1.132
 
 Depth wave 4 — audit-grafana deepened to the [depth doctrine](report-standard/depth-doctrine.md), completing the benchmark-live wave (five audits now: kubernetes, lgtm, alert-routing, clickstack, grafana). Verified read-only against the self-hosted benchmark Grafana **v12.3.1** (basic-auth from the cluster admin secret, read into a variable and never printed; GET-only, zero mutation).
