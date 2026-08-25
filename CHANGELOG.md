@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.140
+
+audit-signoz auth-model correction — **caught by a live PAT test** on the deployed benchmark SigNoz, not review. v0.138 manages tokens under **Settings → Service Accounts** with a **Roles (Beta)** RBAC (not "API Keys"), and a **Viewer role returns HTTP 403 `authz_forbidden`** on every read endpoint the audit uses (`/api/v1/rules`, `/api/v1/channels`, `/api/v1/dashboards`, `/api/v3/query_range`). The skill previously instructed a "Viewer PAT" — which would 403 the entire audit for a customer.
+
+- **Doctor gate now distinguishes 401 from 403:** `401` = token missing/invalid; `403 authz_forbidden` = token authenticated but its service-account role lacks read (Viewer insufficient) → a directed "assign an Admin or custom read-granting role" message, not a generic auth error.
+- **providers.md + connect**: token creation rewritten to *Service Account (Settings → Service Accounts) with an Admin or custom read-granting role*; explicitly notes Viewer is 403-forbidden.
+- **SIG-001 / SIG-050**: security posture now recommends the *least role that still grants read* (custom read role where supported; Viewer insufficient, Admin broader than ideal), and the error-evidence rules handle the 403 role case.
+
+The auth header (`SIGNOZ-API-KEY`) and all endpoints were confirmed live. The authed-response checks (SIG-040/041) remain verify-pending until a read-capable service-account token is run (the v0.138 login flow isn't scriptable headlessly). Gates: leak CLEAN, structure-check (15), run-tests (22), plugin validate --strict.
+
 ## 0.1.139
 
 New integration — **`audit-signoz`** (the 17th audit), added the same way ClickStack was: deployed live on the benchmark and grounded in its real API, not drafted from memory. SigNoz is OpenTelemetry-native observability on ClickHouse — a sibling of ClickStack — so the audit mirrors `audit-clickstack`'s shape while targeting SigNoz's own query-service.
