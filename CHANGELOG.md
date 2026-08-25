@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.139
+
+New integration — **`audit-signoz`** (the 17th audit), added the same way ClickStack was: deployed live on the benchmark and grounded in its real API, not drafted from memory. SigNoz is OpenTelemetry-native observability on ClickHouse — a sibling of ClickStack — so the audit mirrors `audit-clickstack`'s shape while targeting SigNoz's own query-service.
+
+- **11 checks (`SIG-NNN`) across 8 scored categories** (weights sum 100): query-API health, telemetry coverage, ingestion freshness, retention/TTL, ClickHouse health + capacity + write-path, alerting, dashboards, security posture. **Flagship (SIG-040):** the per-service paging path — a critical service has an alert rule → it is enabled and evaluates → it names a channel present in `/api/v1/channels` → that channel's destination is live (not empty/loopback/placeholder). Every finding clears the depth doctrine; strictly read-only.
+- **Auth:** a read-only VIEWER Personal Access Token via the `SIGNOZ-API-KEY` header; optional read-only ClickHouse user unlocks the deep backend lane (otherwise retention reads via SigNoz's TTL settings API and the direct-CH checks are `not-in-scope`).
+- **Deployed SigNoz v0.138 on the benchmark and live-verified:** reachability (`/api/v1/version`, `/api/v1/health` — 200), and the full ClickHouse lane against real data — health (17 active parts, no write-path errors), capacity (4.6 GiB free, 5% used), retention (`logs_v2`/`samples_v4` carry TTL), and the coverage/freshness + zero-telemetry guardrail (SIG-007) firing correctly on a fresh instance. The authed-API endpoints (SIG-040 alerting, SIG-041 dashboards) are confirmed present (401 without a PAT); their response-parsing is **verify-pending a VIEWER PAT** — v0.138 relocated the JWT login path, so I couldn't mint one headlessly, but a customer's PAT makes those checks live. The reference states this honestly.
+- Registered across connect Step 1, the start catalog, README, providers.md (SigNoz config + PAT + optional read-only ClickHouse user), and the `SIG` findings-schema prefix (also backfilled the missing `CS`/clickstack prefix). No `setup-signoz` ships yet — findings name inline SigNoz UI/API fixes, like `audit-pagerduty`.
+
+Gates: leak CLEAN, structure-check (15), run-tests (22 suites), plugin validate --strict. 3 pressure scenarios.
+
 ## 0.1.138
 
 Report readability (team feedback) — the **"Where" field is now an explicit required table** whenever a finding affects more than one object, instead of a comma-separated sentence. [report-standard/report-template.md](report-standard/report-template.md) states it as a conformance requirement in both the finding skeleton (with the exact `| # | Affected |` table form) and the prose rules, so the format is identical no matter which model writes the report — a weaker model no longer has to infer that a multi-item list should be a table. Single-object findings stay inline. Applies to every audit's `report.md`. Gates: leak CLEAN, structure-check (15), run-tests (22 suites), plugin validate --strict.

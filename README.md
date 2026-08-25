@@ -25,7 +25,7 @@ flowchart TD
     end
 
     subgraph AUDIT["② Audit — read-only, scored 0–100, changes nothing"]
-        aud["16 audit skills: lgtm · grafana · sentry · pagerduty · datadog<br/>elk · jsm · zenduty · groundcover · alert-routing<br/>kubernetes · digitalocean · gcp · aws · azure · clickstack"]
+        aud["17 audit skills: lgtm · grafana · sentry · pagerduty · datadog<br/>elk · jsm · zenduty · groundcover · alert-routing<br/>kubernetes · digitalocean · gcp · aws · azure · clickstack · signoz"]
         cost["/scoutflo:audit-cost<br/>deep per-resource cost, ranked savings"]
     end
 
@@ -181,6 +181,7 @@ Secrets live only in environment variables you export yourself. `~/.scoutflo/too
 | --- | --- |
 | `/scoutflo:audit-lgtm` | **Prometheus**, Loki, Tempo, Mimir, VictoriaMetrics, and Alertmanager stack health — scrape targets, rule evaluation, TSDB cardinality, retention (for Prometheus **alert routing**, pair with `audit-alert-routing`) |
 | `/scoutflo:audit-clickstack` | **ClickStack** (ClickHouse + HyperDX + OpenTelemetry) — telemetry coverage, ingestion freshness, retention TTL, ClickHouse DB/parts/replica health, HyperDX alerting + dashboards, security posture |
+| `/scoutflo:audit-signoz` | **SigNoz** (ClickHouse-backed, OpenTelemetry-native) — query-API health, telemetry coverage, ingestion freshness, retention TTL, ClickHouse health/capacity, alert-rule→channel delivery, dashboards, security posture |
 | `/scoutflo:audit-grafana` | Dashboard truthfulness, alert-rule wiring, query hygiene, datasource health |
 | `/scoutflo:audit-sentry` | Org and project config, privacy scrubbing, alert-rule tiers, releases, monitors |
 | `/scoutflo:audit-pagerduty` | Paging health: services, escalation policies, on-call coverage, alert grouping and noise, incident aging — plus a vendor-analytics-backed **actionability** section (auto-resolved share, MTTA, sleep-hour interruptions) when your plan and key allow |

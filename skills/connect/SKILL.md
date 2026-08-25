@@ -1,6 +1,6 @@
 ---
 name: connect
-description: Guided credential setup; creates minimal-scope tokens per tier for Grafana, Sentry, PagerDuty, Datadog, ELK/Kibana, JSM Operations, Zenduty, Groundcover, Prometheus, Loki, Tempo, Mimir, VictoriaMetrics, ClickStack (ClickHouse + HyperDX), DigitalOcean, GCP, Azure, AWS, Kubernetes, and Slack, and writes ~/.scoutflo/toolkit.yaml. Use when the user wants to connect or onboard the toolkit, add an integration, rotate a token, or set up credentials, including the audit-brief Slack webhook. Do not use for alert-delivery webhooks (Grafana contact points, Alertmanager receivers; use setup-grafana or setup-lgtm) or to verify reachability (use doctor).
+description: Guided credential setup; creates minimal-scope tokens per tier for Grafana, Sentry, PagerDuty, Datadog, ELK/Kibana, JSM Operations, Zenduty, Groundcover, Prometheus, Loki, Tempo, Mimir, VictoriaMetrics, ClickStack (ClickHouse + HyperDX), SigNoz, DigitalOcean, GCP, Azure, AWS, Kubernetes, and Slack, and writes ~/.scoutflo/toolkit.yaml. Use when the user wants to connect or onboard the toolkit, add an integration, rotate a token, or set up credentials, including the audit-brief Slack webhook. Do not use for alert-delivery webhooks (Grafana contact points, Alertmanager receivers; use setup-grafana or setup-lgtm) or to verify reachability (use doctor).
 ---
 
 # Connect: Credential and Config Setup
@@ -79,6 +79,7 @@ Ask which integrations to configure as a plain numbered list in a normal chat me
 | Groundcover | audit-groundcover | `groundcover:` | `GROUNDCOVER_API_KEY` | service-account API key on a Viewer role = true read-only tier |
 | Prometheus + Alertmanager | audit-lgtm, setup-lgtm, audit-alert-routing | `prometheus:` | `PROM_TOKEN` (only if your endpoints require auth) | URL reachability; optional bearer |
 | ClickStack (ClickHouse + HyperDX) | audit-clickstack, setup-clickstack | `clickstack:` | `CH_KEY` (ClickHouse read-only user password) + `HDX_API_KEY` (HyperDX API key) | ClickHouse: a read-only user with `SELECT` on the telemetry db + `system.*`; HyperDX: an API key that can `GET /api/alerts`, `/api/dashboards`, `/api/sources` |
+| SigNoz (ClickHouse-backed) | audit-signoz | `signoz:` | `SIGNOZ_API_KEY` (read-only VIEWER Personal Access Token) + optional `SIGNOZ_CH_KEY` (ClickHouse read-only user password) | A VIEWER-role PAT (Settings → API Keys) that can `GET /api/v1/rules`, `/api/v1/channels`, `/api/v1/dashboards` and `POST /api/v3/query_range`; optionally a read-only ClickHouse user with `SELECT` on `signoz_*` + `system.*` for the deep backend lane |
 | Loki | audit-lgtm, setup-lgtm | `loki:` | `LOKI_TOKEN` (optional) | URL; optional tenant and token |
 | Tempo | audit-lgtm, setup-lgtm | `tempo:` | `TEMPO_TOKEN` (optional) | URL; optional tenant and token |
 | Mimir | audit-lgtm, setup-lgtm | `mimir:` | `MIMIR_TOKEN` (optional) | URL; `tenant_id` when multi-tenant |
@@ -107,6 +108,7 @@ Judgment step: collect the non-secret facts for every integration you picked bef
 | Groundcover | `groundcover.token_env`, `groundcover.tier`; optional `backend_id`, `api_url` | `token_env: GROUNDCOVER_API_KEY` |
 | Prometheus + Alertmanager | `prometheus.url`, `prometheus.alertmanager_url`; add `token_env` and `tier` only behind an auth proxy | `url: https://prometheus.example.com` |
 | ClickStack | `clickstack.clickhouse_url`, `clickstack.clickhouse_user`, `clickstack.clickhouse_password_env`, `clickstack.hyperdx_url`, `clickstack.hyperdx_api_key_env` | `clickhouse_url: https://your-clickhouse-host:8123` |
+| SigNoz | `signoz.url`, `signoz.api_key_env`, and optional `signoz.clickhouse_url`, `signoz.clickhouse_user`, `signoz.clickhouse_password_env` | `url: https://your-signoz-host` |
 | Loki | `loki.url`; optional `token_env` and `tier` | `url: https://loki.example.com` |
 | Tempo | `tempo.url`; optional `token_env` and `tier` | `url: https://tempo.example.com` |
 | Mimir | `mimir.url`; optional `tenant_id`, `token_env`, `tier` | `tenant_id: your-tenant` |
