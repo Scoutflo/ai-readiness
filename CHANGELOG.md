@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.142
+
+audit-signoz v0.138 API-path corrections — caught by a **live authenticated read** once the benchmark service account was assigned the `signoz-viewer` role (closing the authed-lane verify-pending from v0.1.141).
+
+- **Dashboards (SIG-041):** `/api/v1/dashboards` is **deprecated on v0.138** and returns HTTP `501 dashboard_deprecated`. The skill now reads **`/api/v2/dashboards`** (`.data.dashboards`). All dashboards references updated across the skill + connect.
+- **Retention (SIG-020):** `/api/v1/settings/ttl` **requires a `?type=<traces|metrics|logs>` param** — a bare call returns 400 `type param cannot be empty`. SIG-020 now queries per-signal. (Live-confirmed values on the benchmark: traces 360h, metrics 720h, logs −1/unbounded.)
+- **Provenance upgraded** from "verify-pending" to **authed-confirmed**: `GET /api/v1/rules`, `/api/v1/channels`, `/api/v1/alerts` and `GET /api/v2/dashboards` each return 200 JSON with a `signoz-viewer` token; a role-less token returns 403 `authz_forbidden`. The version-compatibility note now records both v0.138 path facts (v1 dashboards → v2; `settings/ttl` type param).
+
+Gates: leak CLEAN, structure-check (16), run-tests (22), plugin validate --strict.
+
 ## 0.1.141
 
 SigNoz auth-model correction + a plugin-wide HTTP-probe compatibility hardening — driven by a live test on the deployed SigNoz v0.138 that proved our shipped guidance was wrong.
