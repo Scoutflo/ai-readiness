@@ -8,3 +8,8 @@
 42d75b86bf87560ff2f0d44d2e48feaeb0b2d949:skills/audit-all/tests/test-v0165-integration-end-to-end.sh:stripe-access-token:237
 42d75b86bf87560ff2f0d44d2e48feaeb0b2d949:skills/audit-all/tests/test-v0165-integration-end-to-end.sh:stripe-access-token:253
 42d75b86bf87560ff2f0d44d2e48feaeb0b2d949:skills/redaction/tests/test-redaction-integration.sh:stripe-access-token:64
+
+# False positive: gitleaks' curl-auth-user rule matches a `date -u '+now UTC: %Y-%m-%d %H:%M %A'`
+# format string (the `-u` is date's UTC flag, not a curl credential). Harmless doc content in a
+# historical commit; suppress the specific fingerprint so CI is not red on a non-secret.
+a83f1faf01792e3f2cb84a8ca1eba16504d45a18:skills/audit-alert-routing/references/verification-chain.md:curl-auth-user:768
