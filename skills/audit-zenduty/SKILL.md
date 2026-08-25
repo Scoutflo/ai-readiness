@@ -62,9 +62,28 @@ done
 
 ZD_API="https://www.zenduty.com/api"
 # Teams is the cheapest list read. Auth is "Token <key>", the literal word Token, not Bearer.
-CODE="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 \
-  -H "Authorization: Token ${ZENDUTY_TOKEN}" "${ZD_API}/account/teams/")"
-[ "$CODE" = "200" ] || { echo "teams probe returned ${CODE}: 401/403 = key invalid or not 'Token'-prefixed (not Bearer); 429 = rate-limited, wait a minute"; exit 1; }
+# www.zenduty.com is Cloudflare-fronted, so a 200 that returns a JS-challenge/SPA/login page
+# is a false-green. Judge the body, not the status code alone: capture BOTH the status and the
+# content-type, and pass ONLY on 200 + a JSON content-type + a body assertion. This mirrors
+# skills/doctor/scripts/doctor.sh so doctor and this audit agree.
+BODY="$(mktemp)"; RC=0
+META="$(curl -s -o "$BODY" -w '%{http_code} %{content_type}' --max-time 10 \
+  -H "Authorization: Token ${ZENDUTY_TOKEN}" "${ZD_API}/account/teams/")" || RC=$?
+CODE="${META%% *}"; CT="${META#* }"
+if [ "$RC" -ne 0 ]; then
+  rm -f "$BODY"; echo "teams probe could not connect (curl exit ${RC}); check network and the www.zenduty.com host"; exit 1
+elif [ "$CODE" = "200" ] && printf '%s' "$CT" | grep -qi json && jq -e 'type=="array" or type=="object"' "$BODY" >/dev/null 2>&1; then
+  : # real JSON team list from the API — pass
+elif [ "$CODE" = "200" ]; then
+  rm -f "$BODY"; echo "teams probe returned 200 but Content-Type='${CT}' — looks like a Cloudflare interstitial/JS-challenge or SPA/login page, not the API; a 200 HTML page is not proof, retry or verify the token"; exit 1
+elif [ "$CODE" = "401" ] || [ "$CODE" = "403" ]; then
+  rm -f "$BODY"; echo "teams probe returned ${CODE}: key invalid or not 'Token'-prefixed (not Bearer)"; exit 1
+elif [ "$CODE" = "429" ]; then
+  rm -f "$BODY"; echo "teams probe returned 429: rate-limited, wait a minute"; exit 1
+else
+  rm -f "$BODY"; echo "teams probe returned ${CODE}"; exit 1
+fi
+rm -f "$BODY"
 echo "doctor gate: pass"
 ```
 

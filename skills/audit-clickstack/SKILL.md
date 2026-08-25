@@ -81,9 +81,19 @@ if [ -n "${HDX_API_KEY:-}" ]; then
   # helper obtains a session instead; without them, CS-040/CS-041 are marked not-in-scope.
   HDX_URL_D=$(awk '/^clickstack:/{f=1;next} /^[a-z]/{f=0} f && $1=="hyperdx_url:"{print $2}' "$CFG")
   if [ -n "$HDX_URL_D" ]; then
-    _c=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 -H "Authorization: Bearer ${HDX_API_KEY}" "${HDX_URL_D%/}/api/alerts")
+    _hb="$(mktemp)"
+    _meta=$(curl -s -o "$_hb" -w '%{http_code} %{content_type}' --max-time 10 -H "Authorization: Bearer ${HDX_API_KEY}" "${HDX_URL_D%/}/api/alerts") || _meta="000 -"
+    _c="${_meta%% *}"; _ct="${_meta#* }"
     case "$_c" in
-      200) echo "HyperDX in scope (GET /api/alerts -> 200 with the REST key)";;
+      200)
+        # A 200 alone is not scope: a moved path, a GET on a POST-only route, or a
+        # reverse proxy fronting auth can answer 200 with an HTML login/SPA page.
+        # Treat HyperDX as in-scope ONLY when the body is JSON of the /api/alerts shape.
+        if printf '%s' "$_ct" | grep -qi json && jq -e 'type=="array" or has("data") or has("alerts")' "$_hb" >/dev/null 2>&1; then
+          echo "HyperDX in scope (GET /api/alerts -> 200 with the REST key)"
+        else
+          echo "HyperDX GET /api/alerts -> 200 but Content-Type='${_ct}' with a non-JSON body — looks like an HTML login/SPA/proxy page, not the API (moved path, a GET on a POST-only route, or a proxy fronting auth), so HyperDX is NOT in scope. CS-040/CS-041 will be marked not-in-scope. Verify clickstack.hyperdx_url."
+        fi;;
       401|403)
         if [ -n "${HDX_EMAIL:-}" ] && [ -n "${HDX_PASSWORD:-}" ]; then
           echo "HyperDX key 401s (v2.x: the apiKey is ingestion-only) but login credentials are set — the audit obtains a session via POST /api/login/password (cookie in a 0600 mktemp jar, deleted on exit, never printed) and scores CS-040/CS-041"
@@ -92,6 +102,7 @@ if [ -n "${HDX_API_KEY:-}" ]; then
         fi;;
       *) echo "HyperDX GET /api/alerts -> ${_c}; HyperDX categories may be not-in-scope. Verify clickstack.hyperdx_url.";;
     esac
+    rm -f "$_hb"
   fi
 elif [ -n "${HDX_EMAIL:-}" ] && [ -n "${HDX_PASSWORD:-}" ]; then
   echo "HyperDX API key not set but login credentials are — the audit scores CS-040/CS-041 via the v2 session login (presence-checked only; never printed)"

@@ -5,12 +5,22 @@ Runnable, read-only checks for every surface the [audit-signoz](../SKILL.md) wor
 ## 1. Conventions
 
 - The endpoints, auth model, ClickHouse databases, and error-code semantics below were **confirmed on a live read** of a SigNoz **v0.138** instance. Anything marked **confirm-live** (the JSON response shapes of `/api/v1/rules`, `/api/v1/channels`, `/api/v1/dashboards`, and `/api/v1/settings/ttl`; the `POST /api/v3/query_range` request body; and every SigNoz ClickHouse column name) needs verifying against your instance with a working credential before the skill asserts it. Never invent an endpoint, table, column, or field beyond what is confirmed.
-- **SigNoz API auth:** every authenticated call sends the header `SIGNOZ-API-KEY: ${SIGNOZ_API_KEY}`, where the PAT is a **Service Account token** (SigNoz Settings → Service Accounts) whose role grants read — Admin, or a custom read role; a Viewer role returns 403 on the read endpoints. Two endpoints are **open (no auth)** and are the reachability/liveness probes: `GET /api/v1/version` (returns `{"version":"v0.138.0","ee":"Y","setupCompleted":...}`) and `GET /api/v1/health` (returns `{"status":"ok"}`) — both HTTP 200. The authed endpoints `GET /api/v1/rules`, `GET /api/v1/channels`, `GET /api/v1/dashboards`, and `GET /api/v1/settings/ttl`, plus `POST /api/v3/query_range`, return HTTP `401` JSON `{"status":"error","error":{"type":"unauthenticated",...}}` without the PAT — that 401 confirms the endpoint exists and requires auth; it is not a broken path.
+- **SigNoz API auth:** every authenticated call sends the header `SIGNOZ-API-KEY: ${SIGNOZ_API_KEY}`, where the token is a **Service Account token** (SigNoz Settings → Service Accounts) assigned **at least the `signoz-viewer` role** — read-only and the least-privilege role that works. Verified at the SigNoz source and live on v0.138: `GET /api/v1/rules`, `/api/v1/channels`, `/api/v1/dashboards`, and `/api/v1/alerts` are wrapped in the `ViewAccess` middleware, which admits **any** of `signoz-admin` / `signoz-editor` / `signoz-viewer`. So Viewer is **required and sufficient** — do **not** use Admin (over-privileged) or assume a custom role is needed. A `403 authz_forbidden` with body `{"code":"authz_forbidden","message":"only viewers/editors/admins can access this resource"}` means the service account holds **none of those three roles** — on v0.138 a service account is created with **zero roles** until one is attached (Settings → Service Accounts → Roles, or `POST /api/v1/service_account_roles`); the fix is to assign it `signoz-viewer`, not a higher role. Two endpoints are **open (no auth)** and are the reachability/liveness probes: `GET /api/v1/version` (returns `{"version":"v0.138.0","ee":"Y","setupCompleted":...}`) and `GET /api/v1/health` (returns `{"status":"ok"}`) — both HTTP 200. Without the token the authed endpoints return HTTP `401` JSON `{"status":"error","error":{"type":"unauthenticated",...}}` — that 401 confirms the endpoint exists and requires auth; it is not a broken path.
 - **SigNoz ClickHouse read surface (optional deep lane):** HTTP on `:8123`. Every ClickHouse block authenticates as a **least-privilege read-only user** (see [SIG-050](#8-security-posture-sig-050-and-query-api-health-sig-001)) — that user is the read-only guarantee. The HTTP `readonly=1` setting is pinned as *defense-in-depth* on top of it; a user that is **already read-only by profile** rejects `?readonly=1` with `Code: 164 — Cannot modify 'readonly' setting in readonly mode`, which itself proves the user is read-only, so `chq` falls back to the query without the param. Probe the `readonly=1` form **once** per session and remember which form works — retrying it on every call lands a Code-164 row per query in `system.errors`, which SIG-030 would then read back as "spiking READONLY errors" (the audit polluting the signal it audits). The SQL is sent as the raw POST body with `--data-binary`; nothing is stored.
 - Presence-check tokens and passwords only; never echo, log, or write a secret value anywhere. Rendered channel configs and API responses can embed webhook URLs with secrets — record their shape and host class (loopback, private, public, placeholder), never the full URL.
-- `curl -fsS --max-time 20` is the default. Where a status code is itself the evidence (the unauthenticated ClickHouse default-user probe in SIG-050, and the no-PAT SigNoz probe), `-f` is dropped deliberately and `-w '%{http_code}'` is used; those blocks say so.
+- `curl -fsS --max-time 20` is the default. Where a status code is itself the evidence (the unauthenticated ClickHouse default-user probe in SIG-050, and the no-Service Account token SigNoz probe), `-f` is dropped deliberately and `-w '%{http_code}'` is used; those blocks say so.
 - Time windows and thresholds are examples; tune to your ingest volume: `RECENT="INTERVAL 1 HOUR"` for coverage, `FRESH_LAG_S=900` for freshness, part-count and error-spike thresholds per your cluster size.
 - The single-node build has **no replicas and no sharding**, so `system.replicas` is empty there — that is expected, not a finding. Replica checks apply to clustered ClickHouse.
+
+### Version compatibility (auth + API paths across SigNoz releases)
+
+The `SIGNOZ-API-KEY` header is the **constant** across every version (a `Bearer` JWT is only the browser session). What changes is how a token is minted and what path a route lives at — so echo `GET /api/v1/version` first and branch on it. Buckets seen in the wild:
+
+- **OSS < v0.85** — may have **no API-key path at all** (programmatic keys arrived in v0.85.0, 2025-05-28). Treat as "authed API unavailable" and lean on the ClickHouse deep lane.
+- **~v0.85–v0.113** — standalone **API Keys** under *Settings → API Keys* (this menu no longer exists on current builds), tied to a user with the classic 3-tier `user.role` RBAC (ADMIN/EDITOR/VIEWER); the key inherits the creating user's role. Service Accounts do **not** exist yet in this era.
+- **~v0.114–v0.135** — transitional: **Service Accounts** introduced (v0.114.0, 2026-03-05) alongside API keys; fine-grained authz behind the `use_fine_grained_authz` flag. Both key surfaces may appear in the UI.
+- **v0.136+** (the deployed benchmark is **v0.138.0 EE**) — fine-grained authz (OpenFGA) **on by default** (flag removed v0.136.0), still UI-labelled "Roles (Beta)"; `user_roles` API in v0.137.0, `service_account_roles` API in v0.138.0. Four immutable managed roles — `signoz-admin` / `signoz-editor` / `signoz-viewer` / `signoz-anonymous`; a service account starts with **zero roles** and gets the **union** of whatever is attached. The coarse `ViewAccess` gate on `/rules`, `/channels`, `/dashboards`, `/alerts` behaves **identically in Community, Enterprise, and Cloud**, so `signoz-viewer` reads them in every edition (custom/per-resource roles are an Enterprise-only extra, not needed here).
+- **Path moves that make a status-only probe false-green on v0.138+:** `/api/v1/user` was removed in v0.137.1 (2026-08-14) — a GET now falls through to the SPA (HTTP 200 + `text/html`); service-account identity is `GET /api/v1/service_accounts/me`. `query_range` is **POST** at v3, v4, **and v5** (v5 current; v3 still works) — a GET to any of them, or to POST-only listing routes, returns the SPA. `/api/v1/rules` and `/api/v1/channels` paths themselves are stable. This is exactly why the doctor probe below asserts the response is JSON, not just a 200.
 
 SigNoz API helper (declare once per session; every SigNoz block below calls `sig_get`):
 
@@ -19,7 +29,7 @@ set -eu
 SIG_URL="https://your-signoz-host:8080"     # signoz.url
 SIG_URL="${SIG_URL%/}"
 SIGNOZ_API_KEY="${SIGNOZ_API_KEY:-}"         # signoz.api_key_env; presence-checked by the doctor gate
-[ -n "$SIGNOZ_API_KEY" ] || { echo "no SigNoz PAT set (signoz.api_key_env); authed checks unavailable — run /scoutflo:connect"; exit 1; }
+[ -n "$SIGNOZ_API_KEY" ] || { echo "no SigNoz Service Account token set (signoz.api_key_env); authed checks unavailable — run /scoutflo:connect"; exit 1; }
 
 # sig_get <path> — the ONE way every SigNoz block below reads the API; GET only.
 sig_get() {
@@ -75,23 +85,42 @@ Doctor reachability + liveness (open endpoints, then one authed probe). Self-con
 set -eu
 SIG_URL="${SIG_URL:-https://your-signoz-host:8080}"; SIG_URL="${SIG_URL%/}"   # signoz.url
 SIGNOZ_API_KEY="${SIGNOZ_API_KEY:-}"                                          # signoz.api_key_env
-[ -n "$SIGNOZ_API_KEY" ] || { echo "no SigNoz PAT set (signoz.api_key_env) — run /scoutflo:connect"; exit 1; }
+[ -n "$SIGNOZ_API_KEY" ] || { echo "no SigNoz Service Account token set (signoz.api_key_env) — run /scoutflo:connect"; exit 1; }
 # Open endpoints — reachability, no auth (both 200 on a healthy instance):
 curl -fsS --max-time 10 "${SIG_URL}/api/v1/version" | jq -e '.version and (.setupCompleted != null)' >/dev/null \
   && echo "version endpoint ok" || { echo "GET /api/v1/version did not answer as expected; wrong host/port"; exit 1; }
 curl -fsS --max-time 10 "${SIG_URL}/api/v1/health" | jq -e '.status == "ok"' >/dev/null \
   && echo "health ok" || echo "WARN: /api/v1/health did not report ok"
 # Authed probe — the service-account token actually works (SIG-001 evidence).
-# CONFIRMED live on v0.138: 401 = token missing/invalid; 403 authz_forbidden = the token
-# authenticated but its ROLE lacks read (a Viewer role returns 403 on this endpoint — the
-# audit needs an Admin or a custom read-granting role, see providers.md). Distinguish them.
-RC="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 -H "SIGNOZ-API-KEY: ${SIGNOZ_API_KEY}" "${SIG_URL}/api/v1/rules")"
+# A 200 status ALONE is not proof: a moved path, a POST-only route hit with GET, or an
+# SSO/reverse-proxy in front of SigNoz all return HTTP 200 with an HTML SPA/login body, which
+# a status-only check would mis-read as "authorized". So capture the body AND the content-type
+# and require real JSON before crediting a pass. CONFIRMED live + at source on v0.138:
+#   401 = token missing/invalid;
+#   403 authz_forbidden = token authenticated but the service account holds NO read role
+#        (below viewer) — assign it signoz-viewer (Settings -> Service Accounts -> Roles);
+#   200 + non-JSON (text/html) = /api/v1/rules fell through to the SPA/login page (path moved
+#        on this version, or a proxy fronts auth) -> NOT verified.
+SIG_BODY="$(mktemp)"
+SIG_META="$(curl -s -o "$SIG_BODY" -w '%{http_code} %{content_type}' --max-time 15 \
+             -H "SIGNOZ-API-KEY: ${SIGNOZ_API_KEY}" "${SIG_URL}/api/v1/rules")"
+RC="${SIG_META%% *}"; CT="${SIG_META#* }"
 case "$RC" in
-  200) echo "authed query API ok (GET /api/v1/rules -> 200 with the token)";;
-  401) echo "GET /api/v1/rules -> 401 unauthenticated: the SigNoz token is missing or invalid — run /scoutflo:connect"; exit 1;;
-  403) echo "GET /api/v1/rules -> 403 authz_forbidden: the token authenticated but its SERVICE-ACCOUNT ROLE lacks read (a Viewer role is insufficient on v0.138). Assign the service account an Admin or a custom read-granting role (SigNoz Settings -> Service Accounts / Roles), then retry"; exit 1;;
-  *)   echo "GET /api/v1/rules -> ${RC}; verify signoz.url and the token"; exit 1;;
+  200)
+    case "$CT" in
+      application/json*) : ;;
+      *) echo "GET /api/v1/rules -> 200 but Content-Type='${CT}' (not JSON): the request fell through to the SigNoz SPA/login page — the path moved on this version or a proxy fronts auth; NOT verified"; rm -f "$SIG_BODY"; exit 1 ;;
+    esac
+    if jq -e 'type=="array" or has("data") or has("rules")' "$SIG_BODY" >/dev/null 2>&1; then
+      echo "authed query API ok (GET /api/v1/rules -> 200 JSON with the token; signoz-viewer is sufficient)"
+    else
+      echo "GET /api/v1/rules -> 200 JSON but unexpected shape; inspect the body before crediting"; rm -f "$SIG_BODY"; exit 1
+    fi ;;
+  401) echo "GET /api/v1/rules -> 401 unauthenticated: the SigNoz token is missing or invalid — run /scoutflo:connect"; rm -f "$SIG_BODY"; exit 1;;
+  403) echo "GET /api/v1/rules -> 403 authz_forbidden: the token authenticated but its service account holds NO read role (below viewer). Assign the service account the signoz-viewer role (SigNoz Settings -> Service Accounts -> Roles, or POST /api/v1/service_account_roles), then retry — Viewer is read-only and sufficient"; rm -f "$SIG_BODY"; exit 1;;
+  *)   echo "GET /api/v1/rules -> ${RC} (content-type ${CT}); verify signoz.url and the token"; rm -f "$SIG_BODY"; exit 1;;
 esac
+rm -f "$SIG_BODY"
 ```
 
 ## 2. Check catalog
@@ -101,7 +130,7 @@ One permanent ID per check. IDs never change or get reused; retired checks keep 
 | ID | Category | Check | Typical fail severity |
 | --- | --- | --- | --- |
 | SIG-007 | Scope guardrail | Reachable SigNoz with **zero telemetry across logs/traces/metrics**, or **zero alert rules**, is a visibility/ingestion gap — blocks the coverage/alerting-dependent categories, never a confident 0 | info |
-| SIG-001 | Query API health | The authenticated read path answers with the PAT (`GET /api/v1/rules` → 200; the query API `POST /api/v3/query_range` resolves) — proves the surface the whole audit depends on works | high |
+| SIG-001 | Query API health | The authenticated read path answers with the Service Account token (`GET /api/v1/rules` → 200; the query API `POST /api/v3/query_range` resolves) — proves the surface the whole audit depends on works | high |
 | SIG-010 | Telemetry coverage | Logs, traces, and metrics carry recent data for the critical services (via `/api/v3/query_range` or the `signoz_*` tables) | high |
 | SIG-011 | Ingestion freshness | `max(<ts_col>)` lag on logs/traces/metrics within threshold (stale = broken pipeline) | high |
 | SIG-020 | Retention | Each signal (traces/metrics/logs) has a deliberate TTL (via `/api/v1/settings/ttl` and/or the ClickHouse table TTL); unbounded = cost/compliance gap, too-short = data-loss gap | high |
@@ -141,12 +170,12 @@ chq "SELECT 'logs' AS signal, count() AS total FROM signoz_logs.logs_v2
 Without the ClickHouse lane, the census is the query API instead — `POST /api/v3/query_range` for a coarse count over the recent window across each signal (body confirm-live).
 
 - **Healthy target:** at least one signal carries rows, and at least one alert rule exists.
-- **Finding (SIG-007):** if SigNoz is reachable (`/api/v1/health` ok, PAT works) but **every** telemetry signal returns `0` in the recent window, emit SIG-007 and mark the coverage-dependent categories (**SIG-010, SIG-011**) `blocked`. If SigNoz is reachable but returns **zero alert rules**, emit SIG-007 and mark the alerting-dependent categories (**SIG-040, SIG-041**) `blocked`. In both cases keep **Security posture (SIG-050)** — and, on the ClickHouse lane, **DB health (SIG-030)** — scorable, then **renormalize** the overall over the categories that remain. Never report a confident `0/100` from an empty read; the likely cause is that ingestion or the collector is down, the read path cannot see the database, or the PAT cannot see the intended data — not that observability is confidently absent.
+- **Finding (SIG-007):** if SigNoz is reachable (`/api/v1/health` ok, the token works) but **every** telemetry signal returns `0` in the recent window, emit SIG-007 and mark the coverage-dependent categories (**SIG-010, SIG-011**) `blocked`. If SigNoz is reachable but returns **zero alert rules**, emit SIG-007 and mark the alerting-dependent categories (**SIG-040, SIG-041**) `blocked`. In both cases keep **Security posture (SIG-050)** — and, on the ClickHouse lane, **DB health (SIG-030)** — scorable, then **renormalize** the overall over the categories that remain. Never report a confident `0/100` from an empty read; the likely cause is that ingestion or the collector is down, the read path cannot see the database, or the Service Account token cannot see the intended data — not that observability is confidently absent.
 - **Forbidden on both surfaces here:** SELECT / GET only; see section 9.
 
 ## 4. Telemetry: coverage and freshness (SIG-010, SIG-011)
 
-Two lanes — the SigNoz query API (always available with the PAT) and the ClickHouse deep lane (when configured). Prefer ClickHouse for per-service depth because its rows are exact; use the query API when the ClickHouse lane is not configured.
+Two lanes — the SigNoz query API (always available with the Service Account token) and the ClickHouse deep lane (when configured). Prefer ClickHouse for per-service depth because its rows are exact; use the query API when the ClickHouse lane is not configured.
 
 ### SIG-010 — telemetry coverage
 
@@ -330,9 +359,9 @@ sig_get /api/v1/dashboards | jq .   # shape confirm-live
 
 ## 8. Security posture (SIG-050) and query API health (SIG-001)
 
-**SIG-001 (query API health).** The successful authed reads elsewhere in this run are the evidence: `GET /api/v1/rules` → 200 with the PAT, and `POST /api/v3/query_range` resolving a minimal query. A 401 with `{"error":{"type":"unauthenticated"}}` on the authed path is a `blocked` SIG-001 (and blocks the categories that need the query API), never a confident fail.
+**SIG-001 (query API health).** The successful authed reads elsewhere in this run are the evidence: `GET /api/v1/rules` → 200 with the Service Account token, and `POST /api/v3/query_range` resolving a minimal query. A 401 with `{"error":{"type":"unauthenticated"}}` on the authed path is a `blocked` SIG-001 (and blocks the categories that need the query API), never a confident fail.
 
-**SIG-050 (security posture).** The SigNoz endpoint must require auth — the confirmed `401` on `/api/v1/rules` without a PAT is the good state; prove it (this probe sends **no** header, so the status code is the evidence and `-f` is dropped):
+**SIG-050 (security posture).** The SigNoz endpoint must require auth — the confirmed `401` on `/api/v1/rules` without a Service Account token is the good state; prove it (this probe sends **no** header, so the status code is the evidence and `-f` is dropped):
 
 ```bash
 curl -s -o /dev/null -w 'unauth SigNoz rules probe: %{http_code}\n' --max-time 10 "${SIG_URL}/api/v1/rules"
@@ -353,9 +382,9 @@ TLS on the wire — confirm the audit reaches SigNoz and ClickHouse over TLS rat
 printf '%s\n' "$SIG_URL" | grep -qE '^https://' && echo "TLS: SigNoz endpoint is https" || echo "TLS: SigNoz endpoint is plaintext http — confirm a TLS listener/ingress exists"
 ```
 
-- **Healthy target:** the SigNoz authed probe returns `401` (not `200`); the unauthenticated ClickHouse `default`-user probe returns an auth-required status (e.g. `403`/`516`), not `200`; service users use `sha256_password`/`double_sha1_password`, not `plaintext_password`; the audit reaches both surfaces over TLS; a dedicated least-privilege read-only ClickHouse user exists for audits; and the audit PAT is VIEWER role (declared at connect — a PAT cannot self-introspect its role).
-- **Finding (SIG-050):** a `200` from the unauthenticated SigNoz authed-resource probe (public readability) is critical exposure. A `200` from the ClickHouse `default`-user probe means the `default` user has no password — critical. A service user on `auth_type = plaintext_password` is a real posture finding. Plaintext HTTP across an untrusted network is a transport-security finding. No scoped read-only CH user, or an admin-scoped audit PAT, is a least-privilege finding. Record the user name and `auth_type`, never any `auth_params` value. Fix inline: require the CH `default`-user password / move plaintext users to sha256 / front the endpoints with TLS / issue a read-role service-account token.
-- **Forbidden:** SELECT / SHOW / GET only — never `CREATE USER`, `ALTER USER`, `GRANT`, `REVOKE`, or a PAT/channel write from the audit; see section 9.
+- **Healthy target:** the SigNoz authed probe returns `401` (not `200`); the unauthenticated ClickHouse `default`-user probe returns an auth-required status (e.g. `403`/`516`), not `200`; service users use `sha256_password`/`double_sha1_password`, not `plaintext_password`; the audit reaches both surfaces over TLS; a dedicated least-privilege read-only ClickHouse user exists for audits; and the audit Service Account token is VIEWER role (declared at connect — a Service Account token cannot self-introspect its role).
+- **Finding (SIG-050):** a `200` from the unauthenticated SigNoz authed-resource probe (public readability) is critical exposure. A `200` from the ClickHouse `default`-user probe means the `default` user has no password — critical. A service user on `auth_type = plaintext_password` is a real posture finding. Plaintext HTTP across an untrusted network is a transport-security finding. No scoped read-only CH user, or an admin-scoped audit Service Account token, is a least-privilege finding. Record the user name and `auth_type`, never any `auth_params` value. Fix inline: require the CH `default`-user password / move plaintext users to sha256 / front the endpoints with TLS / issue a read-role service-account token.
+- **Forbidden:** SELECT / SHOW / GET only — never `CREATE USER`, `ALTER USER`, `GRANT`, `REVOKE`, or a Service Account token/channel write from the audit; see section 9.
 
 ## 9. Forbidden mutations (both surfaces)
 

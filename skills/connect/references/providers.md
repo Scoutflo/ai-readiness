@@ -64,9 +64,9 @@ OSS caveat: Grafana OSS has basic roles only. Listing datasources (`GET /api/dat
 printf 'GRAFANA_TOKEN: ' && read -rs GRAFANA_TOKEN && export GRAFANA_TOKEN && printf '\n'
 
 GRAFANA_URL="https://grafana.example.com"   # grafana.url
-code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 -H "Authorization: Bearer ${GRAFANA_TOKEN}" "${GRAFANA_URL}/api/health")
-[ "$code" = "200" ] && echo PASS || echo "FAIL: got $code"
-# Expect: PASS. 401 means the token is wrong or expired.
+curl -fsS --max-time 10 -H "Authorization: Bearer ${GRAFANA_TOKEN}" "${GRAFANA_URL}/api/health" | jq -e '.database=="ok"' >/dev/null \
+  && echo PASS || echo "FAIL: not reachable/authorized, or a 200 HTML SSO/login page instead of JSON (401 = token wrong/expired)"
+# Expect: PASS. Asserting .database=="ok" makes a Grafana behind an SSO proxy (which returns a 200 login page) FAIL here instead of false-passing.
 
 curl -fsS --max-time 10 -H "Authorization: Bearer ${GRAFANA_TOKEN}" "${GRAFANA_URL}/api/org" | jq -e '.name | length > 0'
 # Expect: exit 0 (prints the org name, then `true`). 403 here with a healthy
@@ -106,6 +106,7 @@ Every SaaS org lives in exactly one region, and the other region's API returns `
 ```bash
 SENTRY_ORG="your-org-slug"   # sentry.org
 for h in us.sentry.io de.sentry.io; do
+  # status-probe-ok: quick user sanity-check against sentry.io (fixed vendor JSON API, no SSO login fall-through); the authoritative JSON-asserting gate is /scoutflo:doctor.
   code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 \
     -H "Authorization: Bearer ${SENTRY_TOKEN}" \
     "https://${h}/api/0/organizations/${SENTRY_ORG}/")"
@@ -234,6 +235,7 @@ Two caveats to know at creation time:
 printf 'PAGERDUTY_TOKEN: ' && read -rs PAGERDUTY_TOKEN && export PAGERDUTY_TOKEN && printf '\n'
 
 PD_API="https://api.pagerduty.com"   # pagerduty.region: us -> api.pagerduty.com, eu -> api.eu.pagerduty.com
+# status-probe-ok: quick user sanity-check against api.pagerduty.com (fixed vendor JSON API, no SSO login fall-through); the authoritative JSON-asserting gate is /scoutflo:doctor.
 code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 \
   -H "Authorization: Token token=${PAGERDUTY_TOKEN}" \
   -H "Content-Type: application/json" "${PD_API}/abilities")
@@ -303,10 +305,12 @@ printf 'DATADOG_API_KEY: ' && read -rs DATADOG_API_KEY && export DATADOG_API_KEY
 printf 'DATADOG_APP_KEY: ' && read -rs DATADOG_APP_KEY && export DATADOG_APP_KEY && printf '\n'
 
 DD_SITE="datadoghq.com"   # datadog.site
+# status-probe-ok: quick user sanity-check against api.<site> Datadog (fixed vendor JSON API, no SSO login fall-through); the authoritative JSON-asserting gate is /scoutflo:doctor.
 code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 \
   -H "DD-API-KEY: ${DATADOG_API_KEY}" "https://api.${DD_SITE}/api/v1/validate")
 [ "$code" = "200" ] && echo "API key PASS" || echo "API key FAIL: got $code (403 = wrong key or wrong site)"
 
+# status-probe-ok: quick user sanity-check against api.<site> Datadog (fixed vendor JSON API, no SSO login fall-through); the authoritative JSON-asserting gate is /scoutflo:doctor.
 code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 \
   -H "DD-API-KEY: ${DATADOG_API_KEY}" -H "DD-APPLICATION-KEY: ${DATADOG_APP_KEY}" \
   "https://api.${DD_SITE}/api/v1/monitor?page_size=1")
@@ -474,6 +478,7 @@ printf 'JSM_API_TOKEN: ' && read -rs JSM_API_TOKEN && export JSM_API_TOKEN && pr
 SITE="your-site.atlassian.net"   # jsm.site
 CLOUD_ID="$(curl -fsS --max-time 10 "https://${SITE}/_edge/tenant_info" | jq -r '.cloudId')"
 # One page of alerts is the cheapest Operations-scoped read; -u sends Basic auth.
+# status-probe-ok: quick user sanity-check against api.atlassian.com (fixed vendor JSON API, no SSO login fall-through); the authoritative JSON-asserting gate is /scoutflo:doctor.
 code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 -u "${JSM_EMAIL}:${JSM_API_TOKEN}" \
   "https://api.atlassian.com/jsm/ops/api/${CLOUD_ID}/v1/alerts?size=1")
 [ "$code" = "200" ] && echo "JSM Operations PASS" || echo "FAIL: got $code (401 = bad token/email; 403 = user lacks Operations access; 404 = wrong cloud_id)"
@@ -521,9 +526,9 @@ Zenduty publishes strict, per-endpoint-class rate limits (for example, Incident 
 printf 'ZENDUTY_TOKEN: ' && read -rs ZENDUTY_TOKEN && export ZENDUTY_TOKEN && printf '\n'
 
 # Teams is the cheapest list read and the doctor probe. Token, not Bearer.
-code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 \
-  -H "Authorization: Token ${ZENDUTY_TOKEN}" "https://www.zenduty.com/api/account/teams/")
-[ "$code" = "200" ] && echo "Zenduty PASS" || echo "FAIL: got $code (401 = bad or non-Token-prefixed key; 429 = rate-limited, wait a minute)"
+curl -fsS --max-time 10 -H "Authorization: Token ${ZENDUTY_TOKEN}" "https://www.zenduty.com/api/account/teams/" \
+  | jq -e 'type=="array" or type=="object"' >/dev/null \
+  && echo "Zenduty PASS" || echo "FAIL: bad/non-Token-prefixed key (401), rate-limited (429), or a 200 Cloudflare/SPA page instead of JSON"
 ```
 
 ## Groundcover
@@ -569,10 +574,9 @@ printf 'GROUNDCOVER_API_KEY: ' && read -rs GROUNDCOVER_API_KEY && export GROUNDC
 GC_API="https://api.groundcover.com"   # groundcover.api_url
 # Listing monitors is the cheapest read and the doctor probe (there is no whoami endpoint).
 # Add -H "X-Backend-Id: <backend>" if your account is multi-backend.
-code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 \
-  -H "Authorization: Bearer ${GROUNDCOVER_API_KEY}" -H "Content-Type: application/json" \
-  -X POST "${GC_API}/api/monitors/list" --data '{"sources":[]}')
-[ "$code" = "200" ] && echo "Groundcover PASS" || echo "FAIL: got $code (401 = bad key; 403 = key lacks Viewer access or wrong/missing X-Backend-Id)"
+curl -fsS --max-time 10 -H "Authorization: Bearer ${GROUNDCOVER_API_KEY}" -H "Content-Type: application/json" \
+  -X POST "${GC_API}/api/monitors/list" --data '{"sources":[]}' | jq -e 'type=="array" or type=="object"' >/dev/null \
+  && echo "Groundcover PASS" || echo "FAIL: 401 = bad key; 403 = lacks Viewer / wrong X-Backend-Id; or a 200 non-JSON page on a self-hosted host (monitors API not exposed there)"
 ```
 
 ## AWS
@@ -676,6 +680,7 @@ export GOOGLE_APPLICATION_CREDENTIALS="/path/to/your-key.json"
 GCP_PROJECT="your-project-id"   # gcp.project
 gcloud projects describe "$GCP_PROJECT" --format='value(projectId)'
 if [ -n "${GOOGLE_APPLICATION_CREDENTIALS:-}" ]; then TOKEN="$(gcloud auth application-default print-access-token)"; else TOKEN="$(gcloud auth print-access-token)"; fi
+# status-probe-ok: quick user sanity-check against monitoring.googleapis.com via a gcloud token (fixed JSON API, no SSO login fall-through); the authoritative gate is /scoutflo:doctor.
 code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 -H "Authorization: Bearer ${TOKEN}" \
   "https://monitoring.googleapis.com/v3/projects/${GCP_PROJECT}/notificationChannels?pageSize=1")
 [ "$code" = "200" ] && echo PASS || echo "FAIL: got $code"
@@ -852,7 +857,15 @@ curl -sS --max-time 10 -H "X-ClickHouse-User: ${CH_USER}" -H "X-ClickHouse-Key: 
   "${CH_URL}/?query=SELECT%201" | grep -qx 1 && echo "ClickHouse PASS" || echo "ClickHouse FAIL — check url/user/CH_KEY"
 # HyperDX: /api/alerts is auth-gated (401 without a credential). The exact API-key header
 # varies by HyperDX version — confirm it against your instance (Authorization: Bearer <key>
-# or x-api-key: <key>); a 200 with the key configured is the authoritative signal.
+# or x-api-key: <key>). A 200 alone is NOT the signal: assert a JSON body, since an SSO/proxy
+# in front of HyperDX returns 200 + text/html (the SPA) for an unauthenticated request.
+HDX_URL="https://your-hyperdx-host:8080"   # clickstack.hyperdx_url
+KB="$(mktemp)"; km=$(curl -s -o "$KB" -w '%{http_code} %{content_type}' --max-time 10 -H "Authorization: Bearer ${HDX_API_KEY}" "${HDX_URL%/}/api/alerts")
+kc="${km%% *}"; kct="${km#* }"
+if [ "$kc" = "200" ] && printf '%s' "$kct" | grep -qi json && jq -e 'type=="array" or has("data") or has("alerts")' "$KB" >/dev/null 2>&1; then
+  echo "HyperDX key PASS (200 JSON)"
+else echo "HyperDX key: code=$kc content-type=$kct — if 401 try 'x-api-key: <key>'; a 200 with an HTML body is the SPA/login page, not the API"; fi
+rm -f "$KB"
 ```
 
 If you configured the v2 login credentials, verify the session path too (the cookie jar is temporary and never printed):
@@ -863,8 +876,13 @@ JAR="$(mktemp)"; chmod 600 "$JAR"; trap 'rm -f "$JAR"' EXIT INT TERM
 jq -n --arg e "$HDX_EMAIL" --arg p "$HDX_PASSWORD" '{email: $e, password: $p}' \
   | curl -s -o /dev/null --max-time 10 -c "$JAR" -H 'Content-Type: application/json' \
       --data-binary @- "${HDX_URL%/}/api/login/password"
-code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 -b "$JAR" "${HDX_URL%/}/api/alerts")
-[ "$code" = "200" ] && echo "HyperDX session PASS" || echo "HyperDX session FAIL: got $code — check HDX_EMAIL/HDX_PASSWORD"
+# Assert a JSON body, not just 200 — a session that landed on the SPA/login page also returns 200 + text/html.
+HB="$(mktemp)"; hm=$(curl -s -o "$HB" -w '%{http_code} %{content_type}' --max-time 10 -b "$JAR" "${HDX_URL%/}/api/alerts")
+hc="${hm%% *}"; hct="${hm#* }"
+if [ "$hc" = "200" ] && printf '%s' "$hct" | grep -qi json && jq -e 'type=="array" or has("data") or has("alerts")' "$HB" >/dev/null 2>&1; then
+  echo "HyperDX session PASS (200 JSON)"
+else echo "HyperDX session FAIL: code=$hc content-type=$hct — a 200 with an HTML body means the login/SPA page, not the API (check HDX_EMAIL/HDX_PASSWORD/url)"; fi
+rm -f "$HB"
 ```
 
 The external `default` ClickHouse user requires a password, so the audit always uses its own scoped `scoutflo_ro` user, never `default`.
@@ -873,7 +891,7 @@ The external `default` ClickHouse user requires a password, so the audit always 
 
 SigNoz stores telemetry (traces/metrics/logs) in ClickHouse and serves it through its own query-service API. `audit-signoz` authenticates to that API with a **Service Account token** — sent as the `SIGNOZ-API-KEY` header. Optionally, a **read-only ClickHouse user** unlocks the deep backend lane (part counts, disk/capacity, TTL) directly against the `signoz_*` databases; without it those checks read retention via SigNoz's own `GET /api/v1/settings/ttl` and mark the direct-CH checks `not-in-scope`.
 
-> **Role note (confirmed live on v0.138):** the service account's **role must grant read** on the audited endpoints. A **Viewer** role returns **HTTP 403 `authz_forbidden`** on `/api/v1/rules`, `/api/v1/channels`, `/api/v1/dashboards`, and `/api/v3/query_range` — so a "Viewer" token cannot run the audit. Assign the service account an **Admin** role, or a **custom role** (Settings → **Roles**) that grants read on those resources. This is more privilege than ideal for a read-only audit; use the narrowest role your build lets you that still returns 200 on those reads.
+> **Role note (confirmed live + at the SigNoz source on v0.138):** the service account needs **at least the read-only `signoz-viewer` role**. `/api/v1/rules`, `/api/v1/channels`, `/api/v1/dashboards`, and `/api/v1/alerts` are wrapped in SigNoz's `ViewAccess` gate, which admits **any** of `signoz-admin` / `signoz-editor` / `signoz-viewer` — so **Viewer is required and sufficient**. Do **not** assign Admin (over-privileged) or assume a custom role is needed. A **403 `authz_forbidden`** (`"only viewers/editors/admins can access this resource"`) means the service account holds **none of those roles** — on v0.138 a service account is created with **zero roles** until you attach one, so the fix is to assign it `signoz-viewer` (Settings → Service Accounts → Roles), not to grant a higher role.
 
 ### Config
 
@@ -888,9 +906,9 @@ signoz:
   # clickhouse_password_env: SIGNOZ_CH_KEY
 ```
 
-### Create a Service Account token (with a read-granting role)
+### Create a Service Account token (assign it the `signoz-viewer` role)
 
-In SigNoz **Settings → Service Accounts** (v0.138+; older builds: Settings → API Keys), create a service account, give it a role that grants **read** on rules/dashboards/channels — **Admin**, or a custom read role under Settings → **Roles** — and generate its key. A **Viewer** role is *not* sufficient: it returns `403 authz_forbidden` on those read endpoints. Export the key into the variable your config names (it is sent as the `SIGNOZ-API-KEY` header):
+On current SigNoz (**v0.114+, including v0.138**) the only token path is **Settings → Service Accounts** — there is **no "API Keys" menu** (only very old builds, ~v0.85–v0.113, had *Settings → API Keys*). Create a service account, then **open it and assign the `signoz-viewer` role** via the Roles dropdown (a service account starts with **zero roles**, so an unroled token gets `403 authz_forbidden` on the read endpoints — that is a missing role, not "Viewer is insufficient"). `signoz-viewer` is read-only and is the least-privilege role that works; do not use Admin. Generate the key and export it into the variable your config names (it is sent as the `SIGNOZ-API-KEY` header):
 
 ```bash
 export SIGNOZ_API_KEY='<your-signoz-service-account-token>'
@@ -917,10 +935,19 @@ export SIGNOZ_CH_KEY='<strong-password>'
 ```bash
 SIGNOZ_URL="https://your-signoz-host"   # signoz.url
 # Reachability (open, no auth):
-curl -sS --max-time 10 "${SIGNOZ_URL%/}/api/v1/version" | grep -q '"version"' && echo "SigNoz reachable" || echo "SigNoz FAIL — check url"
-# PAT works (authed endpoint returns 200, not 401):
-code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 -H "SIGNOZ-API-KEY: ${SIGNOZ_API_KEY}" "${SIGNOZ_URL%/}/api/v1/rules")
-[ "$code" = "200" ] && echo "SigNoz PAT PASS" || echo "SigNoz PAT FAIL — got $code (401 = wrong/missing token)"
+curl -sS --max-time 10 "${SIGNOZ_URL%/}/api/v1/version" | jq -e '.version' >/dev/null && echo "SigNoz reachable" || echo "SigNoz FAIL — check url"
+# Token works — assert a JSON body, not just a 200. A moved path / SSO-proxy / login page
+# returns 200 + text/html (the SPA), which a status-only check would mis-read as authorized.
+SB="$(mktemp)"; META=$(curl -s -o "$SB" -w '%{http_code} %{content_type}' --max-time 15 -H "SIGNOZ-API-KEY: ${SIGNOZ_API_KEY}" "${SIGNOZ_URL%/}/api/v1/rules")
+CODE="${META%% *}"; CT="${META#* }"
+case "$CODE" in
+  200) case "$CT" in application/json*) jq -e 'type=="array" or has("data") or has("rules")' "$SB" >/dev/null 2>&1 && echo "SigNoz token PASS (200 JSON; signoz-viewer sufficient)" || echo "SigNoz token FAIL — 200 but unexpected body";;
+       *) echo "SigNoz token FAIL — 200 but Content-Type=$CT (SPA/login fall-through, not the API; check url/version)";; esac ;;
+  401) echo "SigNoz token FAIL — 401 (missing/invalid token)";;
+  403) echo "SigNoz token FAIL — 403 authz_forbidden (service account has no role — assign it signoz-viewer)";;
+  *)   echo "SigNoz token FAIL — got $CODE";;
+esac
+rm -f "$SB"
 ```
 
 ## Kubernetes
@@ -1031,6 +1058,7 @@ map-repos never writes to GitHub; there is no elevated tier for this integration
 printf 'GITHUB_TOKEN: ' && read -rs GITHUB_TOKEN && export GITHUB_TOKEN && printf '\n'
 
 GITHUB_ORG="your-org"   # github.org
+# status-probe-ok: quick user sanity-check against api.github.com (fixed vendor JSON API, no SSO login fall-through); the authoritative gate is /scoutflo:doctor.
 code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 -H "Authorization: Bearer ${GITHUB_TOKEN}" "https://api.github.com/orgs/${GITHUB_ORG}")
 [ "$code" = "200" ] && echo PASS || echo "FAIL: got $code"
 # Expect: PASS. 404 here is normal for a personal account rather than an org --

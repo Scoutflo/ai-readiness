@@ -61,10 +61,18 @@ done
 [ -n "${PAGERDUTY_TOKEN:-}" ] || { echo "PAGERDUTY_TOKEN is not set; run /scoutflo:connect"; exit 1; }
 
 PD_API="https://api.pagerduty.com"   # pagerduty.region: us -> api.pagerduty.com, eu -> api.eu.pagerduty.com
-CODE="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 \
+# Keep the body (do NOT discard to /dev/null) and capture the content-type, so a 200 that is
+# really an HTML SSO/login/SPA/proxy page fails closed instead of passing on the status alone.
+PD_BODY="$(mktemp)"
+META="$(curl -s -o "$PD_BODY" -w '%{http_code} %{content_type}' --max-time 10 \
   -H "Authorization: Token token=${PAGERDUTY_TOKEN}" \
-  -H "Content-Type: application/json" "${PD_API}/abilities")"
-[ "$CODE" = "200" ] || { echo "abilities probe returned ${CODE}: 401 means the key is invalid, revoked, or the region host is wrong (pagerduty.region us vs eu)"; exit 1; }
+  -H "Content-Type: application/json" "${PD_API}/abilities")" || true
+CODE="${META%% *}"; CT="${META#* }"
+[ "$CODE" = "200" ] || { rm -f "$PD_BODY"; echo "abilities probe returned ${CODE}: 401 means the key is invalid, revoked, or the region host is wrong (pagerduty.region us vs eu)"; exit 1; }
+# 200 alone is not proof: require JSON and a field the abilities API always returns.
+printf '%s' "$CT" | grep -qi json && jq -e 'has("abilities")' "$PD_BODY" >/dev/null 2>&1 \
+  || { rm -f "$PD_BODY"; echo "abilities probe returned 200 but Content-Type=${CT} and the body is not the PagerDuty abilities JSON — looks like an HTML login/SPA/proxy page, not api.pagerduty.com; verify the host/region"; exit 1; }
+rm -f "$PD_BODY"
 echo "doctor gate: pass"
 ```
 

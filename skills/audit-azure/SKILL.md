@@ -71,6 +71,7 @@ SUB="${AZ_SUBSCRIPTION_CFG:-$(printf '%s' "$ACCT" | jq -r '.id')}"
 echo "identity: $(printf '%s' "$ACCT" | jq -r '.user.name') on subscription $(printf '%s' "$ACCT" | jq -r '.name')"
 ARM_TOKEN="$(az account get-access-token --subscription "$SUB" --resource https://management.azure.com --query accessToken -o tsv)"
 # One cheap ARM read at a CONFIRMED api-version proves reachability + the token works.
+# status-probe-ok: the az CLI already authenticated the identity above; this is an ARM reachability + api-version confirmation on management.azure.com (a fixed JSON API, not an SSO-fronted SPA), with 401/403/404 handled explicitly.
 code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 -H "Authorization: Bearer ${ARM_TOKEN}" \
   "https://management.azure.com/subscriptions/${SUB}/providers/Microsoft.Insights/actionGroups?api-version=2023-01-01")"
 [ "$code" = "200" ] || { echo "action-groups api: ${code} (expected 200); 401 = missing/malformed token (confirmed), 403 = missing Monitoring Reader, 404 = wrong subscription id (confirmed)"; exit 1; }

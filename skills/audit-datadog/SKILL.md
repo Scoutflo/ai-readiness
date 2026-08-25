@@ -63,13 +63,25 @@ done
 
 DD_SITE="datadoghq.com"   # datadog.site: e.g. datadoghq.com, us5.datadoghq.com, datadoghq.eu
 DD_HOST="api.${DD_SITE}"
-VCODE="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 \
-  -H "DD-API-KEY: ${DATADOG_API_KEY}" "https://${DD_HOST}/api/v1/validate")"
-[ "$VCODE" = "200" ] || { echo "validate returned ${VCODE}: API key invalid or wrong datadog.site (a valid key on the wrong site returns 403)"; exit 1; }
-MCODE="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 \
+# Datadog is SaaS so the risk is low, but as defense-in-depth keep the body and content-type
+# (do NOT discard to /dev/null) so a 200 that is really an HTML login/SPA/proxy page fails closed.
+DDV_BODY="$(mktemp)"
+VMETA="$(curl -s -o "$DDV_BODY" -w '%{http_code} %{content_type}' --max-time 10 \
+  -H "DD-API-KEY: ${DATADOG_API_KEY}" "https://${DD_HOST}/api/v1/validate")" || true
+VCODE="${VMETA%% *}"; VCT="${VMETA#* }"
+[ "$VCODE" = "200" ] || { rm -f "$DDV_BODY"; echo "validate returned ${VCODE}: API key invalid or wrong datadog.site (a valid key on the wrong site returns 403)"; exit 1; }
+printf '%s' "$VCT" | grep -qi json && jq -e '.valid==true' "$DDV_BODY" >/dev/null 2>&1 \
+  || { rm -f "$DDV_BODY"; echo "validate returned 200 but Content-Type=${VCT} and the body is not the Datadog validate JSON (.valid==true) — looks like an HTML login/SPA/proxy page, not api.${DD_SITE}; verify datadog.site"; exit 1; }
+rm -f "$DDV_BODY"
+DDM_BODY="$(mktemp)"
+MMETA="$(curl -s -o "$DDM_BODY" -w '%{http_code} %{content_type}' --max-time 10 \
   -H "DD-API-KEY: ${DATADOG_API_KEY}" -H "DD-APPLICATION-KEY: ${DATADOG_APP_KEY}" \
-  "https://${DD_HOST}/api/v1/monitor?page_size=1")"
-[ "$MCODE" = "200" ] || { echo "monitor read returned ${MCODE}: app key invalid, missing monitors_read scope, or its user was disabled (app keys are user-bound)"; exit 1; }
+  "https://${DD_HOST}/api/v1/monitor?page_size=1")" || true
+MCODE="${MMETA%% *}"; MCT="${MMETA#* }"
+[ "$MCODE" = "200" ] || { rm -f "$DDM_BODY"; echo "monitor read returned ${MCODE}: app key invalid, missing monitors_read scope, or its user was disabled (app keys are user-bound)"; exit 1; }
+printf '%s' "$MCT" | grep -qi json && jq -e 'type=="array"' "$DDM_BODY" >/dev/null 2>&1 \
+  || { rm -f "$DDM_BODY"; echo "monitor read returned 200 but Content-Type=${MCT} and the body is not the monitors JSON array — looks like an HTML login/SPA/proxy page, not the monitor API; verify datadog.site"; exit 1; }
+rm -f "$DDM_BODY"
 echo "doctor gate: pass"
 ```
 

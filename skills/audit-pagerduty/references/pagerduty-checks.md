@@ -168,6 +168,7 @@ done
 # PD-005: escalation targets that reference schedules — verify each resolves and has on-call now
 jq -r '[.[] | .rules[].targets[] | select(.type == "schedule_reference") | .id] | unique | .[]' \
   "${RAW_DIR}/escalation-policies.json" | while read -r sid; do
+  # status-probe-ok: the HTTP status IS the evidence (404 = a dead schedule reference inside a live escalation policy, PD-005); api.pagerduty.com is fixed JSON SaaS.
   code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 \
     -H "Authorization: Token token=${PAGERDUTY_TOKEN}" "${PD_API}/schedules/${sid}")
   echo "schedule ${sid}: http ${code}"

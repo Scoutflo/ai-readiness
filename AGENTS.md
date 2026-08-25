@@ -13,15 +13,19 @@ sh ci/run-tests.sh .
 claude plugin validate . --strict
 ```
 
-`ci/structure-check.sh` composes 15 checks: anchor, cross-block, coverage,
+`ci/structure-check.sh` composes 16 checks: anchor, cross-block, coverage,
 remediation-map, **skill-completeness**, the four behavioral-parity gates
 (scope-checkpoint, redaction-parity, business-context-parity, **env-load-parity**),
 and manifest-compat, min-version-consistency, catalog-consistency,
 liveness-readonly, **audit-dir** (runnable output-path declarations resolve via
-`${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}`, never a hardcoded literal), and
+`${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}`, never a hardcoded literal),
 **named-section** (every `(cookbook: "Section Name")` prose reference in a
 SKILL.md resolves to a real `## Section Name` heading in that skill's
-`references/*.md`).
+`references/*.md`), and **content-type-probe** (every *authenticated* HTTP
+doctor/verify probe must assert the response is JSON — capture `%{content_type}`
+and/or a `jq -e` body check — so a 200 HTML SSO/login/SPA page fails closed
+instead of false-greening; a deliberately status-only probe carries a
+`status-probe-ok` comment).
 `ci/run-tests.sh` executes
 every `tests/*.sh` and `skills/*/tests/*.sh` under `/bin/sh` (and rejects dead
 bats-syntax files that cannot run). All four run in CI on every push/PR — a

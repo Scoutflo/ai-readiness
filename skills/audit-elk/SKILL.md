@@ -62,9 +62,29 @@ done
 
 KIBANA_URL="https://kibana.example.com"   # elk.kibana_url (Kibana, not Elasticsearch)
 KIBANA_URL="${KIBANA_URL%/}"
-CODE="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 \
-  -H "Authorization: ApiKey ${KIBANA_API_KEY}" "${KIBANA_URL}/api/alerting/_health")"
-[ "$CODE" = "200" ] || { echo "alerting health probe returned ${CODE}: 404 = elk.kibana_url points at Elasticsearch not Kibana (or a space/base-path prefix is wrong); 401/403 = key invalid or role lacks Kibana Read on Stack Rules"; exit 1; }
+# Kibana is browser-facing behind SSO, so a 200 that returns an HTML login/SPA page is a
+# false-green. Judge the body, not the status code alone: capture BOTH the status and the
+# content-type, and pass ONLY on 200 + a JSON content-type + a version-robust body assertion
+# (any JSON object/array from the alerting API — do NOT over-fit a Kibana field). This mirrors
+# skills/doctor/scripts/doctor.sh so doctor and this audit agree.
+BODY="$(mktemp)"; RC=0
+META="$(curl -s -o "$BODY" -w '%{http_code} %{content_type}' --max-time 10 \
+  -H "Authorization: ApiKey ${KIBANA_API_KEY}" "${KIBANA_URL}/api/alerting/_health")" || RC=$?
+CODE="${META%% *}"; CT="${META#* }"
+if [ "$RC" -ne 0 ]; then
+  rm -f "$BODY"; echo "alerting health probe could not connect (curl exit ${RC}); check elk.kibana_url and network"; exit 1
+elif [ "$CODE" = "200" ] && printf '%s' "$CT" | grep -qi json && jq -e 'type=="object" or type=="array"' "$BODY" >/dev/null 2>&1; then
+  : # real JSON from the alerting API — pass
+elif [ "$CODE" = "200" ]; then
+  rm -f "$BODY"; echo "alerting health probe returned 200 but Content-Type='${CT}' — looks like an HTML login/SPA/proxy page, not the API: Kibana is likely behind an SSO/OAuth reverse proxy returning its login page (or elk.kibana_url is wrong); a 200 HTML page is not proof of API access"; exit 1
+elif [ "$CODE" = "404" ]; then
+  rm -f "$BODY"; echo "alerting health probe returned 404: elk.kibana_url points at Elasticsearch not Kibana (or a space/base-path prefix is wrong)"; exit 1
+elif [ "$CODE" = "401" ] || [ "$CODE" = "403" ]; then
+  rm -f "$BODY"; echo "alerting health probe returned ${CODE}: key invalid or role lacks Kibana Read on Stack Rules"; exit 1
+else
+  rm -f "$BODY"; echo "alerting health probe returned ${CODE}"; exit 1
+fi
+rm -f "$BODY"
 echo "doctor gate: pass"
 ```
 

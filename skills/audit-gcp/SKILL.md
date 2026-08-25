@@ -77,6 +77,7 @@ PROJECT_ID="$(gcloud projects describe "$GCP_PROJECT" --format='value(projectId)
 [ "$PROJECT_ID" = "$GCP_PROJECT" ] || { echo "project mismatch: gcloud resolved '${PROJECT_ID}', config names '${GCP_PROJECT}'"; exit 1; }
 echo "project id confirmed: ${PROJECT_ID}"
 
+# status-probe-ok: gcloud already authenticated the identity above; monitoring.googleapis.com is a fixed JSON API (not an SSO-fronted SPA) and 403/404 are handled explicitly.
 code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 -H "Authorization: Bearer ${TOKEN}" \
   "https://monitoring.googleapis.com/v3/projects/${GCP_PROJECT}/notificationChannels?pageSize=1")"
 [ "$code" = "200" ] || { echo "monitoring api: ${code} (expected 200); a 403 means the identity lacks monitoring.viewer or the Monitoring API is disabled, a 404 means the project id is wrong"; exit 1; }
