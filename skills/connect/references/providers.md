@@ -869,6 +869,58 @@ code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 -b "$JAR" "${HDX_URL
 
 The external `default` ClickHouse user requires a password, so the audit always uses its own scoped `scoutflo_ro` user, never `default`.
 
+## SigNoz (ClickHouse-backed, OpenTelemetry-native)
+
+SigNoz stores telemetry (traces/metrics/logs) in ClickHouse and serves it through its own query-service API. `audit-signoz` authenticates to that API with a **read-only Personal Access Token** (VIEWER role) — sent as the `SIGNOZ-API-KEY` header. Optionally, a **read-only ClickHouse user** unlocks the deep backend lane (part counts, disk/capacity, TTL) directly against the `signoz_*` databases; without it those checks read retention via SigNoz's own `GET /api/v1/settings/ttl` and mark the direct-CH checks `not-in-scope`.
+
+### Config
+
+```yaml
+signoz:
+  url: https://your-signoz-host
+  api_key_env: SIGNOZ_API_KEY
+  # Optional — the deep ClickHouse backend lane (SIG-030/060/061). Without these,
+  # those checks are not-in-scope and retention is read via the SigNoz TTL settings API.
+  # clickhouse_url: https://your-signoz-clickhouse-host:8123
+  # clickhouse_user: scoutflo_ro
+  # clickhouse_password_env: SIGNOZ_CH_KEY
+```
+
+### Create a read-only Personal Access Token (VIEWER)
+
+In SigNoz, open **Settings → API Keys** (Access Tokens) and create a token with the **Viewer** role — read scope is all the audit needs (`GET /api/v1/rules`, `/api/v1/channels`, `/api/v1/dashboards`, and `POST /api/v3/query_range`). Export it into the variable your config names:
+
+```bash
+export SIGNOZ_API_KEY='<your-signoz-viewer-PAT>'
+```
+
+### Optional: read-only ClickHouse user (deep backend lane)
+
+Run as a ClickHouse admin (a deliberate cluster change). It grants `SELECT` on the SigNoz telemetry databases and `system` tables the audit reads, and nothing else:
+
+```sql
+CREATE USER scoutflo_ro IDENTIFIED WITH sha256_password BY '<strong-password>';
+GRANT SELECT ON signoz_traces.*  TO scoutflo_ro;
+GRANT SELECT ON signoz_metrics.* TO scoutflo_ro;
+GRANT SELECT ON signoz_logs.*    TO scoutflo_ro;
+GRANT SELECT ON system.*         TO scoutflo_ro;
+```
+
+```bash
+export SIGNOZ_CH_KEY='<strong-password>'
+```
+
+### Verify
+
+```bash
+SIGNOZ_URL="https://your-signoz-host"   # signoz.url
+# Reachability (open, no auth):
+curl -sS --max-time 10 "${SIGNOZ_URL%/}/api/v1/version" | grep -q '"version"' && echo "SigNoz reachable" || echo "SigNoz FAIL — check url"
+# PAT works (authed endpoint returns 200, not 401):
+code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 -H "SIGNOZ-API-KEY: ${SIGNOZ_API_KEY}" "${SIGNOZ_URL%/}/api/v1/rules")
+[ "$code" = "200" ] && echo "SigNoz PAT PASS" || echo "SigNoz PAT FAIL — got $code (401 = wrong/missing token)"
+```
+
 ## Kubernetes
 
 ### Config
