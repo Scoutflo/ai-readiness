@@ -65,11 +65,21 @@ done
 GC_API="https://api.groundcover.com"   # groundcover.api_url override if set
 # There is no whoami endpoint; listing monitors is the auth probe. Add the X-Backend-Id header
 # (from groundcover.backend_id) on multi-backend accounts. This POST lists, it does not mutate.
-CODE="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 \
+# Do NOT discard the body: a self-hosted groundcover behind an in-cluster ingress can answer 200
+# with an HTML SPA/login/proxy page, which a status-only check would read as success. Capture the
+# status AND the content-type, and record pass ONLY on 200 + JSON + a monitors-list shape assertion.
+GC_BODY="$(mktemp)"
+META="$(curl -s -o "$GC_BODY" -w '%{http_code} %{content_type}' --max-time 10 \
   -H "Authorization: Bearer ${GROUNDCOVER_API_KEY}" -H "Content-Type: application/json" \
-  -X POST "${GC_API}/api/monitors/list" --data '{"sources":[]}')"
-[ "$CODE" = "200" ] || { echo "monitors/list probe returned ${CODE}: 401 = key invalid; 403 = key lacks Viewer access, or a multi-backend account is missing groundcover.backend_id (X-Backend-Id)"; exit 1; }
-echo "doctor gate: pass"
+  -X POST "${GC_API}/api/monitors/list" --data '{"sources":[]}')" || META="000 -"
+CODE="${META%% *}"; CT="${META#* }"
+if [ "$CODE" = "200" ] && printf '%s' "$CT" | grep -qi json && jq -e 'type=="array" or type=="object"' "$GC_BODY" >/dev/null 2>&1; then
+  rm -f "$GC_BODY"; echo "doctor gate: pass"
+elif [ "$CODE" = "200" ]; then
+  rm -f "$GC_BODY"; echo "monitors/list probe returned 200 but Content-Type='${CT}' / non-JSON body — on a self-hosted groundcover (non-api.groundcover.com) host this usually means the monitors API is not exposed there (an ingress/UI/proxy answered); a 200 HTML page is not proof of the monitors API"; exit 1
+else
+  rm -f "$GC_BODY"; echo "monitors/list probe returned ${CODE}: 401 = key invalid; 403 = key lacks Viewer access, or a multi-backend account is missing groundcover.backend_id (X-Backend-Id)"; exit 1
+fi
 ```
 
 Never proceed past a failed doctor check and never downgrade one into a finding. `/scoutflo:doctor` runs the same probe standalone.

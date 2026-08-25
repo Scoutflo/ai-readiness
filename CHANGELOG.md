@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.1.141
+
+SigNoz auth-model correction + a plugin-wide HTTP-probe compatibility hardening — driven by a live test on the deployed SigNoz v0.138 that proved our shipped guidance was wrong.
+
+**SigNoz (correctness fix, reverses v0.1.140):**
+- v0.1.140 claimed "a Viewer role is insufficient — use Admin or a custom read role." That is **wrong**. Verified live *and* at the SigNoz source: `/api/v1/rules`, `/channels`, `/dashboards`, `/alerts` are wrapped in the `ViewAccess` gate, so **`signoz-viewer` is required and sufficient**. A `403 authz_forbidden` means the service account has **no role assigned** (on v0.138 a service account starts with zero roles) — assign it `signoz-viewer`, not a higher role.
+- Terminology fixed throughout: the v0.138 credential is a **Service Account token** (Settings → Service Accounts), not a "PAT". On current builds (v0.114+) **there is no "API Keys" menu** — that only existed on ~v0.85–v0.113. Added a version-compatibility matrix (API-Keys era → Service-Accounts era) and made the doctor probe echo `/api/v1/version` and branch on it.
+
+**HTTP-probe robustness (the systemic fix):**
+- An authenticated doctor/verify probe that judged success on the HTTP **status code alone** is fooled by a 200 that returns an HTML SSO/login/SPA page (a moved path, a POST-only route hit with GET, or a reverse proxy). Every such probe now captures `%{content_type}` and asserts a JSON body before crediting a pass — a 200 HTML page fails closed with an explicit hint.
+- Hardened: `skills/doctor/scripts/doctor.sh` (the shared `live_check` + grafana/sentry/pagerduty/datadog/elk/jsm/zenduty/groundcover/prometheus/alertmanager blocks, **plus a new SigNoz block** — doctor previously had none), the inline doctor gates of audit-clickstack/elk/zenduty/groundcover/pagerduty/datadog/jsm/grafana/alert-routing, and the SigNoz + HyperDX verify snippets in connect.
+- New CI gate `ci/content-type-probe-check.sh` (structure-check now composes **16** checks) mechanically fails the build if an authenticated status-only probe lacks a content-type/JSON assertion or an explicit `status-probe-ok` marker — so this can never silently regress.
+
+Gates: leak CLEAN, structure-check (16), run-tests (22), plugin validate --strict, local selftest 184/0/1.
+
 ## 0.1.140
 
 audit-signoz auth-model correction — **caught by a live PAT test** on the deployed benchmark SigNoz, not review. v0.138 manages tokens under **Settings → Service Accounts** with a **Roles (Beta)** RBAC (not "API Keys"), and a **Viewer role returns HTTP 403 `authz_forbidden`** on every read endpoint the audit uses (`/api/v1/rules`, `/api/v1/channels`, `/api/v1/dashboards`, `/api/v3/query_range`). The skill previously instructed a "Viewer PAT" — which would 403 the entire audit for a customer.

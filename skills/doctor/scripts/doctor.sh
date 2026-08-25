@@ -234,6 +234,10 @@ resolve_token() {
 # http_get <url> <token-or-empty>: sets HTTP_CODE ("000" on transport failure)
 # and CURL_RC. The Authorization header is attached only when the token is
 # non-empty, so an empty bearer header is never sent.
+# status-probe-ok: this is the reachability primitive for text/plain readiness
+# endpoints (loki/tempo/mimir /ready, which return "ready", not JSON). Probes that
+# must prove authorized DATA access assert a JSON body via live_check's jq arg or
+# authed_json_check instead of calling http_get directly.
 http_get() {
   hg_url="$1"; hg_tok="$2"
   CURL_RC=0
@@ -268,19 +272,89 @@ http_hint() {
   esac
 }
 
-# live_check <integration> <check> <url> <env_var_label> <token-or-empty>
-# Expects HTTP 200. Records pass/fail with the observed code and a hint.
+# live_check <integration> <check> <url> <env_var_label> <token-or-empty> [jq-filter]
+# Records pass/fail with the observed code and a hint. With a 6th <jq-filter> arg it
+# becomes JSON-asserting: a 200 passes ONLY when the Content-Type is JSON AND the filter
+# matches — so an SSO/proxy 200 HTML login page or a moved-path SPA fall-through fails
+# closed instead of scoring a false pass. Without the filter it stays status-only, which
+# is correct for genuine text/plain readiness endpoints (e.g. loki/tempo /ready → "ready").
 live_check() {
-  lc_int="$1"; lc_chk="$2"; lc_url="$3"; lc_env="$4"; lc_tok="$5"
+  lc_int="$1"; lc_chk="$2"; lc_url="$3"; lc_env="$4"; lc_tok="$5"; lc_jq="${6:-}"
   note "doctor: checking ${lc_int} ${lc_chk}: GET ${lc_url}"
-  http_get "$lc_url" "$lc_tok"
+  if [ -z "$lc_jq" ]; then
+    http_get "$lc_url" "$lc_tok"
+    if [ "$CURL_RC" -ne 0 ]; then
+      row "$lc_int" "$lc_chk" yes "$lc_env" fail "000" "$(transport_hint "$CURL_RC") (${lc_url})"
+    elif [ "$HTTP_CODE" = "200" ]; then
+      row "$lc_int" "$lc_chk" yes "$lc_env" pass "$HTTP_CODE" "-"
+    else
+      row "$lc_int" "$lc_chk" yes "$lc_env" fail "$HTTP_CODE" "$(http_hint "$HTTP_CODE")"
+    fi
+    return
+  fi
+  # JSON-asserting path: keep the body, add %{content_type}, require real JSON on a 200.
+  lc_body="$(mktemp)"; CURL_RC=0
+  if [ -n "$lc_tok" ]; then
+    lc_meta="$(curl -s -o "$lc_body" -w '%{http_code} %{content_type}' \
+      --connect-timeout "$CONNECT_TIMEOUT" --max-time "$MAX_TIME" \
+      -H "Authorization: Bearer ${lc_tok}" "$lc_url")" || CURL_RC=$?
+  else
+    lc_meta="$(curl -s -o "$lc_body" -w '%{http_code} %{content_type}' \
+      --connect-timeout "$CONNECT_TIMEOUT" --max-time "$MAX_TIME" "$lc_url")" || CURL_RC=$?
+  fi
+  HTTP_CODE="${lc_meta%% *}"; HTTP_CT="${lc_meta#* }"
   if [ "$CURL_RC" -ne 0 ]; then
     row "$lc_int" "$lc_chk" yes "$lc_env" fail "000" "$(transport_hint "$CURL_RC") (${lc_url})"
   elif [ "$HTTP_CODE" = "200" ]; then
-    row "$lc_int" "$lc_chk" yes "$lc_env" pass "$HTTP_CODE" "-"
+    if printf '%s' "$HTTP_CT" | grep -qi json && jq -e "$lc_jq" "$lc_body" >/dev/null 2>&1; then
+      row "$lc_int" "$lc_chk" yes "$lc_env" pass "$HTTP_CODE" "-"
+    else
+      row "$lc_int" "$lc_chk" yes "$lc_env" fail "$HTTP_CODE" "200 but Content-Type='${HTTP_CT}' / body is not the expected JSON (${lc_jq}): looks like an HTML login/SPA/proxy page, not the API — verify the URL and that no SSO proxy fronts it"
+    fi
   else
     row "$lc_int" "$lc_chk" yes "$lc_env" fail "$HTTP_CODE" "$(http_hint "$HTTP_CODE")"
   fi
+  rm -f "$lc_body"
+}
+
+# authed_json_check <int> <chk> <url> <env-label> <jq-filter> <header-name> <header-value> [method] [data]
+# The anti-false-green path for every AUTHENTICATED HTTP probe. Unlike live_check it keeps the
+# body and records `pass` ONLY on 2xx AND a JSON content-type AND <jq-filter> matching a field
+# the real API always returns. A 200 with a non-JSON (HTML) body — an SSO/reverse-proxy login
+# page, a captive portal, or a route that moved and fell through to a SPA — is recorded `fail`
+# with an explicit hint, NOT a pass. Works with any auth header (Bearer, Token token=, ApiKey,
+# DD-API-KEY, SIGNOZ-API-KEY, Basic via -u done by the caller) and GET or POST.
+authed_json_check() {
+  aj_int="$1"; aj_chk="$2"; aj_url="$3"; aj_env="$4"; aj_jq="$5"; aj_hn="$6"; aj_hv="$7"; aj_method="${8:-GET}"; aj_data="${9:-}"
+  note "doctor: checking ${aj_int} ${aj_chk}: ${aj_method} ${aj_url}"
+  aj_body="$(mktemp)"; aj_rc=0
+  if [ "$aj_method" = "POST" ]; then
+    aj_meta="$(curl -s -o "$aj_body" -w '%{http_code} %{content_type}' \
+      --connect-timeout "$CONNECT_TIMEOUT" --max-time "$MAX_TIME" -X POST \
+      -H "${aj_hn}: ${aj_hv}" -H "Content-Type: application/json" --data "$aj_data" "$aj_url")" || aj_rc=$?
+  else
+    aj_meta="$(curl -s -o "$aj_body" -w '%{http_code} %{content_type}' \
+      --connect-timeout "$CONNECT_TIMEOUT" --max-time "$MAX_TIME" \
+      -H "${aj_hn}: ${aj_hv}" "$aj_url")" || aj_rc=$?
+  fi
+  aj_code="${aj_meta%% *}"; aj_ct="${aj_meta#* }"
+  if [ "$aj_rc" -ne 0 ]; then
+    row "$aj_int" "$aj_chk" yes "$aj_env" fail "000" "$(transport_hint "$aj_rc") (${aj_url})"
+  elif [ "$aj_code" = "200" ]; then
+    case "$aj_ct" in
+      application/json*|*+json*)
+        if jq -e "$aj_jq" "$aj_body" >/dev/null 2>&1; then
+          row "$aj_int" "$aj_chk" yes "$aj_env" pass "$aj_code" "-"
+        else
+          row "$aj_int" "$aj_chk" yes "$aj_env" fail "$aj_code" "200 JSON but unexpected shape (expected: ${aj_jq}); inspect ${aj_url} manually"
+        fi ;;
+      *)
+        row "$aj_int" "$aj_chk" yes "$aj_env" fail "$aj_code" "200 but Content-Type='${aj_ct}' (not JSON): looks like an HTML login/SPA/proxy page, not the API — verify the URL and that no SSO/reverse proxy fronts it" ;;
+    esac
+  else
+    row "$aj_int" "$aj_chk" yes "$aj_env" fail "$aj_code" "$(http_hint "$aj_code")"
+  fi
+  rm -f "$aj_body"
 }
 
 # token_gate <integration> <check...>: when TOKEN_STATE=missing, records the
@@ -325,8 +399,8 @@ else
   GRAFANA_URL="${GRAFANA_URL%/}"
   resolve_token grafana
   if token_gate grafana health identity; then
-    live_check grafana health   "${GRAFANA_URL}/api/health" "${TOKEN_VAR:-none}" "$TOKEN"
-    live_check grafana identity "${GRAFANA_URL}/api/org"    "${TOKEN_VAR:-none}" "$TOKEN"
+    authed_json_check grafana health   "${GRAFANA_URL}/api/health" "${TOKEN_VAR:-none}" '.database=="ok"'          Authorization "Bearer ${TOKEN}"
+    authed_json_check grafana identity "${GRAFANA_URL}/api/org"    "${TOKEN_VAR:-none}" '.name!=null and .id!=null' Authorization "Bearer ${TOKEN}"
   fi
 fi
 
@@ -342,7 +416,7 @@ else
   if [ -z "$SENTRY_ORG" ]; then
     row sentry config yes "${TOKEN_VAR:-none}" fail - "sentry.org is empty in toolkit.yaml; set your org slug"
   elif token_gate sentry org; then
-    live_check sentry org "https://${SENTRY_HOST}/api/0/organizations/${SENTRY_ORG}/" "${TOKEN_VAR:-none}" "$TOKEN"
+    authed_json_check sentry org "https://${SENTRY_HOST}/api/0/organizations/${SENTRY_ORG}/" "${TOKEN_VAR:-none}" ".slug==\"${SENTRY_ORG}\"" Authorization "Bearer ${TOKEN}"
   fi
 fi
 
@@ -368,23 +442,34 @@ else
   if token_gate pagerduty abilities analytics; then
     note "doctor: checking pagerduty abilities: GET ${PD_API}/abilities"
     PD_RC=0
-    PD_CODE="$(curl -s -o /dev/null -w '%{http_code}' \
+    PD_BODY="$(mktemp)"
+    PD_META="$(curl -s -o "$PD_BODY" -w '%{http_code} %{content_type}' \
       --connect-timeout "$CONNECT_TIMEOUT" --max-time "$MAX_TIME" \
       -H "Authorization: Token token=${TOKEN}" \
       -H "Content-Type: application/json" "${PD_API}/abilities")" || PD_RC=$?
+    PD_CODE="${PD_META%% *}"; PD_CT="${PD_META#* }"
     if [ "$PD_RC" -ne 0 ]; then
       row pagerduty abilities yes "$TOKEN_VAR" fail "000" "$(transport_hint "$PD_RC") (${PD_API}/abilities)"
+      PD_CODE="000"
     elif [ "$PD_CODE" = "200" ]; then
-      row pagerduty abilities yes "$TOKEN_VAR" pass "$PD_CODE" "-"
+      # 200 alone is not proof — assert the abilities JSON so an HTML/proxy 200 fails closed.
+      if printf '%s' "$PD_CT" | grep -qi json && jq -e 'has("abilities")' "$PD_BODY" >/dev/null 2>&1; then
+        row pagerduty abilities yes "$TOKEN_VAR" pass "$PD_CODE" "-"
+      else
+        row pagerduty abilities yes "$TOKEN_VAR" fail "$PD_CODE" "200 but body is not the PagerDuty abilities JSON (Content-Type=${PD_CT}) — looks like an HTML/proxy page, not api.pagerduty.com; verify the host/region"
+        PD_CODE="notjson"   # do not let the analytics step trust this 200
+      fi
     elif [ "$PD_CODE" = "401" ]; then
       row pagerduty abilities yes "$TOKEN_VAR" fail "$PD_CODE" "HTTP 401: key invalid or revoked, or wrong region host (pagerduty.region: us vs eu); recreate per connect references/providers.md"
     else
       row pagerduty abilities yes "$TOKEN_VAR" fail "$PD_CODE" "$(http_hint "$PD_CODE")"
     fi
+    rm -f "$PD_BODY"
     if [ "$PD_CODE" = "200" ]; then
       # Read-only-by-effect POST: aggregated incident metrics over the last 7 days.
       note "doctor: checking pagerduty analytics: POST ${PD_API}/analytics/metrics/incidents/all (read-only filter body)"
       PDA_RC=0
+      # status-probe-ok: secondary read-by-effect POST to api.pagerduty.com (fixed JSON SaaS, no SSO fall-through); the abilities probe above already asserted JSON this run.
       PDA_CODE="$(curl -s -o /dev/null -w '%{http_code}' \
         --connect-timeout "$CONNECT_TIMEOUT" --max-time "$MAX_TIME" \
         -X POST \
@@ -444,35 +529,44 @@ else
   else
     DD_HOST="api.${DD_SITE}"
     note "doctor: checking datadog validate: GET https://${DD_HOST}/api/v1/validate"
-    DDV_RC=0
-    DDV_CODE="$(curl -s -o /dev/null -w '%{http_code}' \
+    DDV_RC=0; DDV_BODY="$(mktemp)"
+    DDV_META="$(curl -s -o "$DDV_BODY" -w '%{http_code} %{content_type}' \
       --connect-timeout "$CONNECT_TIMEOUT" --max-time "$MAX_TIME" \
       -H "DD-API-KEY: ${DD_API_KEY}" "https://${DD_HOST}/api/v1/validate")" || DDV_RC=$?
+    DDV_CODE="${DDV_META%% *}"; DDV_CT="${DDV_META#* }"
     if [ "$DDV_RC" -ne 0 ]; then
       row datadog validate yes "$DD_API_VAR" fail "000" "$(transport_hint "$DDV_RC") (https://${DD_HOST}/api/v1/validate)"
       DD_BLOCKED=1
-    elif [ "$DDV_CODE" = "200" ]; then
+    elif [ "$DDV_CODE" = "200" ] && printf '%s' "$DDV_CT" | grep -qi json && jq -e '.valid==true' "$DDV_BODY" >/dev/null 2>&1; then
       row datadog validate yes "$DD_API_VAR" pass "$DDV_CODE" "-"
+    elif [ "$DDV_CODE" = "200" ]; then
+      row datadog validate yes "$DD_API_VAR" fail "$DDV_CODE" "200 but body is not the Datadog validate JSON (Content-Type=${DDV_CT}) — not api.${DD_SITE}; verify datadog.site and that no proxy fronts it"
+      DD_BLOCKED=1
     else
       row datadog validate yes "$DD_API_VAR" fail "$DDV_CODE" "HTTP ${DDV_CODE}: API key invalid or wrong site (datadog.site '${DD_SITE}'); a valid key on the wrong site returns 403"
       DD_BLOCKED=1
     fi
+    rm -f "$DDV_BODY"
     if [ "$DD_BLOCKED" -eq 0 ]; then
       note "doctor: checking datadog monitors-read: GET https://${DD_HOST}/api/v1/monitor?page_size=1"
-      DDM_RC=0
-      DDM_CODE="$(curl -s -o /dev/null -w '%{http_code}' \
+      DDM_RC=0; DDM_BODY="$(mktemp)"
+      DDM_META="$(curl -s -o "$DDM_BODY" -w '%{http_code} %{content_type}' \
         --connect-timeout "$CONNECT_TIMEOUT" --max-time "$MAX_TIME" \
         -H "DD-API-KEY: ${DD_API_KEY}" -H "DD-APPLICATION-KEY: ${DD_APP_KEY}" \
         "https://${DD_HOST}/api/v1/monitor?page_size=1")" || DDM_RC=$?
+      DDM_CODE="${DDM_META%% *}"; DDM_CT="${DDM_META#* }"
       if [ "$DDM_RC" -ne 0 ]; then
         row datadog monitors-read yes "$DD_APP_VAR" fail "000" "$(transport_hint "$DDM_RC")"
-      elif [ "$DDM_CODE" = "200" ]; then
+      elif [ "$DDM_CODE" = "200" ] && printf '%s' "$DDM_CT" | grep -qi json && jq -e 'type=="array"' "$DDM_BODY" >/dev/null 2>&1; then
         row datadog monitors-read yes "$DD_APP_VAR" pass "$DDM_CODE" "-"
+      elif [ "$DDM_CODE" = "200" ]; then
+        row datadog monitors-read yes "$DD_APP_VAR" fail "$DDM_CODE" "200 but body is not the monitors JSON array (Content-Type=${DDM_CT}) — inspect the host"
       elif [ "$DDM_CODE" = "403" ]; then
         row datadog monitors-read yes "$DD_APP_VAR" fail "$DDM_CODE" "HTTP 403: app key invalid, missing the monitors_read scope, or belongs to a disabled user; check the app key scopes per connect references/providers.md"
       else
         row datadog monitors-read yes "$DD_APP_VAR" fail "$DDM_CODE" "$(http_hint "$DDM_CODE")"
       fi
+      rm -f "$DDM_BODY"
       # Informational cost probe. This hits /api/v1/usage/summary, which needs
       # usage_read only; a pass therefore confirms usage_read, NOT billing_read.
       # The audit's estimated/historical cost-trend call (/api/v2/usage/estimated_cost)
@@ -484,6 +578,7 @@ else
       if [ "$DD_COST_CHECKS" = "false" ]; then
         row datadog cost-permissions yes "$DD_APP_VAR" skipped - "datadog.cost_checks is false in toolkit.yaml; cost section will be skipped"
       else
+        # status-probe-ok: informational scope probe, skipped either way (never a pass/fail gate); body shape not needed.
         DDC_CODE="$(curl -s -o /dev/null -w '%{http_code}' \
           --connect-timeout "$CONNECT_TIMEOUT" --max-time "$MAX_TIME" \
           -H "DD-API-KEY: ${DD_API_KEY}" -H "DD-APPLICATION-KEY: ${DD_APP_KEY}" \
@@ -526,13 +621,14 @@ else
   else
     row elk env yes "$ELK_TOKEN_VAR" pass - -
     note "doctor: checking elk alerting-health: GET ${ELK_KIBANA_URL}/api/alerting/_health"
-    ELK_RC=0
-    ELK_CODE="$(curl -s -o /dev/null -w '%{http_code}' \
+    ELK_RC=0; ELK_BODY="$(mktemp)"
+    ELK_META="$(curl -s -o "$ELK_BODY" -w '%{http_code} %{content_type}' \
       --connect-timeout "$CONNECT_TIMEOUT" --max-time "$MAX_TIME" \
       -H "Authorization: ApiKey ${ELK_TOKEN}" "${ELK_KIBANA_URL}/api/alerting/_health")" || ELK_RC=$?
+    ELK_CODE="${ELK_META%% *}"; ELK_CT="${ELK_META#* }"
     if [ "$ELK_RC" -ne 0 ]; then
       row elk alerting-health yes "$ELK_TOKEN_VAR" fail "000" "$(transport_hint "$ELK_RC") (${ELK_KIBANA_URL}/api/alerting/_health)"
-    elif [ "$ELK_CODE" = "200" ]; then
+    elif [ "$ELK_CODE" = "200" ] && printf '%s' "$ELK_CT" | grep -qi json && jq -e 'type=="object" or type=="array"' "$ELK_BODY" >/dev/null 2>&1; then
       row elk alerting-health yes "$ELK_TOKEN_VAR" pass "$ELK_CODE" "-"
       # Space visibility: audit-elk auto-discovers spaces via GET /api/spaces/space, but the
       # response is filtered to spaces this key can see. Surface how many are visible so a
@@ -549,6 +645,8 @@ else
           row elk spaces yes "$ELK_TOKEN_VAR" pass "$ELK_CODE" "visible spaces (${ELK_SPACE_N}): ${ELK_SPACE_IDS}"
         fi
       fi
+    elif [ "$ELK_CODE" = "200" ]; then
+      row elk alerting-health yes "$ELK_TOKEN_VAR" fail "$ELK_CODE" "200 but Content-Type='${ELK_CT}' / non-JSON body: Kibana is likely behind an SSO/OAuth reverse proxy returning its login page (or kibana_url is wrong) — a 200 HTML page is not proof of API access; audit-elk cannot read alerting until a real JSON response comes back"
     elif [ "$ELK_CODE" = "404" ]; then
       row elk alerting-health yes "$ELK_TOKEN_VAR" fail "$ELK_CODE" "HTTP 404: elk.kibana_url likely points at Elasticsearch, not Kibana, or a space/base-path prefix is wrong; alerting rules live in Kibana (:5601 self-managed)"
     elif [ "$ELK_CODE" = "401" ] || [ "$ELK_CODE" = "403" ]; then
@@ -556,6 +654,7 @@ else
     else
       row elk alerting-health yes "$ELK_TOKEN_VAR" fail "$ELK_CODE" "$(http_hint "$ELK_CODE")"
     fi
+    rm -f "$ELK_BODY"
   fi
 fi
 
@@ -608,14 +707,17 @@ else
     else
       JSM_BASE="https://api.atlassian.com/jsm/ops/api/${JSM_CLOUD_ID}/v1"
       note "doctor: checking jsm alerts-read: GET ${JSM_BASE}/alerts?size=1"
-      JSM_RC=0
-      JSM_CODE="$(curl -s -o /dev/null -w '%{http_code}' \
+      JSM_RC=0; JSM_BODY="$(mktemp)"
+      JSM_META="$(curl -s -o "$JSM_BODY" -w '%{http_code} %{content_type}' \
         --connect-timeout "$CONNECT_TIMEOUT" --max-time "$MAX_TIME" \
         -u "${JSM_EMAIL_VAL}:${JSM_TOKEN_VAL}" "${JSM_BASE}/alerts?size=1")" || JSM_RC=$?
+      JSM_CODE="${JSM_META%% *}"; JSM_CT="${JSM_META#* }"
       if [ "$JSM_RC" -ne 0 ]; then
         row jsm alerts-read yes "$JSM_TOKEN_VAR" fail "000" "$(transport_hint "$JSM_RC") (${JSM_BASE}/alerts)"
-      elif [ "$JSM_CODE" = "200" ]; then
+      elif [ "$JSM_CODE" = "200" ] && printf '%s' "$JSM_CT" | grep -qi json && jq -e 'type=="object" or type=="array"' "$JSM_BODY" >/dev/null 2>&1; then
         row jsm alerts-read yes "$JSM_TOKEN_VAR" pass "$JSM_CODE" "-"
+      elif [ "$JSM_CODE" = "200" ]; then
+        row jsm alerts-read yes "$JSM_TOKEN_VAR" fail "$JSM_CODE" "200 but body is not JSON (Content-Type=${JSM_CT}) — not the JSM Operations API; verify jsm.site/cloud_id and that no proxy fronts api.atlassian.com"
       elif [ "$JSM_CODE" = "401" ]; then
         row jsm alerts-read yes "$JSM_TOKEN_VAR" fail "$JSM_CODE" "HTTP 401: bad API token or email; the token is the Basic-auth password and ${JSM_EMAIL_VAR} the username (not a GenieKey); recreate per connect references/providers.md"
       elif [ "$JSM_CODE" = "403" ]; then
@@ -625,6 +727,7 @@ else
       else
         row jsm alerts-read yes "$JSM_TOKEN_VAR" fail "$JSM_CODE" "$(http_hint "$JSM_CODE")"
       fi
+      rm -f "$JSM_BODY"
     fi
   fi
 fi
@@ -651,14 +754,17 @@ else
   else
     row zenduty env yes "$ZD_TOKEN_VAR" pass - -
     note "doctor: checking zenduty teams-read: GET https://www.zenduty.com/api/account/teams/"
-    ZD_RC=0
-    ZD_CODE="$(curl -s -o /dev/null -w '%{http_code}' \
+    ZD_RC=0; ZD_BODY="$(mktemp)"
+    ZD_META="$(curl -s -o "$ZD_BODY" -w '%{http_code} %{content_type}' \
       --connect-timeout "$CONNECT_TIMEOUT" --max-time "$MAX_TIME" \
       -H "Authorization: Token ${ZD_TOKEN}" "https://www.zenduty.com/api/account/teams/")" || ZD_RC=$?
+    ZD_CODE="${ZD_META%% *}"; ZD_CT="${ZD_META#* }"
     if [ "$ZD_RC" -ne 0 ]; then
       row zenduty teams-read yes "$ZD_TOKEN_VAR" fail "000" "$(transport_hint "$ZD_RC") (https://www.zenduty.com/api/account/teams/)"
-    elif [ "$ZD_CODE" = "200" ]; then
+    elif [ "$ZD_CODE" = "200" ] && printf '%s' "$ZD_CT" | grep -qi json && jq -e 'type=="array" or type=="object"' "$ZD_BODY" >/dev/null 2>&1; then
       row zenduty teams-read yes "$ZD_TOKEN_VAR" pass "$ZD_CODE" "-"
+    elif [ "$ZD_CODE" = "200" ]; then
+      row zenduty teams-read yes "$ZD_TOKEN_VAR" fail "$ZD_CODE" "200 but Content-Type='${ZD_CT}' / non-JSON body: likely a Cloudflare interstitial or SPA/login page from www.zenduty.com, not the API — a 200 HTML page is not proof; retry or verify the token"
     elif [ "$ZD_CODE" = "401" ] || [ "$ZD_CODE" = "403" ]; then
       row zenduty teams-read yes "$ZD_TOKEN_VAR" fail "$ZD_CODE" "HTTP ${ZD_CODE}: key invalid or not prefixed correctly; the header must be 'Authorization: Token <key>' (the literal word Token, not Bearer); recreate per connect references/providers.md"
     elif [ "$ZD_CODE" = "429" ]; then
@@ -666,6 +772,7 @@ else
     else
       row zenduty teams-read yes "$ZD_TOKEN_VAR" fail "$ZD_CODE" "$(http_hint "$ZD_CODE")"
     fi
+    rm -f "$ZD_BODY"
   fi
 fi
 
@@ -692,23 +799,26 @@ else
   else
     row groundcover env yes "$GC_TOKEN_VAR" pass - -
     note "doctor: checking groundcover monitors-read: POST ${GC_API}/api/monitors/list"
-    GC_RC=0
+    GC_RC=0; GC_BODY="$(mktemp)"
     if [ -n "$GC_BACKEND" ]; then
-      GC_CODE="$(curl -s -o /dev/null -w '%{http_code}' \
+      GC_META="$(curl -s -o "$GC_BODY" -w '%{http_code} %{content_type}' \
         --connect-timeout "$CONNECT_TIMEOUT" --max-time "$MAX_TIME" \
         -H "Authorization: Bearer ${GC_TOKEN}" -H "X-Backend-Id: ${GC_BACKEND}" \
         -H "Content-Type: application/json" \
         -X POST "${GC_API}/api/monitors/list" --data '{"sources":[]}')" || GC_RC=$?
     else
-      GC_CODE="$(curl -s -o /dev/null -w '%{http_code}' \
+      GC_META="$(curl -s -o "$GC_BODY" -w '%{http_code} %{content_type}' \
         --connect-timeout "$CONNECT_TIMEOUT" --max-time "$MAX_TIME" \
         -H "Authorization: Bearer ${GC_TOKEN}" -H "Content-Type: application/json" \
         -X POST "${GC_API}/api/monitors/list" --data '{"sources":[]}')" || GC_RC=$?
     fi
+    GC_CODE="${GC_META%% *}"; GC_CT="${GC_META#* }"
     if [ "$GC_RC" -ne 0 ]; then
       row groundcover monitors-read yes "$GC_TOKEN_VAR" fail "000" "$(transport_hint "$GC_RC") (${GC_API}/api/monitors/list)"
-    elif [ "$GC_CODE" = "200" ]; then
+    elif [ "$GC_CODE" = "200" ] && printf '%s' "$GC_CT" | grep -qi json && jq -e 'type=="array" or type=="object"' "$GC_BODY" >/dev/null 2>&1; then
       row groundcover monitors-read yes "$GC_TOKEN_VAR" pass "$GC_CODE" "-"
+    elif [ "$GC_CODE" = "200" ]; then
+      row groundcover monitors-read yes "$GC_TOKEN_VAR" fail "$GC_CODE" "200 but Content-Type='${GC_CT}' / non-JSON body at ${GC_API} — on a self-hosted groundcover (non-api.groundcover.com) this usually means the monitors API is not exposed at this host, or an ingress/UI/proxy answered; a 200 HTML page is not proof of the monitors API"
     elif [ "$GC_CODE" = "401" ]; then
       row groundcover monitors-read yes "$GC_TOKEN_VAR" fail "$GC_CODE" "HTTP 401: API key invalid or expired; recreate on a Viewer-role service account per connect references/providers.md"
     elif [ "$GC_CODE" = "403" ]; then
@@ -716,6 +826,7 @@ else
     else
       row groundcover monitors-read yes "$GC_TOKEN_VAR" fail "$GC_CODE" "$(http_hint "$GC_CODE")"
     fi
+    rm -f "$GC_BODY"
   fi
 fi
 
@@ -742,7 +853,8 @@ else
       row prometheus query yes "$TOKEN_VAR" skipped - "blocked: ${TOKEN_VAR} is not set"
     else
       # vector(1) succeeds on a server with zero targets: it tests the API, not the fleet.
-      live_check prometheus query "${PROM_URL}/api/v1/query?query=vector%281%29" "${TOKEN_VAR:-none}" "$TOKEN"
+      # Assert the Prometheus JSON envelope so a 200 HTML/proxy page fails closed.
+      live_check prometheus query "${PROM_URL}/api/v1/query?query=vector%281%29" "${TOKEN_VAR:-none}" "$TOKEN" '.status=="success"'
     fi
   else
     row prometheus configured no - skipped - "prometheus.url is empty; only alertmanager_url is set"
@@ -753,7 +865,7 @@ else
     if [ "$PROM_BLOCKED" -eq 1 ]; then
       row alertmanager status yes "$TOKEN_VAR" skipped - "blocked: ${TOKEN_VAR} is not set"
     else
-      live_check alertmanager status "${AM_URL}/api/v2/status" "${TOKEN_VAR:-none}" "$TOKEN"
+      live_check alertmanager status "${AM_URL}/api/v2/status" "${TOKEN_VAR:-none}" "$TOKEN" '.cluster != null or .versionInfo != null'
     fi
   else
     row alertmanager configured no - skipped - "set prometheus.alertmanager_url if you run Alertmanager"
@@ -810,6 +922,61 @@ else
     else
       row vmalert configured no - skipped - "set victoriametrics.vmalert_url if vmalert evaluates your rules"
     fi
+  fi
+fi
+
+# --- signoz (clickhouse-backed, otel-native) ----------------------------------------
+# SigNoz authenticates with "SIGNOZ-API-KEY: <token>" on a Service Account token that must
+# hold at least the read-only signoz-viewer role. /api/v1/version + /api/v1/health are open;
+# /api/v1/rules requires >= viewer. A 200 with an HTML body is the SPA/login fall-through
+# (a path moved on this version, or a proxy fronts auth) — not proof of API access.
+
+SIGNOZ_URL="$(cfg signoz url)"
+if [ -z "$SIGNOZ_URL" ]; then
+  row signoz configured no - skipped - "add a signoz block via /scoutflo:connect if you run SigNoz"
+else
+  CONFIGURED_COUNT=$((CONFIGURED_COUNT + 1))
+  SIGNOZ_URL="${SIGNOZ_URL%/}"
+  SIGNOZ_TOKEN_VAR="$(cfg signoz api_key_env)"
+  SIGNOZ_TOKEN=""; SIGNOZ_TOKEN_STATE="none"
+  if [ -n "$SIGNOZ_TOKEN_VAR" ]; then
+    SIGNOZ_TOKEN="$(printenv "$SIGNOZ_TOKEN_VAR" 2>/dev/null || true)"
+    if [ -n "$SIGNOZ_TOKEN" ]; then SIGNOZ_TOKEN_STATE="set"; else SIGNOZ_TOKEN_STATE="missing"; fi
+  fi
+  # Reachability + version (open, no auth) — echo the version the run verified against.
+  SIG_VER="$(curl -s --connect-timeout "$CONNECT_TIMEOUT" --max-time "$MAX_TIME" "${SIGNOZ_URL}/api/v1/version" 2>/dev/null | jq -r '.version // empty' 2>/dev/null || true)"
+  if [ -n "$SIG_VER" ]; then
+    row signoz version yes - pass 200 "SigNoz ${SIG_VER}"
+  else
+    row signoz version yes - fail - "GET ${SIGNOZ_URL}/api/v1/version did not return JSON with a .version — wrong host/port, or not a SigNoz API"
+  fi
+  if [ -z "$SIGNOZ_TOKEN_VAR" ]; then
+    row signoz config yes - fail - "signoz.api_key_env is empty in toolkit.yaml; name the variable holding the Service Account token"
+  elif [ "$SIGNOZ_TOKEN_STATE" = "missing" ]; then
+    row signoz env yes "$SIGNOZ_TOKEN_VAR" env-missing - "export ${SIGNOZ_TOKEN_VAR} in this shell, then rerun doctor; created per connect references/providers.md"
+    row signoz rules-read yes "$SIGNOZ_TOKEN_VAR" skipped - "blocked: ${SIGNOZ_TOKEN_VAR} is not set"
+  else
+    row signoz env yes "$SIGNOZ_TOKEN_VAR" pass - -
+    note "doctor: checking signoz rules-read: GET ${SIGNOZ_URL}/api/v1/rules"
+    SIGB="$(mktemp)"; SIGR=0
+    SIGM="$(curl -s -o "$SIGB" -w '%{http_code} %{content_type}' \
+      --connect-timeout "$CONNECT_TIMEOUT" --max-time "$MAX_TIME" \
+      -H "SIGNOZ-API-KEY: ${SIGNOZ_TOKEN}" "${SIGNOZ_URL}/api/v1/rules")" || SIGR=$?
+    SIGC="${SIGM%% *}"; SIGCT="${SIGM#* }"
+    if [ "$SIGR" -ne 0 ]; then
+      row signoz rules-read yes "$SIGNOZ_TOKEN_VAR" fail "000" "$(transport_hint "$SIGR") (${SIGNOZ_URL}/api/v1/rules)"
+    elif [ "$SIGC" = "200" ] && printf '%s' "$SIGCT" | grep -qi json && jq -e 'type=="array" or has("data") or has("rules")' "$SIGB" >/dev/null 2>&1; then
+      row signoz rules-read yes "$SIGNOZ_TOKEN_VAR" pass "$SIGC" "-"
+    elif [ "$SIGC" = "200" ]; then
+      row signoz rules-read yes "$SIGNOZ_TOKEN_VAR" fail "$SIGC" "200 but Content-Type='${SIGCT}' / non-JSON: /api/v1/rules fell through to the SigNoz SPA/login page — path moved on ${SIG_VER:-this version} or a proxy fronts auth; not verified"
+    elif [ "$SIGC" = "401" ]; then
+      row signoz rules-read yes "$SIGNOZ_TOKEN_VAR" fail "$SIGC" "HTTP 401: SIGNOZ-API-KEY missing or invalid; recreate per connect references/providers.md"
+    elif [ "$SIGC" = "403" ]; then
+      row signoz rules-read yes "$SIGNOZ_TOKEN_VAR" fail "$SIGC" "HTTP 403 authz_forbidden: token authenticated but its service account has NO read role (below viewer) — assign it the read-only signoz-viewer role (SigNoz Settings -> Service Accounts -> Roles)"
+    else
+      row signoz rules-read yes "$SIGNOZ_TOKEN_VAR" fail "$SIGC" "$(http_hint "$SIGC")"
+    fi
+    rm -f "$SIGB"
   fi
 fi
 
@@ -873,6 +1040,7 @@ else
       if [ "$GCP_COST_CHECKS" = "false" ]; then
         row gcp cost-permissions yes "${GCP_CRED_VAR:-none}" skipped - "gcp.cost_checks is false in toolkit.yaml; audit-cost GCP Recommender checks will be skipped"
       else
+        # status-probe-ok: informational cost-permissions probe on googleapis.com (fixed JSON API), skipped either way — never a pass/fail gate.
         GCP_REC_CODE="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 -H "Authorization: Bearer ${GCP_TOKEN}" "https://recommender.googleapis.com/v1/projects/${GCP_PROJECT}/locations/global/recommenders/google.compute.image.IdleResourceRecommender/recommendations?pageSize=1" 2>/dev/null || echo 000)"
         if [ "$GCP_REC_CODE" = "200" ]; then
           row gcp cost-permissions yes "${GCP_CRED_VAR:-none}" pass "$GCP_REC_CODE" -
@@ -1101,7 +1269,7 @@ fi
 # doctor does not know is reported, never silently ignored (a clickstack-only config
 # once exited 0 "PASS" with zero rows — that class of false green is what this kills).
 
-KNOWN_BLOCKS="grafana sentry pagerduty datadog elk jsm zenduty groundcover prometheus alertmanager loki tempo mimir victoriametrics vmalert digitalocean gcp aws azure github kubernetes clickstack slack"
+KNOWN_BLOCKS="grafana sentry pagerduty datadog elk jsm zenduty groundcover prometheus alertmanager loki tempo mimir victoriametrics vmalert signoz digitalocean gcp aws azure github kubernetes clickstack slack"
 for blk in $(sed -n 's/^\([a-z_][a-z_0-9]*\):.*$/\1/p' "$CONFIG" | sort -u); do
   case " $KNOWN_BLOCKS " in
     *" $blk "*) : ;;

@@ -57,21 +57,43 @@ AUTH="Authorization: Bearer ${PROM_TOKEN}"
 dig +short "$(printf '%s' "$PROM_URL" | sed -E 's#^https?://([^/]+).*#\1#')" || \
   nslookup "$(printf '%s' "$PROM_URL" | sed -E 's#^https?://([^/]+).*#\1#')"
 
-PROM_CODE=$(curl -s -o /dev/null -w '%{http_code}' --connect-timeout 5 --max-time 10 -H "$AUTH" "${PROM_URL}/api/v1/status/buildinfo")
-AM_CODE=$(curl -s -o /dev/null -w '%{http_code}' --connect-timeout 5 --max-time 10 -H "$AUTH" "${AM_URL}/api/v2/status")
+# Do NOT judge reachability on the status code alone: a reverse proxy fronting auth, a moved
+# path, or a POST-only route hit with GET can each answer 200 with an HTML SSO/login/SPA page,
+# which a status-only check reads as "reachable". These endpoints are typically UNAUTHENTICATED,
+# so a JSON-shaped 200 proves the API answered (reachability), not that the caller is authorized.
+# Keep the body, capture the content-type, and require 200 + JSON + a field the real API always
+# returns before printing pass; a 200 that is not that JSON is an ALR-010 fail (a fronting page).
+PROM_BODY="$(mktemp)"; AM_BODY="$(mktemp)"
+PROM_META="$(curl -s -o "$PROM_BODY" -w '%{http_code} %{content_type}' --connect-timeout 5 --max-time 10 -H "$AUTH" "${PROM_URL}/api/v1/status/buildinfo")" || PROM_META="000 -"
+AM_META="$(curl -s -o "$AM_BODY" -w '%{http_code} %{content_type}' --connect-timeout 5 --max-time 10 -H "$AUTH" "${AM_URL}/api/v2/status")" || AM_META="000 -"
+PROM_CODE="${PROM_META%% *}"; PROM_CT="${PROM_META#* }"
+AM_CODE="${AM_META%% *}"; AM_CT="${AM_META#* }"
 echo "prometheus: ${PROM_CODE}"
 echo "alertmanager: ${AM_CODE}"
-[ "$PROM_CODE" = "200" ] && [ "$AM_CODE" = "200" ] && echo "ALR-010: pass"
+PROM_OK=0; AM_OK=0
+if [ "$PROM_CODE" = "200" ] && printf '%s' "$PROM_CT" | grep -qi json && jq -e '.data.version' "$PROM_BODY" >/dev/null 2>&1; then
+  PROM_OK=1
+elif [ "$PROM_CODE" = "200" ]; then
+  echo "ALR-010 fail: prometheus 200 but Content-Type='${PROM_CT}' and no .data.version — a fronting SSO/login/SPA/proxy page answered, not /api/v1/status/buildinfo"
+fi
+if [ "$AM_CODE" = "200" ] && printf '%s' "$AM_CT" | grep -qi json && jq -e '.cluster or .versionInfo' "$AM_BODY" >/dev/null 2>&1; then
+  AM_OK=1
+elif [ "$AM_CODE" = "200" ]; then
+  echo "ALR-010 fail: alertmanager 200 but Content-Type='${AM_CT}' and no .cluster/.versionInfo — a fronting SSO/login/SPA/proxy page answered, not /api/v2/status"
+fi
+rm -f "$PROM_BODY" "$AM_BODY"
+[ "$PROM_OK" = "1" ] && [ "$AM_OK" = "1" ] && echo "ALR-010: pass"
 ```
 
-Expect: a resolvable A/CNAME record, and both `PROM_CODE` and `AM_CODE` equal to `200` (the final assertion prints `ALR-010: pass` only then; anything else means the check failed and the reader must classify why, per this table:
+Expect: a resolvable A/CNAME record, and both probes returning `200` **with a real API body** — Prometheus `buildinfo` carrying `.data.version` and Alertmanager `/api/v2/status` carrying `.cluster` or `.versionInfo`. The final assertion prints `ALR-010: pass` only then. A `200` whose body is not that JSON is an ALR-010 **fail**, flagged as a fronting SSO/login/SPA/proxy page rather than the API. Because these endpoints are typically UNAUTHENTICATED, a JSON-shaped `200` is proof of *reachability*, not of authorized access. Anything else means the check failed and the reader must classify why, per this table:
 
 | Observed code | Diagnosis | Not this |
 | --- | --- | --- |
 | `000` / connect refused / DNS failure | Reachability problem: DNS, ingress, or network path (ALR-010, high) | Not a routing or auth problem; nothing downstream can be trusted until this is fixed |
 | `401` | Auth problem: the token attached in `$AUTH` is missing, wrong, or expired. Record it as an auth-scope finding, not as "unreachable" or "routing broken" | Never re-run the doctor token check as the fix; this is the live call itself failing auth |
 | `403` | Auth problem: the token is valid but lacks the scope this endpoint needs | Never downgrade to "endpoint not exposed"; the endpoint answered |
-| `200` | Reachable and authenticated (or auth not required); proceed to the next phase | — |
+| `200` but HTML / non-API body (no `.data.version`, or no `.cluster`/`.versionInfo`) | A fronting SSO/login/SPA page or reverse proxy answered, not the API (ALR-010, high) | Not "reachable and healthy"; the status code passed but the body did not |
+| `200` with a real API body (JSON, expected field present) | Reachable and answering (auth not required, or the token passed); proceed to the next phase | — |
 
 A `401`/`403` on a deployment where the doctor gate reported the token as present means the token's scope, not its existence, is the problem; say so explicitly in the finding text.
 

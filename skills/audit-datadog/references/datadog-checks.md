@@ -177,6 +177,7 @@ else
 fi
 # Webhook: a named webhook that 404s is dead.
 WEBHOOK_NAME="your-webhook-name"   # from a @webhook-<name> handle in the messages
+# status-probe-ok: the HTTP status IS the evidence here (404 = a dead @webhook handle referenced by a live monitor, DD-002); api.<site> is fixed JSON SaaS.
 code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 \
   -H "DD-API-KEY: ${DATADOG_API_KEY}" -H "DD-APPLICATION-KEY: ${DATADOG_APP_KEY}" \
   "https://${DD_HOST}/api/v1/integration/webhooks/configuration/webhooks/${WEBHOOK_NAME}")

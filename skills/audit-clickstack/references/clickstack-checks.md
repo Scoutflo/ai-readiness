@@ -31,8 +31,10 @@ CH_KEY="${CH_KEY:-}"                        # clickstack.clickhouse_password_env
 CHQ_FORM=""   # set on first call: "ro" (readonly=1 accepted) or "plain" (profile-readonly user)
 chq() {
   if [ -z "$CHQ_FORM" ]; then
+    # Assert the BODY is exactly 1 (not merely a 2xx): a reverse proxy or SSO page can
+    # answer 200 with HTML, which -f alone would accept and wrongly pin CHQ_FORM=ro.
     if curl -fsS --max-time 20 -H "X-ClickHouse-User: ${CH_USER}" -H "X-ClickHouse-Key: ${CH_KEY}" \
-         "${CH_URL}/?readonly=1" --data-binary "SELECT 1" >/dev/null 2>&1; then
+         "${CH_URL}/?readonly=1" --data-binary "SELECT 1" 2>/dev/null | grep -qx 1; then
       CHQ_FORM="ro"
     else
       CHQ_FORM="plain"   # user is already read-only by profile (Code 164 on the param)
@@ -74,9 +76,14 @@ hdx_get() {
 # and never turn an auth failure into a confident CS-040/CS-041 fail.
 HDX_MODE="none"; HDX_IN_SCOPE=0; HDX_JAR=""
 if [ -n "$HDX_API_KEY" ]; then
-  HDX_PROBE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 \
-    -H "Authorization: Bearer ${HDX_API_KEY}" "${HDX_URL}/api/alerts") || HDX_PROBE="000"
-  if [ "$HDX_PROBE" = "200" ]; then HDX_MODE="key"; HDX_IN_SCOPE=1; fi
+  # Keep the body: a proxy/SSO in front of HyperDX can answer 200 with an HTML login/SPA page,
+  # so in-scope is credited only on a real JSON alerts body, not on a bare 200.
+  HDX_KB="$(mktemp)"
+  HDX_KM=$(curl -s -o "$HDX_KB" -w '%{http_code} %{content_type}' --max-time 10 \
+    -H "Authorization: Bearer ${HDX_API_KEY}" "${HDX_URL}/api/alerts") || HDX_KM="000 -"
+  HDX_PROBE="${HDX_KM%% *}"; HDX_KCT="${HDX_KM#* }"
+  if [ "$HDX_PROBE" = "200" ] && printf '%s' "$HDX_KCT" | grep -qi json && jq -e 'type=="array" or has("data") or has("alerts")' "$HDX_KB" >/dev/null 2>&1; then HDX_MODE="key"; HDX_IN_SCOPE=1; fi
+  rm -f "$HDX_KB"
 fi
 
 # v2.x session fallback (confirmed live): the key 401s because on v2 the apiKey is
@@ -92,14 +99,22 @@ if [ "$HDX_MODE" = "none" ] && [ -n "$HDX_EMAIL" ] && [ -n "$HDX_PASSWORD" ]; th
     | curl -s -o /dev/null --max-time 10 -c "$HDX_JAR" \
         -H 'Content-Type: application/json' --data-binary @- \
         "${HDX_URL}/api/login/password" || true
-  # Success is proven by the session working, not by the login status code (a redirect):
-  HDX_SESS=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 -b "$HDX_JAR" "${HDX_URL}/api/alerts") || HDX_SESS="000"
-  if [ "$HDX_SESS" = "200" ]; then
+  # Success is proven by the session REACHING THE API, not by the login status code
+  # (a redirect) and not by a bare 200: a moved path, a proxy, or the SPA can answer
+  # 200 with an HTML login page. Require a JSON body of the /api/alerts shape before
+  # crediting the session; capture the body + content-type instead of discarding them.
+  HDX_SB="$(mktemp)"
+  HDX_META=$(curl -s -o "$HDX_SB" -w '%{http_code} %{content_type}' --max-time 10 -b "$HDX_JAR" "${HDX_URL}/api/alerts") || HDX_META="000 -"
+  HDX_SESS="${HDX_META%% *}"; HDX_SESS_CT="${HDX_META#* }"
+  if [ "$HDX_SESS" = "200" ] && printf '%s' "$HDX_SESS_CT" | grep -qi json && jq -e 'type=="array" or has("data") or has("alerts")' "$HDX_SB" >/dev/null 2>&1; then
     HDX_MODE="session"; HDX_IN_SCOPE=1
     echo "HyperDX v2 session login OK (GET /api/alerts -> 200 with the session cookie) — CS-040/CS-041 are scorable this run"
+  elif [ "$HDX_SESS" = "200" ]; then
+    echo "HyperDX session login returned 200 but Content-Type='${HDX_SESS_CT}' with a non-JSON body — an HTML login/SPA/proxy page, not the API, so the session is NOT proven. CS-040/CS-041 = not-in-scope (reason: HyperDX v2 session login did not reach the REST API). Not a fail — never retry-loop the login."
   else
     echo "HyperDX session login did not yield a working session (GET /api/alerts -> ${HDX_SESS}); check the variables hyperdx_email_env/hyperdx_password_env name. CS-040/CS-041 = not-in-scope (reason: HyperDX v2 session login failed). Not a fail — never retry-loop the login."
   fi
+  rm -f "$HDX_SB"
 fi
 
 if [ "$HDX_IN_SCOPE" = "0" ] && { [ -z "$HDX_EMAIL" ] || [ -z "$HDX_PASSWORD" ]; }; then

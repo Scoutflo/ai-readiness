@@ -67,9 +67,18 @@ CLOUD_ID="${JSM_CLOUD_ID:-}"         # jsm.cloud_id when set; else resolve from 
 [ -n "$CLOUD_ID" ] || { echo "could not resolve cloud_id from jsm.site ${JSM_SITE}; set jsm.cloud_id explicitly (connect references/providers.md)"; exit 1; }
 
 JSM_BASE="https://api.atlassian.com/jsm/ops/api/${CLOUD_ID}/v1"
-CODE="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 \
-  -u "${JSM_EMAIL}:${JSM_API_TOKEN}" "${JSM_BASE}/alerts?size=1")"
-[ "$CODE" = "200" ] || { echo "alerts probe returned ${CODE}: 401 = bad token/email (the token is the Basic password, not a GenieKey); 403 = user lacks Operations access; 404 = wrong cloud_id"; exit 1; }
+# Keep the body (do NOT discard to /dev/null) and capture the content-type, so a 200 that is
+# really an HTML login/SPA/proxy page in front of api.atlassian.com fails closed instead of
+# passing on the status alone.
+JSM_BODY="$(mktemp)"
+META="$(curl -s -o "$JSM_BODY" -w '%{http_code} %{content_type}' --max-time 10 \
+  -u "${JSM_EMAIL}:${JSM_API_TOKEN}" "${JSM_BASE}/alerts?size=1")" || true
+CODE="${META%% *}"; CT="${META#* }"
+[ "$CODE" = "200" ] || { rm -f "$JSM_BODY"; echo "alerts probe returned ${CODE}: 401 = bad token/email (the token is the Basic password, not a GenieKey); 403 = user lacks Operations access; 404 = wrong cloud_id"; exit 1; }
+# 200 alone is not proof: require JSON with the .values array the alerts list always returns.
+printf '%s' "$CT" | grep -qi json && jq -e '.values | type=="array"' "$JSM_BODY" >/dev/null 2>&1 \
+  || { rm -f "$JSM_BODY"; echo "alerts probe returned 200 but Content-Type=${CT} and the body is not the JSM Operations alerts JSON (.values array) — looks like an HTML login/SPA/proxy page, not api.atlassian.com; verify jsm.site/cloud_id"; exit 1; }
+rm -f "$JSM_BODY"
 echo "doctor gate: pass"
 ```
 

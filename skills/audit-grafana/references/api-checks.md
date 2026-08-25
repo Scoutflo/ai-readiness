@@ -59,6 +59,7 @@ GRAFANA_URL="https://grafana.example.com"   # grafana.url
 [ -n "${GRAFANA_TOKEN:-}" ] || { echo "GRAFANA_TOKEN is not set; run /scoutflo:connect"; exit 1; }
 
 # -sS without -f on purpose: a 403 here is the expected, healthy result.
+# status-probe-ok: the HTTP status IS the evidence (a 403 is the expected healthy least-privilege result); asserting a JSON body would defeat the check.
 code="$(curl -sS --max-time 10 -o /dev/null -w '%{http_code}' \
   -H "Authorization: Bearer ${GRAFANA_TOKEN}" "${GRAFANA_URL}/api/org/users")"
 echo "org-users read: HTTP ${code}"
