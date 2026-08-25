@@ -871,7 +871,9 @@ The external `default` ClickHouse user requires a password, so the audit always 
 
 ## SigNoz (ClickHouse-backed, OpenTelemetry-native)
 
-SigNoz stores telemetry (traces/metrics/logs) in ClickHouse and serves it through its own query-service API. `audit-signoz` authenticates to that API with a **read-only Personal Access Token** (VIEWER role) — sent as the `SIGNOZ-API-KEY` header. Optionally, a **read-only ClickHouse user** unlocks the deep backend lane (part counts, disk/capacity, TTL) directly against the `signoz_*` databases; without it those checks read retention via SigNoz's own `GET /api/v1/settings/ttl` and mark the direct-CH checks `not-in-scope`.
+SigNoz stores telemetry (traces/metrics/logs) in ClickHouse and serves it through its own query-service API. `audit-signoz` authenticates to that API with a **Service Account token** — sent as the `SIGNOZ-API-KEY` header. Optionally, a **read-only ClickHouse user** unlocks the deep backend lane (part counts, disk/capacity, TTL) directly against the `signoz_*` databases; without it those checks read retention via SigNoz's own `GET /api/v1/settings/ttl` and mark the direct-CH checks `not-in-scope`.
+
+> **Role note (confirmed live on v0.138):** the service account's **role must grant read** on the audited endpoints. A **Viewer** role returns **HTTP 403 `authz_forbidden`** on `/api/v1/rules`, `/api/v1/channels`, `/api/v1/dashboards`, and `/api/v3/query_range` — so a "Viewer" token cannot run the audit. Assign the service account an **Admin** role, or a **custom role** (Settings → **Roles**) that grants read on those resources. This is more privilege than ideal for a read-only audit; use the narrowest role your build lets you that still returns 200 on those reads.
 
 ### Config
 
@@ -886,12 +888,12 @@ signoz:
   # clickhouse_password_env: SIGNOZ_CH_KEY
 ```
 
-### Create a read-only Personal Access Token (VIEWER)
+### Create a Service Account token (with a read-granting role)
 
-In SigNoz, open **Settings → API Keys** (Access Tokens) and create a token with the **Viewer** role — read scope is all the audit needs (`GET /api/v1/rules`, `/api/v1/channels`, `/api/v1/dashboards`, and `POST /api/v3/query_range`). Export it into the variable your config names:
+In SigNoz **Settings → Service Accounts** (v0.138+; older builds: Settings → API Keys), create a service account, give it a role that grants **read** on rules/dashboards/channels — **Admin**, or a custom read role under Settings → **Roles** — and generate its key. A **Viewer** role is *not* sufficient: it returns `403 authz_forbidden` on those read endpoints. Export the key into the variable your config names (it is sent as the `SIGNOZ-API-KEY` header):
 
 ```bash
-export SIGNOZ_API_KEY='<your-signoz-viewer-PAT>'
+export SIGNOZ_API_KEY='<your-signoz-service-account-token>'
 ```
 
 ### Optional: read-only ClickHouse user (deep backend lane)
