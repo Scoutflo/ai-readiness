@@ -27,7 +27,7 @@ Requirements. Configure only the blocks that exist in your environment; delete t
 | Integration | toolkit.yaml keys | Secret | Minimum scope | Tier |
 | --- | --- | --- | --- | --- |
 | ClickHouse | `clickstack.clickhouse_url` (`http(s)://your-clickhouse-host:8123`), `clickstack.clickhouse_user` | `clickstack.clickhouse_password_env` (the variable named there — e.g. `CH_KEY`) | a scoped **read-only** user: `SELECT` on the telemetry database + `system.*` | read-only |
-| HyperDX | `clickstack.hyperdx_url` (`http(s)://your-hyperdx-url:8080`) | `clickstack.hyperdx_api_key_env` (the variable named there — e.g. `HDX_API_KEY`) | API key that can `GET /api/alerts`, `/api/dashboards`, `/api/sources` — only on builds that issue a REST key; on v2.x the apiKey is ingestion-only | read-only |
+| HyperDX | `clickstack.hyperdx_url` (`http(s)://your-hyperdx-url:8080`) | `clickstack.hyperdx_api_key_env` (the variable named there — e.g. `HDX_API_KEY`) | the per-user **Personal API Access Key** (Settings → API Keys) that reads the external API v2 — `GET /api/v2/alerts`, `/api/v2/dashboards`, `/api/v2/sources` — via `Authorization: Bearer`; **not** the team ingestion key | read-only |
 | HyperDX v2 login (optional) | `clickstack.hyperdx_email_env`, `clickstack.hyperdx_password_env` (the variables named there — e.g. `HDX_EMAIL`, `HDX_PASSWORD`) | the login password variable | a HyperDX member account whose UI login can view alerts/dashboards/sources; used once per run for `POST /api/login/password` to obtain the session cookie that scores CS-040/CS-041 on v2.x | read-only reads via session |
 | Slack (optional) | `slack.webhook_env` | webhook variable | post to one channel | n/a |
 
@@ -75,34 +75,30 @@ else
   echo "clickstack block not configured in toolkit.yaml; this audit has nothing to read — configure it or run a different audit"; exit 1
 fi
 if [ -n "${HDX_API_KEY:-}" ]; then
-  # Key present — but on HyperDX v2.x the REST API is session-authenticated (the apiKey is
-  # ingestion-only), so a key that 401s on /api/alerts means HyperDX is not scorable via a key.
-  # This is not a doctor failure: with the optional login credentials set, the check-catalog
-  # helper obtains a session instead; without them, CS-040/CS-041 are marked not-in-scope.
+  # HyperDX REST auth (confirmed live + v2.29 source): the PRIMARY path is the per-user Personal
+  # API Access Key (Bearer) against the external API v2 (/api/v2/*). Probe BOTH path forms — the
+  # direct API-port form and the app-proxy-doubled form (the app strips one leading /api) — and
+  # credit in-scope only on a real JSON body. The team ingestion key 401s here (wrong token); the
+  # internal /api/* routes are session-only. Session-login is the legacy fallback.
   HDX_URL_D=$(awk '/^clickstack:/{f=1;next} /^[a-z]/{f=0} f && $1=="hyperdx_url:"{print $2}' "$CFG")
   if [ -n "$HDX_URL_D" ]; then
-    _hb="$(mktemp)"
-    _meta=$(curl -s -o "$_hb" -w '%{http_code} %{content_type}' --max-time 10 -H "Authorization: Bearer ${HDX_API_KEY}" "${HDX_URL_D%/}/api/alerts") || _meta="000 -"
-    _c="${_meta%% *}"; _ct="${_meta#* }"
-    case "$_c" in
-      200)
-        # A 200 alone is not scope: a moved path, a GET on a POST-only route, or a
-        # reverse proxy fronting auth can answer 200 with an HTML login/SPA page.
-        # Treat HyperDX as in-scope ONLY when the body is JSON of the /api/alerts shape.
-        if printf '%s' "$_ct" | grep -qi json && jq -e 'type=="array" or has("data") or has("alerts")' "$_hb" >/dev/null 2>&1; then
-          echo "HyperDX in scope (GET /api/alerts -> 200 with the REST key)"
-        else
-          echo "HyperDX GET /api/alerts -> 200 but Content-Type='${_ct}' with a non-JSON body — looks like an HTML login/SPA/proxy page, not the API (moved path, a GET on a POST-only route, or a proxy fronting auth), so HyperDX is NOT in scope. CS-040/CS-041 will be marked not-in-scope. Verify clickstack.hyperdx_url."
-        fi;;
-      401|403)
-        if [ -n "${HDX_EMAIL:-}" ] && [ -n "${HDX_PASSWORD:-}" ]; then
-          echo "HyperDX key 401s (v2.x: the apiKey is ingestion-only) but login credentials are set — the audit obtains a session via POST /api/login/password (cookie in a 0600 mktemp jar, deleted on exit, never printed) and scores CS-040/CS-041"
-        else
-          echo "HyperDX key configured but GET /api/alerts -> ${_c}: HyperDX v2.x authenticates the REST API by session, not a static key (the apiKey is ingestion-only). CS-040/CS-041 will be marked not-in-scope with that reason — expected on v2.x, not a failure. Optional: set clickstack.hyperdx_email_env + hyperdx_password_env via /scoutflo:connect to score them."
-        fi;;
-      *) echo "HyperDX GET /api/alerts -> ${_c}; HyperDX categories may be not-in-scope. Verify clickstack.hyperdx_url.";;
-    esac
-    rm -f "$_hb"
+    HDX_URL_D="${HDX_URL_D%/}"; _hdx_ok=0
+    for _b in "/api/v2" "/api/api/v2"; do
+      _hb="$(mktemp)"
+      _meta=$(curl -s -o "$_hb" -w '%{http_code} %{content_type}' --max-time 10 -H "Authorization: Bearer ${HDX_API_KEY}" "${HDX_URL_D}${_b}/alerts") || _meta="000 -"
+      _c="${_meta%% *}"; _ct="${_meta#* }"
+      if [ "$_c" = "200" ] && printf '%s' "$_ct" | grep -qi json && jq -e 'type=="array" or has("data") or has("alerts")' "$_hb" >/dev/null 2>&1; then
+        echo "HyperDX in scope (Personal API Access Key -> GET ${_b}/alerts -> 200 JSON)"; _hdx_ok=1; rm -f "$_hb"; break
+      fi
+      rm -f "$_hb"
+    done
+    if [ "$_hdx_ok" = "0" ]; then
+      if [ -n "${HDX_EMAIL:-}" ] && [ -n "${HDX_PASSWORD:-}" ]; then
+        echo "HyperDX Personal API Access Key did not authenticate the external API v2 (tried ${HDX_URL_D}/api/v2/alerts and ${HDX_URL_D}/api/api/v2/alerts), but login credentials are set — the audit falls back to a session (POST /api/login/password; cookie in a 0600 mktemp jar, deleted on exit, never printed) and scores CS-040/CS-041"
+      else
+        echo "HyperDX credential set but no working read path: the Personal API Access Key did not authenticate the external API v2 (tried ${HDX_URL_D}/api/v2/alerts and ${HDX_URL_D}/api/api/v2/alerts). Likely the configured token is the team INGESTION key, not the per-user 'Personal API Access Key' (Settings -> API Keys), or hyperdx_url does not reach the API. CS-040/CS-041 = not-in-scope (not a failure). Optional legacy fallback: set clickstack.hyperdx_email_env + hyperdx_password_env via /scoutflo:connect."
+      fi
+    fi
   fi
 elif [ -n "${HDX_EMAIL:-}" ] && [ -n "${HDX_PASSWORD:-}" ]; then
   echo "HyperDX API key not set but login credentials are — the audit scores CS-040/CS-041 via the v2 session login (presence-checked only; never printed)"
@@ -134,7 +130,7 @@ If the resolved host or URL differs from what `toolkit.yaml` names, stop and rep
 
 - Config records are discovery metadata; a live query is proof. Credit nothing you did not read live this run.
 - Evidence is real command output. An assertion without the query and its observed rows is a suspicion, not a finding.
-- API and SQL errors are evidence. A `401`/`403` on `/api/alerts` **with a static key** is the HyperDX v2.x session-auth reality (the apiKey is ingestion-only) — score CS-040/CS-041 via the optional login credentials, or mark them `not-in-scope`; it is a wrong-key error only on a build that actually issues REST keys. A `404` on `/api/v1/*` means the wrong path (the confirmed API is `/api/<resource>`, **not** `/api/v1/*`); an `unknown table` error means the wrong database or a renamed table; a `516`/auth error over HTTP means the ClickHouse user or password is wrong. Never convert an upstream error into empty success.
+- API and SQL errors are evidence. A `401`/`403` on the **external API v2** (`/api/v2/alerts`) means the wrong token — the team ingestion key 401s there; use the per-user **Personal API Access Key** (Bearer). A `401` on an **internal** route (`/api/alerts`) is expected — those are session-only; the web app redirects it to `/login` (the "email/password prompt"), which is why the audit reads `/api/v2/*` with the personal key, not `/api/alerts`. A `404` on `/api/v2/*` usually means the path form is wrong for this deployment — try the app-proxy-doubled `/api/api/v2/*` (the helper does this automatically). An `unknown table` error means the wrong database or a renamed table; a `516`/auth error over HTTP means the ClickHouse user or password is wrong. Never convert an upstream error into empty success.
 - Never score from object counts. Forty dashboards and two hundred rows prove nothing; credit comes from telemetry a responder could actually act on — recent rows for the critical services, an alert wired to a live receiver.
 - A table that exists is not coverage. `otel_logs` present with zero recent rows for `checkout` is a gap, not a pass.
 - Alerts are not live until they route to a receiver. A HyperDX alert wired to nothing is the core failure this audit exists to catch (CS-040); "an alert exists" is `configured`, not working.
@@ -435,7 +431,7 @@ All thresholds and windows named in the checks (`RECENT_WINDOW`, `FRESHNESS_THRE
 | Stalled pipeline read as "no data" | Distinguish zero rows (CS-010) from rows present but a growing `max(Timestamp)` lag (CS-011) |
 | Invented a metrics-table column name | Only `otel_logs`/`otel_traces` columns are confirmed; resolve `otel_metrics_*` columns from `system.columns` before querying |
 | `/api/v1/*` used against HyperDX | The confirmed API base is `/api/<resource>`; `/api/v1/*` returns 404 |
-| A v2 `401` read as a wrong API key | On HyperDX v2.x the apiKey is ingestion-only; the helper falls back to the optional session login (`hyperdx_email_env`/`hyperdx_password_env`) or marks CS-040/CS-041 `not-in-scope` — never a confident fail, never header-variant looping |
+| A HyperDX `401` read as a wrong API key or hard fail | Read `/api/v2/*` with the per-user Personal API Access Key (Bearer); a 401 there = the ingestion key was used (wrong token) → point at the Personal API Access Key; an internal `/api/*` 401 is the session-only route (expected). The helper probes both `/api/v2` and `/api/api/v2`, then falls back to the optional session login, else marks CS-040/CS-041 `not-in-scope` — never a confident fail, never header-variant looping |
 | Session cookie printed or persisted | The `connect.sid` jar is `mktemp` `chmod 600`, deleted on exit; it never appears in terminal output, evidence, `raw/`, the report, or any file that outlives the run |
 | HyperDX field names assumed | Read `/api/alerts`, `/api/dashboards`, `/api/sources` shapes from the live response; treat field names as confirm-against-your-instance |
 | Alert counted as working because it exists | An alert wired to no receiver is the CS-040 failure; mark delivery `configured`, not validated-live |
