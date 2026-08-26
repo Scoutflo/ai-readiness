@@ -1206,9 +1206,10 @@ if [ -n "$CH_URL_CFG" ]; then
   fi
   HDX_URL_CFG="$(cfg clickstack hyperdx_url)"
   if [ -n "$HDX_URL_CFG" ]; then
+    # status-probe-ok: unauthenticated /api/health reachability ping (no credential sent); the authed read is the audit's /api/v2 probe with the Personal API Access Key.
     HDX_HC="$(curl -s -o /dev/null -w '%{http_code}' --connect-timeout "$CONNECT_TIMEOUT" --max-time "$MAX_TIME" "${HDX_URL_CFG%/}/api/health")" || HDX_HC="000"
     if [ "$HDX_HC" = "200" ]; then
-      row clickstack hyperdx-health yes - pass 200 "reachable; note: HyperDX v2.x REST (alerts/dashboards) is session-authenticated — an ingestion apiKey 401s there; with hyperdx_email_env + hyperdx_password_env set the audit logs in and scores those categories, otherwise it marks them not-in-scope (expected)"
+      row clickstack hyperdx-health yes - pass 200 "reachable; note: HyperDX reads via the external API v2 (/api/v2/*) with the per-user Personal API Access Key (Authorization: Bearer) set in hyperdx_api_key_env — NOT the team ingestion key (which 401s there). Legacy fallback: hyperdx_email_env + hyperdx_password_env (session login). With neither, the HyperDX categories are marked not-in-scope (expected)"
     else
       row clickstack hyperdx-health yes - fail "$HDX_HC" "GET ${HDX_URL_CFG%/}/api/health did not return 200 — check clickstack.hyperdx_url"
     fi

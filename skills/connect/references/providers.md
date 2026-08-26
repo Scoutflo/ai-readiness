@@ -795,7 +795,7 @@ Run only the checks for the stores you configured. These health paths vary by de
 
 ## ClickStack (ClickHouse + HyperDX)
 
-ClickStack stores telemetry in ClickHouse and fronts it with HyperDX. `audit-clickstack` needs a **read-only ClickHouse user** and a **HyperDX API key**; both are read-only. On HyperDX **v2.x** the REST API is session-authenticated (the apiKey is ingestion-only), so there is an **optional** login-credential pair that lets the audit score the HyperDX categories there — see below.
+ClickStack stores telemetry in ClickHouse and fronts it with HyperDX. `audit-clickstack` needs a **read-only ClickHouse user** and a HyperDX **Personal API Access Key**; both are read-only. HyperDX reads go through the **external API v2** (`/api/v2/*`) with the per-user Personal API Access Key (`Authorization: Bearer`) — **not** the team ingestion key, and **not** the internal `/api/*` routes (those are browser-session only and redirect a 401 to the login page). An **optional** login-credential pair is a legacy fallback for instances where you cannot mint a Personal API Access Key — see below.
 
 ### Config
 
@@ -804,10 +804,10 @@ clickstack:
   clickhouse_url: https://your-clickhouse-host:8123
   clickhouse_user: scoutflo_ro
   clickhouse_password_env: CH_KEY
-  hyperdx_url: https://your-hyperdx-host:8080
-  hyperdx_api_key_env: HDX_API_KEY
-  # Optional — HyperDX v2.x only (REST is session-auth; the apiKey cannot read
-  # alerts/dashboards/sources there). Set both to let the audit log in instead:
+  hyperdx_url: https://your-hyperdx-host:8080   # the app/UI URL (or the API-server port if exposed)
+  hyperdx_api_key_env: HDX_API_KEY              # the PERSONAL API ACCESS KEY (per-user), NOT the ingestion key
+  # Optional legacy fallback — only if you cannot mint a Personal API Access Key.
+  # A real user login; the audit reads the internal routes via a session cookie:
   # hyperdx_email_env: HDX_EMAIL
   # hyperdx_password_env: HDX_PASSWORD
 ```
@@ -828,26 +828,30 @@ Then export the password into the variable your config names:
 export CH_KEY='<strong-password>'
 ```
 
-### Create a HyperDX API key
+### Create a HyperDX Personal API Access Key (the read credential)
 
-In HyperDX, open Team Settings and create an API key (read scope is enough for the audit's `GET /api/alerts`, `/api/dashboards`, `/api/sources`). Export it:
+**HyperDX has two different tokens — use the right one.** The audit reads through the **external API v2** (`/api/v2/alerts`, `/api/v2/dashboards`, `/api/v2/sources`), which authenticates with the per-user **Personal API Access Key** sent as `Authorization: Bearer`. The team **Ingestion API Key** (the OTLP `authorization` header) is a *different* token and returns `401` on the read API — do not use it here.
+
+In HyperDX, open **Team Settings → API Keys** and copy the **"Personal API Access Key"** card (the per-user key; on v2.36+ the section is renamed "API & Agents"). Export it into the variable your config names:
 
 ```bash
-export HDX_API_KEY='<your-hyperdx-api-key>'
+export HDX_API_KEY='<your-hyperdx-PERSONAL-api-access-key>'
 ```
 
-**HyperDX version note (confirmed live against v2.35):** on HyperDX **v2.x** the REST endpoints (`/api/alerts`, `/api/dashboards`, `/api/sources`) authenticate by **session cookie** (user login), not a static key — the team `apiKey` shown in Team Settings is an **ingestion-only** key (the OTLP `authorization` header) and returns `401` on those endpoints under every header form. On such a build you have two options: set the **optional login credentials** below so the audit can score the HyperDX categories (CS-040/CS-041) via a session, or set nothing extra and the audit marks those categories `not-in-scope` with that reason while still fully scoring the ClickHouse categories. A HyperDX build that issues a REST API key scores the HyperDX categories normally with the key alone.
+Point `clickstack.hyperdx_url` at a URL that reaches the API: either the API-server port directly (then the audit uses `<url>/api/v2/...`) or the app/UI URL that proxies `/api` (the app strips one leading `/api`, so the audit automatically falls back to the doubled `<url>/api/api/v2/...`). The audit probes both forms and uses whichever returns JSON.
 
-### Optional: HyperDX v2 login credentials (session auth)
+> **If the token seems to "ask for email and password":** you (or the tool) hit an **internal** route like `/api/alerts` instead of `/api/v2/alerts`. Internal routes are browser-session only — they ignore the Bearer token and return `401`, and HyperDX's web app then redirects to its login page. Use the `/api/v2/*` path with the Personal API Access Key.
 
-This is a deliberately **heavier posture** than a read-only key — it is a real user login. Prefer a dedicated least-privilege HyperDX member account for auditing, not an owner account. What the audit does with it (confirmed live): one `POST /api/login/password` with `{email, password}` per run, which answers with a redirect and sets a `connect.sid` session cookie; the cookie is held in a `mktemp` jar (`chmod 600`), used only for the read-only `GET`s, deleted on exit, and never printed, logged, or written anywhere persistent.
+### Optional: HyperDX login credentials (legacy session fallback)
+
+Only if you cannot mint a Personal API Access Key. This is a deliberately **heavier posture** — a real user login. Prefer a dedicated least-privilege HyperDX member account, not an owner account. What the audit does with it (confirmed live): one `POST /api/login/password` with `{email, password}` per run, which answers `303` and sets a `connect.sid` session cookie; the cookie is held in a `mktemp` jar (`chmod 600`), used only for read-only `GET`s on the internal routes, deleted on exit, and never printed, logged, or written anywhere persistent.
 
 ```bash
 export HDX_EMAIL='<hyperdx-login-email>'
 export HDX_PASSWORD='<hyperdx-login-password>'
 ```
 
-Name both variables in `clickstack.hyperdx_email_env` / `clickstack.hyperdx_password_env`. Skipping this is fine — the v2 HyperDX categories simply stay `not-in-scope`.
+Name both variables in `clickstack.hyperdx_email_env` / `clickstack.hyperdx_password_env`. Skipping this is fine — with a working Personal API Access Key it is not needed, and with neither, the HyperDX categories simply stay `not-in-scope`.
 
 ### Verify
 
@@ -855,17 +859,20 @@ Name both variables in `clickstack.hyperdx_email_env` / `clickstack.hyperdx_pass
 CH_URL="https://your-clickhouse-host:8123"; CH_USER="scoutflo_ro"   # clickstack.clickhouse_url / _user
 curl -sS --max-time 10 -H "X-ClickHouse-User: ${CH_USER}" -H "X-ClickHouse-Key: ${CH_KEY}" \
   "${CH_URL}/?query=SELECT%201" | grep -qx 1 && echo "ClickHouse PASS" || echo "ClickHouse FAIL — check url/user/CH_KEY"
-# HyperDX: /api/alerts is auth-gated (401 without a credential). The exact API-key header
-# varies by HyperDX version — confirm it against your instance (Authorization: Bearer <key>
-# or x-api-key: <key>). A 200 alone is NOT the signal: assert a JSON body, since an SSO/proxy
-# in front of HyperDX returns 200 + text/html (the SPA) for an unauthenticated request.
+# HyperDX: the Personal API Access Key reads the external API v2 (Authorization: Bearer).
+# Try the direct path form and the app-proxy-doubled form; a 200 with a JSON body is the pass
+# (a 404/HTML means that path form is wrong on this deployment — the other usually answers).
 HDX_URL="https://your-hyperdx-host:8080"   # clickstack.hyperdx_url
-KB="$(mktemp)"; km=$(curl -s -o "$KB" -w '%{http_code} %{content_type}' --max-time 10 -H "Authorization: Bearer ${HDX_API_KEY}" "${HDX_URL%/}/api/alerts")
-kc="${km%% *}"; kct="${km#* }"
-if [ "$kc" = "200" ] && printf '%s' "$kct" | grep -qi json && jq -e 'type=="array" or has("data") or has("alerts")' "$KB" >/dev/null 2>&1; then
-  echo "HyperDX key PASS (200 JSON)"
-else echo "HyperDX key: code=$kc content-type=$kct — if 401 try 'x-api-key: <key>'; a 200 with an HTML body is the SPA/login page, not the API"; fi
-rm -f "$KB"
+hdx_pass=0
+for b in /api/v2 /api/api/v2; do
+  KB="$(mktemp)"; km=$(curl -s -o "$KB" -w '%{http_code} %{content_type}' --max-time 10 -H "Authorization: Bearer ${HDX_API_KEY}" "${HDX_URL%/}${b}/alerts")
+  kc="${km%% *}"; kct="${km#* }"
+  if [ "$kc" = "200" ] && printf '%s' "$kct" | grep -qi json && jq -e 'type=="array" or has("data") or has("alerts")' "$KB" >/dev/null 2>&1; then
+    echo "HyperDX PASS (Personal API Access Key -> ${b}/alerts -> 200 JSON)"; hdx_pass=1; rm -f "$KB"; break
+  fi
+  rm -f "$KB"
+done
+[ "$hdx_pass" = 1 ] || echo "HyperDX FAIL — the Personal API Access Key did not return JSON on /api/v2/alerts or /api/api/v2/alerts. Check you used the per-user 'Personal API Access Key' (not the Ingestion key), and that hyperdx_url reaches the API."
 ```
 
 If you configured the v2 login credentials, verify the session path too (the cookie jar is temporary and never printed):

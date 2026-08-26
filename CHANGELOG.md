@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.143
+
+audit-clickstack HyperDX REST auth correction — **live-verified on the benchmark**, fixes the Whatfix ClickStack blocker. The skill was reading HyperDX's **internal** routes (`/api/alerts` etc.) which are **browser-session only** (they ignore a Bearer token and 401, and the web app redirects 401→login — the "prompted for email/password" the customer hit) and wrongly concluded "v2 REST is session-only, the apiKey is ingestion-only."
+
+Corrected model (verified live on a v2.x all-in-one + against the v2.29 source): the primary read path is the per-user **Personal API Access Key** (`Authorization: Bearer`) against the **external API v2** — `/api/v2/alerts`, `/api/v2/dashboards`, `/api/v2/sources`. The team ingestion key is a different token (401s there). The helper now probes both the direct `<url>/api/v2/...` and the app-proxy-doubled `<url>/api/api/v2/...` path forms and keeps whichever returns JSON; session-login is demoted to a legacy fallback. Negative-case messaging now distinguishes wrong-token (ingestion vs personal) from wrong-endpoint from no-credential, instead of silently pushing to email/password. Updated: `audit-clickstack` (doctor gate + check catalog), `connect` (providers.md HyperDX section + verify + SKILL table), `doctor.sh` clickstack note, and the `hyperdx-v2-session-auth` pressure scenario. Live-verified: Personal API Access Key → `/api/api/v2/{alerts,dashboards,sources}` → 200 JSON on the benchmark.
+
+Gates: leak CLEAN, structure-check (16), run-tests (22), plugin validate --strict.
+
 ## 0.1.142
 
 audit-signoz v0.138 API-path corrections — caught by a **live authenticated read** once the benchmark service account was assigned the `signoz-viewer` role (closing the authed-lane verify-pending from v0.1.141).
