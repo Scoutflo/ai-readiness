@@ -586,13 +586,19 @@ LOG_RETENTION_DAYS="365"          # example, tune to your compliance and cost po
 
 ## 13. Large-path worklist: resources in batches
 
-Runnable commands for the large path named in [SKILL.md's Estate sizing](../SKILL.md#estate-sizing) and worked through in [Large-path worklist: resources in batches](../SKILL.md#large-path-worklist-resources-in-batches). This is the same run-ID-keyed, lock-and-resume mechanism as `do-checks.md` section 13 and `gcp-checks.md` section 16, adapted to AWS resource kinds; every block here is stateless and redeclares its own inputs.
+Runnable commands for the large path named in [SKILL.md's Estate sizing](../SKILL.md#estate-sizing) and worked through in [Large-path worklist: resources in batches](../SKILL.md#large-path-worklist-resources-in-batches). This is the same run-ID-keyed, lock-and-resume mechanism as `do-checks.md` section 13 and `gcp-checks.md` section 16, adapted to AWS resource kinds; every block here is stateless and redeclares its own inputs. `AUDIT_ROOT` resolves under the current target segment via the shared enumerator (13.1 and 13.2 compute it): flat `aws/` for a single block, `aws/<label>/` for the `SCOUTFLO_TARGET`-selected item of a labeled list — so a multi-target run keeps each account's worklist and run state separate. The `RUN_DIR="…/aws/runs/<timestamp>"` lines in 13.3–13.6 are single-block **examples**; substitute the resolved `RUN_DIR` from 13.1 or 13.2 (which already carries the `aws/<label>/` segment for a labeled target). The per-resource pulls a batch runs (13.3, 13.5) use the same `--profile`/`--region` discipline as sections 4–12: fill in the target's own `aws.profile`/`aws.region`, never the ambient default.
 
 ### 13.1 Find a resumable run, or start a new one
 
 ```bash
 set -eu
-AUDIT_ROOT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/aws"
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+AWS_KIND=$(sh "$TT" "$CFG" aws kind); AWS_N=$(sh "$TT" "$CFG" aws count)
+AWS_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$AWS_N" ]; do [ "$(sh "$TT" "$CFG" aws label "$_i")" = "$SCOUTFLO_TARGET" ] && { AWS_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+AWS_LABEL=$(sh "$TT" "$CFG" aws label "$AWS_IDX")
+if [ "$AWS_KIND" = seq ]; then AWS_SEG="aws/${AWS_LABEL}"; else AWS_SEG="aws"; fi
+AUDIT_ROOT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${AWS_SEG}"
 
 resumable=""
 if [ -d "${AUDIT_ROOT}/runs" ]; then
@@ -616,7 +622,13 @@ fi
 
 ```bash
 set -eu
-AUDIT_ROOT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/aws"
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+AWS_KIND=$(sh "$TT" "$CFG" aws kind); AWS_N=$(sh "$TT" "$CFG" aws count)
+AWS_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$AWS_N" ]; do [ "$(sh "$TT" "$CFG" aws label "$_i")" = "$SCOUTFLO_TARGET" ] && { AWS_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+AWS_LABEL=$(sh "$TT" "$CFG" aws label "$AWS_IDX")
+if [ "$AWS_KIND" = seq ]; then AWS_SEG="aws/${AWS_LABEL}"; else AWS_SEG="aws"; fi
+AUDIT_ROOT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${AWS_SEG}"
 RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)"   # first-seen timestamp of this run; stable for its lifetime
 RUN_DIR="${AUDIT_ROOT}/runs/${RUN_ID}"
 mkdir -p "${RUN_DIR}"

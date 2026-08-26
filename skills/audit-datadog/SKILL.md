@@ -11,14 +11,16 @@ This skill audits the monitor layer inside Datadog. Whether the page that a moni
 
 Every command is read-only: GET on monitors, downtimes, SLOs, integrations, usage, and dashboards. Unlike the PagerDuty audit, Datadog exposes no read-by-effect POST, so every mutating verb — muting, resolving, creating downtimes, test events — is forbidden; the full list is in [references/datadog-checks.md](references/datadog-checks.md) section 13. There is no `setup-datadog` yet, so every finding names its manual fix path instead of a setup anchor.
 
+**Multiple Datadog targets, one run:** `datadog` may be a single block (one `site`/`api_key_env`/`app_key_env`) or a **list of labeled targets**, each with its own `site`, `api_key_env`, and `app_key_env`. The audit **iterates every target** — enumerate them with `sh "${CLAUDE_PLUGIN_ROOT}/report-standard/toolkit-targets.sh" <cfg> datadog labels` and run the full sequence below once per target with `SCOUTFLO_TARGET=<label>` set. Output goes to `datadog/<label>/<date>/` for a list, or the flat `datadog/<date>/` for a single block. Every API call resolves and uses the target's own `site` and key pair — `api_key_env`/`app_key_env` name the variables holding the secrets, sent as the `DD-API-KEY`/`DD-APPLICATION-KEY` headers; there is no ambient default, and a single-block config resolves to exactly one target whose label defaults to the block name (`datadog`), byte-identical to today's read.
+
 Run this standalone, from `/scoutflo:audit-all`, or on a schedule via `/scoutflo:schedule-audits`.
 
 Outputs, per the [report standard](../../report-standard/README.md):
 
-- `./scoutflo-audits/datadog/<YYYY-MM-DD>/findings.json` per the [findings schema](../../report-standard/findings-schema.md), finding IDs `DD-NNN` (scored) and `DDOPT-NNN` (non-scored cost)
-- `./scoutflo-audits/datadog/<YYYY-MM-DD>/report.md` per the [report template](../../report-standard/report-template.md), including the `## Inventory` section (the `render-report-viz.sh inventory` output)
-- `./scoutflo-audits/datadog/<YYYY-MM-DD>/inventory.json` per the [inventory schema](../../report-standard/inventory-schema.md) (`scoutflo-inventory/v1`): the complete Phase-2 catalog — one item per monitor, SLO, and downtime (`kind`: `monitor`, `slo`, `downtime`) — each with `kind`, `covers`, `enabled`, `severity`, and `routes_to` for alerting objects. Built from the raw pull, never invented; redacted at capture, never a secret value.
-- One appended line in `./scoutflo-audits/datadog/history.jsonl`
+- `./scoutflo-audits/datadog/[<label>/]<YYYY-MM-DD>/findings.json` per the [findings schema](../../report-standard/findings-schema.md), finding IDs `DD-NNN` (scored) and `DDOPT-NNN` (non-scored cost)
+- `./scoutflo-audits/datadog/[<label>/]<YYYY-MM-DD>/report.md` per the [report template](../../report-standard/report-template.md), including the `## Inventory` section (the `render-report-viz.sh inventory` output)
+- `./scoutflo-audits/datadog/[<label>/]<YYYY-MM-DD>/inventory.json` per the [inventory schema](../../report-standard/inventory-schema.md) (`scoutflo-inventory/v1`): the complete Phase-2 catalog — one item per monitor, SLO, and downtime (`kind`: `monitor`, `slo`, `downtime`) — each with `kind`, `covers`, `enabled`, `severity`, and `routes_to` for alerting objects. Built from the raw pull, never invented; redacted at capture, never a secret value.
+- One appended line in `./scoutflo-audits/datadog/[<label>/]history.jsonl`
 - One Slack brief, when `slack.webhook_env` is configured
 
 ## Doctor gate
@@ -57,12 +59,26 @@ SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.s
 for bin in curl jq; do
   command -v "$bin" >/dev/null || { echo "missing binary: $bin"; exit 1; }
 done
-# datadog.api_key_env / app_key_env name the variables; presence check only, never print.
+# Resolve the CURRENT datadog target from toolkit.yaml — a single block, or the SCOUTFLO_TARGET-selected
+# item of a labeled list (the shared enumerator handles both; no yq required). Every API call below uses
+# this target's own site and key pair; a single-block config resolves to one target (label "datadog").
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+DD_KIND=$(sh "$TT" "$CFG" datadog kind); DD_N=$(sh "$TT" "$CFG" datadog count)
+[ "${DD_N:-0}" -ge 1 ] || { echo "no datadog target configured in $CFG; run /scoutflo:connect"; exit 1; }
+DD_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$DD_N" ]; do [ "$(sh "$TT" "$CFG" datadog label "$_i")" = "$SCOUTFLO_TARGET" ] && { DD_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+DD_LABEL=$(sh "$TT" "$CFG" datadog label "$DD_IDX")
+if [ "$DD_KIND" = seq ]; then DD_SEG="datadog/${DD_LABEL}"; else DD_SEG="datadog"; fi
+DD_SITE=$(sh "$TT" "$CFG" datadog get "$DD_IDX" site); DD_SITE="${DD_SITE:-datadoghq.com}"   # datadog.site: e.g. datadoghq.com, us5.datadoghq.com, datadoghq.eu
+DD_HOST="api.${DD_SITE}"
+echo "datadog target: ${DD_LABEL} (site ${DD_SITE}) -> ${DD_SEG}/"
+# datadog.api_key_env / app_key_env name the VARIABLES holding this target's keys; read each by name so
+# every target uses its own pair (defaults DATADOG_API_KEY / DATADOG_APP_KEY for a single block). Presence check only, never print.
+DD_API_VAR=$(sh "$TT" "$CFG" datadog get "$DD_IDX" api_key_env); DD_API_VAR="${DD_API_VAR:-DATADOG_API_KEY}"
+DD_APP_VAR=$(sh "$TT" "$CFG" datadog get "$DD_IDX" app_key_env); DD_APP_VAR="${DD_APP_VAR:-DATADOG_APP_KEY}"
+DATADOG_API_KEY="$(printenv "$DD_API_VAR" 2>/dev/null || true)"; export DATADOG_API_KEY
+DATADOG_APP_KEY="$(printenv "$DD_APP_VAR" 2>/dev/null || true)"; export DATADOG_APP_KEY
 [ -n "${DATADOG_API_KEY:-}" ] || { echo "DATADOG_API_KEY is not set; run /scoutflo:connect"; exit 1; }
 [ -n "${DATADOG_APP_KEY:-}" ] || { echo "DATADOG_APP_KEY is not set; both keys are required; run /scoutflo:connect"; exit 1; }
-
-DD_SITE="datadoghq.com"   # datadog.site: e.g. datadoghq.com, us5.datadoghq.com, datadoghq.eu
-DD_HOST="api.${DD_SITE}"
 # Datadog is SaaS so the risk is low, but as defense-in-depth keep the body and content-type
 # (do NOT discard to /dev/null) so a 200 that is really an HTML login/SPA/proxy page fails closed.
 DDV_BODY="$(mktemp)"
@@ -95,8 +111,22 @@ Print what you are pointed at and compare it to the config before the first real
 
 ```bash
 set -eu
-DD_SITE="datadoghq.com"   # datadog.site
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+# Resolve the CURRENT datadog target from config via the shared enumerator — a single block, or the
+# SCOUTFLO_TARGET-selected item of a labeled list (no yq required). Site and keys are this target's own.
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+DD_KIND=$(sh "$TT" "$CFG" datadog kind); DD_N=$(sh "$TT" "$CFG" datadog count)
+DD_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$DD_N" ]; do [ "$(sh "$TT" "$CFG" datadog label "$_i")" = "$SCOUTFLO_TARGET" ] && { DD_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+DD_LABEL=$(sh "$TT" "$CFG" datadog label "$DD_IDX")
+if [ "$DD_KIND" = seq ]; then DD_SEG="datadog/${DD_LABEL}"; else DD_SEG="datadog"; fi
+DD_SITE=$(sh "$TT" "$CFG" datadog get "$DD_IDX" site); DD_SITE="${DD_SITE:-datadoghq.com}"   # datadog.site
 DD_HOST="api.${DD_SITE}"
+DD_API_VAR=$(sh "$TT" "$CFG" datadog get "$DD_IDX" api_key_env); DD_API_VAR="${DD_API_VAR:-DATADOG_API_KEY}"
+DD_APP_VAR=$(sh "$TT" "$CFG" datadog get "$DD_IDX" app_key_env); DD_APP_VAR="${DD_APP_VAR:-DATADOG_APP_KEY}"
+DATADOG_API_KEY="$(printenv "$DD_API_VAR" 2>/dev/null || true)"; export DATADOG_API_KEY
+DATADOG_APP_KEY="$(printenv "$DD_APP_VAR" 2>/dev/null || true)"; export DATADOG_APP_KEY
+[ -n "${DATADOG_API_KEY:-}" ] || { echo "datadog target '${DD_LABEL}' key variable ${DD_API_VAR} is not set; run /scoutflo:connect"; exit 1; }
+[ -n "${DATADOG_APP_KEY:-}" ] || { echo "datadog target '${DD_LABEL}' app-key variable ${DD_APP_VAR} is not set; run /scoutflo:connect"; exit 1; }
 # There is no org-name whoami on the key pair; identify the org by what it reads and by
 # the site it is bound to. A mismatch between the exported keys' site and datadog.site
 # surfaces here as a 403 rather than a wrong-account read.
@@ -108,7 +138,7 @@ MON_SAMPLE="$(curl -fsS --max-time 15 \
   -H "DD-API-KEY: ${DATADOG_API_KEY}" -H "DD-APPLICATION-KEY: ${DATADOG_APP_KEY}" \
   "https://${DD_HOST}/api/v1/monitor?page_size=3")"
 NAMES="$(printf '%s' "$MON_SAMPLE" | jq -r '[.[].name] | join(", ")')"
-echo "site=${DD_SITE} org=${ORG_NAME} sample_monitors: ${NAMES}"
+echo "site=${DD_SITE} label=${DD_LABEL} org=${ORG_NAME} -> ${DD_SEG}/ sample_monitors: ${NAMES}"
 printf '%s' "$MON_SAMPLE" | jq -e 'type == "array"' >/dev/null \
   || { echo "monitor endpoint did not return a list; wrong site or wrong keys — stop"; exit 1; }
 echo "live-safety gate: pass — confirm this org and these monitor names are the account you intend to audit"
@@ -133,8 +163,18 @@ Count before judging, and declare the path in the terminal output:
 
 ```bash
 set -eu
-DD_SITE="datadoghq.com"   # datadog.site
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+DD_KIND=$(sh "$TT" "$CFG" datadog kind); DD_N=$(sh "$TT" "$CFG" datadog count)
+DD_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$DD_N" ]; do [ "$(sh "$TT" "$CFG" datadog label "$_i")" = "$SCOUTFLO_TARGET" ] && { DD_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+DD_LABEL=$(sh "$TT" "$CFG" datadog label "$DD_IDX")
+if [ "$DD_KIND" = seq ]; then DD_SEG="datadog/${DD_LABEL}"; else DD_SEG="datadog"; fi
+DD_SITE=$(sh "$TT" "$CFG" datadog get "$DD_IDX" site); DD_SITE="${DD_SITE:-datadoghq.com}"   # datadog.site
 DD_HOST="api.${DD_SITE}"
+DD_API_VAR=$(sh "$TT" "$CFG" datadog get "$DD_IDX" api_key_env); DD_API_VAR="${DD_API_VAR:-DATADOG_API_KEY}"
+DD_APP_VAR=$(sh "$TT" "$CFG" datadog get "$DD_IDX" app_key_env); DD_APP_VAR="${DD_APP_VAR:-DATADOG_APP_KEY}"
+DATADOG_API_KEY="$(printenv "$DD_API_VAR" 2>/dev/null || true)"; export DATADOG_API_KEY
+DATADOG_APP_KEY="$(printenv "$DD_APP_VAR" 2>/dev/null || true)"; export DATADOG_APP_KEY
 SMALL_MAX_OBJECTS="25"    # example, tune to your environment
 MEDIUM_MAX_OBJECTS="150"  # example, tune to your environment
 BATCH_SIZE="50"           # monitors per batch on the large path; example, tune it
@@ -146,7 +186,7 @@ TOTAL="$MON_COUNT"
 echo "monitors=${MON_COUNT} slos=${SLO_COUNT} scored_objects=${TOTAL}"
 
 # Guided-walkthrough drift check, per report-standard/README.md: compare against the last run.
-TARGET_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/datadog"
+TARGET_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${DD_SEG}"
 PREV_RUN="$(find "$TARGET_DIR" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort | tail -1)"
 DRIFT="first run"
 if [ -n "$PREV_RUN" ] && [ -f "${PREV_RUN}/findings.json" ]; then
@@ -265,18 +305,26 @@ Emit and verify:
 
 ```bash
 set -eu
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+DD_KIND=$(sh "$TT" "$CFG" datadog kind); DD_N=$(sh "$TT" "$CFG" datadog count)
+DD_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$DD_N" ]; do [ "$(sh "$TT" "$CFG" datadog label "$_i")" = "$SCOUTFLO_TARGET" ] && { DD_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+DD_LABEL=$(sh "$TT" "$CFG" datadog label "$DD_IDX")
+if [ "$DD_KIND" = seq ]; then DD_SEG="datadog/${DD_LABEL}"; else DD_SEG="datadog"; fi
 RUN_DATE="$(date -u +%Y-%m-%d)"
-OUT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/datadog/${RUN_DATE}"
+OUT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${DD_SEG}/${RUN_DATE}"
 mkdir -p "$OUT"
-# ... write findings.json, inventory.json, and report.md per the report standard, then verify:
-jq -e '.schema == "scoutflo-findings/v1" and .target == "datadog" and (.findings | type == "array")' \
+# ... write findings.json, inventory.json, and report.md per the report standard. The findings.json
+# ".target" is the per-target slug (equal to $DD_SEG: "datadog" for a single block, "datadog/<label>"
+# for a labeled-list target), so audit-all/correlation/render disambiguate multiple Datadog targets. Verify:
+jq -e --arg seg "$DD_SEG" '.schema == "scoutflo-findings/v1" and .target == $seg and (.findings | type == "array")' \
   "$OUT/findings.json" >/dev/null && echo "findings.json valid"
 grep -q '^# ' "$OUT/report.md" && echo "report.md present"
 sh "${CLAUDE_PLUGIN_ROOT}/report-standard/check-findings.sh" "$OUT/findings.json"
 # Inventory (scoutflo-inventory/v1): the complete Phase-2 catalog of what exists,
 # built from the raw pull (never invented, redacted). counts.total must reconcile
 # with items; the ## Inventory section of report.md IS this render.
-jq -e '.schema == "scoutflo-inventory/v1" and .target == "datadog" and (.items | type == "array") and (.counts.total == (.items | length))' "$OUT/inventory.json" >/dev/null && echo "inventory.json valid"
+jq -e --arg seg "$DD_SEG" '.schema == "scoutflo-inventory/v1" and .target == $seg and (.items | type == "array") and (.counts.total == (.items | length))' "$OUT/inventory.json" >/dev/null && echo "inventory.json valid"
 sh "${CLAUDE_PLUGIN_ROOT}/report-standard/render-report-viz.sh" inventory "$OUT/inventory.json" >/dev/null && echo "inventory section renders"
 sh "${CLAUDE_PLUGIN_ROOT}/report-standard/render-report-viz.sh" html "$OUT/findings.json" "$OUT/report.html" "$(dirname "$OUT")/history.jsonl"
 sh "${CLAUDE_PLUGIN_ROOT}/report-standard/check-report.sh" "$OUT/report.md"
@@ -286,7 +334,13 @@ Compute the delta against the previous run's `findings.json` (the latest two dat
 
 ```bash
 set -eu
-TARGET_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/datadog"
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+DD_KIND=$(sh "$TT" "$CFG" datadog kind); DD_N=$(sh "$TT" "$CFG" datadog count)
+DD_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$DD_N" ]; do [ "$(sh "$TT" "$CFG" datadog label "$_i")" = "$SCOUTFLO_TARGET" ] && { DD_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+DD_LABEL=$(sh "$TT" "$CFG" datadog label "$DD_IDX")
+if [ "$DD_KIND" = seq ]; then DD_SEG="datadog/${DD_LABEL}"; else DD_SEG="datadog"; fi
+TARGET_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${DD_SEG}"
 RUN_DATE="$(date -u +%Y-%m-%d)"
 OUT="${TARGET_DIR}/${RUN_DATE}"
 RESOLVED="0"   # fixed count from this run's delta; 0 on the first run

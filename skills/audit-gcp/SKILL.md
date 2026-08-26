@@ -11,7 +11,7 @@ Every command in this audit is read-only: gcloud `list`, `describe`, and `read` 
 
 Scope boundaries, stated so a green score never overpromises:
 
-- One project per run: the audit judges `gcp.project` from `~/.scoutflo/toolkit.yaml`. Multi-project estates run once per project.
+- **Multiple projects, one run:** `gcp` may be a single block (one `project`) or a **list of labeled targets**, each with its own `project`. The audit **iterates every target** — enumerate them with `sh "${CLAUDE_PLUGIN_ROOT}/report-standard/toolkit-targets.sh" <cfg> gcp labels` and run the full sequence below once per target with `SCOUTFLO_TARGET=<label>` set. Output goes to `gcp/<label>/<date>/` for a list, or the flat `gcp/<date>/` for a single block. Every gcloud/API call names `--project` explicitly; the ambient gcloud default is never read.
 - Covered: Cloud Monitoring, Cloud Logging (metrics and sinks), uptime checks, Compute Engine VMs, GKE cluster telemetry settings, and load balancers. Not covered: Cloud Run, Cloud Functions, App Engine, Cloud SQL, Pub/Sub, and Memorystore; if those carry production traffic, say so in the report as unaudited surface.
 - In-cluster stacks (Prometheus, Alertmanager, Grafana running inside GKE) belong to `/scoutflo:audit-lgtm`; this audit covers the Google-managed plane and states the split.
 
@@ -19,10 +19,10 @@ Run this standalone, from `/scoutflo:audit-all`, or on a schedule via `/scoutflo
 
 Outputs, per the [report standard](../../report-standard/README.md):
 
-- `./scoutflo-audits/gcp/<YYYY-MM-DD>/findings.json` per the [findings schema](../../report-standard/findings-schema.md), finding IDs `GCP-NNN`
-- `./scoutflo-audits/gcp/<YYYY-MM-DD>/report.md` per the [report template](../../report-standard/report-template.md), including the `## Inventory` section (the `render-report-viz.sh inventory` output)
-- `./scoutflo-audits/gcp/<YYYY-MM-DD>/inventory.json` per the [inventory schema](../../report-standard/inventory-schema.md) (`scoutflo-inventory/v1`): the complete Phase-2 catalog — one item per alert policy, notification channel, uptime check, dashboard, and logs-based metric (`kind`: `alert_policy`, `notification_channel`, `uptime_check`, `dashboard`, `log_metric`) — each with `kind`, `covers`, `enabled`, `severity`, and `routes_to` for alerting objects. Built from the raw pull, never invented; redacted at capture, never a secret value.
-- One appended line in `./scoutflo-audits/gcp/history.jsonl`
+- `./scoutflo-audits/gcp/[<label>/]<YYYY-MM-DD>/findings.json` per the [findings schema](../../report-standard/findings-schema.md), finding IDs `GCP-NNN`
+- `./scoutflo-audits/gcp/[<label>/]<YYYY-MM-DD>/report.md` per the [report template](../../report-standard/report-template.md), including the `## Inventory` section (the `render-report-viz.sh inventory` output)
+- `./scoutflo-audits/gcp/[<label>/]<YYYY-MM-DD>/inventory.json` per the [inventory schema](../../report-standard/inventory-schema.md) (`scoutflo-inventory/v1`): the complete Phase-2 catalog — one item per alert policy, notification channel, uptime check, dashboard, and logs-based metric (`kind`: `alert_policy`, `notification_channel`, `uptime_check`, `dashboard`, `log_metric`) — each with `kind`, `covers`, `enabled`, `severity`, and `routes_to` for alerting objects. Built from the raw pull, never invented; redacted at capture, never a secret value.
+- One appended line in `./scoutflo-audits/gcp/[<label>/]history.jsonl`
 - One Slack brief, when `slack.webhook_env` is configured
 
 ## Doctor gate
@@ -62,7 +62,17 @@ for bin in gcloud curl jq; do
   command -v "$bin" >/dev/null || { echo "missing binary: $bin"; exit 1; }
 done
 gcloud --version | head -1
-GCP_PROJECT="your-project-id"   # gcp.project
+# Resolve the CURRENT gcp target from toolkit.yaml — a single block, or the SCOUTFLO_TARGET-selected
+# item of a labeled list (the shared enumerator handles both; no yq required). Every gcloud/API call
+# below names --project "$GCP_PROJECT" explicitly; the ambient gcloud default is never read.
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+GCP_KIND=$(sh "$TT" "$CFG" gcp kind); GCP_N=$(sh "$TT" "$CFG" gcp count)
+[ "${GCP_N:-0}" -ge 1 ] || { echo "no gcp target configured in $CFG; run /scoutflo:connect"; exit 1; }
+GCP_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$GCP_N" ]; do [ "$(sh "$TT" "$CFG" gcp label "$_i")" = "$SCOUTFLO_TARGET" ] && { GCP_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+GCP_LABEL=$(sh "$TT" "$CFG" gcp label "$GCP_IDX"); GCP_PROJECT=$(sh "$TT" "$CFG" gcp get "$GCP_IDX" project)
+[ -n "$GCP_PROJECT" ] || { echo "gcp target '${GCP_LABEL:-?}' has no project in $CFG; run /scoutflo:connect"; exit 1; }
+if [ "$GCP_KIND" = seq ]; then GCP_SEG="gcp/${GCP_LABEL}"; else GCP_SEG="gcp"; fi
+echo "gcp target: ${GCP_LABEL} (project ${GCP_PROJECT}) -> ${GCP_SEG}/"
 # gcp.credentials_env (optional) names GOOGLE_APPLICATION_CREDENTIALS, the path-to-key-file
 # variable application-default credentials read. Presence and file existence only; never
 # print the file's contents anywhere.
@@ -97,13 +107,21 @@ Print what you are pointed at and compare it to the config before the first real
 
 ```bash
 set -eu
-GCP_PROJECT="your-project-id"   # gcp.project
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+[ -f "$CFG" ] || { echo "missing $CFG; run /scoutflo:connect"; exit 1; }
+# Resolve the CURRENT gcp target from config via the shared enumerator — a single block, or the
+# SCOUTFLO_TARGET-selected item of a labeled list (no yq required). Never hand-typed.
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+GCP_N=$(sh "$TT" "$CFG" gcp count)
+GCP_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$GCP_N" ]; do [ "$(sh "$TT" "$CFG" gcp label "$_i")" = "$SCOUTFLO_TARGET" ] && { GCP_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+GCP_LABEL=$(sh "$TT" "$CFG" gcp label "$GCP_IDX"); GCP_PROJECT=$(sh "$TT" "$CFG" gcp get "$GCP_IDX" project)
+[ -n "$GCP_PROJECT" ] || { echo "gcp target '${GCP_LABEL:-?}' has no project in $CFG; run /scoutflo:connect"; exit 1; }
 if [ -n "${GOOGLE_APPLICATION_CREDENTIALS:-}" ]; then
   echo "identity: $(jq -r '.client_email // "unknown"' "$GOOGLE_APPLICATION_CREDENTIALS") (key file)"
 else
   echo "identity: $(gcloud auth list --filter=status:ACTIVE --format='value(account)' | head -1)"
 fi
-echo "target project: ${GCP_PROJECT}"
+echo "gcp target: ${GCP_LABEL} -> project ${GCP_PROJECT}"
 echo "ambient gcloud project (printed for awareness, never used): $(gcloud config get-value project 2>/dev/null || echo unset)"
 # Reachability + identity echo. `gcloud projects describe X` echoes back the id you passed, so
 # comparing projectId to GCP_PROJECT is tautological — it "confirms" any valid project. The real
@@ -114,7 +132,7 @@ DESC="$(gcloud projects describe "$GCP_PROJECT" --format='value(projectId,projec
 echo "target project — confirm id, number, and name are the one you intend: ${DESC}"
 ```
 
-The assertion is the gate: `projects describe` either returns a project id equal to `gcp.project`, or the block exits nonzero and stops the run. Never proceed on "probably the right project". If the printed identity line is not the one your team intends for audits, stop and report the mismatch even though the project-id assertion passed; identity and project are two separate checks. The ambient gcloud project is printed only so a drift is visible; no command in this audit reads it, every command names `--project "${GCP_PROJECT}"` explicitly, and pointing the audit somewhere else is an edit to `toolkit.yaml`, never a `gcloud config set`.
+The target project is resolved from `toolkit.yaml` — a single block, or the `SCOUTFLO_TARGET`-selected item of a labeled list — never hand-typed. The assertion is the gate: `projects describe "$GCP_PROJECT"` must **succeed** — this identity can actually read the resolved target project — or the block exits nonzero and stops the run. A multi-project estate audits each configured target in turn (the runner sets `SCOUTFLO_TARGET=<label>`), so — unlike a single-project equality check — the ambient gcloud default is **not** required to equal the target; instead every command names `--project "${GCP_PROJECT}"` explicitly, so the run can never touch a project other than the one it resolved from `toolkit.yaml`. Never proceed on "probably the right project"; eyeball the printed id, number, and name to confirm it is the project you intend, not merely a reachable one. If the printed identity line is not the one your team intends for audits, stop and report the mismatch even though the reachability check passed; identity and project are two separate checks. The ambient gcloud project is printed only so a drift is visible; no command in this audit reads it, and pointing the audit somewhere else is an edit to `toolkit.yaml`, never a `gcloud config set`.
 
 ## Ground rules
 
@@ -149,7 +167,12 @@ Count before judging, and declare the path in the terminal output:
 
 ```bash
 set -eu
-GCP_PROJECT="your-project-id"   # gcp.project
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+GCP_KIND=$(sh "$TT" "$CFG" gcp kind); GCP_N=$(sh "$TT" "$CFG" gcp count)
+GCP_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$GCP_N" ]; do [ "$(sh "$TT" "$CFG" gcp label "$_i")" = "$SCOUTFLO_TARGET" ] && { GCP_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+GCP_LABEL=$(sh "$TT" "$CFG" gcp label "$GCP_IDX"); GCP_PROJECT=$(sh "$TT" "$CFG" gcp get "$GCP_IDX" project)
+if [ "$GCP_KIND" = seq ]; then GCP_SEG="gcp/${GCP_LABEL}"; else GCP_SEG="gcp"; fi
 MON_API="https://monitoring.googleapis.com/v3"
 if [ -n "${GOOGLE_APPLICATION_CREDENTIALS:-}" ]; then TOKEN="$(gcloud auth application-default print-access-token)"; export CLOUDSDK_AUTH_ACCESS_TOKEN="$TOKEN"; else TOKEN="$(gcloud auth print-access-token)"; fi
 SMALL_MAX_OBJECTS="15"    # example, tune to your environment
@@ -169,8 +192,8 @@ echo "vms=${VMS} clusters=${CLUSTERS} uptime_checks=${CHECKS} backend_services=$
 # Guided-walkthrough drift check, per report-standard/README.md#using-topology-and-prior-runs-as-a-guided-walkthrough:
 # compare against the last run rather than a blank slate. State the result in the executive summary;
 # never silently omit it. This never skips a live check - every check in later phases still runs fresh.
-TARGET_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/gcp"
-PREV_RUN="$(find "$TARGET_DIR" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort | tail -1)"
+TARGET_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${GCP_SEG}"
+PREV_RUN="$(find "$TARGET_DIR" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | grep -v '/runs$' | sort | tail -1)"
 DRIFT="first run"
 if [ -n "$PREV_RUN" ] && [ -f "${PREV_RUN}/findings.json" ]; then
   PREV_TOTAL="$(jq -r '.estate.objects // empty' "${PREV_RUN}/findings.json")"
@@ -221,14 +244,19 @@ The scope checkpoint above narrows a *large* estate. This guardrail catches the 
 
 ```bash
 set -eu
-GCP_PROJECT="your-project-id"   # gcp.project
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+GCP_KIND=$(sh "$TT" "$CFG" gcp kind); GCP_N=$(sh "$TT" "$CFG" gcp count)
+GCP_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$GCP_N" ]; do [ "$(sh "$TT" "$CFG" gcp label "$_i")" = "$SCOUTFLO_TARGET" ] && { GCP_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+GCP_LABEL=$(sh "$TT" "$CFG" gcp label "$GCP_IDX"); GCP_PROJECT=$(sh "$TT" "$CFG" gcp get "$GCP_IDX" project)
+if [ "$GCP_KIND" = seq ]; then GCP_SEG="gcp/${GCP_LABEL}"; else GCP_SEG="gcp"; fi
 RUN_DATE="$(date -u +%Y-%m-%d)"
-RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/gcp/${RUN_DATE}/raw"
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${GCP_SEG}/${RUN_DATE}/raw"
 POL="$(jq -s 'length' "${RAW_DIR}/alert-policies.jsonl" 2>/dev/null || echo 0)"
 CHAN="$(jq 'length' "${RAW_DIR}/channels.json" 2>/dev/null || echo 0)"
 if [ "${POL:-0}" -eq 0 ] && [ "${CHAN:-0}" -eq 0 ]; then
   # Both alerting lists empty despite a readable Monitoring API (Phase 2 returned 200, not 401/403).
-  echo "[guard] 0 alert policies AND 0 notification channels in ${GCP_PROJECT} despite a readable Monitoring API — possible metrics-scope / project-visibility gap (GCP-007)"
+  echo "[guard] 0 alert policies AND 0 notification channels in target ${GCP_LABEL} (project ${GCP_PROJECT}) despite a readable Monitoring API — possible metrics-scope / project-visibility gap (GCP-007)"
   echo "[guard] alerting may live in the metrics-scope scoping project that monitors this one, or this identity sees only a subset of projects — do NOT score a confident 0/100"
 fi
 ```
@@ -280,9 +308,9 @@ Commands in sections 11 and 12. Policy documentation tells the responder where t
 
 ## Large-path worklist: VMs and services in batches
 
-Runs on the large path only (see [Estate sizing](#estate-sizing) above). All state lives under a run-ID-keyed run directory `./scoutflo-audits/gcp/runs/<RUN_ID>/`, not a calendar-date directory, so a run that is still batching when the date rolls over UTC keeps writing into the same place. Full runnable commands (resume scan, run-ID mint, worklist build, lock, batch claim, final pending assert) are in [references/gcp-checks.md](references/gcp-checks.md) section 16; this section states the workflow they implement.
+Runs on the large path only (see [Estate sizing](#estate-sizing) above). All state lives under a run-ID-keyed run directory `./scoutflo-audits/gcp/[<label>/]runs/<RUN_ID>/` (the per-target `<label>/` segment on a labeled list, flat on a single block), not a calendar-date directory, so a run that is still batching when the date rolls over UTC keeps writing into the same place. Full runnable commands (resume scan, run-ID mint, worklist build, lock, batch claim, final pending assert) are in [references/gcp-checks.md](references/gcp-checks.md) section 16; this section states the workflow they implement.
 
-1. **Find a resumable run, or start a new one.** Before minting a new `RUN_ID`, scan `./scoutflo-audits/gcp/runs/*/worklist.tsv` for one with pending rows and offer to resume it instead of starting over.
+1. **Find a resumable run, or start a new one.** Before minting a new `RUN_ID`, scan `./scoutflo-audits/gcp/[<label>/]runs/*/worklist.tsv` for one with pending rows and offer to resume it instead of starting over.
 2. **Build or resume the worklist.** One row per VM, uptime check, and backend service counted in Estate sizing, status `pending` or `done`. A resumed run continues from its existing worklist; never rebuild one that already exists.
 3. **Lock, then claim one batch.** Acquire `worklist.lock` in the run directory before reading pending rows; a lock older than `LOCK_STALE_MINUTES` (30 minutes; example, tune to your batch size) is abandoned and safe to reclaim. Take the next `BATCH_SIZE` pending rows and run the Phase 4 (uptime), Phase 5 (VM), or Phase 7 (load balancer) checks matching each row's kind against just that batch. A row is marked `done` only after its pulls succeed, so an interrupted batch resumes at the row that failed. Release the lock once the batch's rows are marked.
 4. **Assemble incrementally.** After each batch, recompose the partial findings and coverage matrix from the batches completed so far, and print progress (`done=X pending=Y`). Repeat from step 3 until the worklist has zero pending rows.
@@ -348,11 +376,19 @@ Emit and verify:
 
 ```bash
 set -eu
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+GCP_KIND=$(sh "$TT" "$CFG" gcp kind); GCP_N=$(sh "$TT" "$CFG" gcp count)
+GCP_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$GCP_N" ]; do [ "$(sh "$TT" "$CFG" gcp label "$_i")" = "$SCOUTFLO_TARGET" ] && { GCP_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+GCP_LABEL=$(sh "$TT" "$CFG" gcp label "$GCP_IDX")
+if [ "$GCP_KIND" = seq ]; then GCP_SEG="gcp/${GCP_LABEL}"; else GCP_SEG="gcp"; fi
 RUN_DATE="$(date -u +%Y-%m-%d)"
-OUT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/gcp/${RUN_DATE}"
+OUT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${GCP_SEG}/${RUN_DATE}"
 mkdir -p "$OUT"
-# ... write findings.json, inventory.json, and report.md per the report standard, then verify:
-jq -e '.schema == "scoutflo-findings/v1" and .target == "gcp" and (.findings | type == "array") and (.estate.path != null)' \
+# ... write findings.json, inventory.json, and report.md per the report standard. The findings.json
+# ".target" is the per-target slug (equal to $GCP_SEG: "gcp" for a single block, "gcp/<label>" for a
+# labeled list target), so audit-all/correlation/render disambiguate multiple projects. Verify:
+jq -e --arg seg "$GCP_SEG" '.schema == "scoutflo-findings/v1" and .target == $seg and (.findings | type == "array") and (.estate.path != null)' \
   "$OUT/findings.json" >/dev/null && echo "findings.json valid"
 grep -q '^# ' "$OUT/report.md" && echo "report.md present"
 # Output conformance: the emitted report.md must match report-standard/report-template.md.
@@ -361,7 +397,7 @@ sh "${CLAUDE_PLUGIN_ROOT}/report-standard/check-findings.sh" "$OUT/findings.json
 # Inventory (scoutflo-inventory/v1): the complete Phase-2 catalog of what exists,
 # built from the raw pull (never invented, redacted). counts.total must reconcile
 # with items; the ## Inventory section of report.md IS this render.
-jq -e '.schema == "scoutflo-inventory/v1" and .target == "gcp" and (.items | type == "array") and (.counts.total == (.items | length))' "$OUT/inventory.json" >/dev/null && echo "inventory.json valid"
+jq -e --arg seg "$GCP_SEG" '.schema == "scoutflo-inventory/v1" and .target == $seg and (.items | type == "array") and (.counts.total == (.items | length))' "$OUT/inventory.json" >/dev/null && echo "inventory.json valid"
 sh "${CLAUDE_PLUGIN_ROOT}/report-standard/render-report-viz.sh" inventory "$OUT/inventory.json" >/dev/null && echo "inventory section renders"
 sh "${CLAUDE_PLUGIN_ROOT}/report-standard/render-report-viz.sh" html "$OUT/findings.json" "$OUT/report.html" "$(dirname "$OUT")/history.jsonl"
 sh "${CLAUDE_PLUGIN_ROOT}/report-standard/check-report.sh" "$OUT/report.md"
@@ -371,7 +407,13 @@ After the report is written, close with the run-completion message per the repor
 
 ```bash
 set -eu
-TARGET_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/gcp"
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+GCP_KIND=$(sh "$TT" "$CFG" gcp kind); GCP_N=$(sh "$TT" "$CFG" gcp count)
+GCP_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$GCP_N" ]; do [ "$(sh "$TT" "$CFG" gcp label "$_i")" = "$SCOUTFLO_TARGET" ] && { GCP_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+GCP_LABEL=$(sh "$TT" "$CFG" gcp label "$GCP_IDX")
+if [ "$GCP_KIND" = seq ]; then GCP_SEG="gcp/${GCP_LABEL}"; else GCP_SEG="gcp"; fi
+TARGET_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${GCP_SEG}"
 RUN_DATE="$(date -u +%Y-%m-%d)"
 OUT="${TARGET_DIR}/${RUN_DATE}"
 RESOLVED="0"   # fixed count from this run's delta; 0 on the first run
@@ -391,7 +433,13 @@ The report's trend line renders the last five history.jsonl entries, oldest firs
 
 ```bash
 set -eu
-TARGET_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/gcp"
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+GCP_KIND=$(sh "$TT" "$CFG" gcp kind); GCP_N=$(sh "$TT" "$CFG" gcp count)
+GCP_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$GCP_N" ]; do [ "$(sh "$TT" "$CFG" gcp label "$_i")" = "$SCOUTFLO_TARGET" ] && { GCP_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+GCP_LABEL=$(sh "$TT" "$CFG" gcp label "$GCP_IDX")
+if [ "$GCP_KIND" = seq ]; then GCP_SEG="gcp/${GCP_LABEL}"; else GCP_SEG="gcp"; fi
+TARGET_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${GCP_SEG}"
 RUN_DATE="$(date -u +%Y-%m-%d)"
 OUT="${TARGET_DIR}/${RUN_DATE}"
 TOPO_LINE="Topology readiness: readiness not recorded"  # replace with "r/n services sync-ready" from Phase 10
@@ -403,7 +451,7 @@ if [ -n "${SCOUTFLO_SLACK_WEBHOOK:-}" ]; then
   COUNTS="$(jq -r '.severity_counts | "\(.critical) critical, \(.high) high, \(.medium) medium, \(.low) low"' "$OUT/findings.json")"
   CHECKS="$(jq -r '"\([.score.categories[].checks_passed] | add)/\([.score.categories[].checks_total] | add) checks passed"' "$OUT/findings.json")"
   TOP="$(jq -r '[.findings[] | "\(.id) \(.title)"] | .[0:5] | join("\n")' "$OUT/findings.json")"
-  PREV="$(find "$TARGET_DIR" -mindepth 1 -maxdepth 1 -type d | sort | tail -2 | head -1)"
+  PREV="$(find "$TARGET_DIR" -mindepth 1 -maxdepth 1 -type d | grep -v '/runs$' | sort | tail -2 | head -1)"
   MOVE=""; DELTA="first run"
   if [ -n "$PREV" ] && [ "$PREV" != "$OUT" ]; then
     MOVE="$(jq -rn --argjson prev "$(jq '.score.overall' "$PREV/findings.json")" --argjson cur "$SCORE" \

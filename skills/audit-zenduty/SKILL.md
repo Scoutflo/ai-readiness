@@ -11,14 +11,16 @@ This skill audits the Zenduty paging layer, not the monitoring tools that *send*
 
 Zenduty was acquired by Xurrent and rebranded **Xurrent IMR** (a branding change, not a sunset); the API and product are alive and everything still runs through `https://www.zenduty.com/api/...`. Every command is read-only: GET, plus two documented read-by-POST calls (the incident filter and the analytics endpoints, which aggregate server-side and change nothing). Every mutating verb is forbidden; the full list is in [references/zenduty-checks.md](references/zenduty-checks.md) section 13. There is no `setup-zenduty` yet, so every finding names its manual fix path in the Zenduty UI or API instead of a setup anchor.
 
+**Multiple Zenduty accounts, one run:** `zenduty` may be a single block (one `token_env`) or a **list of labeled targets**, each with its own `token_env`. The audit **iterates every target** — enumerate them with `sh "${CLAUDE_PLUGIN_ROOT}/report-standard/toolkit-targets.sh" <cfg> zenduty labels` and run the full sequence below once per target with `SCOUTFLO_TARGET=<label>` set. Output goes to `zenduty/<label>/<date>/` for a list, or the flat `zenduty/<date>/` for a single block. Every network call uses the target's own resolved token — the API key held by the variable that target's `token_env` names (`Authorization: Token <key>`); there is no ambient default beyond the key in the environment, and a single-block config resolves to exactly one target whose label defaults to the block name (`zenduty`), byte-identical to today's read.
+
 Run this standalone, from `/scoutflo:audit-all`, or on a schedule via `/scoutflo:schedule-audits`.
 
 Outputs, per the [report standard](../../report-standard/README.md):
 
-- `./scoutflo-audits/zenduty/<YYYY-MM-DD>/findings.json` per the [findings schema](../../report-standard/findings-schema.md), finding IDs `ZD-NNN`
-- `./scoutflo-audits/zenduty/<YYYY-MM-DD>/report.md` per the [report template](../../report-standard/report-template.md), including the `## Inventory` section (the `render-report-viz.sh inventory` output)
-- `./scoutflo-audits/zenduty/<YYYY-MM-DD>/inventory.json` per the [inventory schema](../../report-standard/inventory-schema.md) (`scoutflo-inventory/v1`): the complete Phase-1 catalog — one item per team, escalation policy, schedule, service, integration, alert/suppress rule, and maintenance window (kinds `team`, `escalation_policy`, `schedule`, `service`, `integration`, `alert_rule`, `maintenance_window`), each with its `kind`, `covers` (the team or service it applies to), `enabled`, `severity` (the object's own, or null), and `routes_to` for alerting objects (the escalation target it pages). Built from the raw pull, never invented; redacted at capture, never a secret value.
-- One appended line in `./scoutflo-audits/zenduty/history.jsonl`
+- `./scoutflo-audits/zenduty/[<label>/]<YYYY-MM-DD>/findings.json` per the [findings schema](../../report-standard/findings-schema.md), finding IDs `ZD-NNN`
+- `./scoutflo-audits/zenduty/[<label>/]<YYYY-MM-DD>/report.md` per the [report template](../../report-standard/report-template.md), including the `## Inventory` section (the `render-report-viz.sh inventory` output)
+- `./scoutflo-audits/zenduty/[<label>/]<YYYY-MM-DD>/inventory.json` per the [inventory schema](../../report-standard/inventory-schema.md) (`scoutflo-inventory/v1`): the complete Phase-1 catalog — one item per team, escalation policy, schedule, service, integration, alert/suppress rule, and maintenance window (kinds `team`, `escalation_policy`, `schedule`, `service`, `integration`, `alert_rule`, `maintenance_window`), each with its `kind`, `covers` (the team or service it applies to), `enabled`, `severity` (the object's own, or null), and `routes_to` for alerting objects (the escalation target it pages). Built from the raw pull, never invented; redacted at capture, never a secret value.
+- One appended line in `./scoutflo-audits/zenduty/[<label>/]history.jsonl`
 - One Slack brief, when `slack.webhook_env` is configured
 
 ## Doctor gate
@@ -57,6 +59,20 @@ SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.s
 for bin in curl jq; do
   command -v "$bin" >/dev/null || { echo "missing binary: $bin"; exit 1; }
 done
+# Resolve the CURRENT zenduty target from toolkit.yaml — a single block, or the SCOUTFLO_TARGET-selected
+# item of a labeled list (the shared enumerator handles both; no yq required). The token comes from the
+# variable this target's token_env names; a single-block config resolves to one target (label "zenduty").
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+ZD_KIND=$(sh "$TT" "$CFG" zenduty kind); ZD_N=$(sh "$TT" "$CFG" zenduty count)
+[ "${ZD_N:-0}" -ge 1 ] || { echo "no zenduty target configured in $CFG; run /scoutflo:connect"; exit 1; }
+ZD_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$ZD_N" ]; do [ "$(sh "$TT" "$CFG" zenduty label "$_i")" = "$SCOUTFLO_TARGET" ] && { ZD_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+ZD_LABEL=$(sh "$TT" "$CFG" zenduty label "$ZD_IDX")
+if [ "$ZD_KIND" = seq ]; then ZD_SEG="zenduty/${ZD_LABEL}"; else ZD_SEG="zenduty"; fi
+# token_env holds a VARIABLE NAME; the secret is that variable's value (defaults to ZENDUTY_TOKEN for a
+# single-block config). Resolve it into ZENDUTY_TOKEN so every read below uses this target's own key.
+ZD_TOKVAR=$(sh "$TT" "$CFG" zenduty get "$ZD_IDX" token_env); ZD_TOKVAR="${ZD_TOKVAR:-ZENDUTY_TOKEN}"
+ZENDUTY_TOKEN="$(printenv "$ZD_TOKVAR" 2>/dev/null || true)"; export ZENDUTY_TOKEN
+echo "zenduty target: ${ZD_LABEL} -> ${ZD_SEG}/ (token via ${ZD_TOKVAR})"
 # zenduty.token_env names the variable; presence check only, never print the value.
 [ -n "${ZENDUTY_TOKEN:-}" ] || { echo "ZENDUTY_TOKEN is not set; run /scoutflo:connect"; exit 1; }
 
@@ -98,17 +114,27 @@ Print what you are pointed at and compare it to the config before the first real
 ```bash
 set -eu
 ZD_API="https://www.zenduty.com/api"
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+# Resolve the CURRENT zenduty target from config via the shared enumerator — a single block, or the
+# SCOUTFLO_TARGET-selected item of a labeled list (no yq required). The token is this target's own key.
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+ZD_KIND=$(sh "$TT" "$CFG" zenduty kind); ZD_N=$(sh "$TT" "$CFG" zenduty count)
+ZD_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$ZD_N" ]; do [ "$(sh "$TT" "$CFG" zenduty label "$_i")" = "$SCOUTFLO_TARGET" ] && { ZD_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+ZD_LABEL=$(sh "$TT" "$CFG" zenduty label "$ZD_IDX")
+ZD_TOKVAR=$(sh "$TT" "$CFG" zenduty get "$ZD_IDX" token_env); ZD_TOKVAR="${ZD_TOKVAR:-ZENDUTY_TOKEN}"
+ZENDUTY_TOKEN="$(printenv "$ZD_TOKVAR" 2>/dev/null || true)"; export ZENDUTY_TOKEN
+[ -n "${ZENDUTY_TOKEN:-}" ] || { echo "zenduty target '${ZD_LABEL}' token variable ${ZD_TOKVAR} is not set; run /scoutflo:connect"; exit 1; }
 # Zenduty has no whoami; the account is identified by the teams the key reads.
 TEAMS_SAMPLE="$(curl -fsS --max-time 15 -H "Authorization: Token ${ZENDUTY_TOKEN}" "${ZD_API}/account/teams/")"
 COUNT="$(printf '%s' "$TEAMS_SAMPLE" | jq 'if type=="array" then length else (.results // []) | length end')"
 NAMES="$(printf '%s' "$TEAMS_SAMPLE" | jq -r 'if type=="array" then . else (.results // []) end | [.[].name] | join(", ")')"
-echo "api=${ZD_API} sample_teams=${COUNT}: ${NAMES}"
+echo "zenduty target: ${ZD_LABEL} (token via ${ZD_TOKVAR}) api=${ZD_API} sample_teams=${COUNT}: ${NAMES}"
 printf '%s' "$TEAMS_SAMPLE" | jq -e 'if type=="array" then . else (.results // []) end | type == "array"' >/dev/null \
   || { echo "teams endpoint did not return a team list; wrong key or wrong host — stop"; exit 1; }
 echo "live-safety gate: pass — confirm these team names belong to the account you intend to audit"
 ```
 
-The key in the environment is the account selector; there is no ambient default beyond it. The printed sample team names are the human check: if they belong to a different org than intended, stop and fix the exported key before any further read.
+The key resolved for this target is the account selector; there is no ambient default beyond it, and each target names its own `token_env` so a multi-account run never reuses one account's key against another. The printed sample team names are the human check: if they belong to a different org than intended, stop and fix the exported key before any further read.
 
 ## Ground rules
 
@@ -144,6 +170,14 @@ Count before judging, and declare the path in the terminal output:
 ```bash
 set -eu
 ZD_API="https://www.zenduty.com/api"
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+ZD_KIND=$(sh "$TT" "$CFG" zenduty kind); ZD_N=$(sh "$TT" "$CFG" zenduty count)
+ZD_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$ZD_N" ]; do [ "$(sh "$TT" "$CFG" zenduty label "$_i")" = "$SCOUTFLO_TARGET" ] && { ZD_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+ZD_LABEL=$(sh "$TT" "$CFG" zenduty label "$ZD_IDX")
+if [ "$ZD_KIND" = seq ]; then ZD_SEG="zenduty/${ZD_LABEL}"; else ZD_SEG="zenduty"; fi
+ZD_TOKVAR=$(sh "$TT" "$CFG" zenduty get "$ZD_IDX" token_env); ZD_TOKVAR="${ZD_TOKVAR:-ZENDUTY_TOKEN}"
+ZENDUTY_TOKEN="$(printenv "$ZD_TOKVAR" 2>/dev/null || true)"; export ZENDUTY_TOKEN
 SMALL_MAX_OBJECTS="15"    # example, tune to your environment
 MEDIUM_MAX_OBJECTS="60"   # example, tune to your environment
 BATCH_SIZE="10"           # teams per batch on the large path; example, tune it
@@ -162,7 +196,7 @@ TOTAL=$((TEAMS + SERVICES))
 echo "teams=${TEAMS} services=${SERVICES} scored_objects=${TOTAL}"
 
 # Guided-walkthrough drift check, per report-standard/README.md.
-TARGET_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/zenduty"
+TARGET_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${ZD_SEG}"
 PREV_RUN="$(find "$TARGET_DIR" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort | tail -1)"
 DRIFT="first run"
 if [ -n "$PREV_RUN" ] && [ -f "${PREV_RUN}/findings.json" ]; then
@@ -214,8 +248,14 @@ The scope checkpoint above narrows a *large* estate. This guardrail catches the 
 
 ```bash
 set -eu
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+ZD_KIND=$(sh "$TT" "$CFG" zenduty kind); ZD_N=$(sh "$TT" "$CFG" zenduty count)
+ZD_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$ZD_N" ]; do [ "$(sh "$TT" "$CFG" zenduty label "$_i")" = "$SCOUTFLO_TARGET" ] && { ZD_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+ZD_LABEL=$(sh "$TT" "$CFG" zenduty label "$ZD_IDX")
+if [ "$ZD_KIND" = seq ]; then ZD_SEG="zenduty/${ZD_LABEL}"; else ZD_SEG="zenduty"; fi
 RUN_DATE="$(date -u +%Y-%m-%d)"
-RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/zenduty/${RUN_DATE}/raw"
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${ZD_SEG}/${RUN_DATE}/raw"
 # Teams discovered by the key vs audited this run. Any discovered team we did NOT audit?
 UNAUDITED="$(comm -23 "${RAW_DIR}/teams-discovered.txt" "${RAW_DIR}/teams-audited.txt" 2>/dev/null | tr '\n' ' ')"
 UNAUDITED_TRIM="$(printf '%s' "$UNAUDITED" | tr -d '[:space:]')"
@@ -314,11 +354,19 @@ Emit and verify:
 
 ```bash
 set -eu
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+ZD_KIND=$(sh "$TT" "$CFG" zenduty kind); ZD_N=$(sh "$TT" "$CFG" zenduty count)
+ZD_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$ZD_N" ]; do [ "$(sh "$TT" "$CFG" zenduty label "$_i")" = "$SCOUTFLO_TARGET" ] && { ZD_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+ZD_LABEL=$(sh "$TT" "$CFG" zenduty label "$ZD_IDX")
+if [ "$ZD_KIND" = seq ]; then ZD_SEG="zenduty/${ZD_LABEL}"; else ZD_SEG="zenduty"; fi
 RUN_DATE="$(date -u +%Y-%m-%d)"
-OUT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/zenduty/${RUN_DATE}"
+OUT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${ZD_SEG}/${RUN_DATE}"
 mkdir -p "$OUT"
-# ... write findings.json, inventory.json, and report.md per the report standard, then verify:
-jq -e '.schema == "scoutflo-findings/v1" and .target == "zenduty" and (.findings | type == "array")' \
+# ... write findings.json, inventory.json, and report.md per the report standard. The findings.json
+# ".target" is the per-target slug (equal to $ZD_SEG: "zenduty" for a single block, "zenduty/<label>"
+# for a labeled list target), so audit-all/correlation/render disambiguate multiple Zenduty accounts. Verify:
+jq -e --arg seg "$ZD_SEG" '.schema == "scoutflo-findings/v1" and .target == $seg and (.findings | type == "array")' \
   "$OUT/findings.json" >/dev/null && echo "findings.json valid"
 grep -q '^# ' "$OUT/report.md" && echo "report.md present"
 sh "${CLAUDE_PLUGIN_ROOT}/report-standard/check-findings.sh" "$OUT/findings.json"
@@ -335,7 +383,13 @@ Compute the delta against the previous run's `findings.json` (the latest two dat
 
 ```bash
 set -eu
-TARGET_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/zenduty"
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+ZD_KIND=$(sh "$TT" "$CFG" zenduty kind); ZD_N=$(sh "$TT" "$CFG" zenduty count)
+ZD_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$ZD_N" ]; do [ "$(sh "$TT" "$CFG" zenduty label "$_i")" = "$SCOUTFLO_TARGET" ] && { ZD_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+ZD_LABEL=$(sh "$TT" "$CFG" zenduty label "$ZD_IDX")
+if [ "$ZD_KIND" = seq ]; then ZD_SEG="zenduty/${ZD_LABEL}"; else ZD_SEG="zenduty"; fi
+TARGET_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${ZD_SEG}"
 RUN_DATE="$(date -u +%Y-%m-%d)"
 OUT="${TARGET_DIR}/${RUN_DATE}"
 RESOLVED="0"   # fixed count from this run's delta; 0 on the first run

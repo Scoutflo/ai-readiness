@@ -68,6 +68,8 @@ An `org:read` + `project:read` + `alerts:read` token runs the full audit. `event
 
 Runs on the large path only (see [SKILL.md#estate-sizing](../SKILL.md#estate-sizing)). Replaces the per-project loop at the end of Phase 1; the org-level fetches above the loop (`projects.json`, `teams.json`, `integrations.json`, and the rest) still run once, cluster-wide, before this procedure starts. All state lives under a run-ID-keyed run directory, not a calendar-date directory, so a batch that is still running when the date rolls over in UTC does not abandon its progress or fight the next day's directory.
 
+**Multi-target:** the `sentry/...` output paths in the blocks below are the single-block (flat) form. For a labeled-list target, every `sentry/...` output path becomes `sentry/<label>/...`: resolve `SNTRY_SEG` (single block → `sentry`; labeled list → `sentry/<label>`) exactly as the SKILL.md doctor/estate blocks do, and substitute it for the leading `sentry` segment in `AUDIT_ROOT`, `RUN_DIR`, and `RAW_DIR`. Connection params and the token are the same per-target reads the SKILL.md uses — `SENTRY_HOST`/`SENTRY_ORG` from `sh "$TT" "$CFG" sentry get "$SNTRY_IDX" host|org`, and the token from the variable named by `... get "$SNTRY_IDX" token_env`.
+
 **Step 0: find a resumable run, or mint a new run ID.**
 
 ```bash

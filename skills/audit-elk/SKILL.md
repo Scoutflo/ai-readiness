@@ -11,14 +11,16 @@ This skill audits **Kibana Alerting** (Stack Rules and their connectors), not El
 
 Every command is read-only: GET on rules, connectors, rule types, health, and (on 9.2+) maintenance windows, plus a read-by-query on Elasticsearch `_watcher/stats` for the split check. Every mutating verb — enable, disable, mute, snooze, connector execute — is forbidden; the full list is in [references/elk-checks.md](references/elk-checks.md) section 12. There is no `setup-elk` yet, so every finding names its manual fix path in Kibana instead of a setup anchor.
 
+**Multiple Kibana targets, one run.** `elk` may be a single block (one `kibana_url` + `token_env`) or a **list of labeled targets**, each with its own `kibana_url` and `token_env`. The audit **iterates every target** — enumerate them with `sh "${CLAUDE_PLUGIN_ROOT}/report-standard/toolkit-targets.sh" <cfg> elk labels` and run the full sequence below once per target with `SCOUTFLO_TARGET=<label>` set. Output goes to `elk/<label>/<date>/` for a list, or the flat `elk/<date>/` for a single block; the `findings.json` `.target` is that same per-target slug (`elk`, or `elk/<label>`). Every network call uses the target's own resolved `kibana_url` and token — there is no ambient default (the API key plus the Kibana URL select the target). This is distinct from Kibana **spaces**, which the audit still discovers and iterates *within* each target.
+
 Run this standalone, from `/scoutflo:audit-all`, or on a schedule via `/scoutflo:schedule-audits`.
 
 Outputs, per the [report standard](../../report-standard/README.md):
 
-- `./scoutflo-audits/elk/<YYYY-MM-DD>/findings.json` per the [findings schema](../../report-standard/findings-schema.md), finding IDs `ELK-NNN`
-- `./scoutflo-audits/elk/<YYYY-MM-DD>/report.md` per the [report template](../../report-standard/report-template.md), including the `## Inventory` section (the `render-report-viz.sh inventory` output)
-- `./scoutflo-audits/elk/<YYYY-MM-DD>/inventory.json` per the [inventory schema](../../report-standard/inventory-schema.md) (`scoutflo-inventory/v1`): the complete Phase-1 catalog — one item per Kibana alerting rule and connector, each with `kind`, `covers`, `enabled`, `severity`, and `routes_to` for alerting objects. Built from the raw pull, never invented; redacted at capture, never a secret value.
-- One appended line in `./scoutflo-audits/elk/history.jsonl`
+- `./scoutflo-audits/elk/[<label>/]<YYYY-MM-DD>/findings.json` per the [findings schema](../../report-standard/findings-schema.md), finding IDs `ELK-NNN`
+- `./scoutflo-audits/elk/[<label>/]<YYYY-MM-DD>/report.md` per the [report template](../../report-standard/report-template.md), including the `## Inventory` section (the `render-report-viz.sh inventory` output)
+- `./scoutflo-audits/elk/[<label>/]<YYYY-MM-DD>/inventory.json` per the [inventory schema](../../report-standard/inventory-schema.md) (`scoutflo-inventory/v1`): the complete Phase-1 catalog — one item per Kibana alerting rule and connector, each with `kind`, `covers`, `enabled`, `severity`, and `routes_to` for alerting objects. Built from the raw pull, never invented; redacted at capture, never a secret value.
+- One appended line in `./scoutflo-audits/elk/[<label>/]history.jsonl`
 - One Slack brief, when `slack.webhook_env` is configured
 
 ## Doctor gate
@@ -57,11 +59,24 @@ SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.s
 for bin in curl jq; do
   command -v "$bin" >/dev/null || { echo "missing binary: $bin"; exit 1; }
 done
-# elk.token_env names the variable; presence check only, never print the value.
-[ -n "${KIBANA_API_KEY:-}" ] || { echo "KIBANA_API_KEY is not set; run /scoutflo:connect"; exit 1; }
-
-KIBANA_URL="https://kibana.example.com"   # elk.kibana_url (Kibana, not Elasticsearch)
+# Resolve the CURRENT elk target from toolkit.yaml — a single block, or the SCOUTFLO_TARGET-selected
+# item of a labeled list (the shared enumerator handles both; no yq required). kibana_url and the
+# token variable come from the resolved target; the ambient env is never assumed to be the target.
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+ELK_KIND=$(sh "$TT" "$CFG" elk kind); ELK_N=$(sh "$TT" "$CFG" elk count)
+[ "${ELK_N:-0}" -ge 1 ] || { echo "no elk target configured in $CFG; run /scoutflo:connect"; exit 1; }
+ELK_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$ELK_N" ]; do [ "$(sh "$TT" "$CFG" elk label "$_i")" = "$SCOUTFLO_TARGET" ] && { ELK_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+ELK_LABEL=$(sh "$TT" "$CFG" elk label "$ELK_IDX")
+if [ "$ELK_KIND" = seq ]; then ELK_SEG="elk/${ELK_LABEL}"; else ELK_SEG="elk"; fi
+KIBANA_URL=$(sh "$TT" "$CFG" elk get "$ELK_IDX" kibana_url)   # elk.kibana_url (Kibana, not Elasticsearch)
+[ -n "$KIBANA_URL" ] || { echo "elk target '${ELK_LABEL:-?}' has no kibana_url in $CFG; run /scoutflo:connect"; exit 1; }
 KIBANA_URL="${KIBANA_URL%/}"
+# elk.token_env names the secret VARIABLE (default KIBANA_API_KEY); resolve the name, then read the
+# value from the environment (the store sourced above). Presence check only, never print the value.
+ELK_TOKEN_VAR=$(sh "$TT" "$CFG" elk get "$ELK_IDX" token_env); [ -n "$ELK_TOKEN_VAR" ] || ELK_TOKEN_VAR="KIBANA_API_KEY"
+KIBANA_API_KEY=$(printenv "$ELK_TOKEN_VAR" 2>/dev/null || true)
+[ -n "${KIBANA_API_KEY:-}" ] || { echo "\$${ELK_TOKEN_VAR} (elk.token_env) is not set; run /scoutflo:connect"; exit 1; }
+echo "elk target: ${ELK_LABEL} (${KIBANA_URL}) -> ${ELK_SEG}/"
 # Kibana is browser-facing behind SSO, so a 200 that returns an HTML login/SPA page is a
 # false-green. Judge the body, not the status code alone: capture BOTH the status and the
 # content-type, and pass ONLY on 200 + a JSON content-type + a version-robust body assertion
@@ -98,13 +113,24 @@ Print what you are pointed at and compare it to the config before the first real
 
 ```bash
 set -eu
-KIBANA_URL="https://kibana.example.com"   # elk.kibana_url
-KIBANA_URL="${KIBANA_URL%/}"
+CFG="${SCOUTFLO_CONFIG:-}"
+[ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done
+[ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+[ -f "$CFG" ] || { echo "missing $CFG; run /scoutflo:connect"; exit 1; }
+# Resolve the CURRENT elk target from config via the shared enumerator — a single block, or the
+# SCOUTFLO_TARGET-selected item of a labeled list (no yq required). Never hand-typed.
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+ELK_N=$(sh "$TT" "$CFG" elk count)
+ELK_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$ELK_N" ]; do [ "$(sh "$TT" "$CFG" elk label "$_i")" = "$SCOUTFLO_TARGET" ] && { ELK_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+ELK_LABEL=$(sh "$TT" "$CFG" elk label "$ELK_IDX")
+KIBANA_URL=$(sh "$TT" "$CFG" elk get "$ELK_IDX" kibana_url); KIBANA_URL="${KIBANA_URL%/}"   # elk.kibana_url
+ELK_TOKEN_VAR=$(sh "$TT" "$CFG" elk get "$ELK_IDX" token_env); [ -n "$ELK_TOKEN_VAR" ] || ELK_TOKEN_VAR="KIBANA_API_KEY"
+KIBANA_API_KEY=$(printenv "$ELK_TOKEN_VAR" 2>/dev/null || true)
 STATUS_JSON="$(curl -fsS --max-time 15 -H "Authorization: ApiKey ${KIBANA_API_KEY}" \
   "${KIBANA_URL}/api/status" 2>/dev/null || echo '{}')"
 VER="$(printf '%s' "$STATUS_JSON" | jq -r '.version.number // "unknown"')"
 NAME="$(printf '%s' "$STATUS_JSON" | jq -r '.name // "unknown"')"
-echo "kibana_url=${KIBANA_URL} name=${NAME} version=${VER}"
+echo "elk target: ${ELK_LABEL}; kibana_url=${KIBANA_URL} name=${NAME} version=${VER}"
 printf '%s' "$STATUS_JSON" | jq -e '.version.number != null' >/dev/null \
   || { echo "no Kibana version in the status response; this URL is not a Kibana host — stop"; exit 1; }
 echo "live-safety gate: pass — confirm this is the Kibana instance and version you intend to audit; the version drives the maintenance-window (9.2+) and legacy-route (9.0) gates"
@@ -131,14 +157,21 @@ Count before judging, and declare the path in the terminal output. The unit here
 
 ```bash
 set -eu
-KIBANA_URL="https://kibana.example.com"   # elk.kibana_url
-KIBANA_URL="${KIBANA_URL%/}"
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+ELK_KIND=$(sh "$TT" "$CFG" elk kind); ELK_N=$(sh "$TT" "$CFG" elk count)
+ELK_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$ELK_N" ]; do [ "$(sh "$TT" "$CFG" elk label "$_i")" = "$SCOUTFLO_TARGET" ] && { ELK_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+ELK_LABEL=$(sh "$TT" "$CFG" elk label "$ELK_IDX")
+if [ "$ELK_KIND" = seq ]; then ELK_SEG="elk/${ELK_LABEL}"; else ELK_SEG="elk"; fi
+KIBANA_URL=$(sh "$TT" "$CFG" elk get "$ELK_IDX" kibana_url); KIBANA_URL="${KIBANA_URL%/}"   # elk.kibana_url
+ELK_TOKEN_VAR=$(sh "$TT" "$CFG" elk get "$ELK_IDX" token_env); [ -n "$ELK_TOKEN_VAR" ] || ELK_TOKEN_VAR="KIBANA_API_KEY"
+KIBANA_API_KEY=$(printenv "$ELK_TOKEN_VAR" 2>/dev/null || true)
 SMALL_MAX_OBJECTS="30"    # example, tune to your environment
 MEDIUM_MAX_OBJECTS="150"  # example, tune to your environment
 BATCH_SIZE="50"           # rules per batch on the large path; example, tune it
 AUTH="Authorization: ApiKey ${KIBANA_API_KEY}"
 RUN_DATE="$(date -u +%Y-%m-%d)"
-RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/elk/${RUN_DATE}/raw"
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${ELK_SEG}/${RUN_DATE}/raw"
 # Sum rule totals across the AUDITED spaces (spaces.txt, materialized by elk-checks.md
 # section 4a from live enumeration — NOT a bare default-space call). Per-space breakdown.
 [ -s "${RAW_DIR}/spaces.txt" ] || { echo "run space enumeration (elk-checks.md 4a) before sizing"; exit 1; }
@@ -154,7 +187,7 @@ ZERO_RULES=0; [ "$TOTAL" -eq 0 ] && ZERO_RULES=1
 echo "scored_objects=${TOTAL} (summed across audited spaces) zero_rules=${ZERO_RULES}"
 
 # Guided-walkthrough drift check, per report-standard/README.md.
-TARGET_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/elk"
+TARGET_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${ELK_SEG}"
 PREV_RUN="$(find "$TARGET_DIR" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort | tail -1)"
 DRIFT="first run"
 if [ -n "$PREV_RUN" ] && [ -f "${PREV_RUN}/findings.json" ]; then
@@ -206,8 +239,14 @@ The scope checkpoint above narrows a *large* estate. This guardrail catches the 
 
 ```bash
 set -eu
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+ELK_KIND=$(sh "$TT" "$CFG" elk kind); ELK_N=$(sh "$TT" "$CFG" elk count)
+ELK_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$ELK_N" ]; do [ "$(sh "$TT" "$CFG" elk label "$_i")" = "$SCOUTFLO_TARGET" ] && { ELK_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+ELK_LABEL=$(sh "$TT" "$CFG" elk label "$ELK_IDX")
+if [ "$ELK_KIND" = seq ]; then ELK_SEG="elk/${ELK_LABEL}"; else ELK_SEG="elk"; fi
 RUN_DATE="$(date -u +%Y-%m-%d)"
-RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/elk/${RUN_DATE}/raw"
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${ELK_SEG}/${RUN_DATE}/raw"
 # Spaces discovered (4a) vs audited (this run). Are there rules-bearing spaces we did NOT audit?
 UNAUDITED="$(comm -23 "${RAW_DIR}/spaces-discovered.txt" "${RAW_DIR}/spaces.txt" 2>/dev/null | tr '\n' ' ')"
 UNAUDITED_TRIM="$(printf '%s' "$UNAUDITED" | tr -d '[:space:]')"
@@ -321,18 +360,26 @@ Emit and verify:
 
 ```bash
 set -eu
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+ELK_KIND=$(sh "$TT" "$CFG" elk kind); ELK_N=$(sh "$TT" "$CFG" elk count)
+ELK_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$ELK_N" ]; do [ "$(sh "$TT" "$CFG" elk label "$_i")" = "$SCOUTFLO_TARGET" ] && { ELK_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+ELK_LABEL=$(sh "$TT" "$CFG" elk label "$ELK_IDX")
+if [ "$ELK_KIND" = seq ]; then ELK_SEG="elk/${ELK_LABEL}"; else ELK_SEG="elk"; fi
 RUN_DATE="$(date -u +%Y-%m-%d)"
-OUT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/elk/${RUN_DATE}"
+OUT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${ELK_SEG}/${RUN_DATE}"
 mkdir -p "$OUT"
-# ... write findings.json, inventory.json, and report.md per the report standard, then verify:
-jq -e '.schema == "scoutflo-findings/v1" and .target == "elk" and (.findings | type == "array")' \
+# ... write findings.json, inventory.json, and report.md per the report standard. The findings.json
+# ".target" is the per-target slug (equal to $ELK_SEG: "elk" for a single block, "elk/<label>" for a
+# labeled-list target), so audit-all/correlation/render disambiguate multiple Kibana targets. Verify:
+jq -e --arg seg "$ELK_SEG" '.schema == "scoutflo-findings/v1" and .target == $seg and (.findings | type == "array")' \
   "$OUT/findings.json" >/dev/null && echo "findings.json valid"
 grep -q '^# ' "$OUT/report.md" && echo "report.md present"
 sh "${CLAUDE_PLUGIN_ROOT}/report-standard/check-findings.sh" "$OUT/findings.json"
 # Inventory (scoutflo-inventory/v1): the complete Phase-1 catalog of what exists,
 # built from the raw pull (never invented, redacted). counts.total must reconcile
 # with items; the ## Inventory section of report.md IS this render.
-jq -e '.schema == "scoutflo-inventory/v1" and .target == "elk"
+jq -e --arg seg "$ELK_SEG" '.schema == "scoutflo-inventory/v1" and .target == $seg
        and (.items | type == "array") and (.counts.total == (.items | length))' \
   "$OUT/inventory.json" >/dev/null && echo "inventory.json valid"
 sh "${CLAUDE_PLUGIN_ROOT}/report-standard/render-report-viz.sh" inventory "$OUT/inventory.json" >/dev/null \
@@ -345,7 +392,13 @@ Compute the delta against the previous run's `findings.json` (the latest two dat
 
 ```bash
 set -eu
-TARGET_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/elk"
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+ELK_KIND=$(sh "$TT" "$CFG" elk kind); ELK_N=$(sh "$TT" "$CFG" elk count)
+ELK_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$ELK_N" ]; do [ "$(sh "$TT" "$CFG" elk label "$_i")" = "$SCOUTFLO_TARGET" ] && { ELK_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+ELK_LABEL=$(sh "$TT" "$CFG" elk label "$ELK_IDX")
+if [ "$ELK_KIND" = seq ]; then ELK_SEG="elk/${ELK_LABEL}"; else ELK_SEG="elk"; fi
+TARGET_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${ELK_SEG}"
 RUN_DATE="$(date -u +%Y-%m-%d)"
 OUT="${TARGET_DIR}/${RUN_DATE}"
 RESOLVED="0"   # fixed count from this run's delta; 0 on the first run

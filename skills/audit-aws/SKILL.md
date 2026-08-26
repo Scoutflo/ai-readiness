@@ -11,16 +11,18 @@ Every command in this audit is read-only: `aws` `describe-*`, `get-*`, and `list
 
 Two axes, scored differently on purpose: reliability and readiness (the six categories below) fold into the normal 0-100 score, the same as every other audit skill in this toolkit. Cost & Resource Optimization is a separate, parallel, non-scored report section, the same pattern this toolkit already uses for Scoutflo Topology Readiness. Mixing a dollar-savings signal into a reliability score creates a perverse incentive: an idle standby RDS replica is "waste" by a cost lens and "correct" by a reliability lens, so scoring both on one axis would reward removing the standby. Keeping them separate means you can be reliability-healthy and cost-inefficient, or the reverse, and see both truths.
 
+**Multiple accounts, one run:** `aws` may be a single block (one account, with an optional `profile`/`region`) or a **list of labeled targets**, each with its own optional `profile`, optional `account_id`, and `region`. The audit **iterates every target** — enumerate them with `sh "${CLAUDE_PLUGIN_ROOT}/report-standard/toolkit-targets.sh" <cfg> aws labels` and run the full sequence below once per target with `SCOUTFLO_TARGET=<label>` set. Output goes to `aws/<label>/<date>/` for a list, or the flat `aws/<date>/` for a single block. Every `aws` call names its target's own `--profile`/`--region` explicitly (resolved from that target, never a hand-typed value); the ambient `AWS_PROFILE`/`AWS_DEFAULT_REGION` is never read, and `aws configure` is never run.
+
 Out of scope: Alertmanager-style routing proof for a self-hosted stack belongs to `/scoutflo:audit-alert-routing`; if your workloads run on EKS with an in-cluster LGTM or Grafana stack, that layer belongs to `/scoutflo:audit-lgtm` and `/scoutflo:audit-grafana`. This audit covers the AWS-managed plane and states the split so a green AWS score never implies in-cluster coverage.
 
 Run this standalone, from `/scoutflo:audit-all`, or on a schedule via `/scoutflo:schedule-audits`.
 
 Outputs, per the [report standard](../../report-standard/README.md):
 
-- `./scoutflo-audits/aws/<YYYY-MM-DD>/findings.json` per the [findings schema](../../report-standard/findings-schema.md), reliability finding IDs `AWS-NNN`, Cost & Resource Optimization finding IDs `AWSOPT-NNN`
-- `./scoutflo-audits/aws/<YYYY-MM-DD>/report.md` per the [report template](../../report-standard/report-template.md), including the `## Inventory` section (the `render-report-viz.sh inventory` output)
-- `./scoutflo-audits/aws/<YYYY-MM-DD>/inventory.json` per the [inventory schema](../../report-standard/inventory-schema.md) (`scoutflo-inventory/v1`): the complete Phase-1 catalog — one item per CloudWatch `alarm`, `sns_topic`, `dashboard`, and `log_group`, plus each inventoried `vm`, `database`, `cluster`, `function`, `load_balancer`, and `uptime_check` — each with `kind`, `covers`, `enabled`, `severity`, and `routes_to` for alerting objects (an alarm's SNS topic). Built from the raw pull, never invented; redacted at capture, never a secret value.
-- One appended line in `./scoutflo-audits/aws/history.jsonl` (reliability score only; the cost section never feeds the ledger)
+- `./scoutflo-audits/aws/[<label>/]<YYYY-MM-DD>/findings.json` per the [findings schema](../../report-standard/findings-schema.md), reliability finding IDs `AWS-NNN`, Cost & Resource Optimization finding IDs `AWSOPT-NNN`
+- `./scoutflo-audits/aws/[<label>/]<YYYY-MM-DD>/report.md` per the [report template](../../report-standard/report-template.md), including the `## Inventory` section (the `render-report-viz.sh inventory` output)
+- `./scoutflo-audits/aws/[<label>/]<YYYY-MM-DD>/inventory.json` per the [inventory schema](../../report-standard/inventory-schema.md) (`scoutflo-inventory/v1`): the complete Phase-1 catalog — one item per CloudWatch `alarm`, `sns_topic`, `dashboard`, and `log_group`, plus each inventoried `vm`, `database`, `cluster`, `function`, `load_balancer`, and `uptime_check` — each with `kind`, `covers`, `enabled`, `severity`, and `routes_to` for alerting objects (an alarm's SNS topic). Built from the raw pull, never invented; redacted at capture, never a secret value.
+- One appended line in `./scoutflo-audits/aws/[<label>/]history.jsonl` (reliability score only; the cost section never feeds the ledger)
 - One Slack brief, when `slack.webhook_env` is configured
 
 ## Doctor gate
@@ -60,9 +62,20 @@ SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.s
 for bin in aws curl jq; do
   command -v "$bin" >/dev/null || { echo "missing binary: $bin"; exit 1; }
 done
-AWS_ACCOUNT="123456789012"   # aws.account_id
-AWS_PROFILE_CFG=""           # aws.profile; empty means the active credential chain
-AWS_REGION_CFG="us-east-1"   # aws.region
+# Resolve the CURRENT aws target from toolkit.yaml — a single block, or the SCOUTFLO_TARGET-selected
+# item of a labeled list (the shared enumerator handles both; no yq required). Per-target keys:
+# optional profile, optional account_id, region. Every aws call below passes this target's own
+# --profile/--region explicitly; the ambient AWS_PROFILE/AWS_DEFAULT_REGION is never read.
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+AWS_KIND=$(sh "$TT" "$CFG" aws kind); AWS_N=$(sh "$TT" "$CFG" aws count)
+[ "${AWS_N:-0}" -ge 1 ] || { echo "no aws target configured in $CFG; run /scoutflo:connect"; exit 1; }
+AWS_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$AWS_N" ]; do [ "$(sh "$TT" "$CFG" aws label "$_i")" = "$SCOUTFLO_TARGET" ] && { AWS_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+AWS_LABEL=$(sh "$TT" "$CFG" aws label "$AWS_IDX")
+AWS_ACCOUNT_CFG=$(sh "$TT" "$CFG" aws get "$AWS_IDX" account_id)   # optional; may be empty
+AWS_PROFILE_CFG=$(sh "$TT" "$CFG" aws get "$AWS_IDX" profile)     # optional; empty = active credential chain
+AWS_REGION_CFG=$(sh "$TT" "$CFG" aws get "$AWS_IDX" region)
+if [ "$AWS_KIND" = seq ]; then AWS_SEG="aws/${AWS_LABEL}"; else AWS_SEG="aws"; fi
+echo "aws target: ${AWS_LABEL} (account ${AWS_ACCOUNT_CFG:-<credential-chain>}, profile ${AWS_PROFILE_CFG:-<credential-chain>}) -> ${AWS_SEG}/"
 
 aws_cli() {
   if [ -n "$AWS_PROFILE_CFG" ]; then
@@ -90,13 +103,24 @@ Troubleshooting, not a rule: if `aws` times out while `curl` to public sites wor
 
 ## Live-safety gate
 
-Print what you are pointed at and compare it to the config before the first real check, mirroring the GCP project-ID gate exactly, adapted to an account ID and ARN:
+Print what you are pointed at and compare it against the config before the first real check. The comparison value comes from `toolkit.yaml`, not from what an operator typed or what an ambient `AWS_PROFILE` left active in another terminal. A multi-account estate audits each configured target in turn (the runner sets `SCOUTFLO_TARGET=<label>`), so the gate is the AWS analog of the relaxed Azure visibility gate: it asserts `sts get-caller-identity`'s account equals the target's `account_id` **when that target sets one**, and otherwise proceeds on the target's own explicit `--profile`/`--region`:
 
 ```bash
 set -eu
-AWS_ACCOUNT="123456789012"   # aws.account_id
-AWS_PROFILE_CFG=""           # aws.profile
-AWS_REGION_CFG="us-east-1"   # aws.region
+CONFIG="${SCOUTFLO_CONFIG:-}"
+[ -n "$CONFIG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CONFIG="$_c"; break; }; done
+[ -n "$CONFIG" ] || CONFIG="$HOME/.scoutflo/toolkit.yaml"
+[ -f "$CONFIG" ] || { echo "missing $CONFIG; run /scoutflo:connect"; exit 1; }
+# Resolve the CURRENT aws target from config via the shared enumerator — a single block, or the
+# SCOUTFLO_TARGET-selected item of a labeled list (no yq required). Never hand-typed.
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+AWS_N=$(sh "$TT" "$CONFIG" aws count)
+[ "${AWS_N:-0}" -ge 1 ] || { echo "no aws target configured in $CONFIG; run /scoutflo:connect"; exit 1; }
+AWS_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$AWS_N" ]; do [ "$(sh "$TT" "$CONFIG" aws label "$_i")" = "$SCOUTFLO_TARGET" ] && { AWS_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+AWS_LABEL=$(sh "$TT" "$CONFIG" aws label "$AWS_IDX")
+AWS_ACCOUNT_CFG=$(sh "$TT" "$CONFIG" aws get "$AWS_IDX" account_id)   # optional; may be empty
+AWS_PROFILE_CFG=$(sh "$TT" "$CONFIG" aws get "$AWS_IDX" profile)     # optional; empty = active credential chain
+AWS_REGION_CFG=$(sh "$TT" "$CONFIG" aws get "$AWS_IDX" region)
 
 aws_cli() {
   if [ -n "$AWS_PROFILE_CFG" ]; then
@@ -110,12 +134,22 @@ STS_OUT="$(aws_cli sts get-caller-identity --output json)"
 RESOLVED_ACCOUNT="$(echo "$STS_OUT" | jq -r '.Account')"
 RESOLVED_ARN="$(echo "$STS_OUT" | jq -r '.Arn')"
 echo "identity: ${RESOLVED_ARN}"
-echo "resolved account: ${RESOLVED_ACCOUNT} config account: ${AWS_ACCOUNT}"
-[ "$RESOLVED_ACCOUNT" = "$AWS_ACCOUNT" ] || { echo "live-safety gate failed: sts resolved account '${RESOLVED_ACCOUNT}', config names '${AWS_ACCOUNT}'; stop, this credential points at the wrong account"; exit 1; }
-echo "live-safety gate: pass, target confirmed"
+echo "aws target: ${AWS_LABEL} (profile ${AWS_PROFILE_CFG:-<credential-chain>}); resolved account ${RESOLVED_ACCOUNT}, config account_id ${AWS_ACCOUNT_CFG:-<unset>}"
+# Multi-target safety: a multi-account estate audits several accounts in one run, so — unlike a
+# single-account equality check — the ambient default is NOT required to equal the target; every
+# command passes this target's own --profile/--region explicitly (resolved above), so the run can
+# never touch an account other than the one this profile selects. When account_id IS set for the
+# target, sts's resolved account MUST match it (catches a profile wired to the wrong account); when
+# it is not set, proceed on the explicit profile and print what was resolved. AWS_PROFILE is never read.
+if [ -n "$AWS_ACCOUNT_CFG" ]; then
+  [ "$RESOLVED_ACCOUNT" = "$AWS_ACCOUNT_CFG" ] || { echo "live-safety gate failed: sts resolved account '${RESOLVED_ACCOUNT}' for target '${AWS_LABEL}' (profile ${AWS_PROFILE_CFG:-<credential-chain>}), config account_id names '${AWS_ACCOUNT_CFG}'; stop, this credential points at the wrong account"; exit 1; }
+  echo "live-safety gate: pass, target '${AWS_LABEL}' account ${RESOLVED_ACCOUNT} confirmed; every call passes --profile/--region explicitly"
+else
+  echo "live-safety gate: pass, target '${AWS_LABEL}' has no account_id to assert against; proceeding on the explicit profile ${AWS_PROFILE_CFG:-<credential-chain>} (resolved account ${RESOLVED_ACCOUNT}); every call passes --profile/--region explicitly and AWS_PROFILE is never read"
+fi
 ```
 
-Never proceed on "probably the right account": the assertion above is what stops the run, not a human comparing two printed lines. Every command in this audit passes `--profile` and `--region` explicitly when configured; the audit never reads or sets `AWS_PROFILE`, `AWS_DEFAULT_REGION`, or any other ambient default, and never runs `aws configure`. Account ID drift between staging and production credentials is one of the most common real-world failures in AWS operations; this gate exists specifically to catch it before the first check runs, not after the report is written.
+Never proceed on "probably the right account": when a target names an `account_id`, the assertion above is what stops the run, not a human comparing two printed lines. Every command in this audit passes its target's own `--profile` and `--region` explicitly when configured; the audit never reads or sets `AWS_PROFILE`, `AWS_DEFAULT_REGION`, or any other ambient default, and never runs `aws configure`. A multi-account estate audits several targets in one run (the runner sets `SCOUTFLO_TARGET=<label>`), so the ambient default is not required to equal any one target; the explicit `--profile` is what selects the account, and the `account_id` check — where a target sets one — catches a profile wired to the wrong account. Account ID drift between staging and production credentials is one of the most common real-world failures in AWS operations; this gate exists specifically to catch it before the first check runs, not after the report is written.
 
 ## Ground rules
 
@@ -155,8 +189,14 @@ Count before judging, and declare the path in the terminal output:
 
 ```bash
 set -eu
-AWS_PROFILE_CFG=""           # aws.profile
-AWS_REGION_CFG="us-east-1"   # aws.region
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+AWS_KIND=$(sh "$TT" "$CFG" aws kind); AWS_N=$(sh "$TT" "$CFG" aws count)
+AWS_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$AWS_N" ]; do [ "$(sh "$TT" "$CFG" aws label "$_i")" = "$SCOUTFLO_TARGET" ] && { AWS_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+AWS_LABEL=$(sh "$TT" "$CFG" aws label "$AWS_IDX")
+AWS_PROFILE_CFG=$(sh "$TT" "$CFG" aws get "$AWS_IDX" profile)   # optional; empty = active credential chain
+AWS_REGION_CFG=$(sh "$TT" "$CFG" aws get "$AWS_IDX" region)
+if [ "$AWS_KIND" = seq ]; then AWS_SEG="aws/${AWS_LABEL}"; else AWS_SEG="aws"; fi
 aws_cli() {
   if [ -n "$AWS_PROFILE_CFG" ]; then
     aws --profile "$AWS_PROFILE_CFG" ${AWS_REGION_CFG:+--region "$AWS_REGION_CFG"} "$@"
@@ -182,8 +222,8 @@ echo "ec2=${EC2} rds=${RDS} ecs_services=${ECS_SERVICES} eks_clusters=${EKS} lam
 # SAME block as the TOTAL computed above; a separate fence would run in a fresh shell where
 # $TOTAL is unbound and, under set -eu, abort. The value of the step is telling the reader
 # whether their estate actually changed, not silently re-scanning the same ground every run.
-TARGET_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/aws"
-PREV_RUN="$(find "$TARGET_DIR" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort | tail -1)"
+TARGET_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${AWS_SEG}"
+PREV_RUN="$(find "$TARGET_DIR" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | grep -v '/runs$' | sort | tail -1)"
 DRIFT="first run"
 if [ -n "$PREV_RUN" ] && [ -f "${PREV_RUN}/findings.json" ]; then
   PREV_TOTAL="$(jq -r '.estate.objects // empty' "${PREV_RUN}/findings.json")"
@@ -311,9 +351,9 @@ Then render the Scoutflo Topology Readiness section per [topology-readiness.md](
 
 ## Large-path worklist: resources in batches
 
-Runs on the large path only (see [Estate sizing](#estate-sizing) above). All state lives under a run-ID-keyed run directory `./scoutflo-audits/aws/runs/<RUN_ID>/`, not the calendar-date directory sections 4 to 10 of the reference write raw captures under, so a run that is still batching when the date rolls over UTC keeps writing into the same place. Full runnable commands (resume scan, run-ID mint, worklist build, lock, batch claim and mark-done, final pending assertion) are in [references/aws-checks.md](references/aws-checks.md) section 13, copied from the proven `do-checks.md` section 13 / `gcp-checks.md` section 16 mechanism rather than reinvented; this section states the workflow they implement.
+Runs on the large path only (see [Estate sizing](#estate-sizing) above). All state lives under a run-ID-keyed run directory `./scoutflo-audits/aws/[<label>/]runs/<RUN_ID>/` (under the resolved target segment — flat `aws/runs/…` for a single block, `aws/<label>/runs/…` for a labeled target), not the calendar-date directory sections 4 to 10 of the reference write raw captures under, so a run that is still batching when the date rolls over UTC keeps writing into the same place. Full runnable commands (resume scan, run-ID mint, worklist build, lock, batch claim and mark-done, final pending assertion) are in [references/aws-checks.md](references/aws-checks.md) section 13, copied from the proven `do-checks.md` section 13 / `gcp-checks.md` section 16 mechanism rather than reinvented; this section states the workflow they implement. On the large path, `AUDIT_ROOT`/`RUN_DIR` in section 13 resolve under this same target segment (the enumerator resolves `aws` vs `aws/<label>` exactly as the phases above do).
 
-1. **Find a resumable run, or start a new one.** Before minting a new `RUN_ID`, scan `./scoutflo-audits/aws/runs/*/worklist.tsv` for one with pending rows and offer to resume it instead of starting over.
+1. **Find a resumable run, or start a new one.** Before minting a new `RUN_ID`, scan `./scoutflo-audits/aws/[<label>/]runs/*/worklist.tsv` for one with pending rows and offer to resume it instead of starting over.
 2. **Build or resume the worklist.** One row per resource from Estate sizing (`kind`: `ec2`, `rds`, `ecs_service`, `eks_cluster`, or `lambda`; `id`; `status`: `pending` or `done`). A resumed run continues from its existing worklist; never rebuild one that already exists.
 3. **Lock, then claim one batch.** Acquire `worklist.lock` in the run directory before reading pending rows; a lock older than `LOCK_STALE_MINUTES` (30 minutes; example, tune to your batch size) is abandoned and safe to reclaim. Take the next `BATCH_SIZE` pending rows and run the Phase 3 to Phase 8 checks that key off that resource kind, plus, when `aws.cost_checks` is on, the matching Cost & Resource Optimization checks from Phase 10 against the same batch. A row is marked `done` only after its pulls succeed, so an interrupted batch resumes at the resource that failed. Release the lock once the batch's rows are marked.
 4. **Assert before writing.** After every batch, print `done=X pending=Y`. Repeat from step 3 until the worklist has zero pending rows; assert `pending == 0` before Phase 11 writes `findings.json` or `report.md`. A run that stops mid-batch leaves the worklist as its resume point and never overwrites the previous complete report.
@@ -359,11 +399,19 @@ Emit and verify:
 
 ```bash
 set -eu
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+AWS_KIND=$(sh "$TT" "$CFG" aws kind); AWS_N=$(sh "$TT" "$CFG" aws count)
+AWS_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$AWS_N" ]; do [ "$(sh "$TT" "$CFG" aws label "$_i")" = "$SCOUTFLO_TARGET" ] && { AWS_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+AWS_LABEL=$(sh "$TT" "$CFG" aws label "$AWS_IDX")
+if [ "$AWS_KIND" = seq ]; then AWS_SEG="aws/${AWS_LABEL}"; else AWS_SEG="aws"; fi
 RUN_DATE="$(date -u +%Y-%m-%d)"
-OUT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/aws/${RUN_DATE}"
+OUT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${AWS_SEG}/${RUN_DATE}"
 mkdir -p "$OUT"
-# ... write findings.json, inventory.json, and report.md per the report standard, then verify:
-jq -e '.schema == "scoutflo-findings/v1" and .target == "aws" and (.findings | type == "array")' \
+# ... write findings.json, inventory.json, and report.md per the report standard. The findings.json
+# ".target" is the per-target slug (equal to $AWS_SEG: "aws" for a single block, "aws/<label>" for a
+# labeled list target), so audit-all/correlation/render disambiguate multiple accounts. Then verify:
+jq -e --arg seg "$AWS_SEG" '.schema == "scoutflo-findings/v1" and .target == $seg and (.findings | type == "array")' \
   "$OUT/findings.json" >/dev/null && echo "findings.json valid"
 grep -q '^# ' "$OUT/report.md" && echo "report.md present"
 # Output conformance: the emitted report.md must match report-standard/report-template.md.
@@ -382,7 +430,13 @@ Compute the delta against the previous run's `findings.json` (the latest two dat
 
 ```bash
 set -eu
-TARGET_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/aws"
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+AWS_KIND=$(sh "$TT" "$CFG" aws kind); AWS_N=$(sh "$TT" "$CFG" aws count)
+AWS_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$AWS_N" ]; do [ "$(sh "$TT" "$CFG" aws label "$_i")" = "$SCOUTFLO_TARGET" ] && { AWS_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+AWS_LABEL=$(sh "$TT" "$CFG" aws label "$AWS_IDX")
+if [ "$AWS_KIND" = seq ]; then AWS_SEG="aws/${AWS_LABEL}"; else AWS_SEG="aws"; fi
+TARGET_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${AWS_SEG}"
 RUN_DATE="$(date -u +%Y-%m-%d)"
 OUT="${TARGET_DIR}/${RUN_DATE}"
 RESOLVED="0"   # fixed count from this run's delta; 0 on the first run
@@ -402,7 +456,13 @@ The report's trend line renders the last five history.jsonl entries, oldest firs
 
 ```bash
 set -eu
-TARGET_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/aws"
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+AWS_KIND=$(sh "$TT" "$CFG" aws kind); AWS_N=$(sh "$TT" "$CFG" aws count)
+AWS_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$AWS_N" ]; do [ "$(sh "$TT" "$CFG" aws label "$_i")" = "$SCOUTFLO_TARGET" ] && { AWS_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+AWS_LABEL=$(sh "$TT" "$CFG" aws label "$AWS_IDX")
+if [ "$AWS_KIND" = seq ]; then AWS_SEG="aws/${AWS_LABEL}"; else AWS_SEG="aws"; fi
+TARGET_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${AWS_SEG}"
 RUN_DATE="$(date -u +%Y-%m-%d)"
 OUT="${TARGET_DIR}/${RUN_DATE}"
 TOPO_LINE="Topology readiness: readiness not recorded"  # replace with "r/n services sync-ready" from Phase 9
@@ -417,7 +477,7 @@ if [ -n "${SCOUTFLO_SLACK_WEBHOOK:-}" ]; then
   TOP="$(jq -r '[.findings[] | select(.area != "cost-optimization") | "\(.id) \(.title)"] | .[0:5] | join("\n")' "$OUT/findings.json")"
   AWSOPT_COUNT="$(jq -r '[.findings[] | select(.area == "cost-optimization")] | length' "$OUT/findings.json")"
   [ "$AWSOPT_COUNT" -gt 0 ] && COST_LINE="Cost: ${AWSOPT_COUNT} optimization opportunities found"
-  PREV="$(find "$TARGET_DIR" -mindepth 1 -maxdepth 1 -type d | sort | tail -2 | head -1)"
+  PREV="$(find "$TARGET_DIR" -mindepth 1 -maxdepth 1 -type d | grep -v '/runs$' | sort | tail -2 | head -1)"
   MOVE=""; DELTA="first run"
   if [ -n "$PREV" ] && [ "$PREV" != "$OUT" ]; then
     MOVE="$(jq -rn --argjson prev "$(jq '.score.overall' "$PREV/findings.json")" --argjson cur "$SCORE" \

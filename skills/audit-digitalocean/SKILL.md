@@ -11,21 +11,23 @@ Every command in this audit is read-only: `doctl` list and get calls, plus `curl
 
 Out of scope: DigitalOcean Kubernetes (DOKS) cluster telemetry. If your workloads run on DOKS, this audit covers only the DO-level surfaces above; the in-cluster stack belongs to `/scoutflo:audit-lgtm` and its Grafana layer to `/scoutflo:audit-grafana`. The report states this boundary so a green DO score never implies cluster coverage.
 
+**Multiple DigitalOcean accounts or teams, one run:** `digitalocean` may be a single block (one `token_env` + optional `team`) or a **list of labeled targets**, each with its own `token_env` and `team`. The audit **iterates every target** — enumerate them with `sh "${CLAUDE_PLUGIN_ROOT}/report-standard/toolkit-targets.sh" <cfg> digitalocean labels` and run the full sequence below once per target with `SCOUTFLO_TARGET=<label>` set. Output goes to `digitalocean/<label>/<date>/` for a list, or the flat `digitalocean/<date>/` for a single block (byte-identical to today). Every `doctl`/`curl` call exports THIS target's own resolved secret into `DIGITALOCEAN_ACCESS_TOKEN`; no ambient token is trusted, and the live-safety team check compares against THIS target's `team`.
+
 Run this standalone, from `/scoutflo:audit-all`, or on a schedule via `/scoutflo:schedule-audits`.
 
 Outputs, per the [report standard](../../report-standard/README.md):
 
-- `./scoutflo-audits/digitalocean/<YYYY-MM-DD>/findings.json` per the [findings schema](../../report-standard/findings-schema.md), finding IDs `DO-NNN`
-- `./scoutflo-audits/digitalocean/<YYYY-MM-DD>/report.md` per the [report template](../../report-standard/report-template.md), including the `## Inventory` section (the `render-report-viz.sh inventory` output)
-- `./scoutflo-audits/digitalocean/<YYYY-MM-DD>/inventory.json` per the [inventory schema](../../report-standard/inventory-schema.md) (`scoutflo-inventory/v1`): the complete Phase-2 catalog — one item per App Platform app (`app`), managed database (`database`), uptime check (`uptime_check`), and DO Monitoring alert policy (`alert_policy`), each with `kind`, `covers`, `enabled`, `severity`, and `routes_to` for alerting objects. Built from the raw pull, never invented; redacted at capture, never a secret value.
-- One appended line in `./scoutflo-audits/digitalocean/history.jsonl`
+- `./scoutflo-audits/digitalocean/[<label>/]<YYYY-MM-DD>/findings.json` per the [findings schema](../../report-standard/findings-schema.md), finding IDs `DO-NNN`
+- `./scoutflo-audits/digitalocean/[<label>/]<YYYY-MM-DD>/report.md` per the [report template](../../report-standard/report-template.md), including the `## Inventory` section (the `render-report-viz.sh inventory` output)
+- `./scoutflo-audits/digitalocean/[<label>/]<YYYY-MM-DD>/inventory.json` per the [inventory schema](../../report-standard/inventory-schema.md) (`scoutflo-inventory/v1`): the complete Phase-2 catalog — one item per App Platform app (`app`), managed database (`database`), uptime check (`uptime_check`), and DO Monitoring alert policy (`alert_policy`), each with `kind`, `covers`, `enabled`, `severity`, and `routes_to` for alerting objects. Built from the raw pull, never invented; redacted at capture, never a secret value.
+- One appended line in `./scoutflo-audits/digitalocean/[<label>/]history.jsonl`
 - One Slack brief, when `slack.webhook_env` is configured
 
 ## Doctor gate
 
 | Integration | toolkit.yaml keys | Secret | Minimum scope | Tier |
 | --- | --- | --- | --- | --- |
-| DigitalOcean | `digitalocean.token_env`, optional `digitalocean.team` | the variable named by `token_env` (`DIGITALOCEAN_ACCESS_TOKEN`; doctl reads it natively) | custom-scoped API token with read access to apps, databases, monitoring, uptime, and domains (token recipe in `/scoutflo:connect`) | read-only |
+| DigitalOcean | `digitalocean.token_env`, optional `digitalocean.team` (per target on a labeled list) | the variable named by THIS target's `token_env`, exported into `DIGITALOCEAN_ACCESS_TOKEN` (doctl reads that natively); defaults to `DIGITALOCEAN_ACCESS_TOKEN` when the key is absent | custom-scoped API token with read access to apps, databases, monitoring, uptime, and domains (token recipe in `/scoutflo:connect`) | read-only |
 | Slack (optional) | `slack.webhook_env` | webhook variable | post to one channel | n/a |
 
 ```bash
@@ -57,8 +59,21 @@ SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.s
 for bin in doctl curl jq; do
   command -v "$bin" >/dev/null || { echo "missing binary: $bin"; exit 1; }
 done
-# digitalocean.token_env names the variable; presence check only, never print the value.
-[ -n "${DIGITALOCEAN_ACCESS_TOKEN:-}" ] || { echo "DIGITALOCEAN_ACCESS_TOKEN is not set; run /scoutflo:connect"; exit 1; }
+# Resolve the CURRENT digitalocean target from toolkit.yaml — a single block, or the
+# SCOUTFLO_TARGET-selected item of a labeled list (the shared enumerator handles both; no yq
+# required). doctl reads DIGITALOCEAN_ACCESS_TOKEN natively, so export THIS target's own resolved
+# secret into it; the ambient token is never trusted.
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+DO_KIND=$(sh "$TT" "$CFG" digitalocean kind); DO_N=$(sh "$TT" "$CFG" digitalocean count)
+[ "${DO_N:-0}" -ge 1 ] || { echo "no digitalocean target configured in $CFG; run /scoutflo:connect"; exit 1; }
+DO_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$DO_N" ]; do [ "$(sh "$TT" "$CFG" digitalocean label "$_i")" = "$SCOUTFLO_TARGET" ] && { DO_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+DO_LABEL=$(sh "$TT" "$CFG" digitalocean label "$DO_IDX")
+if [ "$DO_KIND" = seq ]; then DO_SEG="digitalocean/${DO_LABEL}"; else DO_SEG="digitalocean"; fi
+# digitalocean.token_env names THIS target's token variable; presence-check only, never print the value.
+DO_TOKEN_VAR=$(sh "$TT" "$CFG" digitalocean get "$DO_IDX" token_env); [ -n "$DO_TOKEN_VAR" ] || DO_TOKEN_VAR="DIGITALOCEAN_ACCESS_TOKEN"
+export DIGITALOCEAN_ACCESS_TOKEN="$(printenv "$DO_TOKEN_VAR" 2>/dev/null || true)"
+[ -n "${DIGITALOCEAN_ACCESS_TOKEN:-}" ] || { echo "${DO_TOKEN_VAR} is not set; run /scoutflo:connect"; exit 1; }
+echo "digitalocean target: ${DO_LABEL} -> ${DO_SEG}/"
 
 DOCTL_VERSION="$(doctl version)"
 [ -n "${DOCTL_VERSION}" ] || { echo "doctl version printed no output; doctl is broken or not on PATH"; exit 1; }
@@ -84,18 +99,31 @@ Print what you are pointed at and compare it to the config before the first real
 
 ```bash
 set -eu
-DO_TEAM="your-team-uuid"   # digitalocean.team; "personal" if the key is absent
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+[ -f "$CFG" ] || { echo "missing $CFG; run /scoutflo:connect"; exit 1; }
+# Resolve the CURRENT digitalocean target (single block or SCOUTFLO_TARGET-selected list item); never hand-typed.
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+DO_N=$(sh "$TT" "$CFG" digitalocean count)
+DO_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$DO_N" ]; do [ "$(sh "$TT" "$CFG" digitalocean label "$_i")" = "$SCOUTFLO_TARGET" ] && { DO_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+DO_LABEL=$(sh "$TT" "$CFG" digitalocean label "$DO_IDX")
+# THIS target's team (digitalocean.team; "personal" when the key is absent) — the value compared against, read from config not hand-typed.
+DO_TEAM=$(sh "$TT" "$CFG" digitalocean get "$DO_IDX" team); [ -n "$DO_TEAM" ] || DO_TEAM="personal"
+# THIS target's token: digitalocean.token_env names the variable; load the secret store, then export it for doctl.
+SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.scoutflo/env" ]; then SCOUTFLO_ENV="./.scoutflo/env"; else SCOUTFLO_ENV="$HOME/.scoutflo/env"; fi; }
+[ -f "$SCOUTFLO_ENV" ] && . "$SCOUTFLO_ENV" || true
+DO_TOKEN_VAR=$(sh "$TT" "$CFG" digitalocean get "$DO_IDX" token_env); [ -n "$DO_TOKEN_VAR" ] || DO_TOKEN_VAR="DIGITALOCEAN_ACCESS_TOKEN"
+export DIGITALOCEAN_ACCESS_TOKEN="$(printenv "$DO_TOKEN_VAR" 2>/dev/null || true)"
 ACCOUNT_JSON="$(doctl account get -o json)"
 RESOLVED_TEAM="$(echo "${ACCOUNT_JSON}" | jq -r '(if type=="array" then .[0] else . end) | .team.uuid // "personal"')"
 RESOLVED_STATUS="$(echo "${ACCOUNT_JSON}" | jq -r '(if type=="array" then .[0] else . end) | .status')"
-echo "status=${RESOLVED_STATUS} team=${RESOLVED_TEAM} config_team=${DO_TEAM}"
+echo "target=${DO_LABEL} status=${RESOLVED_STATUS} team=${RESOLVED_TEAM} config_team=${DO_TEAM}"
 echo "${ACCOUNT_JSON}" | jq -e --arg team "${DO_TEAM}" \
   '(if type=="array" then .[0] else . end) | (.team.uuid // "personal") == $team' >/dev/null \
-  || { echo "resolved team '${RESOLVED_TEAM}' does not match toolkit.yaml digitalocean.team '${DO_TEAM}'; stop, this token points at the wrong account"; exit 1; }
-echo "live-safety gate: pass, target confirmed"
+  || { echo "resolved team '${RESOLVED_TEAM}' does not match toolkit.yaml digitalocean target '${DO_LABEL}' team '${DO_TEAM}'; stop, this token points at the wrong account"; exit 1; }
+echo "live-safety gate: pass, target ${DO_LABEL} confirmed"
 ```
 
-Never proceed on "probably the right account": the assertion above is what stops the run, not a human comparing two printed lines. doctl reads exactly one token from `DIGITALOCEAN_ACCESS_TOKEN`, so the token in the environment is the target selector; there is no ambient default beyond it.
+Never proceed on "probably the right account": the assertion above is what stops the run, not a human comparing two printed lines. doctl reads exactly one token from `DIGITALOCEAN_ACCESS_TOKEN`, and this block exports THIS target's resolved secret into it before the call, so the target selector is the config-resolved token — never whatever token happened to be ambient in the shell — and the team check compares against THIS target's `digitalocean.team`.
 
 ## Ground rules
 
@@ -133,6 +161,18 @@ Count before judging, and declare the path in the terminal output:
 
 ```bash
 set -eu
+# Resolve the CURRENT digitalocean target (single block or SCOUTFLO_TARGET-selected list item),
+# then load the secret store and export THIS target's token so every doctl call below uses it.
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+DO_KIND=$(sh "$TT" "$CFG" digitalocean kind); DO_N=$(sh "$TT" "$CFG" digitalocean count)
+DO_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$DO_N" ]; do [ "$(sh "$TT" "$CFG" digitalocean label "$_i")" = "$SCOUTFLO_TARGET" ] && { DO_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+DO_LABEL=$(sh "$TT" "$CFG" digitalocean label "$DO_IDX")
+if [ "$DO_KIND" = seq ]; then DO_SEG="digitalocean/${DO_LABEL}"; else DO_SEG="digitalocean"; fi
+SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.scoutflo/env" ]; then SCOUTFLO_ENV="./.scoutflo/env"; else SCOUTFLO_ENV="$HOME/.scoutflo/env"; fi; }
+[ -f "$SCOUTFLO_ENV" ] && . "$SCOUTFLO_ENV" || true
+DO_TOKEN_VAR=$(sh "$TT" "$CFG" digitalocean get "$DO_IDX" token_env); [ -n "$DO_TOKEN_VAR" ] || DO_TOKEN_VAR="DIGITALOCEAN_ACCESS_TOKEN"
+export DIGITALOCEAN_ACCESS_TOKEN="$(printenv "$DO_TOKEN_VAR" 2>/dev/null || true)"
 SMALL_MAX_OBJECTS="10"    # example, tune to your environment
 MEDIUM_MAX_OBJECTS="40"   # example, tune to your environment
 BATCH_SIZE="10"           # apps per batch on the large path; example, tune it
@@ -146,8 +186,8 @@ echo "apps=${APPS} dbs=${DBS} uptime_checks=${CHECKS} alert_policies=${POLICIES}
 # Guided-walkthrough drift check, per report-standard/README.md#using-topology-and-prior-runs-as-a-guided-walkthrough:
 # compare against the last run rather than a blank slate. State the result in the executive summary;
 # never silently omit it. This never skips a live check - every check in later phases still runs fresh.
-TARGET_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/digitalocean"
-PREV_RUN="$(find "$TARGET_DIR" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort | tail -1)"
+TARGET_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${DO_SEG}"
+PREV_RUN="$(find "$TARGET_DIR" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | grep -v '/runs$' | sort | tail -1)"
 DRIFT="first run"
 if [ -n "$PREV_RUN" ] && [ -f "${PREV_RUN}/findings.json" ]; then
   PREV_TOTAL="$(jq -r '.estate.objects // empty' "${PREV_RUN}/findings.json")"
@@ -284,9 +324,9 @@ Then render the Scoutflo Topology Readiness section per [topology-readiness.md](
 
 ## Large-path worklist: apps in batches
 
-Runs on the large path only (see [Estate sizing](#estate-sizing) above). All state lives under a run-ID-keyed run directory `./scoutflo-audits/digitalocean/runs/<RUN_ID>/`, not the calendar-date directory sections 4 to 11 of the reference write raw captures under, so a run that is still batching when the date rolls over UTC keeps writing into the same place. Full runnable commands (resume scan, run-ID mint, worklist build, lock, batch claim and mark-done, final pending assertion) are in [references/do-checks.md](references/do-checks.md) section 13; this section states the workflow they implement.
+Runs on the large path only (see [Estate sizing](#estate-sizing) above). All state lives under a run-ID-keyed run directory `./scoutflo-audits/digitalocean/[<label>/]runs/<RUN_ID>/` (the `[<label>/]` segment is present only for a labeled multi-target list; a single block stays flat), not the calendar-date directory sections 4 to 11 of the reference write raw captures under, so a run that is still batching when the date rolls over UTC keeps writing into the same place. Full runnable commands (resume scan, run-ID mint, worklist build, lock, batch claim and mark-done, final pending assertion) are in [references/do-checks.md](references/do-checks.md) section 13; this section states the workflow they implement.
 
-1. **Find a resumable run, or start a new one.** Before minting a new `RUN_ID`, scan `./scoutflo-audits/digitalocean/runs/*/worklist.tsv` for one with pending rows and offer to resume it instead of starting over.
+1. **Find a resumable run, or start a new one.** Before minting a new `RUN_ID`, scan `./scoutflo-audits/digitalocean/[<label>/]runs/*/worklist.tsv` for one with pending rows and offer to resume it instead of starting over.
 2. **Build or resume the worklist.** One row per app ID from `doctl apps list`, status `pending` or `done`. A resumed run continues from its existing worklist; never rebuild one that already exists.
 3. **Lock, then claim one batch.** Acquire `worklist.lock` in the run directory before reading pending rows; a lock older than `LOCK_STALE_MINUTES` (30 minutes; example, tune to your batch size) is abandoned and safe to reclaim. Take the next `BATCH_SIZE` pending app IDs and run the section 4 per-app inventory pull plus the Phase 3 to Phase 8 checks that key off an app ID, against just that batch. An app's row is marked `done` only after its pulls succeed, so an interrupted batch resumes at the app that failed. Release the lock once the batch's rows are marked.
 4. **Assert before writing.** After every batch, print `done=X pending=Y`. Repeat from step 3 until the worklist has zero pending rows; assert `pending == 0` before Phase 10 writes `findings.json` or `report.md`. A run that stops mid-batch leaves the worklist as its resume point and never overwrites the previous complete report.
@@ -319,11 +359,22 @@ Emit and verify:
 
 ```bash
 set -eu
+# Resolve the CURRENT digitalocean target so output lands in the per-target directory:
+# flat digitalocean/<date>/ for a single block, digitalocean/<label>/<date>/ for a list.
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+DO_KIND=$(sh "$TT" "$CFG" digitalocean kind); DO_N=$(sh "$TT" "$CFG" digitalocean count)
+DO_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$DO_N" ]; do [ "$(sh "$TT" "$CFG" digitalocean label "$_i")" = "$SCOUTFLO_TARGET" ] && { DO_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+DO_LABEL=$(sh "$TT" "$CFG" digitalocean label "$DO_IDX")
+if [ "$DO_KIND" = seq ]; then DO_SEG="digitalocean/${DO_LABEL}"; else DO_SEG="digitalocean"; fi
 RUN_DATE="$(date -u +%Y-%m-%d)"
-OUT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/digitalocean/${RUN_DATE}"
+OUT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${DO_SEG}/${RUN_DATE}"
 mkdir -p "$OUT"
-# ... write findings.json, inventory.json, and report.md per the report standard, then verify:
-jq -e '.schema == "scoutflo-findings/v1" and .target == "digitalocean" and (.findings | type == "array")' \
+# ... write findings.json, inventory.json, and report.md per the report standard. The findings.json and
+# inventory.json ".target" is the per-target slug $DO_SEG ("digitalocean" for a single block,
+# "digitalocean/<label>" for a labeled list target), so audit-all/correlation/render disambiguate
+# multiple accounts. Then verify:
+jq -e --arg seg "$DO_SEG" '.schema == "scoutflo-findings/v1" and .target == $seg and (.findings | type == "array")' \
   "$OUT/findings.json" >/dev/null && echo "findings.json valid"
 grep -q '^# ' "$OUT/report.md" && echo "report.md present"
 # Output conformance: the emitted report.md must match report-standard/report-template.md.
@@ -332,7 +383,7 @@ sh "${CLAUDE_PLUGIN_ROOT}/report-standard/check-findings.sh" "$OUT/findings.json
 # Inventory (scoutflo-inventory/v1): the complete Phase-2 catalog of what exists,
 # built from the raw pull (never invented, redacted). counts.total must reconcile
 # with items; the ## Inventory section of report.md IS this render.
-jq -e '.schema == "scoutflo-inventory/v1" and .target == "digitalocean"
+jq -e --arg seg "$DO_SEG" '.schema == "scoutflo-inventory/v1" and .target == $seg
        and (.items | type == "array") and (.counts.total == (.items | length))' \
   "$OUT/inventory.json" >/dev/null && echo "inventory.json valid"
 sh "${CLAUDE_PLUGIN_ROOT}/report-standard/render-report-viz.sh" inventory "$OUT/inventory.json" >/dev/null \
@@ -345,7 +396,13 @@ After the report is written, close with the run-completion message per the repor
 
 ```bash
 set -eu
-TARGET_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/digitalocean"
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+DO_KIND=$(sh "$TT" "$CFG" digitalocean kind); DO_N=$(sh "$TT" "$CFG" digitalocean count)
+DO_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$DO_N" ]; do [ "$(sh "$TT" "$CFG" digitalocean label "$_i")" = "$SCOUTFLO_TARGET" ] && { DO_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+DO_LABEL=$(sh "$TT" "$CFG" digitalocean label "$DO_IDX")
+if [ "$DO_KIND" = seq ]; then DO_SEG="digitalocean/${DO_LABEL}"; else DO_SEG="digitalocean"; fi
+TARGET_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${DO_SEG}"
 RUN_DATE="$(date -u +%Y-%m-%d)"
 OUT="${TARGET_DIR}/${RUN_DATE}"
 RESOLVED="0"   # fixed count from this run's delta; 0 on the first run
@@ -365,7 +422,13 @@ The report's trend line renders the last five history.jsonl entries, oldest firs
 
 ```bash
 set -eu
-TARGET_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/digitalocean"
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+DO_KIND=$(sh "$TT" "$CFG" digitalocean kind); DO_N=$(sh "$TT" "$CFG" digitalocean count)
+DO_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$DO_N" ]; do [ "$(sh "$TT" "$CFG" digitalocean label "$_i")" = "$SCOUTFLO_TARGET" ] && { DO_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+DO_LABEL=$(sh "$TT" "$CFG" digitalocean label "$DO_IDX")
+if [ "$DO_KIND" = seq ]; then DO_SEG="digitalocean/${DO_LABEL}"; else DO_SEG="digitalocean"; fi
+TARGET_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${DO_SEG}"
 RUN_DATE="$(date -u +%Y-%m-%d)"
 OUT="${TARGET_DIR}/${RUN_DATE}"
 TOPO_LINE="Topology readiness: readiness not recorded"  # replace with "r/n services sync-ready" from Phase 9
@@ -377,7 +440,7 @@ if [ -n "${SCOUTFLO_SLACK_WEBHOOK:-}" ]; then
   COUNTS="$(jq -r '.severity_counts | "\(.critical) critical, \(.high) high, \(.medium) medium, \(.low) low"' "$OUT/findings.json")"
   CHECKS="$(jq -r '"\([.score.categories[].checks_passed] | add)/\([.score.categories[].checks_total] | add) checks passed"' "$OUT/findings.json")"
   TOP="$(jq -r '[.findings[] | "\(.id) \(.title)"] | .[0:5] | join("\n")' "$OUT/findings.json")"
-  PREV="$(find "$TARGET_DIR" -mindepth 1 -maxdepth 1 -type d | sort | tail -2 | head -1)"
+  PREV="$(find "$TARGET_DIR" -mindepth 1 -maxdepth 1 -type d | grep -v '/runs$' | sort | tail -2 | head -1)"
   MOVE=""; DELTA="first run"
   if [ -n "$PREV" ] && [ "$PREV" != "$OUT" ]; then
     MOVE="$(jq -rn --argjson prev "$(jq '.score.overall' "$PREV/findings.json")" --argjson cur "$SCORE" \
