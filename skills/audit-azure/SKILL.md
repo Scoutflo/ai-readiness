@@ -11,7 +11,7 @@ Every command in this audit is read-only: `az ... show`/`list`, ARM GETs at conf
 
 Scope boundaries, stated so a green score never overpromises:
 
-- One subscription per run: the audit judges `azure.subscription_id` from `~/.scoutflo/toolkit.yaml`. Multi-subscription estates run once per subscription.
+- **Multiple subscriptions, one run:** `azure` may be a single block (one `subscription_id`) or a **list of labeled targets**, each with its own `subscription_id`. The audit **iterates every target** — enumerate them with `sh "${CLAUDE_PLUGIN_ROOT}/report-standard/toolkit-targets.sh" <cfg> azure labels` and run the full sequence below once per target with `SCOUTFLO_TARGET=<label>` set. Output goes to `azure/<label>/<date>/` for a list, or the flat `azure/<date>/` for a single block. Every command names `--subscription` explicitly; the ambient `az` default is never read.
 - Covered: Azure Monitor (action groups, metric/log/activity alerts), VMs/VMSS, AKS monitoring surfaces, Log Analytics, and App Gateway/Load Balancer diagnostics. Not covered: App Service/Functions internals, Cosmos/SQL/Storage service-specific depth, Front Door, and API Management; if those carry production traffic, say so in the report as unaudited surface.
 - In-cluster stacks (Prometheus, Alertmanager, Grafana running inside AKS) belong to `/scoutflo:audit-lgtm`; this audit covers the Azure-managed plane and states the split.
 
@@ -19,10 +19,10 @@ Run this standalone, from `/scoutflo:audit-all`, or on a schedule via `/scoutflo
 
 Outputs, per the [report standard](../../report-standard/README.md):
 
-- `./scoutflo-audits/azure/<YYYY-MM-DD>/findings.json` per the [findings schema](../../report-standard/findings-schema.md), finding IDs `AZR-NNN` (cost `AZROPT-NNN`)
-- `./scoutflo-audits/azure/<YYYY-MM-DD>/report.md` per the [report template](../../report-standard/report-template.md), including the `## Inventory` section (the `render-report-viz.sh inventory` output)
-- `./scoutflo-audits/azure/<YYYY-MM-DD>/inventory.json` per the [inventory schema](../../report-standard/inventory-schema.md) (`scoutflo-inventory/v1`): the complete Phase-2 catalog — one item per action group, metric alert, scheduled-query (log) alert, activity-log alert, VM, VMSS, AKS cluster, Log Analytics workspace, App Gateway, and Load Balancer (`kind`: `action_group`, `alert_rule`, `log_alert`, `activity_log_alert`, `vm`, `vmss`, `cluster`, `workspace`, `app_gateway`, `load_balancer`) — each with `kind`, `covers`, `enabled`, `severity`, and `routes_to` for alerting objects. Built from the raw pull, never invented; redacted at capture, never a secret value.
-- One appended line in `./scoutflo-audits/azure/history.jsonl`
+- `./scoutflo-audits/azure/[<label>/]<YYYY-MM-DD>/findings.json` per the [findings schema](../../report-standard/findings-schema.md), finding IDs `AZR-NNN` (cost `AZROPT-NNN`)
+- `./scoutflo-audits/azure/[<label>/]<YYYY-MM-DD>/report.md` per the [report template](../../report-standard/report-template.md), including the `## Inventory` section (the `render-report-viz.sh inventory` output)
+- `./scoutflo-audits/azure/[<label>/]<YYYY-MM-DD>/inventory.json` per the [inventory schema](../../report-standard/inventory-schema.md) (`scoutflo-inventory/v1`): the complete Phase-2 catalog — one item per action group, metric alert, scheduled-query (log) alert, activity-log alert, VM, VMSS, AKS cluster, Log Analytics workspace, App Gateway, and Load Balancer (`kind`: `action_group`, `alert_rule`, `log_alert`, `activity_log_alert`, `vm`, `vmss`, `cluster`, `workspace`, `app_gateway`, `load_balancer`) — each with `kind`, `covers`, `enabled`, `severity`, and `routes_to` for alerting objects. Built from the raw pull, never invented; redacted at capture, never a secret value.
+- One appended line in `./scoutflo-audits/azure/[<label>/]history.jsonl`
 - One Slack brief, when `slack.webhook_env` is configured
 
 All api-versions, property paths, and auth behavior cited below are the ones live-confirmed in the Azure SDK/API Validation Report; nothing unconfirmed is asserted as fact.
@@ -64,11 +64,20 @@ for bin in az curl jq; do
   command -v "$bin" >/dev/null || { echo "missing binary: $bin"; exit 1; }
 done
 az version --query '"azure-cli"' -o tsv 2>/dev/null | head -1
-AZ_SUBSCRIPTION_CFG="your-sub-id"   # azure.subscription_id; empty means the az CLI default subscription
+# Resolve the CURRENT azure target from toolkit.yaml — a single block, or the SCOUTFLO_TARGET-selected
+# item of a labeled list (the shared enumerator handles both; no yq required). Every command below
+# names --subscription "$SUB" explicitly; the ambient az default is never read.
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+AZ_KIND=$(sh "$TT" "$CFG" azure kind); AZ_N=$(sh "$TT" "$CFG" azure count)
+[ "${AZ_N:-0}" -ge 1 ] || { echo "no azure target configured in $CFG; run /scoutflo:connect"; exit 1; }
+AZ_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$AZ_N" ]; do [ "$(sh "$TT" "$CFG" azure label "$_i")" = "$SCOUTFLO_TARGET" ] && { AZ_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+AZ_LABEL=$(sh "$TT" "$CFG" azure label "$AZ_IDX"); SUB=$(sh "$TT" "$CFG" azure get "$AZ_IDX" subscription_id)
+[ -n "$SUB" ] || { echo "azure target '${AZ_LABEL:-?}' has no subscription_id in $CFG; run /scoutflo:connect"; exit 1; }
+if [ "$AZ_KIND" = seq ]; then AZ_SEG="azure/${AZ_LABEL}"; else AZ_SEG="azure"; fi
+echo "azure target: ${AZ_LABEL} (subscription ${SUB}) -> ${AZ_SEG}/"
 # Confirmed auth path: DefaultAzureCredential -> AzureCliCredential (via az login).
 ACCT="$(az account show -o json)" || { echo "az account show failed; run 'az login'"; exit 1; }
-SUB="${AZ_SUBSCRIPTION_CFG:-$(printf '%s' "$ACCT" | jq -r '.id')}"
-echo "identity: $(printf '%s' "$ACCT" | jq -r '.user.name') on subscription $(printf '%s' "$ACCT" | jq -r '.name')"
+echo "identity: $(printf '%s' "$ACCT" | jq -r '.user.name'); auditing subscription ${SUB}"
 ARM_TOKEN="$(az account get-access-token --subscription "$SUB" --resource https://management.azure.com --query accessToken -o tsv)"
 # One cheap ARM read at a CONFIRMED api-version proves reachability + the token works.
 # status-probe-ok: the az CLI already authenticated the identity above; this is an ARM reachability + api-version confirmation on management.azure.com (a fixed JSON API, not an SSO-fronted SPA), with 401/403/404 handled explicitly.
@@ -95,27 +104,28 @@ CONFIG="${SCOUTFLO_CONFIG:-}"
 [ -n "$CONFIG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CONFIG="$_c"; break; }; done
 [ -n "$CONFIG" ] || CONFIG="$HOME/.scoutflo/toolkit.yaml"
 [ -f "$CONFIG" ] || { echo "missing $CONFIG; run /scoutflo:connect"; exit 1; }
-# Resolve azure.subscription_id the same way doctor.sh reads two-level keys: yq when present,
-# a sed fallback otherwise. Never hand-typed.
-if command -v yq >/dev/null 2>&1 && yq -r '. | keys | length' "$CONFIG" >/dev/null 2>&1; then
-  AZ_SUB_CFG="$(yq -r '.azure.subscription_id // ""' "$CONFIG")"
-else
-  AZ_SUB_CFG="$(sed -n '/^azure:/,/^[A-Za-z_]/p' "$CONFIG" \
-    | sed -n 's/^[[:space:]]\{1,\}subscription_id:[[:space:]]*//p' | head -n 1 \
-    | sed -e 's/[[:space:]]#.*$//' -e "s/^[\"']//" -e "s/[\"']\$//" -e 's/[[:space:]]*$//')"
-fi
-[ -n "$AZ_SUB_CFG" ] || { echo "azure.subscription_id is not set in $CONFIG; run /scoutflo:connect"; exit 1; }
+# Resolve the CURRENT azure target from config via the shared enumerator — a single block, or the
+# SCOUTFLO_TARGET-selected item of a labeled list (no yq required). Never hand-typed.
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+AZ_N=$(sh "$TT" "$CONFIG" azure count)
+AZ_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$AZ_N" ]; do [ "$(sh "$TT" "$CONFIG" azure label "$_i")" = "$SCOUTFLO_TARGET" ] && { AZ_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+AZ_LABEL=$(sh "$TT" "$CONFIG" azure label "$AZ_IDX")
+AZ_SUB_CFG=$(sh "$TT" "$CONFIG" azure get "$AZ_IDX" subscription_id)
+[ -n "$AZ_SUB_CFG" ] || { echo "azure target '${AZ_LABEL:-?}' has no subscription_id in $CONFIG; run /scoutflo:connect"; exit 1; }
 ACCT="$(az account show -o json)" || { echo "az account show failed; run 'az login'"; exit 1; }
 echo "identity: $(printf '%s' "$ACCT" | jq -r '.user.name')"
 echo "tenant: $(printf '%s' "$ACCT" | jq -r '.tenantId')"
-echo "config target (azure.subscription_id): ${AZ_SUB_CFG}"
-echo "live subscription (az account show): $(printf '%s' "$ACCT" | jq -r '.id') ($(printf '%s' "$ACCT" | jq -r '.name'))"
-[ "$(printf '%s' "$ACCT" | jq -r '.id')" = "$AZ_SUB_CFG" ] \
-  || { echo "STOP: az resolves a subscription that does not match toolkit.yaml azure.subscription_id (${AZ_SUB_CFG}); every command must pass --subscription ${AZ_SUB_CFG} explicitly, or fix the config"; exit 1; }
-echo "live-safety gate passed: identity, tenant, and subscription confirmed against config"
+echo "azure target: ${AZ_LABEL} -> subscription ${AZ_SUB_CFG}"
+# Multi-target safety: the target subscription must be one THIS identity can see (`az account list`),
+# and every command passes --subscription "${AZ_SUB_CFG}" explicitly. A multi-subscription estate
+# audits several subscriptions in one run, so the ambient default is NOT required to equal the
+# target; `az account set` is never used. A target this identity cannot see stops the run.
+az account list --query '[].id' -o tsv 2>/dev/null | grep -qxF "$AZ_SUB_CFG" \
+  || { echo "STOP: azure target '${AZ_LABEL}' subscription ${AZ_SUB_CFG} is not visible to this identity ($(printf '%s' "$ACCT" | jq -r '.user.name')) in 'az account list'; az login to the right tenant/account, or fix the config"; exit 1; }
+echo "live-safety gate passed: identity + tenant printed; target subscription ${AZ_SUB_CFG} is visible and will be named explicitly on every command"
 ```
 
-The assertion is the gate: the live subscription equals `azure.subscription_id` or the block exits nonzero and stops the run. Never proceed on "probably the right subscription". If the printed identity or tenant is not the one your team intends for audits, stop and report the mismatch even though the subscription assertion passed; identity, tenant, and subscription are separate checks. No command in this audit reads the ambient `az` default; every command names `--subscription` explicitly, and pointing the audit elsewhere is an edit to `toolkit.yaml`, never an `az account set`.
+The assertion is the gate: the target subscription must be **visible to this identity** (`az account list`) or the block exits nonzero and stops the run. A multi-subscription estate audits each configured target in turn (the runner sets `SCOUTFLO_TARGET=<label>`), so — unlike a single-subscription equality check — the ambient `az` default is **not** required to equal the target; instead every command names `--subscription "$SUB"` explicitly, so the run can never touch a subscription other than the one it resolved from `toolkit.yaml`. If the printed identity or tenant is not the one your team intends for audits, stop and report the mismatch even though the visibility check passed; identity, tenant, and subscription are separate checks. `az account set` is never used, and pointing the audit elsewhere is an edit to `toolkit.yaml`.
 
 ## Ground rules
 
@@ -144,8 +154,12 @@ Count before judging, and declare the path in the terminal output:
 
 ```bash
 set -eu
-AZ_SUBSCRIPTION_CFG="your-sub-id"   # azure.subscription_id
-SUB="${AZ_SUBSCRIPTION_CFG:-$(az account show --query id -o tsv)}"
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+AZ_KIND=$(sh "$TT" "$CFG" azure kind); AZ_N=$(sh "$TT" "$CFG" azure count)
+AZ_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$AZ_N" ]; do [ "$(sh "$TT" "$CFG" azure label "$_i")" = "$SCOUTFLO_TARGET" ] && { AZ_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+AZ_LABEL=$(sh "$TT" "$CFG" azure label "$AZ_IDX"); SUB=$(sh "$TT" "$CFG" azure get "$AZ_IDX" subscription_id)
+if [ "$AZ_KIND" = seq ]; then AZ_SEG="azure/${AZ_LABEL}"; else AZ_SEG="azure"; fi
 SMALL_MAX_OBJECTS="15"    # example, tune to your environment
 MEDIUM_MAX_OBJECTS="60"   # example, tune to your environment
 BATCH_SIZE="10"           # objects per batch on the large path; example, tune it
@@ -161,7 +175,7 @@ echo "vms=${VMS} vmss=${VMSS} aks=${AKS} app_gateways=${APPGW} load_balancers=${
 
 # Guided-walkthrough drift check: compare against the last run's estate.objects rather than a blank
 # slate and state it in the executive summary (per report-standard/README.md). Never skips a live check.
-TARGET_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/azure"
+TARGET_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${AZ_SEG}"
 PREV_RUN="$(find "$TARGET_DIR" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | grep -v '/runs$' | sort | tail -1)"
 if [ -n "$PREV_RUN" ] && [ -f "${PREV_RUN}/findings.json" ]; then
   PREV_TOTAL="$(jq -r '.estate.objects // empty' "${PREV_RUN}/findings.json")"
@@ -205,14 +219,19 @@ The scope checkpoint above narrows a *large* estate. This guardrail catches the 
 
 ```bash
 set -eu
-AZ_SUBSCRIPTION_CFG="your-sub-id"   # azure.subscription_id
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+AZ_KIND=$(sh "$TT" "$CFG" azure kind); AZ_N=$(sh "$TT" "$CFG" azure count)
+AZ_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$AZ_N" ]; do [ "$(sh "$TT" "$CFG" azure label "$_i")" = "$SCOUTFLO_TARGET" ] && { AZ_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+AZ_LABEL=$(sh "$TT" "$CFG" azure label "$AZ_IDX"); SUB=$(sh "$TT" "$CFG" azure get "$AZ_IDX" subscription_id)
+if [ "$AZ_KIND" = seq ]; then AZ_SEG="azure/${AZ_LABEL}"; else AZ_SEG="azure"; fi
 RUN_DATE="$(date -u +%Y-%m-%d)"
-RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/azure/${RUN_DATE}/raw"
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${AZ_SEG}/${RUN_DATE}/raw"
 AGS="$(jq 'length' "${RAW_DIR}/action-groups.json" 2>/dev/null || echo 0)"
 ALERTS="$(jq 'length' "${RAW_DIR}/metric-alerts.json" 2>/dev/null || echo 0)"
 if [ "${AGS:-0}" -eq 0 ] && [ "${ALERTS:-0}" -eq 0 ]; then
   # Both empty despite a readable ARM surface (the doctor gate returned 200, not 401/403).
-  echo "[guard] 0 action groups AND 0 metric alerts in ${AZ_SUBSCRIPTION_CFG} despite a readable ARM surface — possible identity / resource-group visibility gap (AZR-007)"
+  echo "[guard] 0 action groups AND 0 metric alerts in target ${AZ_LABEL} (subscription ${SUB}) despite a readable ARM surface — possible identity / resource-group visibility gap (AZR-007)"
   echo "[guard] alerting may live in a resource group this identity cannot read, or this identity lacks Monitoring Reader at subscription scope — do NOT score a confident 0/100"
 fi
 ```
@@ -319,11 +338,19 @@ Emit and verify:
 
 ```bash
 set -eu
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+AZ_KIND=$(sh "$TT" "$CFG" azure kind); AZ_N=$(sh "$TT" "$CFG" azure count)
+AZ_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$AZ_N" ]; do [ "$(sh "$TT" "$CFG" azure label "$_i")" = "$SCOUTFLO_TARGET" ] && { AZ_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+AZ_LABEL=$(sh "$TT" "$CFG" azure label "$AZ_IDX")
+if [ "$AZ_KIND" = seq ]; then AZ_SEG="azure/${AZ_LABEL}"; else AZ_SEG="azure"; fi
 RUN_DATE="$(date -u +%Y-%m-%d)"
-OUT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/azure/${RUN_DATE}"
+OUT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${AZ_SEG}/${RUN_DATE}"
 mkdir -p "$OUT"
-# ... write findings.json, inventory.json, and report.md per the report standard, then verify:
-jq -e '.schema == "scoutflo-findings/v1" and .target == "azure" and (.findings | type == "array") and (.estate.path != null)' \
+# ... write findings.json, inventory.json, and report.md per the report standard. The findings.json
+# ".target" is the per-target slug (equal to $AZ_SEG: "azure" for a single block, "azure/<label>" for
+# a labeled list target), so audit-all/correlation/render disambiguate multiple subscriptions. Verify:
+jq -e --arg seg "$AZ_SEG" '.schema == "scoutflo-findings/v1" and .target == $seg and (.findings | type == "array") and (.estate.path != null)' \
   "$OUT/findings.json" >/dev/null && echo "findings.json valid"
 grep -q '^# ' "$OUT/report.md" && echo "report.md present"
 # Output conformance + score reconciliation, then the viz, then template conformance.
@@ -341,7 +368,13 @@ After the report is written, close with the run-completion message per the repor
 
 ```bash
 set -eu
-TARGET_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/azure"
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+AZ_KIND=$(sh "$TT" "$CFG" azure kind); AZ_N=$(sh "$TT" "$CFG" azure count)
+AZ_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$AZ_N" ]; do [ "$(sh "$TT" "$CFG" azure label "$_i")" = "$SCOUTFLO_TARGET" ] && { AZ_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+AZ_LABEL=$(sh "$TT" "$CFG" azure label "$AZ_IDX")
+if [ "$AZ_KIND" = seq ]; then AZ_SEG="azure/${AZ_LABEL}"; else AZ_SEG="azure"; fi
+TARGET_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${AZ_SEG}"
 RUN_DATE="$(date -u +%Y-%m-%d)"
 OUT="${TARGET_DIR}/${RUN_DATE}"
 RESOLVED="0"   # fixed count from this run's delta; 0 on the first run
@@ -361,7 +394,13 @@ The report's trend line renders the last five history.jsonl entries, oldest firs
 
 ```bash
 set -eu
-TARGET_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/azure"
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+AZ_KIND=$(sh "$TT" "$CFG" azure kind); AZ_N=$(sh "$TT" "$CFG" azure count)
+AZ_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$AZ_N" ]; do [ "$(sh "$TT" "$CFG" azure label "$_i")" = "$SCOUTFLO_TARGET" ] && { AZ_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+AZ_LABEL=$(sh "$TT" "$CFG" azure label "$AZ_IDX")
+if [ "$AZ_KIND" = seq ]; then AZ_SEG="azure/${AZ_LABEL}"; else AZ_SEG="azure"; fi
+TARGET_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${AZ_SEG}"
 RUN_DATE="$(date -u +%Y-%m-%d)"
 OUT="${TARGET_DIR}/${RUN_DATE}"
 TOPO_LINE="Topology readiness: readiness not recorded"  # replace with "r/n services sync-ready" from Phase 10
@@ -413,9 +452,9 @@ When context is available, apply it per [BUSINESS-CONTEXT-INTEGRATION-v0168.md](
 
 ## Large-path worklist
 
-Runs on the large path only (see the Estate sizing step above). All state lives under a run-ID-keyed run directory `./scoutflo-audits/azure/runs/<RUN_ID>/`, not a calendar-date directory, so a run still batching when the UTC date rolls over keeps writing to the same place (the drift check and the emit step already skip this directory with `grep -v '/runs$'`).
+Runs on the large path only (see the Estate sizing step above). All state lives under a run-ID-keyed run directory `./scoutflo-audits/azure/[<label>/]runs/<RUN_ID>/`, not a calendar-date directory, so a run still batching when the UTC date rolls over keeps writing to the same place (the drift check and the emit step already skip this directory with `grep -v '/runs$'`).
 
-1. **Find a resumable run, or start a new one.** Before minting a new `RUN_ID`, scan `./scoutflo-audits/azure/runs/*/worklist.tsv` for one with pending rows and offer to resume it instead of starting over.
+1. **Find a resumable run, or start a new one.** Before minting a new `RUN_ID`, scan `./scoutflo-audits/azure/[<label>/]runs/*/worklist.tsv` for one with pending rows and offer to resume it instead of starting over.
 2. **Build or resume the worklist.** One row per VM, VMSS, App Gateway, and Load Balancer counted in Estate sizing, status `pending` or `done`. A resumed run continues from its existing worklist; never rebuild one that already exists.
 3. **Lock, then claim one batch.** Acquire `worklist.lock` in the run directory before reading pending rows; a lock older than `LOCK_STALE_MINUTES` (30 minutes; example, tune to your batch size) is abandoned and safe to reclaim. Take the next `BATCH_SIZE` pending rows and run the matching per-resource checks against just that batch — VM/VMSS coverage (AZR-010) for a VM/VMSS row, App Gateway / Load Balancer health-probe + diagnostic-setting checks (AZR-050) for a network row. A row is marked `done` **only after its reads succeed**, so an interrupted batch resumes at the row that failed. Release the lock once the batch's rows are marked.
 4. **Assemble incrementally.** After each batch, recompose the partial findings and coverage matrix from the batches completed so far, and print progress (`done=X pending=Y`). Repeat from step 3 until the worklist has zero pending rows.

@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.145
+
+audit-azure multi-target (multiple subscriptions in one environment) — the **reference implementation** for multi-target-per-integration, **live-verified on a real subscription**.
+
+- `audit-azure` now **iterates every azure target**: `azure:` may be a single block (one `subscription_id`, unchanged) or a **labeled list** of subscriptions. The runner sets `SCOUTFLO_TARGET=<label>` per target; each block resolves the current target via the shared `report-standard/toolkit-targets.sh` enumerator.
+- **Per-target output, no collision:** a list writes `azure/<label>/<date>/` (+ per-target `history.jsonl`, `.target` = `azure/<label>`); a single block still writes the flat `azure/<date>/` (zero migration). Rolls up correctly via the v0.1.144 two-level `audit-all` aggregation.
+- **Live-safety relaxed** from strict ambient-equality (which made multi-subscription runs impossible) to **visibility** — the target subscription must be in `az account list` — plus explicit `--subscription` on every command. `az account set` stays forbidden. `SCOUTFLO_TARGET` added to the crossblock external allowlist. New `multi-subscription-targets` pressure scenario.
+- **Live-verified on the Sponsorship subscription:** single-block → `azure/` flat; a 2-label list → `azure/prod-a` + `azure/prod-b` (distinct dirs, no collision); membership gate PASS; per-target `--subscription` ARM read → 200.
+
+Gates: leak CLEAN, structure-check (16), run-tests (23), plugin validate --strict.
+
 ## 0.1.144
 
 Multi-target foundation + audit-all two-level aggregation (Phase 0 of "multiple targets under one integration").
