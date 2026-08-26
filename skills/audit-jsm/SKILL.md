@@ -13,12 +13,14 @@ Every command is read-only: GET against the JSM Operations REST API. Every mutat
 
 Run this standalone, from `/scoutflo:audit-all`, or on a schedule via `/scoutflo:schedule-audits`.
 
+**Multiple JSM sites, one run.** `jsm` in `toolkit.yaml` may be a single block (one `site`) or a **list of labeled targets**, each with its own `site`, optional `cloud_id`, `email_env`, and `token_env`. This audit **iterates every target** — enumerate them with `sh "${CLAUDE_PLUGIN_ROOT}/report-standard/toolkit-targets.sh" <cfg> jsm labels` and run the whole sequence below once per target with `SCOUTFLO_TARGET=<label>` set. Output goes to `jsm/<label>/<YYYY-MM-DD>/` for a labeled list, or the flat `jsm/<YYYY-MM-DD>/` for a single block (byte-identical to the prior single-block layout). Every `_edge/tenant_info` lookup and every JSM Operations REST call uses the target's own resolved `cloud_id` and credentials; there is no ambient default.
+
 Outputs, per the [report standard](../../report-standard/README.md):
 
-- `./scoutflo-audits/jsm/<YYYY-MM-DD>/findings.json` per the [findings schema](../../report-standard/findings-schema.md), finding IDs `JSM-NNN`
-- `./scoutflo-audits/jsm/<YYYY-MM-DD>/report.md` per the [report template](../../report-standard/report-template.md), including the `## Inventory` section (the `render-report-viz.sh inventory` output)
-- `./scoutflo-audits/jsm/<YYYY-MM-DD>/inventory.json` per the [inventory schema](../../report-standard/inventory-schema.md) (`scoutflo-inventory/v1`): the complete Phase-2 catalog — one item per team, escalation policy, routing rule, on-call schedule, notification policy, heartbeat, integration, alert policy, and maintenance window (`kind`: `team`, `escalation_policy`, `route`, `schedule`, `notification_policy`, `heartbeat`, `integration`, `alert_policy`, `maintenance_window`) — each with `kind`, `covers`, `enabled`, `severity`, and `routes_to` for alerting objects. Built from the raw pull, never invented; redacted at capture, never a secret value.
-- One appended line in `./scoutflo-audits/jsm/history.jsonl`
+- `./scoutflo-audits/jsm/[<label>/]<YYYY-MM-DD>/findings.json` per the [findings schema](../../report-standard/findings-schema.md), finding IDs `JSM-NNN`
+- `./scoutflo-audits/jsm/[<label>/]<YYYY-MM-DD>/report.md` per the [report template](../../report-standard/report-template.md), including the `## Inventory` section (the `render-report-viz.sh inventory` output)
+- `./scoutflo-audits/jsm/[<label>/]<YYYY-MM-DD>/inventory.json` per the [inventory schema](../../report-standard/inventory-schema.md) (`scoutflo-inventory/v1`): the complete Phase-2 catalog — one item per team, escalation policy, routing rule, on-call schedule, notification policy, heartbeat, integration, alert policy, and maintenance window (`kind`: `team`, `escalation_policy`, `route`, `schedule`, `notification_policy`, `heartbeat`, `integration`, `alert_policy`, `maintenance_window`) — each with `kind`, `covers`, `enabled`, `severity`, and `routes_to` for alerting objects. Built from the raw pull, never invented; redacted at capture, never a secret value.
+- One appended line in `./scoutflo-audits/jsm/[<label>/]history.jsonl`
 - One Slack brief, when `slack.webhook_env` is configured
 
 ## Doctor gate
@@ -57,14 +59,31 @@ SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.s
 for bin in curl jq; do
   command -v "$bin" >/dev/null || { echo "missing binary: $bin"; exit 1; }
 done
-# jsm.email_env and jsm.token_env name the variables; presence check only, never print them.
-[ -n "${JSM_EMAIL:-}" ]     || { echo "JSM_EMAIL is not set; run /scoutflo:connect"; exit 1; }
-[ -n "${JSM_API_TOKEN:-}" ] || { echo "JSM_API_TOKEN is not set; run /scoutflo:connect"; exit 1; }
-
-JSM_SITE="your-site.atlassian.net"   # jsm.site
-CLOUD_ID="${JSM_CLOUD_ID:-}"         # jsm.cloud_id when set; else resolve from the site
+# Resolve the CURRENT jsm target from toolkit.yaml — a single block, or the SCOUTFLO_TARGET-selected
+# item of a labeled list (the shared enumerator handles both; no yq required). Every call below uses
+# THIS target's own site/cloud_id and credentials; there is no ambient default.
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+JT_KIND=$(sh "$TT" "$CFG" jsm kind); JT_N=$(sh "$TT" "$CFG" jsm count)
+[ "${JT_N:-0}" -ge 1 ] || { echo "no jsm target configured in $CFG; run /scoutflo:connect"; exit 1; }
+JT_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$JT_N" ]; do [ "$(sh "$TT" "$CFG" jsm label "$_i")" = "$SCOUTFLO_TARGET" ] && { JT_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+JT_LABEL=$(sh "$TT" "$CFG" jsm label "$JT_IDX")
+if [ "$JT_KIND" = seq ]; then JT_SEG="jsm/${JT_LABEL}"; else JT_SEG="jsm"; fi
+JSM_SITE=$(sh "$TT" "$CFG" jsm get "$JT_IDX" site)
+[ -n "$JSM_SITE" ] || { echo "jsm target '${JT_LABEL:-?}' has no site in $CFG; run /scoutflo:connect"; exit 1; }
+# jsm.email_env / jsm.token_env name the VARIABLES that hold the credentials (defaults JSM_EMAIL /
+# JSM_API_TOKEN); resolve the names from this target, read the values by name, presence-check only,
+# never print them. For a single block these default to the well-known names, so nothing changes.
+JSM_EMAIL_VAR=$(sh "$TT" "$CFG" jsm get "$JT_IDX" email_env); [ -n "$JSM_EMAIL_VAR" ] || JSM_EMAIL_VAR="JSM_EMAIL"
+JSM_TOKEN_VAR=$(sh "$TT" "$CFG" jsm get "$JT_IDX" token_env); [ -n "$JSM_TOKEN_VAR" ] || JSM_TOKEN_VAR="JSM_API_TOKEN"
+JSM_EMAIL=$(printenv "$JSM_EMAIL_VAR" 2>/dev/null || true)
+JSM_API_TOKEN=$(printenv "$JSM_TOKEN_VAR" 2>/dev/null || true)
+[ -n "${JSM_EMAIL:-}" ]     || { echo "${JSM_EMAIL_VAR} is not set (jsm target '${JT_LABEL}'); run /scoutflo:connect"; exit 1; }
+[ -n "${JSM_API_TOKEN:-}" ] || { echo "${JSM_TOKEN_VAR} is not set (jsm target '${JT_LABEL}'); run /scoutflo:connect"; exit 1; }
+# jsm.cloud_id when set on THIS target; else resolve from the site's tenant_info edge route.
+CLOUD_ID=$(sh "$TT" "$CFG" jsm get "$JT_IDX" cloud_id)
 [ -n "$CLOUD_ID" ] || CLOUD_ID="$(curl -fsS --max-time 10 "https://${JSM_SITE}/_edge/tenant_info" | jq -r '.cloudId // empty')"
-[ -n "$CLOUD_ID" ] || { echo "could not resolve cloud_id from jsm.site ${JSM_SITE}; set jsm.cloud_id explicitly (connect references/providers.md)"; exit 1; }
+[ -n "$CLOUD_ID" ] || { echo "could not resolve cloud_id for jsm target '${JT_LABEL}' from site ${JSM_SITE}; set this target's jsm.cloud_id explicitly (connect references/providers.md)"; exit 1; }
+echo "jsm target: ${JT_LABEL} (site ${JSM_SITE}) -> ${JT_SEG}/"
 
 JSM_BASE="https://api.atlassian.com/jsm/ops/api/${CLOUD_ID}/v1"
 # Keep the body (do NOT discard to /dev/null) and capture the content-type, so a 200 that is
@@ -92,15 +111,32 @@ Print what you are pointed at and compare it to the config before the first real
 
 ```bash
 set -eu
-JSM_SITE="your-site.atlassian.net"   # jsm.site
-CLOUD_ID="${JSM_CLOUD_ID:-}"
+CFG="${SCOUTFLO_CONFIG:-}"
+[ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done
+[ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+[ -f "$CFG" ] || { echo "missing $CFG; run /scoutflo:connect"; exit 1; }
+# Secret store, same layered resolver as the doctor gate — a token added mid-session is seen here too.
+SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.scoutflo/env" ]; then SCOUTFLO_ENV="./.scoutflo/env"; else SCOUTFLO_ENV="$HOME/.scoutflo/env"; fi; }
+[ -f "$SCOUTFLO_ENV" ] && . "$SCOUTFLO_ENV" || true
+# Resolve the CURRENT jsm target from config (single block, or the SCOUTFLO_TARGET-selected list
+# item; no yq). Site, cloud_id, and the credential VARIABLE NAMES are this target's own — never typed.
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+JT_N=$(sh "$TT" "$CFG" jsm count)
+JT_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$JT_N" ]; do [ "$(sh "$TT" "$CFG" jsm label "$_i")" = "$SCOUTFLO_TARGET" ] && { JT_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+JT_LABEL=$(sh "$TT" "$CFG" jsm label "$JT_IDX")
+JSM_SITE=$(sh "$TT" "$CFG" jsm get "$JT_IDX" site)
+JSM_EMAIL_VAR=$(sh "$TT" "$CFG" jsm get "$JT_IDX" email_env); [ -n "$JSM_EMAIL_VAR" ] || JSM_EMAIL_VAR="JSM_EMAIL"
+JSM_TOKEN_VAR=$(sh "$TT" "$CFG" jsm get "$JT_IDX" token_env); [ -n "$JSM_TOKEN_VAR" ] || JSM_TOKEN_VAR="JSM_API_TOKEN"
+JSM_EMAIL=$(printenv "$JSM_EMAIL_VAR" 2>/dev/null || true)
+JSM_API_TOKEN=$(printenv "$JSM_TOKEN_VAR" 2>/dev/null || true)
+CLOUD_ID=$(sh "$TT" "$CFG" jsm get "$JT_IDX" cloud_id)
 [ -n "$CLOUD_ID" ] || CLOUD_ID="$(curl -fsS --max-time 10 "https://${JSM_SITE}/_edge/tenant_info" | jq -r '.cloudId // empty')"
 JSM_BASE="https://api.atlassian.com/jsm/ops/api/${CLOUD_ID}/v1"
 # Resolve one page of teams and print account-identifying, non-secret facts.
 TEAMS_SAMPLE="$(curl -fsS --max-time 15 -u "${JSM_EMAIL}:${JSM_API_TOKEN}" "${JSM_BASE}/teams?size=5")"
 COUNT="$(printf '%s' "$TEAMS_SAMPLE" | jq '(.values // []) | length')"
 NAMES="$(printf '%s' "$TEAMS_SAMPLE" | jq -r '[.values[]?.name] | join(", ")')"
-echo "site=${JSM_SITE} cloud_id=${CLOUD_ID} sample_teams=${COUNT}: ${NAMES}"
+echo "jsm target: ${JT_LABEL} site=${JSM_SITE} cloud_id=${CLOUD_ID} sample_teams=${COUNT}: ${NAMES}"
 printf '%s' "$TEAMS_SAMPLE" | jq -e '.values | type == "array"' >/dev/null \
   || { echo "teams endpoint did not return a team list; wrong cloud_id or wrong credentials — stop"; exit 1; }
 echo "live-safety gate: pass — confirm this site and these team names belong to the account you intend to audit"
@@ -138,12 +174,25 @@ Count before judging, and declare the path in the terminal output. The unit here
 
 ```bash
 set -eu
-# Each block is a fresh shell, so re-resolve CLOUD_ID exactly as the doctor gate does
-# (the gate's value does not persist here). jsm.cloud_id when set, else the site's tenant_info.
-JSM_SITE="your-site.atlassian.net"   # jsm.site
-CLOUD_ID="${JSM_CLOUD_ID:-}"
+# Each block is a fresh shell, so re-resolve the target + its connection params exactly as the
+# doctor gate does (values do not persist across blocks). Single block, or the SCOUTFLO_TARGET-
+# selected item of a labeled list; no yq required.
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.scoutflo/env" ]; then SCOUTFLO_ENV="./.scoutflo/env"; else SCOUTFLO_ENV="$HOME/.scoutflo/env"; fi; }
+[ -f "$SCOUTFLO_ENV" ] && . "$SCOUTFLO_ENV" || true
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+JT_KIND=$(sh "$TT" "$CFG" jsm kind); JT_N=$(sh "$TT" "$CFG" jsm count)
+JT_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$JT_N" ]; do [ "$(sh "$TT" "$CFG" jsm label "$_i")" = "$SCOUTFLO_TARGET" ] && { JT_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+JT_LABEL=$(sh "$TT" "$CFG" jsm label "$JT_IDX")
+if [ "$JT_KIND" = seq ]; then JT_SEG="jsm/${JT_LABEL}"; else JT_SEG="jsm"; fi
+JSM_SITE=$(sh "$TT" "$CFG" jsm get "$JT_IDX" site)
+JSM_EMAIL_VAR=$(sh "$TT" "$CFG" jsm get "$JT_IDX" email_env); [ -n "$JSM_EMAIL_VAR" ] || JSM_EMAIL_VAR="JSM_EMAIL"
+JSM_TOKEN_VAR=$(sh "$TT" "$CFG" jsm get "$JT_IDX" token_env); [ -n "$JSM_TOKEN_VAR" ] || JSM_TOKEN_VAR="JSM_API_TOKEN"
+JSM_EMAIL=$(printenv "$JSM_EMAIL_VAR" 2>/dev/null || true)
+JSM_API_TOKEN=$(printenv "$JSM_TOKEN_VAR" 2>/dev/null || true)
+CLOUD_ID=$(sh "$TT" "$CFG" jsm get "$JT_IDX" cloud_id)
 [ -n "$CLOUD_ID" ] || CLOUD_ID="$(curl -fsS --max-time 10 "https://${JSM_SITE}/_edge/tenant_info" | jq -r '.cloudId // empty')"
-[ -n "$CLOUD_ID" ] || { echo "could not resolve JSM cloud_id (set jsm.cloud_id or check jsm.site)"; exit 1; }
+[ -n "$CLOUD_ID" ] || { echo "could not resolve JSM cloud_id for target '${JT_LABEL}' (set this target's jsm.cloud_id or check jsm.site)"; exit 1; }
 JSM_BASE="https://api.atlassian.com/jsm/ops/api/${CLOUD_ID}/v1"
 SMALL_MAX_OBJECTS="15"    # example, tune to your environment
 MEDIUM_MAX_OBJECTS="60"   # example, tune to your environment
@@ -159,7 +208,7 @@ TOTAL=$((TEAMS + INTEGRATIONS + SCHEDULES))
 echo "teams=${TEAMS} integrations=${INTEGRATIONS} schedules=${SCHEDULES} scored_objects=${TOTAL}"
 
 # Guided-walkthrough drift check, per report-standard/README.md.
-TARGET_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/jsm"
+TARGET_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${JT_SEG}"
 PREV_RUN="$(find "$TARGET_DIR" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort | tail -1)"
 DRIFT="first run"
 if [ -n "$PREV_RUN" ] && [ -f "${PREV_RUN}/findings.json" ]; then
@@ -211,8 +260,14 @@ The scope checkpoint above narrows a *large* estate. This guardrail catches the 
 
 ```bash
 set -eu
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+JT_KIND=$(sh "$TT" "$CFG" jsm kind); JT_N=$(sh "$TT" "$CFG" jsm count)
+JT_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$JT_N" ]; do [ "$(sh "$TT" "$CFG" jsm label "$_i")" = "$SCOUTFLO_TARGET" ] && { JT_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+JT_LABEL=$(sh "$TT" "$CFG" jsm label "$JT_IDX")
+if [ "$JT_KIND" = seq ]; then JT_SEG="jsm/${JT_LABEL}"; else JT_SEG="jsm"; fi
 RUN_DATE="$(date -u +%Y-%m-%d)"
-RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/jsm/${RUN_DATE}/raw"
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${JT_SEG}/${RUN_DATE}/raw"
 # Teams discovered by the key vs audited this run. Any discovered team we did NOT audit?
 UNAUDITED="$(comm -23 "${RAW_DIR}/teams-discovered.txt" "${RAW_DIR}/teams-audited.txt" 2>/dev/null | tr '\n' ' ')"
 UNAUDITED_TRIM="$(printf '%s' "$UNAUDITED" | tr -d '[:space:]')"
@@ -313,18 +368,26 @@ Emit and verify:
 
 ```bash
 set -eu
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+JT_KIND=$(sh "$TT" "$CFG" jsm kind); JT_N=$(sh "$TT" "$CFG" jsm count)
+JT_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$JT_N" ]; do [ "$(sh "$TT" "$CFG" jsm label "$_i")" = "$SCOUTFLO_TARGET" ] && { JT_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+JT_LABEL=$(sh "$TT" "$CFG" jsm label "$JT_IDX")
+if [ "$JT_KIND" = seq ]; then JT_SEG="jsm/${JT_LABEL}"; else JT_SEG="jsm"; fi
 RUN_DATE="$(date -u +%Y-%m-%d)"
-OUT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/jsm/${RUN_DATE}"
+OUT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${JT_SEG}/${RUN_DATE}"
 mkdir -p "$OUT"
-# ... write findings.json, inventory.json, and report.md per the report standard, then verify:
-jq -e '.schema == "scoutflo-findings/v1" and .target == "jsm" and (.findings | type == "array")' \
+# ... write findings.json, inventory.json, and report.md per the report standard. The findings.json
+# ".target" is the per-target slug (equal to $JT_SEG: "jsm" for a single block, "jsm/<label>" for a
+# labeled-list target), so audit-all/correlation/render disambiguate multiple sites. Then verify:
+jq -e --arg seg "$JT_SEG" '.schema == "scoutflo-findings/v1" and .target == $seg and (.findings | type == "array")' \
   "$OUT/findings.json" >/dev/null && echo "findings.json valid"
 grep -q '^# ' "$OUT/report.md" && echo "report.md present"
 sh "${CLAUDE_PLUGIN_ROOT}/report-standard/check-findings.sh" "$OUT/findings.json"
 # Inventory (scoutflo-inventory/v1): the complete Phase-2 catalog of what exists,
 # built from the raw pull (never invented, redacted). counts.total must reconcile
 # with items; the ## Inventory section of report.md IS this render.
-jq -e '.schema == "scoutflo-inventory/v1" and .target == "jsm" and (.items | type == "array") and (.counts.total == (.items | length))' "$OUT/inventory.json" >/dev/null && echo "inventory.json valid"
+jq -e --arg seg "$JT_SEG" '.schema == "scoutflo-inventory/v1" and .target == $seg and (.items | type == "array") and (.counts.total == (.items | length))' "$OUT/inventory.json" >/dev/null && echo "inventory.json valid"
 sh "${CLAUDE_PLUGIN_ROOT}/report-standard/render-report-viz.sh" inventory "$OUT/inventory.json" >/dev/null && echo "inventory section renders"
 sh "${CLAUDE_PLUGIN_ROOT}/report-standard/render-report-viz.sh" html "$OUT/findings.json" "$OUT/report.html" "$(dirname "$OUT")/history.jsonl"
 sh "${CLAUDE_PLUGIN_ROOT}/report-standard/check-report.sh" "$OUT/report.md"
@@ -334,7 +397,13 @@ Compute the delta against the previous run's `findings.json` (the latest two dat
 
 ```bash
 set -eu
-TARGET_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/jsm"
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+JT_KIND=$(sh "$TT" "$CFG" jsm kind); JT_N=$(sh "$TT" "$CFG" jsm count)
+JT_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$JT_N" ]; do [ "$(sh "$TT" "$CFG" jsm label "$_i")" = "$SCOUTFLO_TARGET" ] && { JT_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+JT_LABEL=$(sh "$TT" "$CFG" jsm label "$JT_IDX")
+if [ "$JT_KIND" = seq ]; then JT_SEG="jsm/${JT_LABEL}"; else JT_SEG="jsm"; fi
+TARGET_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${JT_SEG}"
 RUN_DATE="$(date -u +%Y-%m-%d)"
 OUT="${TARGET_DIR}/${RUN_DATE}"
 RESOLVED="0"   # fixed count from this run's delta; 0 on the first run

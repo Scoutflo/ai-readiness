@@ -13,6 +13,7 @@ Run it standalone, from `/scoutflo:audit-all`, or on a schedule via `/scoutflo:s
 
 This audit owns the Sentry account layer: org and team structure, project inventory and configuration (environments, privacy scrubbing, client-key rate limits, default-rule noise), issue alert rules and their routing against the two-tier model, metric alerts, integration state (Slack, PagerDuty, VCS), release and source-map health signals, and cron and uptime monitors.
 
+- **Multiple Sentry targets, one run:** `sentry` may be a single block (one `host`/`org`/`token_env`) or a **list of labeled targets**, each with its own `host`, `org`, and `token_env`. The audit **iterates every target** — enumerate them with `sh "${CLAUDE_PLUGIN_ROOT}/report-standard/toolkit-targets.sh" <cfg> sentry labels` and run the full sequence below once per target with `SCOUTFLO_TARGET=<label>` set. Output goes to `sentry/<label>/<date>/` for a list, or the flat `sentry/<date>/` for a single block. Every API call resolves and uses the target's own `host`, `org`, and token (`token_env` names the variable holding the secret); the ambient values are never assumed.
 - Grafana dashboards that display Sentry data belong to `audit-grafana`.
 - Metrics, logs, and traces backends belong to `audit-lgtm`. A backend service absent from Sentry is not automatically a gap when your metrics and logs stack owns backend incidents by decision; record the boundary and score against the owning tool.
 - The Alertmanager paging path belongs to `audit-alert-routing`. Here you judge Sentry's own alert wiring and flag unproven routes.
@@ -29,17 +30,36 @@ This audit owns the Sentry account layer: org and team structure, project invent
 
 ```bash
 set -eu
-# Resolved from ~/.scoutflo/toolkit.yaml
-SENTRY_HOST="us.sentry.io"   # sentry.host: us.sentry.io, de.sentry.io, or your self-hosted host
-SENTRY_ORG="your-org-slug"   # sentry.org
+# Resolve the CURRENT sentry target from ~/.scoutflo/toolkit.yaml — a single block, or the
+# SCOUTFLO_TARGET-selected item of a labeled list (the shared enumerator handles both; no yq
+# required). Every API call below names this target's own host/org/token; ambient values are
+# never assumed. $CFG is resolved the standard way (override -> project-local -> home).
+CFG="${SCOUTFLO_CONFIG:-}"
+[ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done
+[ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+[ -f "$CFG" ] || { echo "missing $CFG; run /scoutflo:connect"; exit 1; }
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+SNTRY_KIND=$(sh "$TT" "$CFG" sentry kind); SNTRY_N=$(sh "$TT" "$CFG" sentry count)
+[ "${SNTRY_N:-0}" -ge 1 ] || { echo "no sentry target configured in $CFG; run /scoutflo:connect"; exit 1; }
+SNTRY_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$SNTRY_N" ]; do [ "$(sh "$TT" "$CFG" sentry label "$_i")" = "$SCOUTFLO_TARGET" ] && { SNTRY_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+SNTRY_LABEL=$(sh "$TT" "$CFG" sentry label "$SNTRY_IDX")
+if [ "$SNTRY_KIND" = seq ]; then SNTRY_SEG="sentry/${SNTRY_LABEL}"; else SNTRY_SEG="sentry"; fi
+SENTRY_HOST=$(sh "$TT" "$CFG" sentry get "$SNTRY_IDX" host)   # sentry.host: us.sentry.io, de.sentry.io, or your self-hosted host
+SENTRY_ORG=$(sh "$TT" "$CFG" sentry get "$SNTRY_IDX" org)     # sentry.org
+[ -n "$SENTRY_HOST" ] || { echo "sentry target '${SNTRY_LABEL:-?}' has no host in $CFG; run /scoutflo:connect"; exit 1; }
+[ -n "$SENTRY_ORG" ]  || { echo "sentry target '${SNTRY_LABEL:-?}' has no org in $CFG; run /scoutflo:connect"; exit 1; }
 API="https://${SENTRY_HOST}/api/0"
+echo "sentry target: ${SNTRY_LABEL} (org ${SENTRY_ORG}) -> ${SNTRY_SEG}/"
 # Load the home-anchored secret store so a token added to ~/.scoutflo/env (by connect,
 # even mid-session) is seen here without re-exporting or opening a new terminal. It only
 # sets *_env variables; no secret value is printed. A profile that already sources it makes
 # this a no-op. This mirrors what /scoutflo:doctor does, so doctor and this audit agree.
 SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.scoutflo/env" ]; then SCOUTFLO_ENV="./.scoutflo/env"; else SCOUTFLO_ENV="$HOME/.scoutflo/env"; fi; }
 [ -f "$SCOUTFLO_ENV" ] && . "$SCOUTFLO_ENV" || true
-# sentry.token_env names the variable; presence check only, never print the value.
+# sentry.token_env names the variable holding THIS target's token; read that variable by name so
+# each target uses its own token. Presence check only, never print the value.
+SNTRY_TOKVAR=$(sh "$TT" "$CFG" sentry get "$SNTRY_IDX" token_env); [ -n "$SNTRY_TOKVAR" ] || SNTRY_TOKVAR=SENTRY_TOKEN
+SENTRY_TOKEN=$(printenv "$SNTRY_TOKVAR" 2>/dev/null || true)
 [ -n "${SENTRY_TOKEN:-}" ] || { echo "SENTRY_TOKEN is not set; run /scoutflo:connect"; exit 1; }
 command -v curl >/dev/null || { echo "curl is required"; exit 1; }
 command -v jq   >/dev/null || { echo "jq is required"; exit 1; }
@@ -60,7 +80,7 @@ If the token also carries write scopes, the audit still runs, but note it in the
 
 ## Live-safety gate
 
-Confirm what you are pointed at before the first real check. Compare the slug printed by the doctor gate against `sentry.org` in `~/.scoutflo/toolkit.yaml`, and confirm the org is the one you intend to audit (not a sandbox org with a similar name, not a personal org). Print the target once: `echo "target: ${API} org: ${SENTRY_ORG}"`. On any mismatch, stop and report it. Never proceed on "probably the right org".
+Confirm what you are pointed at before the first real check. Compare the slug printed by the doctor gate against the resolved target's `org` (`sh "$TT" "$CFG" sentry get "$SNTRY_IDX" org`, i.e. the `sentry.org` of this target's block or labeled-list item in `~/.scoutflo/toolkit.yaml`), and confirm the org is the one you intend to audit (not a sandbox org with a similar name, not a personal org). Print the target once: `echo "target: ${API} org: ${SENTRY_ORG} label: ${SNTRY_LABEL} -> ${SNTRY_SEG}/"`. A labeled-list estate audits each target in turn (the runner sets `SCOUTFLO_TARGET=<label>`), so the org you compare is the one the current `SCOUTFLO_TARGET` resolved, never the ambient default. On any mismatch, stop and report it. Never proceed on "probably the right org".
 
 Load `./scoutflo-audits/topology.md` if it exists; its service list is your critical-service list and its names are canonical in findings, the coverage matrix, and `affected` arrays. If it does not exist, infer services from project slugs and platforms, note the inference in the report, and suggest `/scoutflo:map-topology`.
 
@@ -83,10 +103,20 @@ Count before judging, and declare the path in the terminal output. This is one c
 
 ```bash
 set -eu
-# Resolved from ~/.scoutflo/toolkit.yaml
-SENTRY_HOST="us.sentry.io"   # sentry.host: us.sentry.io, de.sentry.io, or your self-hosted host
-SENTRY_ORG="your-org-slug"   # sentry.org
+# Resolve the CURRENT sentry target (single block, or the SCOUTFLO_TARGET-selected item of a
+# labeled list) via the shared enumerator; no yq required. Re-resolved here because each block
+# runs in a fresh shell. $CFG resolved the standard way (override -> project-local -> home).
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+SNTRY_KIND=$(sh "$TT" "$CFG" sentry kind); SNTRY_N=$(sh "$TT" "$CFG" sentry count)
+SNTRY_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$SNTRY_N" ]; do [ "$(sh "$TT" "$CFG" sentry label "$_i")" = "$SCOUTFLO_TARGET" ] && { SNTRY_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+SNTRY_LABEL=$(sh "$TT" "$CFG" sentry label "$SNTRY_IDX")
+if [ "$SNTRY_KIND" = seq ]; then SNTRY_SEG="sentry/${SNTRY_LABEL}"; else SNTRY_SEG="sentry"; fi
+SENTRY_HOST=$(sh "$TT" "$CFG" sentry get "$SNTRY_IDX" host)   # sentry.host
+SENTRY_ORG=$(sh "$TT" "$CFG" sentry get "$SNTRY_IDX" org)     # sentry.org
 API="https://${SENTRY_HOST}/api/0"
+SNTRY_TOKVAR=$(sh "$TT" "$CFG" sentry get "$SNTRY_IDX" token_env); [ -n "$SNTRY_TOKVAR" ] || SNTRY_TOKVAR=SENTRY_TOKEN
+SENTRY_TOKEN=$(printenv "$SNTRY_TOKVAR" 2>/dev/null || true)   # token_env names the variable; never a hardcoded name
 [ -n "${SENTRY_TOKEN:-}" ] || { echo "SENTRY_TOKEN is not set; run /scoutflo:connect"; exit 1; }
 
 SMALL_MAX_PROJECTS="15"    # single-pass ceiling; example, tune to your environment
@@ -115,7 +145,7 @@ echo "estate: projects=${PROJECT_COUNT} teams=${TEAM_COUNT} sizing-path=${path}"
 # Guided-walkthrough drift check, per report-standard/README.md#using-topology-and-prior-runs-as-a-guided-walkthrough:
 # compare against the last run rather than a blank slate. State the result in the executive summary;
 # never silently omit it. This never skips a live check - every check in later phases still runs fresh.
-TARGET_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/sentry"
+TARGET_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${SNTRY_SEG}"
 PREV_RUN="$(find "$TARGET_DIR" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort | tail -1)"
 DRIFT="first run"
 if [ -n "$PREV_RUN" ] && [ -f "${PREV_RUN}/findings.json" ]; then
@@ -179,12 +209,22 @@ On the small and medium paths, run every command below as written: the org-level
 
 ```bash
 set -eu
-# Resolved from ~/.scoutflo/toolkit.yaml
-SENTRY_HOST="us.sentry.io"   # sentry.host: us.sentry.io, de.sentry.io, or your self-hosted host
-SENTRY_ORG="your-org-slug"   # sentry.org
+# Resolve the CURRENT sentry target (single block, or the SCOUTFLO_TARGET-selected item of a
+# labeled list) via the shared enumerator; no yq required. Re-resolved here because each block
+# runs in a fresh shell. $CFG resolved the standard way (override -> project-local -> home).
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+SNTRY_KIND=$(sh "$TT" "$CFG" sentry kind); SNTRY_N=$(sh "$TT" "$CFG" sentry count)
+SNTRY_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$SNTRY_N" ]; do [ "$(sh "$TT" "$CFG" sentry label "$_i")" = "$SCOUTFLO_TARGET" ] && { SNTRY_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+SNTRY_LABEL=$(sh "$TT" "$CFG" sentry label "$SNTRY_IDX")
+if [ "$SNTRY_KIND" = seq ]; then SNTRY_SEG="sentry/${SNTRY_LABEL}"; else SNTRY_SEG="sentry"; fi
+SENTRY_HOST=$(sh "$TT" "$CFG" sentry get "$SNTRY_IDX" host)   # sentry.host
+SENTRY_ORG=$(sh "$TT" "$CFG" sentry get "$SNTRY_IDX" org)     # sentry.org
 API="https://${SENTRY_HOST}/api/0"
+SNTRY_TOKVAR=$(sh "$TT" "$CFG" sentry get "$SNTRY_IDX" token_env); [ -n "$SNTRY_TOKVAR" ] || SNTRY_TOKVAR=SENTRY_TOKEN
+SENTRY_TOKEN=$(printenv "$SNTRY_TOKVAR" 2>/dev/null || true)   # token_env names the variable; never a hardcoded name
 [ -n "${SENTRY_TOKEN:-}" ] || { echo "SENTRY_TOKEN is not set; run /scoutflo:connect"; exit 1; }
-RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/sentry/$(date -u +%Y-%m-%d)/raw"
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${SNTRY_SEG}/$(date -u +%Y-%m-%d)/raw"
 mkdir -p "${RAW_DIR}/projects"
 
 fetch_all() { # $1: full API URL. Follows cursor pagination, prints one merged JSON array.
@@ -372,14 +412,24 @@ Mechanics follow [severity-and-scoring.md](../../report-standard/severity-and-sc
 
 `findings.json` records the estate-sizing outcome in its optional `estate` object: `objects` (the `PROJECT_COUNT` from the sizing pre-check) and `path` (`small`, `medium`, or `large`). On the large path, if a run stopped with the worklist still holding pending rows, the report and the coverage denominators name the projects that were skipped; never publish a large-path run's findings as complete coverage while `worklist.tsv` still has pending rows.
 
-Write both artifacts to `./scoutflo-audits/sentry/<YYYY-MM-DD>/` and verify:
+Write both artifacts to `./scoutflo-audits/sentry/[<label>/]<YYYY-MM-DD>/` (flat for a single block, one subdirectory per label for a labeled list) and verify:
 
 ```bash
 set -eu
-OUT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/sentry/$(date -u +%Y-%m-%d)"
+# Resolve the CURRENT sentry target so the output segment matches the run: flat sentry/<date>/ for a
+# single block, sentry/<label>/<date>/ for a labeled-list target. $CFG resolved the standard way.
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+SNTRY_KIND=$(sh "$TT" "$CFG" sentry kind); SNTRY_N=$(sh "$TT" "$CFG" sentry count)
+SNTRY_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$SNTRY_N" ]; do [ "$(sh "$TT" "$CFG" sentry label "$_i")" = "$SCOUTFLO_TARGET" ] && { SNTRY_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+SNTRY_LABEL=$(sh "$TT" "$CFG" sentry label "$SNTRY_IDX")
+if [ "$SNTRY_KIND" = seq ]; then SNTRY_SEG="sentry/${SNTRY_LABEL}"; else SNTRY_SEG="sentry"; fi
+OUT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${SNTRY_SEG}/$(date -u +%Y-%m-%d)"
 mkdir -p "$OUT"
-# ... write findings.json, inventory.json, and report.md per the report standard, then verify:
-jq -e '.schema == "scoutflo-findings/v1" and (.findings | type == "array")' \
+# ... write findings.json, inventory.json, and report.md per the report standard. The findings.json
+# ".target" is the per-target slug (equal to $SNTRY_SEG: "sentry" for a single block, "sentry/<label>"
+# for a labeled-list target), so audit-all/correlation/render disambiguate multiple Sentry targets. Verify:
+jq -e --arg seg "$SNTRY_SEG" '.schema == "scoutflo-findings/v1" and .target == $seg and (.findings | type == "array")' \
   "$OUT/findings.json" >/dev/null && echo "findings.json valid"
 grep -q '^# ' "$OUT/report.md" && echo "report.md present"
 # Output conformance: the emitted report.md must match report-standard/report-template.md.
@@ -402,7 +452,14 @@ If `slack.webhook_env` is configured, send exactly one brief, titles only, never
 
 ```bash
 set -eu
-OUT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/sentry/$(date -u +%Y-%m-%d)"
+# Resolve the CURRENT sentry target so the brief points at this run's output segment. $CFG standard way.
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+SNTRY_KIND=$(sh "$TT" "$CFG" sentry kind); SNTRY_N=$(sh "$TT" "$CFG" sentry count)
+SNTRY_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$SNTRY_N" ]; do [ "$(sh "$TT" "$CFG" sentry label "$_i")" = "$SCOUTFLO_TARGET" ] && { SNTRY_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+SNTRY_LABEL=$(sh "$TT" "$CFG" sentry label "$SNTRY_IDX")
+if [ "$SNTRY_KIND" = seq ]; then SNTRY_SEG="sentry/${SNTRY_LABEL}"; else SNTRY_SEG="sentry"; fi
+OUT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${SNTRY_SEG}/$(date -u +%Y-%m-%d)"
 # slack.webhook_env names the webhook variable; skip when unset.
 if [ -n "${SCOUTFLO_SLACK_WEBHOOK:-}" ]; then
   OUT_ABS="$(cd "$OUT" && pwd)"   # absolute path: the brief must be openable from anywhere

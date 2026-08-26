@@ -10,6 +10,7 @@ Runnable, read-only checks for every surface the [audit-groundcover](../SKILL.md
 - **Confirmed vs capability-gated.** The monitor list, workflows, and recurring silences are confirmed in groundcover's docs. On SaaS the per-monitor **config + runtime state** (severity, isPaused, state, silenced, pendingFor, lastEvaluationError, alertingCount) comes from `POST /api/monitors/summary/query`, confirmed live (HTTP 200). The per-monitor `GET /api/monitors/{uuid}` returns **YAML** (never pipe it to jq) and its config surface is thin — no `notificationSettings`/`autoResolve`/`customResolveThreshold` — so the fields it alone carries are best-effort enrichment (and `model.thresholds` there is an array). When `summary/query` is not 200, or a config field is genuinely absent, mark the dependent checks (GC-002/003/004/005/010-013, GC-022/023) `not-in-scope` with that reason. Never guess a monitor's live state.
 - `curl -fsS --max-time 30` with the auth header is the default. Where the status code is the evidence, `-f` is dropped and `-w '%{http_code}'` captures it. A list response may be a bare array or wrapped (`{monitors: [...]}` / `{results: [...]}`); the commands normalize both.
 - Thresholds and windows are examples; tune to your workloads. Named defaults live in section 12.
+- **Multiple targets, one run.** The `groundcover/...` output paths and the `GC_API`/`GROUNDCOVER_API_KEY`/backend values in the blocks below are the single-block (flat) form. For a labeled-list target, every `groundcover/...` output path becomes `groundcover/<label>/...`: resolve `GC_SEG` (single block → `groundcover`; labeled list → `groundcover/<label>`) exactly as the [SKILL.md](../SKILL.md) doctor/estate blocks do, and substitute it for the leading `groundcover` segment in every `RAW_DIR`. The connection params are the same per-target reads the SKILL.md uses — `GC_API` from `sh "$TT" "$CFG" groundcover get "$GC_IDX" api_url` (default `https://api.groundcover.com`), the key from the variable named by `... get "$GC_IDX" token_env`, and the `X-Backend-Id` header from `... get "$GC_IDX" backend_id` (sent only when set). The runner sets `SCOUTFLO_TARGET=<label>` and runs the sequence once per target.
 
 ## 2. Check catalog
 
@@ -56,8 +57,9 @@ RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/groundcover/${RUN_DATE}/raw"
 mkdir -p "$RAW_DIR"
 # Build the header set once. Add X-Backend-Id only when groundcover.backend_id is set.
 AUTH="Authorization: Bearer ${GROUNDCOVER_API_KEY}"
-# gc_post <path> <body>  and  gc_get <path>  — add -H "X-Backend-Id: ${GC_BACKEND}" in the real
-# run when backend_id is configured (kept explicit here so the read stays copy-pasteable).
+# gc_post <path> <body>  and  gc_get <path>  — add -H "X-Backend-Id: ${GC_BACKEND_ID}" in the real
+# run when backend_id is configured (from `... get "$GC_IDX" backend_id`; kept explicit here so the
+# read stays copy-pasteable).
 norm() { jq 'if type=="array" then . else (.monitors // .results // .workflows // []) end'; }
 
 # All monitors (list is minimal: uuid, title, type).

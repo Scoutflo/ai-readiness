@@ -11,14 +11,16 @@ This skill audits the paging layer, not the monitoring layer. The `for` duration
 
 Every command is read-only by effect. Almost all are GET. Two documented exceptions are POST requests that read: the Analytics metrics calls (a filter body, server-side aggregation, nothing changes) and the doctor probe of the same surface. Everything else with a mutating verb — acking, snoozing, merging, test events, schedule previews — is forbidden; the full list is in [references/pagerduty-checks.md](references/pagerduty-checks.md) section 13. There is no `setup-pagerduty` yet, so every finding names its manual fix path in the PagerDuty UI or API instead of a setup anchor.
 
+**Multiple PagerDuty accounts, one run:** `pagerduty` may be a single block (one `token_env`) or a **list of labeled targets**, each with its own `token_env` and `region`. The audit **iterates every target** — enumerate them with `sh "${CLAUDE_PLUGIN_ROOT}/report-standard/toolkit-targets.sh" <cfg> pagerduty labels` and run the full sequence below once per target with `SCOUTFLO_TARGET=<label>` set. Output goes to `pagerduty/<label>/<date>/` for a list, or the flat `pagerduty/<date>/` for a single block. Every network call uses the target's own resolved credentials — the API key held by the variable that target's `token_env` names (`Authorization: Token token=<key>`) against that target's own `region` host (`us` → `api.pagerduty.com`, `eu` → `api.eu.pagerduty.com`); there is no ambient default beyond the key in the environment, and a single-block config resolves to exactly one target whose label defaults to the block name (`pagerduty`), byte-identical to today's read.
+
 Run this standalone, from `/scoutflo:audit-all`, or on a schedule via `/scoutflo:schedule-audits`.
 
 Outputs, per the [report standard](../../report-standard/README.md):
 
-- `./scoutflo-audits/pagerduty/<YYYY-MM-DD>/findings.json` per the [findings schema](../../report-standard/findings-schema.md), finding IDs `PD-NNN`
-- `./scoutflo-audits/pagerduty/<YYYY-MM-DD>/report.md` per the [report template](../../report-standard/report-template.md), including the `## Inventory` section (the `render-report-viz.sh inventory` output)
-- `./scoutflo-audits/pagerduty/<YYYY-MM-DD>/inventory.json` per the [inventory schema](../../report-standard/inventory-schema.md) (`scoutflo-inventory/v1`): the complete Phase-2 catalog — one item per service, escalation policy, schedule, integration, and user (`kind` `service`, `escalation_policy`, `schedule`, `integration`, `user`), each with `covers` (the topology service it pages for), `enabled`, `severity` (the object's own, or null), and `routes_to` for alerting objects (a service's escalation policy). Built from the raw pull, never invented; redacted at capture, never a secret value.
-- One appended line in `./scoutflo-audits/pagerduty/history.jsonl`
+- `./scoutflo-audits/pagerduty/[<label>/]<YYYY-MM-DD>/findings.json` per the [findings schema](../../report-standard/findings-schema.md), finding IDs `PD-NNN`
+- `./scoutflo-audits/pagerduty/[<label>/]<YYYY-MM-DD>/report.md` per the [report template](../../report-standard/report-template.md), including the `## Inventory` section (the `render-report-viz.sh inventory` output)
+- `./scoutflo-audits/pagerduty/[<label>/]<YYYY-MM-DD>/inventory.json` per the [inventory schema](../../report-standard/inventory-schema.md) (`scoutflo-inventory/v1`): the complete Phase-2 catalog — one item per service, escalation policy, schedule, integration, and user (`kind` `service`, `escalation_policy`, `schedule`, `integration`, `user`), each with `covers` (the topology service it pages for), `enabled`, `severity` (the object's own, or null), and `routes_to` for alerting objects (a service's escalation policy). Built from the raw pull, never invented; redacted at capture, never a secret value.
+- One appended line in `./scoutflo-audits/pagerduty/[<label>/]history.jsonl`
 - One Slack brief, when `slack.webhook_env` is configured
 
 ## Doctor gate
@@ -57,10 +59,26 @@ SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.s
 for bin in curl jq; do
   command -v "$bin" >/dev/null || { echo "missing binary: $bin"; exit 1; }
 done
+# Resolve the CURRENT pagerduty target from toolkit.yaml — a single block, or the SCOUTFLO_TARGET-selected
+# item of a labeled list (the shared enumerator handles both; no yq required). The token comes from the
+# variable this target's token_env names and the host from its region; a single-block config resolves to
+# one target (label "pagerduty"), byte-identical to today's read.
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+PD_KIND=$(sh "$TT" "$CFG" pagerduty kind); PD_N=$(sh "$TT" "$CFG" pagerduty count)
+[ "${PD_N:-0}" -ge 1 ] || { echo "no pagerduty target configured in $CFG; run /scoutflo:connect"; exit 1; }
+PD_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$PD_N" ]; do [ "$(sh "$TT" "$CFG" pagerduty label "$_i")" = "$SCOUTFLO_TARGET" ] && { PD_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+PD_LABEL=$(sh "$TT" "$CFG" pagerduty label "$PD_IDX")
+if [ "$PD_KIND" = seq ]; then PD_SEG="pagerduty/${PD_LABEL}"; else PD_SEG="pagerduty"; fi
+# token_env holds a VARIABLE NAME; the secret is that variable's value (defaults to PAGERDUTY_TOKEN for a
+# single-block config). Resolve it into PAGERDUTY_TOKEN so every read below uses this target's own key.
+PD_TOKVAR=$(sh "$TT" "$CFG" pagerduty get "$PD_IDX" token_env); PD_TOKVAR="${PD_TOKVAR:-PAGERDUTY_TOKEN}"
+PAGERDUTY_TOKEN="$(printenv "$PD_TOKVAR" 2>/dev/null || true)"; export PAGERDUTY_TOKEN
+# region selects the API host: us -> api.pagerduty.com, eu -> api.eu.pagerduty.com (defaults to us).
+PD_REGION=$(sh "$TT" "$CFG" pagerduty get "$PD_IDX" region); PD_REGION="${PD_REGION:-us}"
+if [ "$PD_REGION" = "eu" ]; then PD_API="https://api.eu.pagerduty.com"; else PD_API="https://api.pagerduty.com"; fi
+echo "pagerduty target: ${PD_LABEL} -> ${PD_SEG}/ (token via ${PD_TOKVAR}, region ${PD_REGION})"
 # pagerduty.token_env names the variable; presence check only, never print the value.
-[ -n "${PAGERDUTY_TOKEN:-}" ] || { echo "PAGERDUTY_TOKEN is not set; run /scoutflo:connect"; exit 1; }
-
-PD_API="https://api.pagerduty.com"   # pagerduty.region: us -> api.pagerduty.com, eu -> api.eu.pagerduty.com
+[ -n "${PAGERDUTY_TOKEN:-}" ] || { echo "pagerduty target '${PD_LABEL}' token variable ${PD_TOKVAR} is not set; run /scoutflo:connect"; exit 1; }
 # Keep the body (do NOT discard to /dev/null) and capture the content-type, so a 200 that is
 # really an HTML SSO/login/SPA/proxy page fails closed instead of passing on the status alone.
 PD_BODY="$(mktemp)"
@@ -86,7 +104,18 @@ Print what you are pointed at and compare it to the config before the first real
 
 ```bash
 set -eu
-PD_API="https://api.pagerduty.com"   # pagerduty.region: us -> api.pagerduty.com, eu -> api.eu.pagerduty.com
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+# Resolve the CURRENT pagerduty target from config via the shared enumerator — a single block, or the
+# SCOUTFLO_TARGET-selected item of a labeled list (no yq required). The token and host are this target's own.
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+PD_KIND=$(sh "$TT" "$CFG" pagerduty kind); PD_N=$(sh "$TT" "$CFG" pagerduty count)
+PD_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$PD_N" ]; do [ "$(sh "$TT" "$CFG" pagerduty label "$_i")" = "$SCOUTFLO_TARGET" ] && { PD_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+PD_LABEL=$(sh "$TT" "$CFG" pagerduty label "$PD_IDX")
+PD_TOKVAR=$(sh "$TT" "$CFG" pagerduty get "$PD_IDX" token_env); PD_TOKVAR="${PD_TOKVAR:-PAGERDUTY_TOKEN}"
+PAGERDUTY_TOKEN="$(printenv "$PD_TOKVAR" 2>/dev/null || true)"; export PAGERDUTY_TOKEN
+[ -n "${PAGERDUTY_TOKEN:-}" ] || { echo "pagerduty target '${PD_LABEL}' token variable ${PD_TOKVAR} is not set; run /scoutflo:connect"; exit 1; }
+PD_REGION=$(sh "$TT" "$CFG" pagerduty get "$PD_IDX" region); PD_REGION="${PD_REGION:-us}"
+if [ "$PD_REGION" = "eu" ]; then PD_API="https://api.eu.pagerduty.com"; else PD_API="https://api.pagerduty.com"; fi
 # PagerDuty account keys have no whoami; the account is identified by what the key reads.
 # Resolve one page of services and print account-identifying, non-secret facts.
 SVC_SAMPLE="$(curl -fsS --max-time 15 \
@@ -94,7 +123,7 @@ SVC_SAMPLE="$(curl -fsS --max-time 15 \
   -H "Content-Type: application/json" "${PD_API}/services?limit=3")"
 COUNT="$(printf '%s' "$SVC_SAMPLE" | jq '.services | length')"
 NAMES="$(printf '%s' "$SVC_SAMPLE" | jq -r '[.services[].name] | join(", ")')"
-echo "region_host=${PD_API} sample_services=${COUNT}: ${NAMES}"
+echo "pagerduty target: ${PD_LABEL} (token via ${PD_TOKVAR}) region_host=${PD_API} sample_services=${COUNT}: ${NAMES}"
 printf '%s' "$SVC_SAMPLE" | jq -e '.services | type == "array"' >/dev/null \
   || { echo "services endpoint did not return a service list; wrong region host or wrong key — stop"; exit 1; }
 echo "live-safety gate: pass — confirm these service names belong to the account you intend to audit before continuing"
@@ -129,7 +158,16 @@ Count before judging, and declare the path in the terminal output:
 
 ```bash
 set -eu
-PD_API="https://api.pagerduty.com"   # pagerduty.region
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+PD_KIND=$(sh "$TT" "$CFG" pagerduty kind); PD_N=$(sh "$TT" "$CFG" pagerduty count)
+PD_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$PD_N" ]; do [ "$(sh "$TT" "$CFG" pagerduty label "$_i")" = "$SCOUTFLO_TARGET" ] && { PD_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+PD_LABEL=$(sh "$TT" "$CFG" pagerduty label "$PD_IDX")
+if [ "$PD_KIND" = seq ]; then PD_SEG="pagerduty/${PD_LABEL}"; else PD_SEG="pagerduty"; fi
+PD_TOKVAR=$(sh "$TT" "$CFG" pagerduty get "$PD_IDX" token_env); PD_TOKVAR="${PD_TOKVAR:-PAGERDUTY_TOKEN}"
+PAGERDUTY_TOKEN="$(printenv "$PD_TOKVAR" 2>/dev/null || true)"; export PAGERDUTY_TOKEN
+PD_REGION=$(sh "$TT" "$CFG" pagerduty get "$PD_IDX" region); PD_REGION="${PD_REGION:-us}"
+if [ "$PD_REGION" = "eu" ]; then PD_API="https://api.eu.pagerduty.com"; else PD_API="https://api.pagerduty.com"; fi
 SMALL_MAX_OBJECTS="15"    # example, tune to your environment
 MEDIUM_MAX_OBJECTS="60"   # example, tune to your environment
 BATCH_SIZE="20"           # services per batch on the large path; example, tune it
@@ -146,7 +184,7 @@ echo "services=${SERVICES} escalation_policies=${POLICIES} schedules=${SCHEDULES
 
 # Guided-walkthrough drift check, per report-standard/README.md: compare against the
 # last run rather than a blank slate; state the result in the executive summary.
-TARGET_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/pagerduty"
+TARGET_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${PD_SEG}"
 PREV_RUN="$(find "$TARGET_DIR" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort | tail -1)"
 DRIFT="first run"
 if [ -n "$PREV_RUN" ] && [ -f "${PREV_RUN}/findings.json" ]; then
@@ -269,11 +307,19 @@ Emit and verify:
 
 ```bash
 set -eu
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+PD_KIND=$(sh "$TT" "$CFG" pagerduty kind); PD_N=$(sh "$TT" "$CFG" pagerduty count)
+PD_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$PD_N" ]; do [ "$(sh "$TT" "$CFG" pagerduty label "$_i")" = "$SCOUTFLO_TARGET" ] && { PD_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+PD_LABEL=$(sh "$TT" "$CFG" pagerduty label "$PD_IDX")
+if [ "$PD_KIND" = seq ]; then PD_SEG="pagerduty/${PD_LABEL}"; else PD_SEG="pagerduty"; fi
 RUN_DATE="$(date -u +%Y-%m-%d)"
-OUT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/pagerduty/${RUN_DATE}"
+OUT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${PD_SEG}/${RUN_DATE}"
 mkdir -p "$OUT"
-# ... write findings.json, inventory.json, and report.md per the report standard, then verify:
-jq -e '.schema == "scoutflo-findings/v1" and .target == "pagerduty" and (.findings | type == "array")' \
+# ... write findings.json, inventory.json, and report.md per the report standard. The findings.json
+# ".target" is the per-target slug (equal to $PD_SEG: "pagerduty" for a single block, "pagerduty/<label>"
+# for a labeled list target), so audit-all/correlation/render disambiguate multiple PagerDuty accounts. Verify:
+jq -e --arg seg "$PD_SEG" '.schema == "scoutflo-findings/v1" and .target == $seg and (.findings | type == "array")' \
   "$OUT/findings.json" >/dev/null && echo "findings.json valid"
 grep -q '^# ' "$OUT/report.md" && echo "report.md present"
 # Output conformance: the emitted report.md must match report-standard/report-template.md.
@@ -291,7 +337,13 @@ Compute the delta against the previous run's `findings.json` (the latest two dat
 
 ```bash
 set -eu
-TARGET_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/pagerduty"
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+PD_KIND=$(sh "$TT" "$CFG" pagerduty kind); PD_N=$(sh "$TT" "$CFG" pagerduty count)
+PD_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$PD_N" ]; do [ "$(sh "$TT" "$CFG" pagerduty label "$_i")" = "$SCOUTFLO_TARGET" ] && { PD_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+PD_LABEL=$(sh "$TT" "$CFG" pagerduty label "$PD_IDX")
+if [ "$PD_KIND" = seq ]; then PD_SEG="pagerduty/${PD_LABEL}"; else PD_SEG="pagerduty"; fi
+TARGET_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${PD_SEG}"
 RUN_DATE="$(date -u +%Y-%m-%d)"
 OUT="${TARGET_DIR}/${RUN_DATE}"
 RESOLVED="0"   # fixed count from this run's delta; 0 on the first run

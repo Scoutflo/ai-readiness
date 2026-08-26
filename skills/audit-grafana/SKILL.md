@@ -11,6 +11,7 @@ Score how much your Grafana would actually help during an incident. Inventory ev
 
 This audit owns the Grafana application layer: datasources, dashboards, Grafana-managed alert rules, contact points, notification policies, query and label hygiene as visible from Grafana, and usage surfaces.
 
+- **Multiple Grafana instances, one run:** `grafana` may be a single block (one `url` + `token_env`) or a **list of labeled targets**, each with its own `url` and `token_env`. The audit **iterates every target** — enumerate them with `sh "${CLAUDE_PLUGIN_ROOT}/report-standard/toolkit-targets.sh" <cfg> grafana labels` and run the full sequence below once per target with `SCOUTFLO_TARGET=<label>` set. Output goes to `grafana/<label>/<date>/` for a list, or the flat `grafana/<date>/` for a single block (byte-identical to today). Every network call uses that target's own resolved `url` and token; no ambient default is read.
 - Backend store internals (Loki, Tempo, Mimir, VictoriaMetrics ingestion health, retention config, HA) belong to `audit-lgtm`. This audit reads backends only through Grafana datasources.
 - Proving that a page actually reaches a human end to end belongs to `audit-alert-routing`. Here you inspect wiring and flag unproven routes.
 - Error-tracker health belongs to `audit-sentry`.
@@ -27,18 +28,32 @@ This audit owns the Grafana application layer: datasources, dashboards, Grafana-
 
 ```bash
 set -eu
-# Resolved from ~/.scoutflo/toolkit.yaml
-GRAFANA_URL="https://grafana.example.com"   # grafana.url
+# Resolve the CURRENT grafana target from ~/.scoutflo/toolkit.yaml — a single block, or the
+# SCOUTFLO_TARGET-selected item of a labeled list (the shared enumerator handles both; no yq
+# required). Every call below uses THIS target's own url + token; no ambient default is read.
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+[ -f "$CFG" ] || { echo "missing $CFG; run /scoutflo:connect"; exit 1; }
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+GRAF_KIND=$(sh "$TT" "$CFG" grafana kind); GRAF_N=$(sh "$TT" "$CFG" grafana count)
+[ "${GRAF_N:-0}" -ge 1 ] || { echo "no grafana target configured in $CFG; run /scoutflo:connect"; exit 1; }
+GRAF_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$GRAF_N" ]; do [ "$(sh "$TT" "$CFG" grafana label "$_i")" = "$SCOUTFLO_TARGET" ] && { GRAF_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+GRAF_LABEL=$(sh "$TT" "$CFG" grafana label "$GRAF_IDX")
+if [ "$GRAF_KIND" = seq ]; then GRAF_SEG="grafana/${GRAF_LABEL}"; else GRAF_SEG="grafana"; fi
+GRAFANA_URL=$(sh "$TT" "$CFG" grafana get "$GRAF_IDX" url)   # grafana.url for THIS target
+[ -n "$GRAFANA_URL" ] || { echo "grafana target '${GRAF_LABEL:-?}' has no url in $CFG; run /scoutflo:connect"; exit 1; }
 # Load the home-anchored secret store so a token added to ~/.scoutflo/env (by connect,
 # even mid-session) is seen here without re-exporting or opening a new terminal. It only
 # sets *_env variables; no secret value is printed. A profile that already sources it makes
 # this a no-op. This mirrors what /scoutflo:doctor does, so doctor and this audit agree.
 SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.scoutflo/env" ]; then SCOUTFLO_ENV="./.scoutflo/env"; else SCOUTFLO_ENV="$HOME/.scoutflo/env"; fi; }
 [ -f "$SCOUTFLO_ENV" ] && . "$SCOUTFLO_ENV" || true
-# grafana.token_env names the variable; presence check only, never print the value.
-[ -n "${GRAFANA_TOKEN:-}" ] || { echo "GRAFANA_TOKEN is not set; run /scoutflo:connect"; exit 1; }
+# grafana.token_env names the variable holding THIS target's token; presence check only, never print the value.
+GRAF_TOKEN_VAR=$(sh "$TT" "$CFG" grafana get "$GRAF_IDX" token_env); [ -n "$GRAF_TOKEN_VAR" ] || GRAF_TOKEN_VAR="GRAFANA_TOKEN"
+GRAFANA_TOKEN=$(printenv "$GRAF_TOKEN_VAR" 2>/dev/null || true)
+[ -n "${GRAFANA_TOKEN:-}" ] || { echo "${GRAF_TOKEN_VAR} is not set; run /scoutflo:connect"; exit 1; }
 command -v curl >/dev/null || { echo "curl is required"; exit 1; }
 command -v jq   >/dev/null || { echo "jq is required"; exit 1; }
+echo "grafana target: ${GRAF_LABEL} (${GRAFANA_URL}) -> ${GRAF_SEG}/"
 
 curl -fsS --max-time 10 "${GRAFANA_URL}/api/health" | jq -e '.database == "ok"' >/dev/null \
   || { echo "Grafana health check failed at ${GRAFANA_URL}/api/health"; exit 1; }
@@ -61,12 +76,25 @@ Also run the least-privilege probe from [references/api-checks.md](references/ap
 Before any real check, confirm what you are pointed at:
 
 ```bash
+set -eu
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+[ -f "$CFG" ] || { echo "missing $CFG; run /scoutflo:connect"; exit 1; }
+# Resolve the CURRENT grafana target (single block or SCOUTFLO_TARGET-selected list item); never hand-typed.
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+GRAF_N=$(sh "$TT" "$CFG" grafana count)
+GRAF_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$GRAF_N" ]; do [ "$(sh "$TT" "$CFG" grafana label "$_i")" = "$SCOUTFLO_TARGET" ] && { GRAF_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+GRAF_LABEL=$(sh "$TT" "$CFG" grafana label "$GRAF_IDX")
+GRAFANA_URL=$(sh "$TT" "$CFG" grafana get "$GRAF_IDX" url)
+SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.scoutflo/env" ]; then SCOUTFLO_ENV="./.scoutflo/env"; else SCOUTFLO_ENV="$HOME/.scoutflo/env"; fi; }
+[ -f "$SCOUTFLO_ENV" ] && . "$SCOUTFLO_ENV" || true
+GRAF_TOKEN_VAR=$(sh "$TT" "$CFG" grafana get "$GRAF_IDX" token_env); [ -n "$GRAF_TOKEN_VAR" ] || GRAF_TOKEN_VAR="GRAFANA_TOKEN"
+GRAFANA_TOKEN=$(printenv "$GRAF_TOKEN_VAR" 2>/dev/null || true)
 curl -fsS --max-time 10 -H "Authorization: Bearer ${GRAFANA_TOKEN}" "${GRAFANA_URL}/api/org" \
   | jq '{org: .name, id: .id}'
-echo "target: ${GRAFANA_URL}"
+echo "target: ${GRAF_LABEL} -> ${GRAFANA_URL}"
 ```
 
-Compare the printed URL and org against `grafana.url` in `~/.scoutflo/toolkit.yaml`. If they differ, or the org name is not the one you expect (staging token against production, or the reverse), stop and report the mismatch. Never proceed on "probably the right instance".
+Compare the printed URL and org against the resolved target's `url` in `~/.scoutflo/toolkit.yaml` (the `grafana` block, or the `SCOUTFLO_TARGET`-named list item). If they differ, or the org name is not the one you expect (staging token against production, or the reverse), stop and report the mismatch. Never proceed on "probably the right instance".
 
 Load `./scoutflo-audits/topology.md` if it exists; its service list is your critical-service list and its names are canonical in findings and the coverage matrix. If it does not exist, infer services live from datasource labels, note the inference in the report, and suggest `/scoutflo:map-topology`.
 
@@ -78,9 +106,20 @@ Count before judging, and declare the path in the terminal output:
 
 ```bash
 set -eu
-# Resolved from ~/.scoutflo/toolkit.yaml
-GRAFANA_URL="https://grafana.example.com"   # grafana.url
-[ -n "${GRAFANA_TOKEN:-}" ] || { echo "GRAFANA_TOKEN is not set; run /scoutflo:connect"; exit 1; }
+# Resolve the CURRENT grafana target (single block or SCOUTFLO_TARGET-selected list item) from config,
+# then load the secret store and read THIS target's token (grafana.token_env names the variable).
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+GRAF_KIND=$(sh "$TT" "$CFG" grafana kind); GRAF_N=$(sh "$TT" "$CFG" grafana count)
+GRAF_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$GRAF_N" ]; do [ "$(sh "$TT" "$CFG" grafana label "$_i")" = "$SCOUTFLO_TARGET" ] && { GRAF_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+GRAF_LABEL=$(sh "$TT" "$CFG" grafana label "$GRAF_IDX")
+if [ "$GRAF_KIND" = seq ]; then GRAF_SEG="grafana/${GRAF_LABEL}"; else GRAF_SEG="grafana"; fi
+GRAFANA_URL=$(sh "$TT" "$CFG" grafana get "$GRAF_IDX" url)
+SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.scoutflo/env" ]; then SCOUTFLO_ENV="./.scoutflo/env"; else SCOUTFLO_ENV="$HOME/.scoutflo/env"; fi; }
+[ -f "$SCOUTFLO_ENV" ] && . "$SCOUTFLO_ENV" || true
+GRAF_TOKEN_VAR=$(sh "$TT" "$CFG" grafana get "$GRAF_IDX" token_env); [ -n "$GRAF_TOKEN_VAR" ] || GRAF_TOKEN_VAR="GRAFANA_TOKEN"
+GRAFANA_TOKEN=$(printenv "$GRAF_TOKEN_VAR" 2>/dev/null || true)
+[ -n "${GRAFANA_TOKEN:-}" ] || { echo "${GRAF_TOKEN_VAR} is not set; run /scoutflo:connect"; exit 1; }
 
 SMALL_MAX_OBJECTS="40"    # dashboards + alert rules + datasources combined; example, tune to your environment
 MEDIUM_MAX_OBJECTS="200"  # example, tune to your environment
@@ -101,7 +140,7 @@ echo "dashboards=${DASHBOARDS} alert_rules=${RULES} datasources=${DATASOURCES} s
 # Guided-walkthrough drift check, per report-standard/README.md#using-topology-and-prior-runs-as-a-guided-walkthrough:
 # compare against the last run rather than a blank slate. State the result in the executive summary;
 # never silently omit it. This never skips a live check - every check in later phases still runs fresh.
-TARGET_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/grafana"
+TARGET_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${GRAF_SEG}"
 PREV_RUN="$(find "$TARGET_DIR" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort | tail -1)"
 DRIFT="first run"
 if [ -n "$PREV_RUN" ] && [ -f "${PREV_RUN}/findings.json" ]; then
@@ -157,13 +196,19 @@ The large-path phases then run against the scoped set; the report names anything
 
 ## Large-path worklist: dashboard batches and resume
 
-Runs on the large path only. State lives under a run-ID-keyed run directory, `./scoutflo-audits/grafana/runs/<RUN_ID>/`, not a calendar-date directory: a run that is still batching when the UTC date rolls over would otherwise abandon its worklist or have to guess which date directory is still its own. This directory holds only the worklist, the lock, and per-batch UID files; the dashboard, datasource, and rule data itself still lands in the standard dated raw directory every other phase in this skill reads from, so nothing else in the skill changes when the large path is active.
+Runs on the large path only. State lives under a run-ID-keyed run directory, `./scoutflo-audits/grafana/[<label>/]runs/<RUN_ID>/` (the `[<label>/]` segment is present only for a labeled multi-target list), not a calendar-date directory: a run that is still batching when the UTC date rolls over would otherwise abandon its worklist or have to guess which date directory is still its own. This directory holds only the worklist, the lock, and per-batch UID files; the dashboard, datasource, and rule data itself still lands in the standard dated raw directory every other phase in this skill reads from, so nothing else in the skill changes when the large path is active.
 
 0. **Find a resumable run, or start a new one.**
 
    ```bash
    set -eu
-   AUDIT_ROOT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/grafana"
+   CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+   TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+   GRAF_KIND=$(sh "$TT" "$CFG" grafana kind); GRAF_N=$(sh "$TT" "$CFG" grafana count)
+   GRAF_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$GRAF_N" ]; do [ "$(sh "$TT" "$CFG" grafana label "$_i")" = "$SCOUTFLO_TARGET" ] && { GRAF_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+   GRAF_LABEL=$(sh "$TT" "$CFG" grafana label "$GRAF_IDX")
+   if [ "$GRAF_KIND" = seq ]; then GRAF_SEG="grafana/${GRAF_LABEL}"; else GRAF_SEG="grafana"; fi
+   AUDIT_ROOT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${GRAF_SEG}"
    resumable=""
    if [ -d "${AUDIT_ROOT}/runs" ]; then
      for d in "${AUDIT_ROOT}/runs"/*/; do
@@ -185,7 +230,13 @@ Runs on the large path only. State lives under a run-ID-keyed run directory, `./
 
    ```bash
    set -eu
-   AUDIT_ROOT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/grafana"
+   CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+   TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+   GRAF_KIND=$(sh "$TT" "$CFG" grafana kind); GRAF_N=$(sh "$TT" "$CFG" grafana count)
+   GRAF_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$GRAF_N" ]; do [ "$(sh "$TT" "$CFG" grafana label "$_i")" = "$SCOUTFLO_TARGET" ] && { GRAF_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+   GRAF_LABEL=$(sh "$TT" "$CFG" grafana label "$GRAF_IDX")
+   if [ "$GRAF_KIND" = seq ]; then GRAF_SEG="grafana/${GRAF_LABEL}"; else GRAF_SEG="grafana"; fi
+   AUDIT_ROOT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${GRAF_SEG}"
    RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)"   # first-seen timestamp of this run; stable for its lifetime
    RUN_DIR="${AUDIT_ROOT}/runs/${RUN_ID}"
    mkdir -p "${RUN_DIR}/batches"
@@ -197,10 +248,20 @@ Runs on the large path only. State lives under a run-ID-keyed run directory, `./
 
    ```bash
    set -eu
-   # Resolved from ~/.scoutflo/toolkit.yaml
-   GRAFANA_URL="https://grafana.example.com"   # grafana.url
-   [ -n "${GRAFANA_TOKEN:-}" ] || { echo "GRAFANA_TOKEN is not set; run /scoutflo:connect"; exit 1; }
-   RUN_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/grafana/runs/20260717T140500Z"   # example; this run's resolved RUN_DIR
+   # Resolve the CURRENT grafana target (single block or SCOUTFLO_TARGET-selected list item) from config.
+   CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+   TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+   GRAF_KIND=$(sh "$TT" "$CFG" grafana kind); GRAF_N=$(sh "$TT" "$CFG" grafana count)
+   GRAF_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$GRAF_N" ]; do [ "$(sh "$TT" "$CFG" grafana label "$_i")" = "$SCOUTFLO_TARGET" ] && { GRAF_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+   GRAF_LABEL=$(sh "$TT" "$CFG" grafana label "$GRAF_IDX")
+   if [ "$GRAF_KIND" = seq ]; then GRAF_SEG="grafana/${GRAF_LABEL}"; else GRAF_SEG="grafana"; fi
+   GRAFANA_URL=$(sh "$TT" "$CFG" grafana get "$GRAF_IDX" url)
+   SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.scoutflo/env" ]; then SCOUTFLO_ENV="./.scoutflo/env"; else SCOUTFLO_ENV="$HOME/.scoutflo/env"; fi; }
+   [ -f "$SCOUTFLO_ENV" ] && . "$SCOUTFLO_ENV" || true
+   GRAF_TOKEN_VAR=$(sh "$TT" "$CFG" grafana get "$GRAF_IDX" token_env); [ -n "$GRAF_TOKEN_VAR" ] || GRAF_TOKEN_VAR="GRAFANA_TOKEN"
+   GRAFANA_TOKEN=$(printenv "$GRAF_TOKEN_VAR" 2>/dev/null || true)
+   [ -n "${GRAFANA_TOKEN:-}" ] || { echo "${GRAF_TOKEN_VAR} is not set; run /scoutflo:connect"; exit 1; }
+   RUN_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${GRAF_SEG}/runs/20260717T140500Z"   # example; this run's resolved RUN_DIR
    WORKLIST="${RUN_DIR}/worklist.tsv"
 
    if [ -s "${WORKLIST}" ]; then
@@ -220,7 +281,13 @@ Runs on the large path only. State lives under a run-ID-keyed run directory, `./
 
    ```bash
    set -eu
-   RUN_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/grafana/runs/20260717T140500Z"   # example; this run's resolved RUN_DIR
+   CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+   TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+   GRAF_KIND=$(sh "$TT" "$CFG" grafana kind); GRAF_N=$(sh "$TT" "$CFG" grafana count)
+   GRAF_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$GRAF_N" ]; do [ "$(sh "$TT" "$CFG" grafana label "$_i")" = "$SCOUTFLO_TARGET" ] && { GRAF_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+   GRAF_LABEL=$(sh "$TT" "$CFG" grafana label "$GRAF_IDX")
+   if [ "$GRAF_KIND" = seq ]; then GRAF_SEG="grafana/${GRAF_LABEL}"; else GRAF_SEG="grafana"; fi
+   RUN_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${GRAF_SEG}/runs/20260717T140500Z"   # example; this run's resolved RUN_DIR
    LOCK="${RUN_DIR}/worklist.lock"
    LOCK_STALE_MINUTES="30"   # example, tune to your batch size and expected run length
 
@@ -243,12 +310,22 @@ Runs on the large path only. State lives under a run-ID-keyed run directory, `./
 
    ```bash
    set -eu
-   RUN_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/grafana/runs/20260717T140500Z"   # example; this run's resolved RUN_DIR
+   CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+   TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+   GRAF_KIND=$(sh "$TT" "$CFG" grafana kind); GRAF_N=$(sh "$TT" "$CFG" grafana count)
+   GRAF_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$GRAF_N" ]; do [ "$(sh "$TT" "$CFG" grafana label "$_i")" = "$SCOUTFLO_TARGET" ] && { GRAF_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+   GRAF_LABEL=$(sh "$TT" "$CFG" grafana label "$GRAF_IDX")
+   if [ "$GRAF_KIND" = seq ]; then GRAF_SEG="grafana/${GRAF_LABEL}"; else GRAF_SEG="grafana"; fi
+   RUN_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${GRAF_SEG}/runs/20260717T140500Z"   # example; this run's resolved RUN_DIR
    WORKLIST="${RUN_DIR}/worklist.tsv"
    BATCH_SIZE="15"   # dashboards per batch on the large path; example, tune it
-   export GRAFANA_URL="https://grafana.example.com"   # grafana.url
-   # GRAFANA_TOKEN must already be exported in this shell; see the doctor gate.
-   export OUT_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/grafana/$(date -u +%Y-%m-%d)/raw"   # same raw dir every other phase reads
+   export GRAFANA_URL="$(sh "$TT" "$CFG" grafana get "$GRAF_IDX" url)"   # grafana.url for THIS target
+   # THIS target's token: grafana.token_env names the variable; load the secret store, then export it for the script.
+   SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.scoutflo/env" ]; then SCOUTFLO_ENV="./.scoutflo/env"; else SCOUTFLO_ENV="$HOME/.scoutflo/env"; fi; }
+   [ -f "$SCOUTFLO_ENV" ] && . "$SCOUTFLO_ENV" || true
+   GRAF_TOKEN_VAR=$(sh "$TT" "$CFG" grafana get "$GRAF_IDX" token_env); [ -n "$GRAF_TOKEN_VAR" ] || GRAF_TOKEN_VAR="GRAFANA_TOKEN"
+   export GRAFANA_TOKEN="$(printenv "$GRAF_TOKEN_VAR" 2>/dev/null || true)"
+   export OUT_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${GRAF_SEG}/$(date -u +%Y-%m-%d)/raw"   # same raw dir every other phase reads
    export SKIP_NON_DASHBOARD="1"   # "0" or unset on this run's first batch only
 
    BATCH_FILE="${RUN_DIR}/batches/$(date -u +%s).uids"
@@ -283,7 +360,13 @@ Before writing `findings.json` and `report.md`, assert the worklist finished:
 
 ```bash
 set -eu
-AUDIT_ROOT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/grafana"
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+GRAF_KIND=$(sh "$TT" "$CFG" grafana kind); GRAF_N=$(sh "$TT" "$CFG" grafana count)
+GRAF_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$GRAF_N" ]; do [ "$(sh "$TT" "$CFG" grafana label "$_i")" = "$SCOUTFLO_TARGET" ] && { GRAF_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+GRAF_LABEL=$(sh "$TT" "$CFG" grafana label "$GRAF_IDX")
+if [ "$GRAF_KIND" = seq ]; then GRAF_SEG="grafana/${GRAF_LABEL}"; else GRAF_SEG="grafana"; fi
+AUDIT_ROOT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${GRAF_SEG}"
 RUN_DIR="${RUN_DIR:-$(ls -dt "${AUDIT_ROOT}"/runs/*/ 2>/dev/null | head -n 1 | sed 's:/$::')}"
 if [ -n "${RUN_DIR}" ] && [ -f "${RUN_DIR}/worklist.tsv" ]; then
   pending=$(awk -F'\t' '$2 == "pending"' "${RUN_DIR}/worklist.tsv" | wc -l | tr -d ' ')
@@ -305,10 +388,22 @@ On the small and medium paths, run the bundled read-only inventory script once, 
 
 ```bash
 set -eu
-export GRAFANA_URL="https://grafana.example.com"   # grafana.url from ~/.scoutflo/toolkit.yaml
-# GRAFANA_TOKEN must already be exported in this shell; see the doctor gate.
+# Resolve the CURRENT grafana target (single block or SCOUTFLO_TARGET-selected list item) from config,
+# then export the target's url + token + raw dir for the read-only inventory script.
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+GRAF_KIND=$(sh "$TT" "$CFG" grafana kind); GRAF_N=$(sh "$TT" "$CFG" grafana count)
+GRAF_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$GRAF_N" ]; do [ "$(sh "$TT" "$CFG" grafana label "$_i")" = "$SCOUTFLO_TARGET" ] && { GRAF_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+GRAF_LABEL=$(sh "$TT" "$CFG" grafana label "$GRAF_IDX")
+if [ "$GRAF_KIND" = seq ]; then GRAF_SEG="grafana/${GRAF_LABEL}"; else GRAF_SEG="grafana"; fi
+export GRAFANA_URL="$(sh "$TT" "$CFG" grafana get "$GRAF_IDX" url)"   # grafana.url for THIS target
+SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.scoutflo/env" ]; then SCOUTFLO_ENV="./.scoutflo/env"; else SCOUTFLO_ENV="$HOME/.scoutflo/env"; fi; }
+[ -f "$SCOUTFLO_ENV" ] && . "$SCOUTFLO_ENV" || true
+GRAF_TOKEN_VAR=$(sh "$TT" "$CFG" grafana get "$GRAF_IDX" token_env); [ -n "$GRAF_TOKEN_VAR" ] || GRAF_TOKEN_VAR="GRAFANA_TOKEN"
+export GRAFANA_TOKEN="$(printenv "$GRAF_TOKEN_VAR" 2>/dev/null || true)"
+export OUT_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${GRAF_SEG}/$(date -u +%Y-%m-%d)/raw"
 bash "${CLAUDE_PLUGIN_ROOT}/skills/audit-grafana/scripts/grafana-audit.sh"
-RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/grafana/$(date -u +%Y-%m-%d)/raw"
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${GRAF_SEG}/$(date -u +%Y-%m-%d)/raw"
 cat "${RAW_DIR}/summary.txt"
 ```
 
@@ -362,7 +457,14 @@ The checks:
 1. **Receiver wiring (GRAF-050).** Walk the policy tree and list every referenced receiver, then confirm each exists among contact points and is not a placeholder:
 
    ```bash
-   RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/grafana/$(date -u +%Y-%m-%d)/raw"   # this run's raw dir
+   # Resolve THIS target's segment (single block => "grafana"; a SCOUTFLO_TARGET list item => "grafana/<label>").
+   CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+   TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+   GRAF_KIND=$(sh "$TT" "$CFG" grafana kind); GRAF_N=$(sh "$TT" "$CFG" grafana count)
+   GRAF_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$GRAF_N" ]; do [ "$(sh "$TT" "$CFG" grafana label "$_i")" = "$SCOUTFLO_TARGET" ] && { GRAF_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+   GRAF_LABEL=$(sh "$TT" "$CFG" grafana label "$GRAF_IDX")
+   if [ "$GRAF_KIND" = seq ]; then GRAF_SEG="grafana/${GRAF_LABEL}"; else GRAF_SEG="grafana"; fi
+   RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${GRAF_SEG}/$(date -u +%Y-%m-%d)/raw"   # this run's raw dir (per resolved target)
    jq -r '[.. | objects | select(has("receiver")) | .receiver] | unique[]' \
      "${RAW_DIR}/notification-policies.json"
    jq -r '.[] | "\(.name)\t\(.type)"' "${RAW_DIR}/contact-points.json"
@@ -381,7 +483,14 @@ The checks:
 4. **Labels (GRAF-053).** Every rule carries `severity` and `service` labels; without them routing and the coverage matrix cannot work:
 
    ```bash
-   RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/grafana/$(date -u +%Y-%m-%d)/raw"   # this run's raw dir
+   # Resolve THIS target's segment (single block => "grafana"; a SCOUTFLO_TARGET list item => "grafana/<label>").
+   CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+   TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+   GRAF_KIND=$(sh "$TT" "$CFG" grafana kind); GRAF_N=$(sh "$TT" "$CFG" grafana count)
+   GRAF_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$GRAF_N" ]; do [ "$(sh "$TT" "$CFG" grafana label "$_i")" = "$SCOUTFLO_TARGET" ] && { GRAF_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+   GRAF_LABEL=$(sh "$TT" "$CFG" grafana label "$GRAF_IDX")
+   if [ "$GRAF_KIND" = seq ]; then GRAF_SEG="grafana/${GRAF_LABEL}"; else GRAF_SEG="grafana"; fi
+   RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${GRAF_SEG}/$(date -u +%Y-%m-%d)/raw"   # this run's raw dir (per resolved target)
    # Exclude recording rules (.record != null): they route nothing and carry no severity/service.
    jq '[ .[] | select((.record // null) == null)
          | select(((.labels.severity // "") == "") or ((.labels.service // "") == ""))
@@ -422,7 +531,14 @@ Every GRAF-100 to GRAF-103 finding points at `setup-grafana`, anchored to the se
 Checks GRAF-070 to GRAF-072. These start from heuristics over `panel-targets.json`; verify each hit before filing.
 
 ```bash
-RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/grafana/$(date -u +%Y-%m-%d)/raw"   # this run's raw dir
+# Resolve THIS target's segment (single block => "grafana"; a SCOUTFLO_TARGET list item => "grafana/<label>").
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+GRAF_KIND=$(sh "$TT" "$CFG" grafana kind); GRAF_N=$(sh "$TT" "$CFG" grafana count)
+GRAF_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$GRAF_N" ]; do [ "$(sh "$TT" "$CFG" grafana label "$_i")" = "$SCOUTFLO_TARGET" ] && { GRAF_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+GRAF_LABEL=$(sh "$TT" "$CFG" grafana label "$GRAF_IDX")
+if [ "$GRAF_KIND" = seq ]; then GRAF_SEG="grafana/${GRAF_LABEL}"; else GRAF_SEG="grafana"; fi
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${GRAF_SEG}/$(date -u +%Y-%m-%d)/raw"   # this run's raw dir (per resolved target)
 # Counter-style metrics queried without rate/increase (candidates for GRAF-070)
 jq '[ .[] | { dashboard_uid, panel_id, raw_counters:
       [ .targets[]? | (.expr // "") | tostring
@@ -442,7 +558,14 @@ A raw counter on a graph shows a meaningless ever-growing line; an expensive exp
 Checks GRAF-080 to GRAF-082:
 
 ```bash
-RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/grafana/$(date -u +%Y-%m-%d)/raw"   # this run's raw dir
+# Resolve THIS target's segment (single block => "grafana"; a SCOUTFLO_TARGET list item => "grafana/<label>").
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+GRAF_KIND=$(sh "$TT" "$CFG" grafana kind); GRAF_N=$(sh "$TT" "$CFG" grafana count)
+GRAF_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$GRAF_N" ]; do [ "$(sh "$TT" "$CFG" grafana label "$_i")" = "$SCOUTFLO_TARGET" ] && { GRAF_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+GRAF_LABEL=$(sh "$TT" "$CFG" grafana label "$GRAF_IDX")
+if [ "$GRAF_KIND" = seq ]; then GRAF_SEG="grafana/${GRAF_LABEL}"; else GRAF_SEG="grafana"; fi
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${GRAF_SEG}/$(date -u +%Y-%m-%d)/raw"   # this run's raw dir (per resolved target)
 # Is there any usage / ingestion-health dashboard at all?
 jq '[ .[] | select(.title | test("usage|billing|ingest|monitoring health"; "i"))
       | {uid, title} ]' "${RAW_DIR}/dashboard-index.json"
@@ -480,7 +603,7 @@ Mechanics follow [severity-and-scoring.md](../../report-standard/severity-and-sc
 - ❌ `Scored dashboard semantics 100: forty dashboards render with no query errors.`
 - ✅ `Scored dashboard semantics 60: panels render, but three key stats mismatch the provider-native source (GRAF-027) and one dashboard silently queries org-wide scope (GRAF-021), so credit stops at partial.`
 
-Write both artifacts to `./scoutflo-audits/grafana/<YYYY-MM-DD>/`:
+Write both artifacts to `./scoutflo-audits/grafana/[<label>/]<YYYY-MM-DD>/` (the flat `grafana/<date>/` for a single block; `grafana/<label>/<date>/` for a labeled list target):
 
 - `findings.json` per the [schema](../../report-standard/findings-schema.md): prefix `GRAF`, IDs from the [check catalog](references/api-checks.md#check-catalog), evidence quoting real command output, every finding with a `remediation` pointer into `setup-grafana`, and `estate.objects`/`estate.path` set to the count and path chosen in [Estate sizing](#estate-sizing).
 - `report.md` per the [template](../../report-standard/report-template.md): executive summary, scorecard, findings table, the Phase 7 coverage matrix, the `## Inventory` section (the `render-report-viz.sh inventory` output), next safe actions ordered severity-then-safety, delta against the previous run (or "first run, no delta"), evidence appendix.
@@ -490,16 +613,26 @@ Emit, verify, brief:
 
 ```bash
 set -eu
-OUT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/grafana/$(date -u +%Y-%m-%d)"
+# Resolve the CURRENT grafana target (single block or SCOUTFLO_TARGET-selected list item) so output
+# lands in the per-target directory: flat grafana/<date>/ for a single block, grafana/<label>/<date>/ for a list.
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+GRAF_KIND=$(sh "$TT" "$CFG" grafana kind); GRAF_N=$(sh "$TT" "$CFG" grafana count)
+GRAF_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$GRAF_N" ]; do [ "$(sh "$TT" "$CFG" grafana label "$_i")" = "$SCOUTFLO_TARGET" ] && { GRAF_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+GRAF_LABEL=$(sh "$TT" "$CFG" grafana label "$GRAF_IDX")
+if [ "$GRAF_KIND" = seq ]; then GRAF_SEG="grafana/${GRAF_LABEL}"; else GRAF_SEG="grafana"; fi
+OUT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${GRAF_SEG}/$(date -u +%Y-%m-%d)"
 mkdir -p "$OUT"
-# ... write findings.json, inventory.json, and report.md per the report standard, then verify:
-jq -e '.schema == "scoutflo-findings/v1" and .target == "grafana"
+# ... write findings.json, inventory.json, and report.md per the report standard. The findings.json and
+# inventory.json ".target" is the per-target slug $GRAF_SEG ("grafana" for a single block, "grafana/<label>"
+# for a labeled list target), so audit-all/correlation/render disambiguate multiple instances. Then verify:
+jq -e --arg seg "$GRAF_SEG" '.schema == "scoutflo-findings/v1" and .target == $seg
        and (.findings | type == "array")' "$OUT/findings.json" >/dev/null \
   && echo "findings.json valid"
 # Inventory (scoutflo-inventory/v1): the complete Phase-1 catalog of what exists,
 # built from the raw pull (never invented, redacted). counts.total must reconcile
 # with items; the ## Inventory section of report.md IS this render.
-jq -e '.schema == "scoutflo-inventory/v1" and .target == "grafana"
+jq -e --arg seg "$GRAF_SEG" '.schema == "scoutflo-inventory/v1" and .target == $seg
        and (.items | type == "array") and (.counts.total == (.items | length))' \
   "$OUT/inventory.json" >/dev/null && echo "inventory.json valid"
 sh "${CLAUDE_PLUGIN_ROOT}/report-standard/render-report-viz.sh" inventory "$OUT/inventory.json" >/dev/null \

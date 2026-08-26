@@ -64,6 +64,8 @@ Two conventions are rules, not suggestions:
 
 Configure only what you run. Unconfigured integrations are skipped cleanly by every skill; they are not failures.
 
+**Multiple targets of one integration (same environment).** If you run several instances of the same integration in one environment — e.g. 3 HyperDX instances, N Azure subscriptions, multiple AWS accounts or GCP projects — make that integration's block a **YAML list**, where each item is the normal mapping plus a required `label:` (a unique slug), each with its own `*_env` variable name for its own secret. The audit runs once per target and writes to `<integration>/<label>/<date>/`; a plain single block is unchanged and writes the flat `<integration>/<date>/`. See the worked example at the top of [templates/toolkit.yaml.example](../../templates/toolkit.yaml.example). For a *different* environment (prod vs staging) keep using a separate `toolkit-<env>.yaml` selected with `SCOUTFLO_CONFIG` — that is environment isolation, distinct from multiple targets in one environment.
+
 Ask which integrations to configure as a plain numbered list in a normal chat message, per the "Asking questions" rule above — this table has many rows, well past the option ceiling that rule warns about.
 
 | Integration | Used by | Config block | Suggested env var | Tier summary |

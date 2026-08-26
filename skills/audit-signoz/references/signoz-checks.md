@@ -26,10 +26,19 @@ SigNoz API helper (declare once per session; every SigNoz block below calls `sig
 
 ```bash
 set -eu
-SIG_URL="https://your-signoz-host:8080"     # signoz.url
-SIG_URL="${SIG_URL%/}"
-SIGNOZ_API_KEY="${SIGNOZ_API_KEY:-}"         # signoz.api_key_env; presence-checked by the doctor gate
-[ -n "$SIGNOZ_API_KEY" ] || { echo "no SigNoz Service Account token set (signoz.api_key_env); authed checks unavailable — run /scoutflo:connect"; exit 1; }
+# Resolve the CURRENT signoz target from toolkit.yaml via the shared enumerator — a single block, or the
+# SCOUTFLO_TARGET-selected item of a labeled list (no yq required). SIG_URL and the token come from THIS
+# target; the fixed placeholders are gone. Every SigNoz block below reuses these once-declared values.
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+SIG_N=$(sh "$TT" "$CFG" signoz count)
+SIG_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "${SIG_N:-0}" ]; do [ "$(sh "$TT" "$CFG" signoz label "$_i")" = "$SCOUTFLO_TARGET" ] && { SIG_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+SIG_URL=$(sh "$TT" "$CFG" signoz get "$SIG_IDX" url); SIG_URL="${SIG_URL%/}"     # signoz.url for THIS target
+SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.scoutflo/env" ]; then SCOUTFLO_ENV="./.scoutflo/env"; else SCOUTFLO_ENV="$HOME/.scoutflo/env"; fi; }
+[ -f "$SCOUTFLO_ENV" ] && . "$SCOUTFLO_ENV" || true
+SIG_KEY_VAR=$(sh "$TT" "$CFG" signoz get "$SIG_IDX" api_key_env); [ -n "$SIG_KEY_VAR" ] || SIG_KEY_VAR="SIGNOZ_API_KEY"   # api_key_env names the token VARIABLE
+SIGNOZ_API_KEY=$(printenv "$SIG_KEY_VAR" 2>/dev/null || true)                    # read the secret by name; never printed
+[ -n "$SIGNOZ_API_KEY" ] || { echo "no SigNoz Service Account token set (${SIG_KEY_VAR}, from signoz.api_key_env); authed checks unavailable — run /scoutflo:connect"; exit 1; }
 
 # sig_get <path> — the ONE way every SigNoz block below reads the API; GET only.
 sig_get() {
@@ -50,9 +59,17 @@ ClickHouse helper (declare once per session; every ClickHouse block below calls 
 
 ```bash
 set -eu
-CH_URL="http://your-clickhouse-host:8123"    # signoz.clickhouse_url
-CH_USER="${CH_USER:-signoz_ro}"              # signoz.clickhouse_user (the read-only audit user)
-CH_KEY="${SIGNOZ_CH_KEY:-}"                  # signoz.clickhouse_password_env; presence-checked by the doctor gate
+# Resolve the CURRENT signoz target's ClickHouse deep-lane params via the shared enumerator (no yq).
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+SIG_N=$(sh "$TT" "$CFG" signoz count)
+SIG_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "${SIG_N:-0}" ]; do [ "$(sh "$TT" "$CFG" signoz label "$_i")" = "$SCOUTFLO_TARGET" ] && { SIG_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+CH_URL=$(sh "$TT" "$CFG" signoz get "$SIG_IDX" clickhouse_url); CH_URL="${CH_URL%/}"          # signoz.clickhouse_url for THIS target
+CH_USER=$(sh "$TT" "$CFG" signoz get "$SIG_IDX" clickhouse_user); [ -n "$CH_USER" ] || CH_USER="signoz_ro"   # read-only audit user
+SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.scoutflo/env" ]; then SCOUTFLO_ENV="./.scoutflo/env"; else SCOUTFLO_ENV="$HOME/.scoutflo/env"; fi; }
+[ -f "$SCOUTFLO_ENV" ] && . "$SCOUTFLO_ENV" || true
+CH_KEY_VAR=$(sh "$TT" "$CFG" signoz get "$SIG_IDX" clickhouse_password_env); [ -n "$CH_KEY_VAR" ] || CH_KEY_VAR="SIGNOZ_CH_KEY"   # names the password VARIABLE
+CH_KEY=$(printenv "$CH_KEY_VAR" 2>/dev/null || true)                         # read the secret by name; never printed
 
 # One read-only SELECT. readonly=1 is defense-in-depth over the user's own read-only grants;
 # -f turns any write attempt, auth failure, or error into a hard non-zero exit. If the server
@@ -83,9 +100,17 @@ Doctor reachability + liveness (open endpoints, then one authed probe). Self-con
 
 ```bash
 set -eu
-SIG_URL="${SIG_URL:-https://your-signoz-host:8080}"; SIG_URL="${SIG_URL%/}"   # signoz.url
-SIGNOZ_API_KEY="${SIGNOZ_API_KEY:-}"                                          # signoz.api_key_env
-[ -n "$SIGNOZ_API_KEY" ] || { echo "no SigNoz Service Account token set (signoz.api_key_env) — run /scoutflo:connect"; exit 1; }
+# Resolve the CURRENT signoz target (single block or SCOUTFLO_TARGET-selected list item) via the shared enumerator.
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+SIG_N=$(sh "$TT" "$CFG" signoz count)
+SIG_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "${SIG_N:-0}" ]; do [ "$(sh "$TT" "$CFG" signoz label "$_i")" = "$SCOUTFLO_TARGET" ] && { SIG_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+SIG_URL=$(sh "$TT" "$CFG" signoz get "$SIG_IDX" url); SIG_URL="${SIG_URL%/}"   # signoz.url for THIS target
+SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.scoutflo/env" ]; then SCOUTFLO_ENV="./.scoutflo/env"; else SCOUTFLO_ENV="$HOME/.scoutflo/env"; fi; }
+[ -f "$SCOUTFLO_ENV" ] && . "$SCOUTFLO_ENV" || true
+SIG_KEY_VAR=$(sh "$TT" "$CFG" signoz get "$SIG_IDX" api_key_env); [ -n "$SIG_KEY_VAR" ] || SIG_KEY_VAR="SIGNOZ_API_KEY"   # api_key_env names the token VARIABLE
+SIGNOZ_API_KEY=$(printenv "$SIG_KEY_VAR" 2>/dev/null || true)                  # read the secret by name; never printed
+[ -n "$SIGNOZ_API_KEY" ] || { echo "no SigNoz Service Account token set (${SIG_KEY_VAR}, from signoz.api_key_env) — run /scoutflo:connect"; exit 1; }
 # Open endpoints — reachability, no auth (both 200 on a healthy instance):
 curl -fsS --max-time 10 "${SIG_URL}/api/v1/version" | jq -e '.version and (.setupCompleted != null)' >/dev/null \
   && echo "version endpoint ok" || { echo "GET /api/v1/version did not answer as expected; wrong host/port"; exit 1; }

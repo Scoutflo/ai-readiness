@@ -13,7 +13,7 @@ sh ci/run-tests.sh .
 claude plugin validate . --strict
 ```
 
-`ci/structure-check.sh` composes 16 checks: anchor, cross-block, coverage,
+`ci/structure-check.sh` composes 17 checks: anchor, cross-block, coverage,
 remediation-map, **skill-completeness**, the four behavioral-parity gates
 (scope-checkpoint, redaction-parity, business-context-parity, **env-load-parity**),
 and manifest-compat, min-version-consistency, catalog-consistency,
@@ -25,7 +25,12 @@ SKILL.md resolves to a real `## Section Name` heading in that skill's
 doctor/verify probe must assert the response is JSON — capture `%{content_type}`
 and/or a `jq -e` body check — so a 200 HTML SSO/login/SPA page fails closed
 instead of false-greening; a deliberately status-only probe carries a
-`status-probe-ok` comment).
+`status-probe-ok` comment), and **multi-target-parity** (every own-block `audit-*`
+resolves its targets through the shared `report-standard/toolkit-targets.sh`
+enumerator and nests output by a resolved `<PREFIX>_SEG` segment, so multiple
+targets of one integration in one environment — 3 HyperDX instances, N Azure
+subscriptions — never collide; shared-backend audits `audit-lgtm`/`audit-alert-routing`
+are the documented exemptions).
 `ci/run-tests.sh` executes
 every `tests/*.sh` and `skills/*/tests/*.sh` under `/bin/sh` (and rejects dead
 bats-syntax files that cannot run). All four run in CI on every push/PR — a

@@ -4,7 +4,7 @@ Runnable, read-only checks for every surface the [audit-kubernetes](../SKILL.md)
 
 ## 1. Conventions
 
-- `KUBE_CONTEXT` is `kubernetes.context` from toolkit.yaml and is passed on **every** call. The active/current context is never used for targeting.
+- `KUBE_CONTEXT` is the `context` of the kubernetes target the SKILL resolved this run — the single block's `context`, or the `SCOUTFLO_TARGET`-selected item's `context` when `kubernetes` is a labeled list — and is passed on **every** call. The active/current context is never used for targeting.
 - Every command is read-only: `kubectl get`, `kubectl auth can-i`, `kubectl api-resources`, `kubectl version`, `kubectl config view`. The live-runtime snapshot (section 10) additionally uses the read-only `top` verb and `get events`, only through the guarded `le_kubectl` wrapper from the shared live-evidence library. No mutating verb appears anywhere (forbidden list, section 9).
 - Secret **values** are never read. `kubectl get secret` (names/types) is allowed; `kubectl get secret -o yaml`/`-o json` with `.data` is forbidden.
 - `-o json | jq` is the parsing path. A `Forbidden` from the API server on a specific `get`/`list` means the audit credential lacks that `view` grant → record `blocked` for the check naming the exact resource.

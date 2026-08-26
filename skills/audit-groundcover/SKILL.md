@@ -13,14 +13,16 @@ groundcover's monitors and workflows are built on Keep, which means it is strong
 
 Every command is read-only: a list/read GET, plus two documented read-by-query POSTs (`POST /api/monitors/list` and `POST /api/workflows/list`, which return data and change nothing). Every mutating verb — creating or editing a monitor, silence, route, or workflow — is forbidden; the full list is in [references/groundcover-checks.md](references/groundcover-checks.md) section 13. There is no `setup-groundcover` yet, so every finding names its manual fix path in the groundcover UI instead of a setup anchor.
 
+**Multiple groundcover targets, one run:** `groundcover` may be a single block (one optional `api_url`, one `token_env`, optional `backend_id`) or a **list of labeled targets**, each with its own `api_url`, `token_env`, and optional `backend_id`. The audit **iterates every target** — enumerate them with `sh "${CLAUDE_PLUGIN_ROOT}/report-standard/toolkit-targets.sh" <cfg> groundcover labels` and run the full sequence below once per target with `SCOUTFLO_TARGET=<label>` set. Output goes to `groundcover/<label>/<date>/` for a list, or the flat `groundcover/<date>/` for a single block. Every request resolves and uses the target's own API base, key, and backend id (`token_env` names the variable holding the secret); there is no ambient default, and the key plus host (and backend id) select the target.
+
 Run this standalone, from `/scoutflo:audit-all`, or on a schedule via `/scoutflo:schedule-audits`.
 
 Outputs, per the [report standard](../../report-standard/README.md):
 
-- `./scoutflo-audits/groundcover/<YYYY-MM-DD>/findings.json` per the [findings schema](../../report-standard/findings-schema.md), finding IDs `GC-NNN`
-- `./scoutflo-audits/groundcover/<YYYY-MM-DD>/report.md` per the [report template](../../report-standard/report-template.md), including the `## Inventory` section (the `render-report-viz.sh inventory` output)
-- `./scoutflo-audits/groundcover/<YYYY-MM-DD>/inventory.json` per the [inventory schema](../../report-standard/inventory-schema.md) (`scoutflo-inventory/v1`): the complete Phase-2 catalog — one item per monitor, workflow, and recurring silence (`kind`: `monitor`, `workflow`, `silence`) — each with `kind`, `covers`, `enabled`, `severity`, and `routes_to` for alerting objects. Built from the raw pull, never invented; redacted at capture, never a secret value.
-- One appended line in `./scoutflo-audits/groundcover/history.jsonl`
+- `./scoutflo-audits/groundcover/[<label>/]<YYYY-MM-DD>/findings.json` per the [findings schema](../../report-standard/findings-schema.md), finding IDs `GC-NNN`
+- `./scoutflo-audits/groundcover/[<label>/]<YYYY-MM-DD>/report.md` per the [report template](../../report-standard/report-template.md), including the `## Inventory` section (the `render-report-viz.sh inventory` output)
+- `./scoutflo-audits/groundcover/[<label>/]<YYYY-MM-DD>/inventory.json` per the [inventory schema](../../report-standard/inventory-schema.md) (`scoutflo-inventory/v1`): the complete Phase-2 catalog — one item per monitor, workflow, and recurring silence (`kind`: `monitor`, `workflow`, `silence`) — each with `kind`, `covers`, `enabled`, `severity`, and `routes_to` for alerting objects. Built from the raw pull, never invented; redacted at capture, never a secret value.
+- One appended line in `./scoutflo-audits/groundcover/[<label>/]history.jsonl`
 - One Slack brief, when `slack.webhook_env` is configured
 
 ## Doctor gate
@@ -50,6 +52,20 @@ if [ ! -f "$CFG" ]; then
   fi
   exit 1
 fi
+# Resolve the CURRENT groundcover target from toolkit.yaml — a single block, or the
+# SCOUTFLO_TARGET-selected item of a labeled list (the shared enumerator handles both; no yq
+# required). Every request below names this target's own api_url/token/backend_id; ambient
+# values are never assumed.
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+GC_KIND=$(sh "$TT" "$CFG" groundcover kind); GC_N=$(sh "$TT" "$CFG" groundcover count)
+[ "${GC_N:-0}" -ge 1 ] || { echo "no groundcover target configured in $CFG; run /scoutflo:connect"; exit 1; }
+GC_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$GC_N" ]; do [ "$(sh "$TT" "$CFG" groundcover label "$_i")" = "$SCOUTFLO_TARGET" ] && { GC_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+GC_LABEL=$(sh "$TT" "$CFG" groundcover label "$GC_IDX")
+if [ "$GC_KIND" = seq ]; then GC_SEG="groundcover/${GC_LABEL}"; else GC_SEG="groundcover"; fi
+GC_API=$(sh "$TT" "$CFG" groundcover get "$GC_IDX" api_url); [ -n "$GC_API" ] || GC_API="https://api.groundcover.com"   # groundcover.api_url override if set
+GC_API="${GC_API%/}"
+GC_BACKEND_ID=$(sh "$TT" "$CFG" groundcover get "$GC_IDX" backend_id)   # groundcover.backend_id; X-Backend-Id header on multi-backend accounts
+echo "groundcover target: ${GC_LABEL} (api ${GC_API}) -> ${GC_SEG}/"
 # Load the home-anchored secret store so a token added to ~/.scoutflo/env (by connect,
 # even mid-session) is seen here without re-exporting or opening a new terminal. It only
 # sets *_env variables; no secret value is printed. A profile that already sources it makes
@@ -59,19 +75,27 @@ SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.s
 for bin in curl jq; do
   command -v "$bin" >/dev/null || { echo "missing binary: $bin"; exit 1; }
 done
-# groundcover.token_env names the variable; presence check only, never print the value.
+# groundcover.token_env names the variable holding THIS target's key; read that variable by name so
+# each target uses its own key. Presence check only, never print the value.
+GC_TOKVAR=$(sh "$TT" "$CFG" groundcover get "$GC_IDX" token_env); [ -n "$GC_TOKVAR" ] || GC_TOKVAR=GROUNDCOVER_API_KEY
+GROUNDCOVER_API_KEY=$(printenv "$GC_TOKVAR" 2>/dev/null || true)
 [ -n "${GROUNDCOVER_API_KEY:-}" ] || { echo "GROUNDCOVER_API_KEY is not set; run /scoutflo:connect"; exit 1; }
 
-GC_API="https://api.groundcover.com"   # groundcover.api_url override if set
-# There is no whoami endpoint; listing monitors is the auth probe. Add the X-Backend-Id header
-# (from groundcover.backend_id) on multi-backend accounts. This POST lists, it does not mutate.
+# There is no whoami endpoint; listing monitors is the auth probe. The X-Backend-Id header
+# (from groundcover.backend_id) is sent on multi-backend accounts. This POST lists, it does not mutate.
 # Do NOT discard the body: a self-hosted groundcover behind an in-cluster ingress can answer 200
 # with an HTML SPA/login/proxy page, which a status-only check would read as success. Capture the
 # status AND the content-type, and record pass ONLY on 200 + JSON + a monitors-list shape assertion.
 GC_BODY="$(mktemp)"
-META="$(curl -s -o "$GC_BODY" -w '%{http_code} %{content_type}' --max-time 10 \
-  -H "Authorization: Bearer ${GROUNDCOVER_API_KEY}" -H "Content-Type: application/json" \
-  -X POST "${GC_API}/api/monitors/list" --data '{"sources":[]}')" || META="000 -"
+if [ -n "$GC_BACKEND_ID" ]; then
+  META="$(curl -s -o "$GC_BODY" -w '%{http_code} %{content_type}' --max-time 10 \
+    -H "Authorization: Bearer ${GROUNDCOVER_API_KEY}" -H "X-Backend-Id: ${GC_BACKEND_ID}" -H "Content-Type: application/json" \
+    -X POST "${GC_API}/api/monitors/list" --data '{"sources":[]}')" || META="000 -"
+else
+  META="$(curl -s -o "$GC_BODY" -w '%{http_code} %{content_type}' --max-time 10 \
+    -H "Authorization: Bearer ${GROUNDCOVER_API_KEY}" -H "Content-Type: application/json" \
+    -X POST "${GC_API}/api/monitors/list" --data '{"sources":[]}')" || META="000 -"
+fi
 CODE="${META%% *}"; CT="${META#* }"
 if [ "$CODE" = "200" ] && printf '%s' "$CT" | grep -qi json && jq -e 'type=="array" or type=="object"' "$GC_BODY" >/dev/null 2>&1; then
   rm -f "$GC_BODY"; echo "doctor gate: pass"
@@ -92,19 +116,38 @@ Print what you are pointed at and compare it to the config before the first real
 
 ```bash
 set -eu
-GC_API="https://api.groundcover.com"   # groundcover.api_url
+# Resolve the CURRENT groundcover target (single block, or the SCOUTFLO_TARGET-selected item of a
+# labeled list) via the shared enumerator; no yq required. Re-resolved here because each block runs
+# in a fresh shell. $CFG resolved the standard way (override -> project-local -> home).
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+GC_KIND=$(sh "$TT" "$CFG" groundcover kind); GC_N=$(sh "$TT" "$CFG" groundcover count)
+GC_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$GC_N" ]; do [ "$(sh "$TT" "$CFG" groundcover label "$_i")" = "$SCOUTFLO_TARGET" ] && { GC_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+GC_LABEL=$(sh "$TT" "$CFG" groundcover label "$GC_IDX")
+if [ "$GC_KIND" = seq ]; then GC_SEG="groundcover/${GC_LABEL}"; else GC_SEG="groundcover"; fi
+GC_API=$(sh "$TT" "$CFG" groundcover get "$GC_IDX" api_url); [ -n "$GC_API" ] || GC_API="https://api.groundcover.com"   # groundcover.api_url
+GC_API="${GC_API%/}"
+GC_BACKEND_ID=$(sh "$TT" "$CFG" groundcover get "$GC_IDX" backend_id)   # groundcover.backend_id; X-Backend-Id on multi-backend accounts
+GC_TOKVAR=$(sh "$TT" "$CFG" groundcover get "$GC_IDX" token_env); [ -n "$GC_TOKVAR" ] || GC_TOKVAR=GROUNDCOVER_API_KEY
+GROUNDCOVER_API_KEY=$(printenv "$GC_TOKVAR" 2>/dev/null || true)   # token_env names the variable; never a hardcoded name
+[ -n "${GROUNDCOVER_API_KEY:-}" ] || { echo "GROUNDCOVER_API_KEY is not set; run /scoutflo:connect"; exit 1; }
 # groundcover has no whoami; the account is identified by the monitors the key reads.
-MON_SAMPLE="$(curl -fsS --max-time 15 -H "Authorization: Bearer ${GROUNDCOVER_API_KEY}" \
-  -H "Content-Type: application/json" -X POST "${GC_API}/api/monitors/list" --data '{"sources":[]}')"
+if [ -n "$GC_BACKEND_ID" ]; then
+  MON_SAMPLE="$(curl -fsS --max-time 15 -H "Authorization: Bearer ${GROUNDCOVER_API_KEY}" -H "X-Backend-Id: ${GC_BACKEND_ID}" \
+    -H "Content-Type: application/json" -X POST "${GC_API}/api/monitors/list" --data '{"sources":[]}')"
+else
+  MON_SAMPLE="$(curl -fsS --max-time 15 -H "Authorization: Bearer ${GROUNDCOVER_API_KEY}" \
+    -H "Content-Type: application/json" -X POST "${GC_API}/api/monitors/list" --data '{"sources":[]}')"
+fi
 COUNT="$(printf '%s' "$MON_SAMPLE" | jq 'if type=="array" then length else (.monitors // .results // []) | length end')"
 TITLES="$(printf '%s' "$MON_SAMPLE" | jq -r 'if type=="array" then . else (.monitors // .results // []) end | [.[0:3][].title] | join(", ")')"
-echo "api=${GC_API} monitors=${COUNT} sample: ${TITLES}"
+echo "groundcover target: ${GC_LABEL} api=${GC_API} monitors=${COUNT} -> ${GC_SEG}/ sample: ${TITLES}"
 printf '%s' "$MON_SAMPLE" | jq -e 'if type=="array" then . else (.monitors // .results // []) end | type == "array"' >/dev/null \
   || { echo "monitors/list did not return a monitor list; wrong key, host, or backend_id — stop"; exit 1; }
 echo "live-safety gate: pass — confirm these monitor titles belong to the account you intend to audit"
 ```
 
-The key plus the API host (and backend id, if multi-backend) select the target; there is no ambient default. The printed sample monitor titles are the human check: if they belong to a different environment than intended, stop and fix the exported key or `groundcover.backend_id` before any further read.
+The key plus the API host (and backend id, if multi-backend) select the target; a labeled-list estate audits each target in turn (the runner sets `SCOUTFLO_TARGET=<label>`), so the account is the one the current `SCOUTFLO_TARGET` resolved, never an ambient default. The printed sample monitor titles are the human check: if they belong to a different environment than intended, stop and fix the exported key or `groundcover.backend_id` before any further read.
 
 ## Ground rules
 
@@ -138,17 +181,35 @@ Count before judging, and declare the path in the terminal output. The unit here
 
 ```bash
 set -eu
-GC_API="https://api.groundcover.com"   # groundcover.api_url
+# Resolve the CURRENT groundcover target (single block, or the SCOUTFLO_TARGET-selected item of a
+# labeled list) via the shared enumerator; no yq required. $CFG resolved the standard way.
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+GC_KIND=$(sh "$TT" "$CFG" groundcover kind); GC_N=$(sh "$TT" "$CFG" groundcover count)
+GC_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$GC_N" ]; do [ "$(sh "$TT" "$CFG" groundcover label "$_i")" = "$SCOUTFLO_TARGET" ] && { GC_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+GC_LABEL=$(sh "$TT" "$CFG" groundcover label "$GC_IDX")
+if [ "$GC_KIND" = seq ]; then GC_SEG="groundcover/${GC_LABEL}"; else GC_SEG="groundcover"; fi
+GC_API=$(sh "$TT" "$CFG" groundcover get "$GC_IDX" api_url); [ -n "$GC_API" ] || GC_API="https://api.groundcover.com"   # groundcover.api_url
+GC_API="${GC_API%/}"
+GC_BACKEND_ID=$(sh "$TT" "$CFG" groundcover get "$GC_IDX" backend_id)   # groundcover.backend_id; X-Backend-Id on multi-backend accounts
+GC_TOKVAR=$(sh "$TT" "$CFG" groundcover get "$GC_IDX" token_env); [ -n "$GC_TOKVAR" ] || GC_TOKVAR=GROUNDCOVER_API_KEY
+GROUNDCOVER_API_KEY=$(printenv "$GC_TOKVAR" 2>/dev/null || true)   # token_env names the variable; never a hardcoded name
+[ -n "${GROUNDCOVER_API_KEY:-}" ] || { echo "GROUNDCOVER_API_KEY is not set; run /scoutflo:connect"; exit 1; }
 SMALL_MAX_OBJECTS="30"    # example, tune to your environment
 MEDIUM_MAX_OBJECTS="150"  # example, tune to your environment
 BATCH_SIZE="50"           # monitors per batch on the large path; example, tune it
-MON_JSON="$(curl -fsS --max-time 30 -H "Authorization: Bearer ${GROUNDCOVER_API_KEY}" \
-  -H "Content-Type: application/json" -X POST "${GC_API}/api/monitors/list" --data '{"sources":[]}')"
+if [ -n "$GC_BACKEND_ID" ]; then
+  MON_JSON="$(curl -fsS --max-time 30 -H "Authorization: Bearer ${GROUNDCOVER_API_KEY}" -H "X-Backend-Id: ${GC_BACKEND_ID}" \
+    -H "Content-Type: application/json" -X POST "${GC_API}/api/monitors/list" --data '{"sources":[]}')"
+else
+  MON_JSON="$(curl -fsS --max-time 30 -H "Authorization: Bearer ${GROUNDCOVER_API_KEY}" \
+    -H "Content-Type: application/json" -X POST "${GC_API}/api/monitors/list" --data '{"sources":[]}')"
+fi
 TOTAL="$(printf '%s' "$MON_JSON" | jq 'if type=="array" then length else (.monitors // .results // []) | length end')"
-echo "monitors=${TOTAL} scored_objects=${TOTAL}"
+echo "groundcover target: ${GC_LABEL} monitors=${TOTAL} scored_objects=${TOTAL} -> ${GC_SEG}/"
 
 # Guided-walkthrough drift check, per report-standard/README.md.
-TARGET_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/groundcover"
+TARGET_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${GC_SEG}"
 PREV_RUN="$(find "$TARGET_DIR" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort | tail -1)"
 DRIFT="first run"
 if [ -n "$PREV_RUN" ] && [ -f "${PREV_RUN}/findings.json" ]; then
@@ -285,18 +346,29 @@ Emit and verify:
 
 ```bash
 set -eu
+# Resolve the CURRENT groundcover target (single block, or the SCOUTFLO_TARGET-selected item of a
+# labeled list) via the shared enumerator; no yq required. $CFG resolved the standard way.
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+GC_KIND=$(sh "$TT" "$CFG" groundcover kind); GC_N=$(sh "$TT" "$CFG" groundcover count)
+GC_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$GC_N" ]; do [ "$(sh "$TT" "$CFG" groundcover label "$_i")" = "$SCOUTFLO_TARGET" ] && { GC_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+GC_LABEL=$(sh "$TT" "$CFG" groundcover label "$GC_IDX")
+if [ "$GC_KIND" = seq ]; then GC_SEG="groundcover/${GC_LABEL}"; else GC_SEG="groundcover"; fi
 RUN_DATE="$(date -u +%Y-%m-%d)"
-OUT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/groundcover/${RUN_DATE}"
+OUT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${GC_SEG}/${RUN_DATE}"
 mkdir -p "$OUT"
-# ... write findings.json, inventory.json, and report.md per the report standard, then verify:
-jq -e '.schema == "scoutflo-findings/v1" and .target == "groundcover" and (.findings | type == "array")' \
+# ... write findings.json, inventory.json, and report.md per the report standard. The findings.json
+# ".target" is the per-target slug (equal to $GC_SEG: "groundcover" for a single block,
+# "groundcover/<label>" for a labeled list target), so audit-all/correlation/render disambiguate
+# multiple targets. Verify:
+jq -e --arg seg "$GC_SEG" '.schema == "scoutflo-findings/v1" and .target == $seg and (.findings | type == "array")' \
   "$OUT/findings.json" >/dev/null && echo "findings.json valid"
 grep -q '^# ' "$OUT/report.md" && echo "report.md present"
 sh "${CLAUDE_PLUGIN_ROOT}/report-standard/check-findings.sh" "$OUT/findings.json"
 # Inventory (scoutflo-inventory/v1): the complete Phase-2 catalog of what exists,
 # built from the raw pull (never invented, redacted). counts.total must reconcile
 # with items; the ## Inventory section of report.md IS this render.
-jq -e '.schema == "scoutflo-inventory/v1" and .target == "groundcover" and (.items | type == "array") and (.counts.total == (.items | length))' "$OUT/inventory.json" >/dev/null && echo "inventory.json valid"
+jq -e --arg seg "$GC_SEG" '.schema == "scoutflo-inventory/v1" and .target == $seg and (.items | type == "array") and (.counts.total == (.items | length))' "$OUT/inventory.json" >/dev/null && echo "inventory.json valid"
 sh "${CLAUDE_PLUGIN_ROOT}/report-standard/render-report-viz.sh" inventory "$OUT/inventory.json" >/dev/null && echo "inventory section renders"
 sh "${CLAUDE_PLUGIN_ROOT}/report-standard/render-report-viz.sh" html "$OUT/findings.json" "$OUT/report.html" "$(dirname "$OUT")/history.jsonl"
 sh "${CLAUDE_PLUGIN_ROOT}/report-standard/check-report.sh" "$OUT/report.md"
@@ -306,7 +378,15 @@ Compute the delta against the previous run's `findings.json` (the latest two dat
 
 ```bash
 set -eu
-TARGET_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/groundcover"
+# Resolve the CURRENT groundcover target (single block, or the SCOUTFLO_TARGET-selected item of a
+# labeled list) via the shared enumerator; no yq required. $CFG resolved the standard way.
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+GC_KIND=$(sh "$TT" "$CFG" groundcover kind); GC_N=$(sh "$TT" "$CFG" groundcover count)
+GC_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$GC_N" ]; do [ "$(sh "$TT" "$CFG" groundcover label "$_i")" = "$SCOUTFLO_TARGET" ] && { GC_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+GC_LABEL=$(sh "$TT" "$CFG" groundcover label "$GC_IDX")
+if [ "$GC_KIND" = seq ]; then GC_SEG="groundcover/${GC_LABEL}"; else GC_SEG="groundcover"; fi
+TARGET_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${GC_SEG}"
 RUN_DATE="$(date -u +%Y-%m-%d)"
 OUT="${TARGET_DIR}/${RUN_DATE}"
 RESOLVED="0"   # fixed count from this run's delta; 0 on the first run

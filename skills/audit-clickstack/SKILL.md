@@ -11,11 +11,13 @@ Every command in this audit is read-only: ClickHouse `SELECT`/`SHOW` statements 
 
 Run this standalone, from `/scoutflo:audit-all`, or on a schedule via `/scoutflo:schedule-audits`.
 
+**Scope — multiple targets, one run:** `clickstack` may be a single block (one `clickhouse_url` + `hyperdx_url`) or a **list of labeled targets**, each with its own connection params. The audit **iterates every target** — enumerate them with `sh "${CLAUDE_PLUGIN_ROOT}/report-standard/toolkit-targets.sh" <cfg> clickstack labels` and run the full sequence below once per target with `SCOUTFLO_TARGET=<label>` set. Output goes to `clickstack/<label>/<date>/` for a list, or the flat `clickstack/<date>/` for a single block (the label defaults to the block name `clickstack`, so a single-block run is byte-identical to today). Every command resolves that target's own `clickhouse_url`/`clickhouse_user`/`hyperdx_url` and its `*_env` credential-variable names through the enumerator; no ambient default is read.
+
 Outputs, per the [report standard](../../report-standard/README.md):
 
-- `./scoutflo-audits/clickstack/<YYYY-MM-DD>/findings.json` per the [findings schema](../../report-standard/findings-schema.md)
-- `./scoutflo-audits/clickstack/<YYYY-MM-DD>/report.md` per the [report template](../../report-standard/report-template.md), including the `## Inventory` section (the `render-report-viz.sh inventory` output)
-- `./scoutflo-audits/clickstack/<YYYY-MM-DD>/inventory.json` per the [inventory schema](../../report-standard/inventory-schema.md) (`scoutflo-inventory/v1`): the complete Phase-2 catalog — one item per HyperDX `alert`, `dashboard`, and `source`, per telemetry `table`, and per ClickHouse `user`, each built from the raw pull, never invented, redacted at capture.
+- `./scoutflo-audits/clickstack/[<label>/]<YYYY-MM-DD>/findings.json` per the [findings schema](../../report-standard/findings-schema.md)
+- `./scoutflo-audits/clickstack/[<label>/]<YYYY-MM-DD>/report.md` per the [report template](../../report-standard/report-template.md), including the `## Inventory` section (the `render-report-viz.sh inventory` output)
+- `./scoutflo-audits/clickstack/[<label>/]<YYYY-MM-DD>/inventory.json` per the [inventory schema](../../report-standard/inventory-schema.md) (`scoutflo-inventory/v1`): the complete Phase-2 catalog — one item per HyperDX `alert`, `dashboard`, and `source`, per telemetry `table`, and per ClickHouse `user`, each built from the raw pull, never invented, redacted at capture.
 - One Slack brief, when `slack.webhook_env` is configured
 
 Provenance note: the ClickHouse read surface and HyperDX endpoint/auth model cited below were **confirmed on a live read** against an official ClickStack build — including the v2 session-login path (`POST /api/login/password` answers with a redirect and a `connect.sid` cookie; a session `GET /api/alerts` returns `200`). The exact JSON field names of the HyperDX `/api/alerts`, `/api/dashboards`, and `/api/sources` responses are **confirm-against-your-instance** — resolve them from the live response this run, never assume a field name.
@@ -64,13 +66,31 @@ SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.s
 command -v curl >/dev/null || { echo "curl not installed"; exit 1; }
 command -v jq   >/dev/null || { echo "jq not installed"; exit 1; }
 
-# For every configured *_env key: presence only, never the value. CH_KEY, HDX_API_KEY,
-# HDX_EMAIL, and HDX_PASSWORD are the variables that clickstack.clickhouse_password_env,
-# clickstack.hyperdx_api_key_env, and the optional clickstack.hyperdx_email_env /
-# clickstack.hyperdx_password_env name; references/clickstack-checks.md reads the same
-# variables in every command block, so doctor and the checks agree.
-if grep -q '^clickstack:' "$CFG"; then
-  [ -n "${CH_KEY:-}" ] || { echo "clickstack block configured but the ClickHouse password variable (clickstack.clickhouse_password_env) is not set; the default user requires a password over HTTP :8123 — run /scoutflo:connect"; exit 1; }
+# Resolve the CURRENT clickstack target from $CFG — a single block, or the SCOUTFLO_TARGET-selected
+# item of a labeled list (the shared enumerator handles both; no yq required). The audit iterates
+# every target (the runner sets SCOUTFLO_TARGET=<label>); output nests under CS_SEG. Connection params
+# and the *_env variable NAMES all come from THIS target — never an ambient default.
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+CS_KIND=$(sh "$TT" "$CFG" clickstack kind); CS_N=$(sh "$TT" "$CFG" clickstack count)
+CS_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "${CS_N:-0}" ]; do [ "$(sh "$TT" "$CFG" clickstack label "$_i")" = "$SCOUTFLO_TARGET" ] && { CS_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+CS_LABEL=$(sh "$TT" "$CFG" clickstack label "$CS_IDX")
+if [ "$CS_KIND" = seq ]; then CS_SEG="clickstack/${CS_LABEL}"; else CS_SEG="clickstack"; fi
+# For every configured *_env key: read the secret with printenv on the VARIABLE NAME the key holds
+# (default to the fixed var when the key is absent), presence only, never the value. CH_KEY, HDX_API_KEY,
+# HDX_EMAIL, and HDX_PASSWORD default to what clickstack.clickhouse_password_env, clickstack.hyperdx_api_key_env,
+# and the optional clickstack.hyperdx_email_env / clickstack.hyperdx_password_env name; references/clickstack-checks.md
+# resolves the same variables in every command block, so doctor and the checks agree.
+CH_KEY_VAR=$(sh "$TT" "$CFG" clickstack get "$CS_IDX" clickhouse_password_env); [ -n "$CH_KEY_VAR" ] || CH_KEY_VAR="CH_KEY"
+CH_KEY=$(printenv "$CH_KEY_VAR" 2>/dev/null || true)
+HDX_API_KEY_VAR=$(sh "$TT" "$CFG" clickstack get "$CS_IDX" hyperdx_api_key_env); [ -n "$HDX_API_KEY_VAR" ] || HDX_API_KEY_VAR="HDX_API_KEY"
+HDX_API_KEY=$(printenv "$HDX_API_KEY_VAR" 2>/dev/null || true)
+HDX_EMAIL_VAR=$(sh "$TT" "$CFG" clickstack get "$CS_IDX" hyperdx_email_env); [ -n "$HDX_EMAIL_VAR" ] || HDX_EMAIL_VAR="HDX_EMAIL"
+HDX_EMAIL=$(printenv "$HDX_EMAIL_VAR" 2>/dev/null || true)
+HDX_PASSWORD_VAR=$(sh "$TT" "$CFG" clickstack get "$CS_IDX" hyperdx_password_env); [ -n "$HDX_PASSWORD_VAR" ] || HDX_PASSWORD_VAR="HDX_PASSWORD"
+HDX_PASSWORD=$(printenv "$HDX_PASSWORD_VAR" 2>/dev/null || true)
+echo "clickstack target: ${CS_LABEL} -> ${CS_SEG}/"
+if [ "${CS_N:-0}" -ge 1 ]; then
+  [ -n "${CH_KEY:-}" ] || { echo "clickstack target '${CS_LABEL}' configured but its ClickHouse password variable (${CH_KEY_VAR}, from clickstack.clickhouse_password_env) is not set; the default user requires a password over HTTP :8123 — run /scoutflo:connect"; exit 1; }
 else
   echo "clickstack block not configured in toolkit.yaml; this audit has nothing to read — configure it or run a different audit"; exit 1
 fi
@@ -80,7 +100,7 @@ if [ -n "${HDX_API_KEY:-}" ]; then
   # direct API-port form and the app-proxy-doubled form (the app strips one leading /api) — and
   # credit in-scope only on a real JSON body. The team ingestion key 401s here (wrong token); the
   # internal /api/* routes are session-only. Session-login is the legacy fallback.
-  HDX_URL_D=$(awk '/^clickstack:/{f=1;next} /^[a-z]/{f=0} f && $1=="hyperdx_url:"{print $2}' "$CFG")
+  HDX_URL_D=$(sh "$TT" "$CFG" clickstack get "$CS_IDX" hyperdx_url)   # hyperdx_url for THIS target (enumerator, not ambient)
   if [ -n "$HDX_URL_D" ]; then
     HDX_URL_D="${HDX_URL_D%/}"; _hdx_ok=0
     for _b in "/api/v2" "/api/api/v2"; do
@@ -115,9 +135,18 @@ Before the first real read, print exactly what you are pointed at and compare it
 
 ```bash
 set -eu
-CH_URL="http://your-clickhouse-host:8123"   # clickstack.clickhouse_url
-CH_USER="scoutflo_ro"                       # clickstack.clickhouse_user (a read-only audit user)
-HDX_URL="https://your-hyperdx-url:8080"     # clickstack.hyperdx_url
+# Resolve the CURRENT clickstack target (single block or SCOUTFLO_TARGET-selected list item) via the
+# shared enumerator; the host/URL/user come from THIS target's config, never a hand-typed placeholder.
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+CS_KIND=$(sh "$TT" "$CFG" clickstack kind); CS_N=$(sh "$TT" "$CFG" clickstack count)
+CS_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "${CS_N:-0}" ]; do [ "$(sh "$TT" "$CFG" clickstack label "$_i")" = "$SCOUTFLO_TARGET" ] && { CS_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+CS_LABEL=$(sh "$TT" "$CFG" clickstack label "$CS_IDX")
+if [ "$CS_KIND" = seq ]; then CS_SEG="clickstack/${CS_LABEL}"; else CS_SEG="clickstack"; fi
+CH_URL=$(sh "$TT" "$CFG" clickstack get "$CS_IDX" clickhouse_url)     # clickstack.clickhouse_url
+CH_USER=$(sh "$TT" "$CFG" clickstack get "$CS_IDX" clickhouse_user)   # clickstack.clickhouse_user (a read-only audit user)
+HDX_URL=$(sh "$TT" "$CFG" clickstack get "$CS_IDX" hyperdx_url)       # clickstack.hyperdx_url
+echo "clickstack target: ${CS_LABEL} -> ${CS_SEG}/"
 echo "ClickHouse HTTP : ${CH_URL}  (user: ${CH_USER})"
 echo "HyperDX API     : ${HDX_URL}"
 # Confirm this is the ClickStack instance you intend to audit before any read.
@@ -166,6 +195,15 @@ Count before judging, and declare the path in the terminal output. This count si
 
 ```bash
 set -eu
+# Resolve the CURRENT clickstack target so sizing (and the report path CS_SEG it declares) tracks the
+# target the runner selected with SCOUTFLO_TARGET; a labeled list sizes each target on its own pass.
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+CS_KIND=$(sh "$TT" "$CFG" clickstack kind); CS_N=$(sh "$TT" "$CFG" clickstack count)
+CS_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "${CS_N:-0}" ]; do [ "$(sh "$TT" "$CFG" clickstack label "$_i")" = "$SCOUTFLO_TARGET" ] && { CS_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+CS_LABEL=$(sh "$TT" "$CFG" clickstack label "$CS_IDX")
+if [ "$CS_KIND" = seq ]; then CS_SEG="clickstack/${CS_LABEL}"; else CS_SEG="clickstack"; fi
+echo "clickstack target: ${CS_LABEL} -> ${CS_SEG}/"
 SMALL_MAX_OBJECTS="100"    # example, tune to your environment
 MEDIUM_MAX_OBJECTS="500"   # example, tune to your environment
 SERVICES=0
@@ -331,13 +369,23 @@ Emit and verify:
 
 ```bash
 set -eu
+# Resolve the CURRENT clickstack target so output lands in the per-target directory: flat
+# clickstack/<date>/ for a single block, clickstack/<label>/<date>/ for a labeled list target.
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+CS_KIND=$(sh "$TT" "$CFG" clickstack kind); CS_N=$(sh "$TT" "$CFG" clickstack count)
+CS_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "${CS_N:-0}" ]; do [ "$(sh "$TT" "$CFG" clickstack label "$_i")" = "$SCOUTFLO_TARGET" ] && { CS_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+CS_LABEL=$(sh "$TT" "$CFG" clickstack label "$CS_IDX")
+if [ "$CS_KIND" = seq ]; then CS_SEG="clickstack/${CS_LABEL}"; else CS_SEG="clickstack"; fi
 RUN_DATE="$(date -u +%Y-%m-%d)"
-OUT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/clickstack/${RUN_DATE}"
+OUT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${CS_SEG}/${RUN_DATE}"
 mkdir -p "$OUT"
-# ... write findings.json (lifecycle set per finding, estate object from sizing),
-# inventory.json (kinds: alert, dashboard, source, table, user), and report.md
-# per the report standard, then verify:
-jq -e '.schema == "scoutflo-findings/v1" and (.findings | type == "array") and (.findings | all(has("lifecycle")))' \
+# ... write findings.json (lifecycle set per finding, estate object from sizing; ".target" is the
+# per-target slug $CS_SEG — "clickstack" for a single block, "clickstack/<label>" for a labeled list
+# target — so audit-all/correlation/render disambiguate multiple instances), inventory.json (kinds:
+# alert, dashboard, source, table, user; ".target" also $CS_SEG), and report.md per the report standard,
+# then verify:
+jq -e --arg seg "$CS_SEG" '.schema == "scoutflo-findings/v1" and .target == $seg and (.findings | type == "array") and (.findings | all(has("lifecycle")))' \
   "$OUT/findings.json" >/dev/null && echo "findings.json valid"
 grep -q '^# ' "$OUT/report.md" && echo "report.md present"
 sh "${CLAUDE_PLUGIN_ROOT}/report-standard/check-findings.sh" "$OUT/findings.json"
@@ -354,7 +402,14 @@ Compute the delta against the previous run date per the [report standard](../../
 
 ```bash
 set -eu
-TARGET_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/clickstack"
+# Resolve the CURRENT clickstack target so the brief reads this target's own dated run + history.
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+CS_KIND=$(sh "$TT" "$CFG" clickstack kind); CS_N=$(sh "$TT" "$CFG" clickstack count)
+CS_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "${CS_N:-0}" ]; do [ "$(sh "$TT" "$CFG" clickstack label "$_i")" = "$SCOUTFLO_TARGET" ] && { CS_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+CS_LABEL=$(sh "$TT" "$CFG" clickstack label "$CS_IDX")
+if [ "$CS_KIND" = seq ]; then CS_SEG="clickstack/${CS_LABEL}"; else CS_SEG="clickstack"; fi
+TARGET_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${CS_SEG}"
 RUN_DATE="$(date -u +%Y-%m-%d)"
 OUT="${TARGET_DIR}/${RUN_DATE}"
 if [ -n "${SCOUTFLO_SLACK_WEBHOOK:-}" ]; then
@@ -411,9 +466,9 @@ Every finding's `remediation` field points at the fix, so "Next safe actions" in
 
 ## Large-path worklist
 
-Runs on the large path only (see [Estate sizing](#estate-sizing)). All state lives under a run-ID-keyed directory `./scoutflo-audits/clickstack/runs/<RUN_ID>/`, not a calendar-date directory, so a run still batching when the UTC date rolls over keeps writing to the same place.
+Runs on the large path only (see [Estate sizing](#estate-sizing)). All state lives under a run-ID-keyed directory `./scoutflo-audits/clickstack/[<label>/]runs/<RUN_ID>/` (the `[<label>/]` segment — the resolved `CS_SEG` — is present only for a labeled multi-target list), not a calendar-date directory, so a run still batching when the UTC date rolls over keeps writing to the same place.
 
-1. **Find a resumable run, or start a new one.** Before minting a new `RUN_ID`, scan `./scoutflo-audits/clickstack/runs/*/worklist.tsv` for one with pending rows and offer to resume it instead of starting over.
+1. **Find a resumable run, or start a new one.** Before minting a new `RUN_ID`, scan `./scoutflo-audits/clickstack/[<label>/]runs/*/worklist.tsv` for one with pending rows and offer to resume it instead of starting over.
 2. **Build or resume the worklist.** One row per critical service counted in Estate sizing (for the Phase 4 per-service coverage + freshness checks) and one per HyperDX alert (for the Phase 7 routing check), status `pending` or `done`. A resumed run continues its existing worklist; never rebuild one that already exists.
 3. **Lock, then claim one batch.** Acquire `worklist.lock` in the run directory before reading pending rows; a lock older than `LOCK_STALE_MINUTES` (30 minutes; example, tune to your batch size) is abandoned and safe to reclaim. Take the next `BATCH_SIZE` pending rows and run the matching checks against just that batch — Phase 4 coverage/freshness for a service row, Phase 7 routing for an alert row. A row is marked `done` **only after its reads succeed**, so an interrupted batch resumes at the row that failed. Release the lock once the batch's rows are marked.
 4. **Assemble incrementally.** After each batch, recompose the partial findings and coverage matrix from the batches completed so far, and print progress (`done=X pending=Y`). Repeat from step 3 until the worklist has zero pending rows.

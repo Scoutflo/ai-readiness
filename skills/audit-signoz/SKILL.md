@@ -11,12 +11,14 @@ Every command in this audit is read-only: SigNoz REST `GET` calls carrying the `
 
 Run this standalone, from `/scoutflo:audit-all`, or on a schedule via `/scoutflo:schedule-audits`.
 
+**Scope — multiple SigNoz targets, one run:** `signoz` may be a single block (one `url` + `api_key_env`, optionally the ClickHouse deep-lane keys) or a **list of labeled targets**, each with its own connection params. The audit **iterates every target** — enumerate them with `sh "${CLAUDE_PLUGIN_ROOT}/report-standard/toolkit-targets.sh" <cfg> signoz labels` and run the full sequence below once per target with `SCOUTFLO_TARGET=<label>` set. Output goes to `signoz/<label>/<date>/` for a labeled list, or the unchanged `signoz/<url-host>/<date>/` for a single block (the single-block path — nested by the slugged host of `signoz.url` — is byte-identical to today). Every command resolves that target's own `url`, its `api_key_env` token-variable name, and (on the deep lane) `clickhouse_url`/`clickhouse_user`/`clickhouse_password_env` through the enumerator; no ambient default is read.
+
 Outputs, per the [report standard](../../report-standard/README.md):
 
-- `./scoutflo-audits/signoz/<url-host>/<YYYY-MM-DD>/findings.json` per the [findings schema](../../report-standard/findings-schema.md), finding IDs `SIG-NNN`
-- `./scoutflo-audits/signoz/<url-host>/<YYYY-MM-DD>/report.md` per the [report template](../../report-standard/report-template.md), including the `## Inventory` section (the `render-report-viz.sh inventory` output)
-- `./scoutflo-audits/signoz/<url-host>/<YYYY-MM-DD>/inventory.json` per the [inventory schema](../../report-standard/inventory-schema.md) (`scoutflo-inventory/v1`): the complete Phase-2 catalog — one item per SigNoz `alert_rule`, `contact_point` (channel), and `dashboard`, per telemetry `table`, and per ClickHouse `user` — each built from the raw pull, never invented, redacted at capture.
-- One appended line in `./scoutflo-audits/signoz/<url-host>/history.jsonl`
+- `./scoutflo-audits/signoz/<label-or-url-host>/<YYYY-MM-DD>/findings.json` per the [findings schema](../../report-standard/findings-schema.md), finding IDs `SIG-NNN`
+- `./scoutflo-audits/signoz/<label-or-url-host>/<YYYY-MM-DD>/report.md` per the [report template](../../report-standard/report-template.md), including the `## Inventory` section (the `render-report-viz.sh inventory` output)
+- `./scoutflo-audits/signoz/<label-or-url-host>/<YYYY-MM-DD>/inventory.json` per the [inventory schema](../../report-standard/inventory-schema.md) (`scoutflo-inventory/v1`): the complete Phase-2 catalog — one item per SigNoz `alert_rule`, `contact_point` (channel), and `dashboard`, per telemetry `table`, and per ClickHouse `user` — each built from the raw pull, never invented, redacted at capture.
+- One appended line in `./scoutflo-audits/signoz/<label-or-url-host>/history.jsonl`
 - One Slack brief, when `slack.webhook_env` is configured
 
 Provenance note: the SigNoz endpoint/auth model and ClickHouse read surface cited below were **confirmed on a live read** against SigNoz **v0.138**. Unauthenticated (both HTTP 200): `GET /api/v1/version` → `{"version":"v0.138.0","ee":"Y","setupCompleted":...}`, `GET /api/v1/health` → `{"status":"ok"}`. Authenticated with a **`signoz-viewer`** service-account token (`SIGNOZ-API-KEY`): `GET /api/v1/rules`, `GET /api/v1/channels`, and `GET /api/v1/alerts` each return **HTTP 200 JSON**; dashboards are served at **`GET /api/v2/dashboards`** → `{"status":"success","data":{"dashboards":[...]}}` — the legacy `/api/v1/dashboards` is **deprecated on v0.138 and returns HTTP `501` `dashboard_deprecated`**, so this audit uses v2; and `GET /api/v1/settings/ttl?type=<traces|metrics|logs>` returns the per-signal TTL (e.g. `{"traces_ttl_duration_hrs":360,...}`) — the `type` param is **required** (a bare call returns 400). Without a token those authed paths return `401 {"error":{"type":"unauthenticated"}}`; with a token but **no role assigned** they return `403 authz_forbidden` (a service account starts with zero roles — assign `signoz-viewer`). The ClickHouse databases `signoz_traces`, `signoz_metrics`, `signoz_logs`, `signoz_meter`, `signoz_metadata`, and `signoz_analytics` are present with Replicated/Distributed MergeTree tables (`logs_v2`, `samples_v2`/`samples_v4`, the traces span table) carrying TTL. The **exact JSON field names** of the responses, the `POST /api/v3/query_range` request body, and the SigNoz ClickHouse **column names** are **confirm-against-your-instance** — resolve them from the live response and from `system.columns` this run, never assume a field or column name.
@@ -64,15 +66,29 @@ SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.s
 command -v curl >/dev/null || { echo "curl not installed"; exit 1; }
 command -v jq   >/dev/null || { echo "jq not installed"; exit 1; }
 
-# For every configured *_env key: presence only, never the value. SIGNOZ_API_KEY and
-# SIGNOZ_CH_KEY are the variables that signoz.api_key_env and the optional
-# signoz.clickhouse_password_env name; references/signoz-checks.md reads the same
-# variables in every command block, so doctor and the checks agree.
-if grep -q '^signoz:' "$CFG"; then
-  [ -n "${SIGNOZ_API_KEY:-}" ] || { echo "signoz block configured but the Service Account token variable (signoz.api_key_env) is not set; the authed SigNoz endpoints need a read-role service-account token — run /scoutflo:connect"; exit 1; }
-else
-  echo "signoz block not configured in toolkit.yaml; this audit has nothing to read — configure it or run a different audit"; exit 1
-fi
+# Resolve the CURRENT signoz target from toolkit.yaml — a single block, or the SCOUTFLO_TARGET-selected
+# item of a labeled list (the shared enumerator handles both; no yq required). Every authed call below
+# uses THIS target's own url + token; output nests under SIG_SEG (signoz/<url-host> for a single block,
+# signoz/<label> for a labeled list). No ambient default is read.
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+SIG_KIND=$(sh "$TT" "$CFG" signoz kind); SIG_N=$(sh "$TT" "$CFG" signoz count)
+[ "${SIG_N:-0}" -ge 1 ] || { echo "signoz block not configured in $CFG; this audit has nothing to read — run /scoutflo:connect or run a different audit"; exit 1; }
+SIG_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "${SIG_N:-0}" ]; do [ "$(sh "$TT" "$CFG" signoz label "$_i")" = "$SCOUTFLO_TARGET" ] && { SIG_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+SIG_LABEL=$(sh "$TT" "$CFG" signoz label "$SIG_IDX")
+SIG_URL=$(sh "$TT" "$CFG" signoz get "$SIG_IDX" url); SIG_URL="${SIG_URL%/}"
+[ -n "$SIG_URL" ] || { echo "signoz target '${SIG_LABEL:-?}' has no url in $CFG; run /scoutflo:connect"; exit 1; }
+SIG_HOST="$(printf '%s' "${SIG_URL:-}" | sed -e 's#^[a-zA-Z][a-zA-Z0-9+.-]*://##' -e 's#[:/].*$##' -e 's#[^A-Za-z0-9._-]#-#g')"; [ -n "$SIG_HOST" ] || SIG_HOST="signoz-host"
+if [ "$SIG_KIND" = seq ]; then SIG_SEG="signoz/${SIG_LABEL}"; else SIG_SEG="signoz/${SIG_HOST}"; fi
+echo "signoz target: ${SIG_LABEL} (${SIG_URL}) -> ${SIG_SEG}/"
+# For every configured *_env key: presence only, never the value. signoz.api_key_env names the
+# token variable (default SIGNOZ_API_KEY) and signoz.clickhouse_password_env the optional CH
+# password variable (default SIGNOZ_CH_KEY); read each with printenv (its NAME, never its value),
+# so references/signoz-checks.md and doctor resolve the same variable per target.
+SIG_KEY_VAR=$(sh "$TT" "$CFG" signoz get "$SIG_IDX" api_key_env); [ -n "$SIG_KEY_VAR" ] || SIG_KEY_VAR="SIGNOZ_API_KEY"
+SIGNOZ_API_KEY=$(printenv "$SIG_KEY_VAR" 2>/dev/null || true)
+[ -n "${SIGNOZ_API_KEY:-}" ] || { echo "signoz target '${SIG_LABEL}' configured but its Service Account token variable (${SIG_KEY_VAR}, from signoz.api_key_env) is not set; the authed SigNoz endpoints need a read-role service-account token — run /scoutflo:connect"; exit 1; }
+CH_KEY_VAR=$(sh "$TT" "$CFG" signoz get "$SIG_IDX" clickhouse_password_env); [ -n "$CH_KEY_VAR" ] || CH_KEY_VAR="SIGNOZ_CH_KEY"
+SIGNOZ_CH_KEY=$(printenv "$CH_KEY_VAR" 2>/dev/null || true)
 if [ -n "${SIGNOZ_CH_KEY:-}" ]; then
   echo "SigNoz ClickHouse deep-backend lane configured — SIG-030/SIG-060/SIG-061 will be scored directly against ClickHouse"
 else
@@ -88,9 +104,24 @@ Before the first real read, print exactly what you are pointed at and compare it
 
 ```bash
 set -eu
-SIG_URL="https://your-signoz-host:8080"     # signoz.url
-CH_URL="http://your-clickhouse-host:8123"   # signoz.clickhouse_url (optional deep lane)
-CH_USER="signoz_ro"                         # signoz.clickhouse_user (a read-only audit user)
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+[ -f "$CFG" ] || { echo "missing $CFG; run /scoutflo:connect"; exit 1; }
+# Resolve the CURRENT signoz target (single block, or the SCOUTFLO_TARGET-selected list item); never hand-typed.
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+SIG_KIND=$(sh "$TT" "$CFG" signoz kind); SIG_N=$(sh "$TT" "$CFG" signoz count)
+SIG_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "${SIG_N:-0}" ]; do [ "$(sh "$TT" "$CFG" signoz label "$_i")" = "$SCOUTFLO_TARGET" ] && { SIG_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+SIG_LABEL=$(sh "$TT" "$CFG" signoz label "$SIG_IDX")
+SIG_URL=$(sh "$TT" "$CFG" signoz get "$SIG_IDX" url); SIG_URL="${SIG_URL%/}"     # signoz.url
+SIG_HOST="$(printf '%s' "${SIG_URL:-}" | sed -e 's#^[a-zA-Z][a-zA-Z0-9+.-]*://##' -e 's#[:/].*$##' -e 's#[^A-Za-z0-9._-]#-#g')"; [ -n "$SIG_HOST" ] || SIG_HOST="signoz-host"
+if [ "$SIG_KIND" = seq ]; then SIG_SEG="signoz/${SIG_LABEL}"; else SIG_SEG="signoz/${SIG_HOST}"; fi
+CH_URL=$(sh "$TT" "$CFG" signoz get "$SIG_IDX" clickhouse_url); CH_URL="${CH_URL%/}"   # signoz.clickhouse_url (optional deep lane)
+CH_USER=$(sh "$TT" "$CFG" signoz get "$SIG_IDX" clickhouse_user); [ -n "$CH_USER" ] || CH_USER="signoz_ro"   # signoz.clickhouse_user
+# CH lane presence: read the clickhouse_password_env variable (its NAME, never its value) after loading the store.
+SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.scoutflo/env" ]; then SCOUTFLO_ENV="./.scoutflo/env"; else SCOUTFLO_ENV="$HOME/.scoutflo/env"; fi; }
+[ -f "$SCOUTFLO_ENV" ] && . "$SCOUTFLO_ENV" || true
+CH_KEY_VAR=$(sh "$TT" "$CFG" signoz get "$SIG_IDX" clickhouse_password_env); [ -n "$CH_KEY_VAR" ] || CH_KEY_VAR="SIGNOZ_CH_KEY"
+SIGNOZ_CH_KEY=$(printenv "$CH_KEY_VAR" 2>/dev/null || true)
+echo "signoz target   : ${SIG_LABEL} -> ${SIG_SEG}/"
 echo "SigNoz API      : ${SIG_URL}"
 [ -n "${SIGNOZ_CH_KEY:-}" ] && echo "SigNoz ClickHouse: ${CH_URL}  (user: ${CH_USER})"
 # Confirm this is the SigNoz instance you intend to audit before any read.
@@ -141,6 +172,18 @@ Count before judging, and declare the path in the terminal output. This count si
 
 ```bash
 set -eu
+# Resolve the CURRENT signoz target (single block or SCOUTFLO_TARGET-selected list item) and declare
+# the SigNoz helper inline, so this block runs standalone. sig_get uses THIS target's own url + token.
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+SIG_N=$(sh "$TT" "$CFG" signoz count)
+SIG_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "${SIG_N:-0}" ]; do [ "$(sh "$TT" "$CFG" signoz label "$_i")" = "$SCOUTFLO_TARGET" ] && { SIG_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+SIG_URL=$(sh "$TT" "$CFG" signoz get "$SIG_IDX" url); SIG_URL="${SIG_URL%/}"
+SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.scoutflo/env" ]; then SCOUTFLO_ENV="./.scoutflo/env"; else SCOUTFLO_ENV="$HOME/.scoutflo/env"; fi; }
+[ -f "$SCOUTFLO_ENV" ] && . "$SCOUTFLO_ENV" || true
+SIG_KEY_VAR=$(sh "$TT" "$CFG" signoz get "$SIG_IDX" api_key_env); [ -n "$SIG_KEY_VAR" ] || SIG_KEY_VAR="SIGNOZ_API_KEY"
+SIGNOZ_API_KEY=$(printenv "$SIG_KEY_VAR" 2>/dev/null || true)
+sig_get() { curl -fsS --max-time 20 -H "SIGNOZ-API-KEY: ${SIGNOZ_API_KEY}" "${SIG_URL}$1"; }
 SMALL_MAX_OBJECTS="100"    # example, tune to your environment
 MEDIUM_MAX_OBJECTS="500"   # example, tune to your environment
 SERVICES=0
@@ -308,20 +351,29 @@ Emit and verify:
 
 ```bash
 set -eu
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+SIG_KIND=$(sh "$TT" "$CFG" signoz kind); SIG_N=$(sh "$TT" "$CFG" signoz count)
+SIG_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "${SIG_N:-0}" ]; do [ "$(sh "$TT" "$CFG" signoz label "$_i")" = "$SCOUTFLO_TARGET" ] && { SIG_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+SIG_LABEL=$(sh "$TT" "$CFG" signoz label "$SIG_IDX")
+SIG_URL=$(sh "$TT" "$CFG" signoz get "$SIG_IDX" url); SIG_URL="${SIG_URL%/}"
+SIG_HOST="$(printf '%s' "${SIG_URL:-}" | sed -e 's#^[a-zA-Z][a-zA-Z0-9+.-]*://##' -e 's#[:/].*$##' -e 's#[^A-Za-z0-9._-]#-#g')"; [ -n "$SIG_HOST" ] || SIG_HOST="signoz-host"
+if [ "$SIG_KIND" = seq ]; then SIG_SEG="signoz/${SIG_LABEL}"; else SIG_SEG="signoz/${SIG_HOST}"; fi
 RUN_DATE="$(date -u +%Y-%m-%d)"
-SIG_HOST="signoz-host"   # the host component of signoz.url, slugged; keeps multi-instance runs distinct
-OUT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/signoz/${SIG_HOST}/${RUN_DATE}"
+OUT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${SIG_SEG}/${RUN_DATE}"
 mkdir -p "$OUT"
-# ... write findings.json (lifecycle set per finding, estate object from sizing),
-# inventory.json (kinds: alert_rule, contact_point, dashboard, table, user), and report.md
-# per the report standard, then verify:
-jq -e '.schema == "scoutflo-findings/v1" and .target == "signoz" and (.findings | type == "array") and (.findings | all(has("lifecycle")))' \
+# ... write findings.json (lifecycle set per finding, estate object from sizing; ".target" is the
+# per-target slug $SIG_SEG — "signoz/<url-host>" for a single block, "signoz/<label>" for a labeled
+# list, so audit-all/correlation/render disambiguate multiple instances), inventory.json (kinds:
+# alert_rule, contact_point, dashboard, table, user; ".target" also $SIG_SEG), and report.md per the
+# report standard, then verify:
+jq -e --arg seg "$SIG_SEG" '.schema == "scoutflo-findings/v1" and .target == $seg and (.findings | type == "array") and (.findings | all(has("lifecycle")))' \
   "$OUT/findings.json" >/dev/null && echo "findings.json valid"
 grep -q '^# ' "$OUT/report.md" && echo "report.md present"
 sh "${CLAUDE_PLUGIN_ROOT}/report-standard/check-findings.sh" "$OUT/findings.json"
 # Inventory (scoutflo-inventory/v1): the complete Phase-2 catalog, built from the raw
 # pull, redacted. counts.total must reconcile with items; the ## Inventory section IS this render.
-jq -e '.schema == "scoutflo-inventory/v1" and (.items | type == "array") and (.counts.total == (.items | length))' "$OUT/inventory.json" >/dev/null && echo "inventory.json valid"
+jq -e --arg seg "$SIG_SEG" '.schema == "scoutflo-inventory/v1" and .target == $seg and (.items | type == "array") and (.counts.total == (.items | length))' "$OUT/inventory.json" >/dev/null && echo "inventory.json valid"
 sh "${CLAUDE_PLUGIN_ROOT}/report-standard/render-report-viz.sh" inventory "$OUT/inventory.json" >/dev/null && echo "inventory section renders"
 sh "${CLAUDE_PLUGIN_ROOT}/report-standard/render-report-viz.sh" html "$OUT/findings.json" "$OUT/report.html" "$(dirname "$OUT")/history.jsonl"
 sh "${CLAUDE_PLUGIN_ROOT}/report-standard/check-report.sh" "$OUT/report.md"
@@ -336,8 +388,15 @@ Compute the delta against the previous run date per the [report standard](../../
 
 ```bash
 set -eu
-SIG_HOST="signoz-host"   # the slugged host component of signoz.url
-TARGET_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/signoz/${SIG_HOST}"
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+SIG_KIND=$(sh "$TT" "$CFG" signoz kind); SIG_N=$(sh "$TT" "$CFG" signoz count)
+SIG_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "${SIG_N:-0}" ]; do [ "$(sh "$TT" "$CFG" signoz label "$_i")" = "$SCOUTFLO_TARGET" ] && { SIG_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+SIG_LABEL=$(sh "$TT" "$CFG" signoz label "$SIG_IDX")
+SIG_URL=$(sh "$TT" "$CFG" signoz get "$SIG_IDX" url); SIG_URL="${SIG_URL%/}"
+SIG_HOST="$(printf '%s' "${SIG_URL:-}" | sed -e 's#^[a-zA-Z][a-zA-Z0-9+.-]*://##' -e 's#[:/].*$##' -e 's#[^A-Za-z0-9._-]#-#g')"; [ -n "$SIG_HOST" ] || SIG_HOST="signoz-host"
+if [ "$SIG_KIND" = seq ]; then SIG_SEG="signoz/${SIG_LABEL}"; else SIG_SEG="signoz/${SIG_HOST}"; fi
+TARGET_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${SIG_SEG}"
 RUN_DATE="$(date -u +%Y-%m-%d)"
 OUT="${TARGET_DIR}/${RUN_DATE}"
 if [ -n "${SCOUTFLO_SLACK_WEBHOOK:-}" ]; then
@@ -398,9 +457,9 @@ Every row traces to a raw object read this run; an empty estate is `items: []` w
 
 ## Large-path worklist
 
-Runs on the large path only (see [Estate sizing](#estate-sizing)). All state lives under a run-ID-keyed directory `./scoutflo-audits/signoz/<url-host>/runs/<RUN_ID>/`, not a calendar-date directory, so a run still batching when the UTC date rolls over keeps writing to the same place.
+Runs on the large path only (see [Estate sizing](#estate-sizing)). All state lives under a run-ID-keyed directory `./scoutflo-audits/signoz/<label-or-url-host>/runs/<RUN_ID>/` (the per-target segment is the resolved `SIG_SEG` — `signoz/<label>` for a labeled multi-target list, `signoz/<url-host>` for a single block), not a calendar-date directory, so a run still batching when the UTC date rolls over keeps writing to the same place.
 
-1. **Find a resumable run, or start a new one.** Before minting a new `RUN_ID`, scan `./scoutflo-audits/signoz/<url-host>/runs/*/worklist.tsv` for one with pending rows and offer to resume it instead of starting over.
+1. **Find a resumable run, or start a new one.** Before minting a new `RUN_ID`, scan `./scoutflo-audits/signoz/<label-or-url-host>/runs/*/worklist.tsv` for one with pending rows and offer to resume it instead of starting over.
 2. **Build or resume the worklist.** One row per critical service counted in Estate sizing (for the Phase 4 per-service coverage + freshness checks) and one per SigNoz alert rule (for the Phase 7 routing check), status `pending` or `done`. A resumed run continues its existing worklist; never rebuild one that already exists.
 3. **Lock, then claim one batch.** Acquire `worklist.lock` in the run directory before reading pending rows; a lock older than `LOCK_STALE_MINUTES` (30 minutes; example, tune to your batch size) is abandoned and safe to reclaim. Take the next `BATCH_SIZE` pending rows and run the matching checks against just that batch — Phase 4 coverage/freshness for a service row, Phase 7 routing for a rule row. A row is marked `done` **only after its reads succeed**, so an interrupted batch resumes at the row that failed. Release the lock once the batch's rows are marked.
 4. **Assemble incrementally.** After each batch, recompose the partial findings and coverage matrix from the batches completed so far, and print progress (`done=X pending=Y`). Repeat from step 3 until the worklist has zero pending rows.

@@ -11,14 +11,18 @@ This audit reads cluster **objects** (via `kubectl get`/`auth can-i`). Whether t
 
 Every command is read-only: `kubectl get`, `kubectl auth can-i`, `kubectl api-resources`, `kubectl version`. The live-runtime snapshot (Phase 8) additionally uses the read-only `top` verb and `get events`, and only through the guarded `le_kubectl` wrapper in the shared live-evidence library (allowlisted read verbs, mechanically enforced by `ci/liveness-readonly-check.sh`). No `apply`, `create`, `edit`, `patch`, `delete`, `label`, `annotate`, `scale`, `cordon`, or `exec` — the full forbidden list is in [references/kubernetes-checks.md](references/kubernetes-checks.md) section 9. `setup-kubernetes` performs the confirm-then-verify fixes; this audit only names them.
 
+Scope boundaries, stated so a green score never overpromises:
+
+- **Multiple clusters, one run:** `kubernetes` may be a single block (one `context`) or a **list of labeled targets**, each with its own `context`. The audit **iterates every target** — enumerate them with `sh "${CLAUDE_PLUGIN_ROOT}/report-standard/toolkit-targets.sh" <cfg> kubernetes labels` and run the full sequence below once per target with `SCOUTFLO_TARGET=<label>` set. Output nests per target: a labeled list writes `kubernetes/<label>/<date>/`, and a single block keeps writing `kubernetes/<context>/<date>/` (byte-identical to today — the single-block label derives from its own `context`, so nothing about a one-cluster config changes). Every `kubectl` call passes `--context "<the target's context>"` explicitly; the current/active kube-context is never used for targeting.
+
 Run this standalone, from `/scoutflo:audit-all`, or on a schedule via `/scoutflo:schedule-audits`.
 
 Outputs, per the [report standard](../../report-standard/README.md):
 
-- `./scoutflo-audits/kubernetes/<context>/<YYYY-MM-DD>/findings.json` per the [findings schema](../../report-standard/findings-schema.md), scored posture finding IDs `K8S-NNN`, plus `K8SRT-NNN` for the parallel non-scored live-runtime snapshot section (Phase 8; `area: live-runtime`, always severity `info` and `points_recoverable: 0`, never in `score.categories` or `score.excluded`). The `<context>` directory segment exists because one machine's kubeconfig routinely reaches several clusters; each cluster gets its own history.
-- `./scoutflo-audits/kubernetes/<context>/<YYYY-MM-DD>/report.md` per the [report template](../../report-standard/report-template.md), including the `## Inventory` section (the `render-report-viz.sh inventory` output)
-- `./scoutflo-audits/kubernetes/<context>/<YYYY-MM-DD>/inventory.json` per the [inventory schema](../../report-standard/inventory-schema.md) (`scoutflo-inventory/v1`): the complete Phase-1 catalog — one item per namespace, workload (Deployment/StatefulSet/DaemonSet), NetworkPolicy, RBAC binding, and PodDisruptionBudget — each with `kind`, `covers`, `enabled`, `severity`, and `routes_to` for alerting objects. Built from the raw pull, never invented; redacted at capture, never a secret value.
-- One appended line in `./scoutflo-audits/kubernetes/<context>/history.jsonl`
+- `./scoutflo-audits/kubernetes/<label>/<YYYY-MM-DD>/findings.json` per the [findings schema](../../report-standard/findings-schema.md), scored posture finding IDs `K8S-NNN`, plus `K8SRT-NNN` for the parallel non-scored live-runtime snapshot section (Phase 8; `area: live-runtime`, always severity `info` and `points_recoverable: 0`, never in `score.categories` or `score.excluded`). The `<label>` directory segment is the target's `label` for a labeled list, or the cluster's own `context` for a single block — either way one machine's kubeconfig routinely reaches several clusters, so each gets its own directory and history. `.target` is the per-target slug `kubernetes/<label>` (equal to `kubernetes/<context>` for a single block).
+- `./scoutflo-audits/kubernetes/<label>/<YYYY-MM-DD>/report.md` per the [report template](../../report-standard/report-template.md), including the `## Inventory` section (the `render-report-viz.sh inventory` output)
+- `./scoutflo-audits/kubernetes/<label>/<YYYY-MM-DD>/inventory.json` per the [inventory schema](../../report-standard/inventory-schema.md) (`scoutflo-inventory/v1`): the complete Phase-1 catalog — one item per namespace, workload (Deployment/StatefulSet/DaemonSet), NetworkPolicy, RBAC binding, and PodDisruptionBudget — each with `kind`, `covers`, `enabled`, `severity`, and `routes_to` for alerting objects. Built from the raw pull, never invented; redacted at capture, never a secret value.
+- One appended line in `./scoutflo-audits/kubernetes/<label>/history.jsonl`
 - One Slack brief, when `slack.webhook_env` is configured
 
 ## Doctor gate
@@ -58,10 +62,21 @@ for bin in kubectl jq; do
   command -v "$bin" >/dev/null || { echo "missing binary: $bin"; exit 1; }
 done
 
-# kubernetes.context names the exact context to audit. It is passed explicitly on
-# EVERY kubectl call; the current/active context is never used for targeting, so a
-# stray `kubectl config use-context` elsewhere cannot silently redirect this audit.
-KUBE_CONTEXT="my-cluster"   # kubernetes.context
+# Resolve the CURRENT kubernetes target from toolkit.yaml — a single block (one `context`), or the
+# SCOUTFLO_TARGET-selected item of a labeled list (the shared enumerator handles both; no yq required).
+# kubernetes.context names the exact context to audit; it is passed explicitly on EVERY kubectl call
+# (--context "$KUBE_CONTEXT"), so the current/active context is never used for targeting and a stray
+# `kubectl config use-context` elsewhere cannot silently redirect this audit. Output nests per target:
+# a single block writes kubernetes/<context>/<date>/ (byte-identical to today, label deriving from the
+# context); a labeled list writes kubernetes/<label>/<date>/.
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+K8S_KIND=$(sh "$TT" "$CFG" kubernetes kind); K8S_N=$(sh "$TT" "$CFG" kubernetes count)
+[ "${K8S_N:-0}" -ge 1 ] || { echo "no kubernetes target configured in $CFG; run /scoutflo:connect"; exit 1; }
+K8S_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$K8S_N" ]; do [ "$(sh "$TT" "$CFG" kubernetes label "$_i")" = "$SCOUTFLO_TARGET" ] && { K8S_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+K8S_LABEL=$(sh "$TT" "$CFG" kubernetes label "$K8S_IDX"); KUBE_CONTEXT=$(sh "$TT" "$CFG" kubernetes get "$K8S_IDX" context)
+[ -n "$KUBE_CONTEXT" ] || { echo "kubernetes target '${K8S_LABEL:-?}' has no context in $CFG; run /scoutflo:connect"; exit 1; }
+if [ "$K8S_KIND" = seq ]; then K8S_SEG="kubernetes/${K8S_LABEL}"; else K8S_SEG="kubernetes/${KUBE_CONTEXT}"; fi
+echo "kubernetes target: ${K8S_LABEL} (context ${KUBE_CONTEXT}) -> ${K8S_SEG}/"
 kubectl config get-contexts -o name | grep -qx "$KUBE_CONTEXT" \
   || { echo "context '$KUBE_CONTEXT' not in kubeconfig; run kubectl config get-contexts, fix kubernetes.context"; exit 1; }
 # Entra-integrated AKS contexts authenticate through a kubelogin exec plugin. If
@@ -97,11 +112,18 @@ Print what you are pointed at and confirm it before the first real check:
 
 ```bash
 set -eu
-KUBE_CONTEXT="my-cluster"   # kubernetes.context
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+[ -f "$CFG" ] || { echo "missing $CFG; run /scoutflo:connect"; exit 1; }
+# Resolve the CURRENT kubernetes target (single block or SCOUTFLO_TARGET-selected list item); never hand-typed.
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+K8S_N=$(sh "$TT" "$CFG" kubernetes count)
+K8S_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$K8S_N" ]; do [ "$(sh "$TT" "$CFG" kubernetes label "$_i")" = "$SCOUTFLO_TARGET" ] && { K8S_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+K8S_LABEL=$(sh "$TT" "$CFG" kubernetes label "$K8S_IDX"); KUBE_CONTEXT=$(sh "$TT" "$CFG" kubernetes get "$K8S_IDX" context)
+[ -n "$KUBE_CONTEXT" ] || { echo "kubernetes target '${K8S_LABEL:-?}' has no context in $CFG; run /scoutflo:connect"; exit 1; }
 SERVER="$(kubectl --context "$KUBE_CONTEXT" config view --minify -o jsonpath='{.clusters[0].cluster.server}' 2>/dev/null)"
 VER="$(kubectl --context "$KUBE_CONTEXT" version -o json 2>/dev/null | jq -r '.serverVersion.gitVersion // "unknown"')"
 NS_COUNT="$(kubectl --context "$KUBE_CONTEXT" get ns -o json | jq '.items | length')"
-echo "context=${KUBE_CONTEXT} server=${SERVER} k8s=${VER} namespaces=${NS_COUNT}"
+echo "target=${K8S_LABEL} context=${KUBE_CONTEXT} server=${SERVER} k8s=${VER} namespaces=${NS_COUNT}"
 echo "live-safety gate: pass — confirm this is the cluster you intend to audit"
 ```
 
@@ -126,7 +148,12 @@ Count before judging, and declare the path in the terminal output:
 
 ```bash
 set -eu
-KUBE_CONTEXT="my-cluster"   # kubernetes.context
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+# Resolve the CURRENT kubernetes target (single block or SCOUTFLO_TARGET-selected list item).
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+K8S_N=$(sh "$TT" "$CFG" kubernetes count)
+K8S_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$K8S_N" ]; do [ "$(sh "$TT" "$CFG" kubernetes label "$_i")" = "$SCOUTFLO_TARGET" ] && { K8S_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+KUBE_CONTEXT=$(sh "$TT" "$CFG" kubernetes get "$K8S_IDX" context)
 OBJ="$(kubectl --context "$KUBE_CONTEXT" get pods,deploy,sts,ds,svc,networkpolicy,pdb -A -o json 2>/dev/null | jq '.items | length')"
 if   [ "$OBJ" -lt 200 ];  then P=small
 elif [ "$OBJ" -lt 1000 ]; then P=medium
@@ -202,7 +229,12 @@ Every probe routes through the guarded wrapper in the shared live-evidence libra
 
 ```bash
 set -eu
-KUBE_CONTEXT="my-cluster"   # kubernetes.context
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+# Resolve the CURRENT kubernetes target (single block or SCOUTFLO_TARGET-selected list item).
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+K8S_N=$(sh "$TT" "$CFG" kubernetes count)
+K8S_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$K8S_N" ]; do [ "$(sh "$TT" "$CFG" kubernetes label "$_i")" = "$SCOUTFLO_TARGET" ] && { K8S_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+KUBE_CONTEXT=$(sh "$TT" "$CFG" kubernetes get "$K8S_IDX" context)
 SNAP_TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"   # tag every fact below [live@${SNAP_TS}]
 # Redaction first, then the guarded probe lib (le_kubectl allows read verbs only).
 . "${CLAUDE_PLUGIN_ROOT}/skills/redaction/lib/redaction.sh" 2>/dev/null || true
@@ -282,9 +314,21 @@ Write `findings.json` first (canonical), then regenerate `report.md`, the histor
 
 ```bash
 set -eu
-KUBE_CONTEXT="your-kube-context"   # kubernetes.context — the same per-cluster segment the outputs section declares
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+# Resolve the CURRENT kubernetes target so output lands in the per-target directory:
+# kubernetes/<context>/<date>/ for a single block, kubernetes/<label>/<date>/ for a labeled list.
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+K8S_KIND=$(sh "$TT" "$CFG" kubernetes kind); K8S_N=$(sh "$TT" "$CFG" kubernetes count)
+K8S_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$K8S_N" ]; do [ "$(sh "$TT" "$CFG" kubernetes label "$_i")" = "$SCOUTFLO_TARGET" ] && { K8S_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+K8S_LABEL=$(sh "$TT" "$CFG" kubernetes label "$K8S_IDX"); KUBE_CONTEXT=$(sh "$TT" "$CFG" kubernetes get "$K8S_IDX" context)
+if [ "$K8S_KIND" = seq ]; then K8S_SEG="kubernetes/${K8S_LABEL}"; else K8S_SEG="kubernetes/${KUBE_CONTEXT}"; fi
 RUN_DATE="$(date -u +%Y-%m-%d)"
-OUT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/kubernetes/${KUBE_CONTEXT}/${RUN_DATE}"   # per-cluster segment, matching the declared outputs
+OUT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${K8S_SEG}/${RUN_DATE}"   # per-target segment, matching the declared outputs
+# The findings.json/inventory.json ".target" is the per-target slug $K8S_SEG ("kubernetes/<context>" for a
+# single block, "kubernetes/<label>" for a labeled list target), so audit-all/correlation/render disambiguate
+# multiple clusters. Verify it first, then reconcile score + shape.
+jq -e --arg seg "$K8S_SEG" '.schema == "scoutflo-findings/v1" and .target == $seg and (.findings | type == "array") and (.estate.path != null)' \
+  "$OUT/findings.json" >/dev/null && echo "findings.json valid"
 sh "${CLAUDE_PLUGIN_ROOT}/report-standard/check-findings.sh" "$OUT/findings.json"
 # Inventory (scoutflo-inventory/v1): the complete Phase-1 catalog of what exists,
 # built from the raw pull (never invented, redacted). counts.total must reconcile
@@ -299,7 +343,14 @@ Compute the delta against the previous run date per the [report standard](../../
 
 ```bash
 set -eu
-TARGET_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/kubernetes"
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+# Resolve the CURRENT kubernetes target so the brief reads the per-target run dir (matching the emit step).
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+K8S_KIND=$(sh "$TT" "$CFG" kubernetes kind); K8S_N=$(sh "$TT" "$CFG" kubernetes count)
+K8S_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$K8S_N" ]; do [ "$(sh "$TT" "$CFG" kubernetes label "$_i")" = "$SCOUTFLO_TARGET" ] && { K8S_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+K8S_LABEL=$(sh "$TT" "$CFG" kubernetes label "$K8S_IDX"); KUBE_CONTEXT=$(sh "$TT" "$CFG" kubernetes get "$K8S_IDX" context)
+if [ "$K8S_KIND" = seq ]; then K8S_SEG="kubernetes/${K8S_LABEL}"; else K8S_SEG="kubernetes/${KUBE_CONTEXT}"; fi
+TARGET_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${K8S_SEG}"
 RUN_DATE="$(date -u +%Y-%m-%d)"
 OUT="${TARGET_DIR}/${RUN_DATE}"
 RT_LINE=""   # optional; set only when live-runtime (K8SRT) observations exist this run

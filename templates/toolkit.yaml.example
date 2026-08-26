@@ -6,7 +6,26 @@
 # - Secrets NEVER go in this file. Every *_env field names an environment
 #   variable that holds the secret. Export those vars in your shell or CI.
 # - Delete the blocks for integrations you do not use.
-# - Multiple targets of the same type: use a YAML list under the key.
+# - Multiple targets of the same integration IN ONE environment: make the block a
+#   YAML LIST, where each item is the same mapping PLUS a required `label:` (a
+#   slug: lowercase letters/digits/hyphens, unique within the block). The audit
+#   runs once per target and writes each to <integration>/<label>/<date>/. A plain
+#   single block (no list) is unchanged and writes the flat <integration>/<date>/.
+#   Example — three HyperDX instances and two Azure subscriptions in one env:
+#     clickstack:
+#       - label: hdx-eu
+#         hyperdx_url: https://hdx-eu:8080
+#         hyperdx_api_key_env: HDX_EU_KEY        # Personal API Access Key (not the ingestion key)
+#       - label: hdx-us
+#         hyperdx_url: https://hdx-us:8080
+#         hyperdx_api_key_env: HDX_US_KEY
+#     azure:
+#       - label: prod-core
+#         subscription_id: 0000-0000-0000-0001
+#       - label: prod-data
+#         subscription_id: 0000-0000-0000-0002
+#   (For a DIFFERENT environment — prod vs staging — use a separate file, e.g.
+#   toolkit-prod.yaml / toolkit-staging.yaml, and pick it with SCOUTFLO_CONFIG.)
 
 # reports_dir: where all reports and runtime data are written (findings.json,
 #   report.md, history.jsonl, topology.md, topology-export.json, exemptions.yaml,

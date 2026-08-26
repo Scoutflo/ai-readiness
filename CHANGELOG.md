@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.1.146
+
+Multi-target per integration — audit **multiple targets of one integration in one environment** in a single run: 3 HyperDX instances, N Azure subscriptions, multiple AWS accounts / GCP projects / DO teams / Kubernetes contexts / SigNoz or Grafana/Sentry/Datadog/etc. instances. Driven by the Whatfix onboarding (3 HyperDX + multiple prod Azure subscriptions).
+
+**Schema (backward-compatible, zero migration):** an integration block may stay a single mapping (unchanged) or become a **labeled YAML list** — each item is the same mapping plus a required `label:` (a unique slug) with its own `*_env` secret variable. A single block resolves to one target whose label defaults to the integration name; a list resolves to N targets. Documented in `templates/toolkit.yaml.example` (worked example) and `connect`. Separate environments (prod vs staging) still use separate `toolkit-<env>.yaml` + `SCOUTFLO_CONFIG` — that is env isolation, distinct from multiple targets in one env.
+
+**Every own-block audit iterates targets** via the shared, tested `report-standard/toolkit-targets.sh` enumerator (`count/label/get/labels/kind`; **no `yq` required** — POSIX-awk fallback) and a `SCOUTFLO_TARGET` selector: audit-azure, audit-aws, audit-gcp, audit-kubernetes, audit-clickstack, audit-signoz, audit-datadog, audit-elk, audit-grafana, audit-sentry, audit-jsm, audit-zenduty, audit-groundcover, audit-pagerduty, audit-digitalocean.
+
+**Per-target output, no collision:** a list writes `<integration>/<label>/<date>/` (+ per-target `history.jsonl`, `.target` = the per-target slug); a single block writes the flat `<integration>/<date>/`. `audit-all`, correlation, and the report renderer aggregate across both one- and two-level layouts (this also fixed a latent bug where signoz/kubernetes never rolled up into `audit-all`).
+
+**Safety preserved per target:** azure/aws/gcp live-safety relaxed from strict ambient-equality to *visibility* (the target must be reachable by the identity) + explicit `--subscription`/`--profile`/`--project` on every command (`az account set` etc. still forbidden); clickstack keeps the `/api/v2` Personal-API-Access-Key path + ClickHouse readonly fallback per target; signoz keeps the `signoz-viewer`/`/api/v2/dashboards`/`settings/ttl?type=` logic per target; the env-load, redaction, scope-checkpoint, business-context, and content-type-probe gates all still pass unchanged.
+
+**New CI gate** `ci/multi-target-parity-check.sh` (structure-check now composes **17** checks) fails the build if an own-block audit doesn't resolve targets via the enumerator + nest output per target. `audit-lgtm` and `audit-alert-routing` read *shared backend blocks* (prometheus/loki/tempo/mimir/grafana/alertmanager), so multi-target there is a distinct multi-stack design — they are the documented exemptions and remain single-block for now.
+
+**Live-verified** on real estates: audit-azure on a real subscription (single-block flat + a 2-label list, no collision, membership gate, per-target ARM read 200); audit-clickstack on the benchmark (per-target HyperDX `/api/v2` 200 + ClickHouse `SELECT 1` with the readonly fallback, distinct per-target dirs). New pressure scenarios for azure and clickstack multi-target.
+
+Gates: leak CLEAN, structure-check (17), run-tests (23), plugin validate --strict, local selftest 184/0/1.
+
 ## 0.1.145
 
 audit-azure multi-target (multiple subscriptions in one environment) — the **reference implementation** for multi-target-per-integration, **live-verified on a real subscription**.
