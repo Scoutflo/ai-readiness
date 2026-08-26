@@ -24,6 +24,10 @@
 #   toolkit-targets.sh <config-file> <block> label <i>        -> the target's label (0-based i)
 #   toolkit-targets.sh <config-file> <block> get   <i> <key>  -> a scalar value in target i
 #   toolkit-targets.sh <config-file> <block> labels           -> all labels, one per line
+#   toolkit-targets.sh <config-file> <block> kind             -> "seq" (a list = multi-target),
+#                                                                 "map" (single-block), or "absent"
+#     Consumers use `kind` for the output-path rule: single-block ("map") writes the FLAT
+#     <integration>/<date>/ path (zero migration); a list ("seq") writes <integration>/<label>/<date>/.
 #
 # For a single-block mapping, `get 0 <key>` returns exactly what the old two-level read did,
 # and `label 0` returns the block name — so existing single-block configs behave identically.
@@ -120,6 +124,21 @@ awk_get() {
   i="$1"; key="$2"
   awk_dump | awk -F'\t' -v i="$i" -v k="$key" '$1==i && $2==k{print $3; exit}'
 }
+awk_kind() {
+  awk -v blk="$BLOCK" '
+    BEGIN{ inblk=0; seenitem=0; seenkey=0 }
+    /^[A-Za-z_][A-Za-z0-9_]*:/ { if ($0 ~ "^" blk ":") { inblk=1; next } else if (inblk) inblk=0 }
+    inblk {
+      if ($0 ~ /^[[:space:]]*#/ || $0 ~ /^[[:space:]]*$/) next
+      if ($0 ~ /^[[:space:]]*-[[:space:]]/) { seenitem=1 }
+      else if ($0 ~ /^[[:space:]]+[A-Za-z0-9_]+:/) { seenkey=1 }
+    }
+    END{ if (seenitem) print "seq"; else if (seenkey) print "map"; else print "absent" }
+  ' "$CFG"
+}
+yq_kind_norm() {
+  case "$(yq_kind)" in ('!!seq') echo seq ;; ('!!map') echo map ;; (*) echo absent ;; esac
+}
 
 case "$OP" in
   count)   if [ "$HAVE_YQ" = 1 ]; then yq_count; else awk_count; fi ;;
@@ -127,6 +146,7 @@ case "$OP" in
            if [ "$HAVE_YQ" = 1 ]; then yq_label "$4"; else awk_label "$4"; fi ;;
   get)     [ $# -ge 5 ] || { echo ""; exit 0; }
            if [ "$HAVE_YQ" = 1 ]; then yq_get "$4" "$5"; else awk_get "$4" "$5"; fi ;;
+  kind)    if [ "$HAVE_YQ" = 1 ]; then yq_kind_norm; else awk_kind; fi ;;
   labels)  n=$(if [ "$HAVE_YQ" = 1 ]; then yq_count; else awk_count; fi)
            i=0; while [ "$i" -lt "$n" ]; do
              if [ "$HAVE_YQ" = 1 ]; then yq_label "$i"; else awk_label "$i"; fi

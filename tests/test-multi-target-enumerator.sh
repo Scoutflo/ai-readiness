@@ -46,6 +46,11 @@ eq "label0=azure"       azure                "$(t azure label 0)"
 eq "get0 sub (quotes stripped)" 0000-single  "$(t azure get 0 subscription_id)"
 eq "get0 tier"          read-only            "$(t azure get 0 tier)"
 
+echo "kind (drives the flat-vs-nested output path rule):"
+eq "clickstack kind=seq" seq                 "$(t clickstack kind)"
+eq "azure kind=map"      map                  "$(t azure kind)"
+eq "sentry kind=absent"  absent               "$(t sentry kind)"
+
 echo "absent block:"
 eq "count=0"            0                    "$(t sentry count)"
 
