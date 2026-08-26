@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.144
+
+Multi-target foundation + audit-all two-level aggregation (Phase 0 of "multiple targets under one integration").
+
+- **New `report-standard/toolkit-targets.sh`** — the one shared enumerator every skill will use to read multiple targets under a single integration (3 HyperDX instances, N Azure subscriptions, …). Backward-compatible: a single-block mapping resolves to exactly one target whose label defaults to the integration name (byte-identical to the old two-level read); a labeled YAML list resolves to N targets. **Does not require `yq`** — a POSIX-awk fallback parses the list form too, so multi-target works on machines without yq (yq is only a fast path). Regression-locked by `tests/test-multi-target-enumerator.sh` (23rd suite).
+- **`audit-all` two-level aggregation (also fixes a latent bug):** the roll-up globs were one-level (`<int>/<date>/`) and silently omitted **signoz** and **kubernetes**, which already nest `<int>/<target>/<date>/`. All aggregation loops + the top-findings collection + the history-trend loop now also match `<int>/<target>/<date>/` and key history per target-path (`clickstack/hdx-eu`, not a bare `hdx-eu`). Fixes the latent omission today and readies audit-all for multi-target.
+
+No per-audit behavior change yet — the audit loop-wiring (clickstack, azure, then the rest) is the following phases. Gates: leak CLEAN, structure-check (16), run-tests (23), plugin validate --strict.
+
 ## 0.1.143
 
 audit-clickstack HyperDX REST auth correction — **live-verified on the benchmark**, fixes the Whatfix ClickStack blocker. The skill was reading HyperDX's **internal** routes (`/api/alerts` etc.) which are **browser-session only** (they ignore a Bearer token and 401, and the web app redirects 401→login — the "prompted for email/password" the customer hit) and wrongly concluded "v2 REST is session-only, the apiKey is ingestion-only."
