@@ -73,11 +73,19 @@ GCP_LABEL=$(sh "$TT" "$CFG" gcp label "$GCP_IDX"); GCP_PROJECT=$(sh "$TT" "$CFG"
 [ -n "$GCP_PROJECT" ] || { echo "gcp target '${GCP_LABEL:-?}' has no project in $CFG; run /scoutflo:connect"; exit 1; }
 if [ "$GCP_KIND" = seq ]; then GCP_SEG="gcp/${GCP_LABEL}"; else GCP_SEG="gcp"; fi
 echo "gcp target: ${GCP_LABEL} (project ${GCP_PROJECT}) -> ${GCP_SEG}/"
-# gcp.credentials_env (optional) names GOOGLE_APPLICATION_CREDENTIALS, the path-to-key-file
-# variable application-default credentials read. Presence and file existence only; never
-# print the file's contents anywhere.
-if [ -n "${GOOGLE_APPLICATION_CREDENTIALS:-}" ]; then
-  [ -f "$GOOGLE_APPLICATION_CREDENTIALS" ] || { echo "GOOGLE_APPLICATION_CREDENTIALS names a missing file"; exit 1; }
+# gcp.credentials_env (optional) is the NAME of the shell variable that holds a service-account
+# key-file path (e.g. GCP_PROD_CORE_SA_KEY, per the multi-project examples in
+# connect/references/providers.md) — not the literal string GOOGLE_APPLICATION_CREDENTIALS.
+# Resolve that name to its value via the enumerator, confirm the key file exists (contents never
+# printed), then export it AS GOOGLE_APPLICATION_CREDENTIALS so application-default credentials
+# mint a token for the intended service account instead of silently falling back to the ambient
+# gcloud login. Unset => your active gcloud login is the identity.
+GCP_CRED_VAR="$(sh "$TT" "$CFG" gcp get "$GCP_IDX" credentials_env)"
+if [ -n "$GCP_CRED_VAR" ]; then
+  GCP_CRED_PATH="$(printenv "$GCP_CRED_VAR" 2>/dev/null || true)"
+  [ -n "$GCP_CRED_PATH" ] || { echo "gcp.credentials_env names '${GCP_CRED_VAR}', but that variable is unset in this shell; export it (recipe in /scoutflo:connect) and rerun"; exit 1; }
+  [ -f "$GCP_CRED_PATH" ] || { echo "gcp.credentials_env ('${GCP_CRED_VAR}') names a missing key file"; exit 1; }
+  export GOOGLE_APPLICATION_CREDENTIALS="$GCP_CRED_PATH"
   TOKEN="$(gcloud auth application-default print-access-token)"
   export CLOUDSDK_AUTH_ACCESS_TOKEN="$TOKEN"
 else
@@ -116,8 +124,14 @@ GCP_N=$(sh "$TT" "$CFG" gcp count)
 GCP_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$GCP_N" ]; do [ "$(sh "$TT" "$CFG" gcp label "$_i")" = "$SCOUTFLO_TARGET" ] && { GCP_IDX=$_i; break; }; _i=$((_i+1)); done; fi
 GCP_LABEL=$(sh "$TT" "$CFG" gcp label "$GCP_IDX"); GCP_PROJECT=$(sh "$TT" "$CFG" gcp get "$GCP_IDX" project)
 [ -n "$GCP_PROJECT" ] || { echo "gcp target '${GCP_LABEL:-?}' has no project in $CFG; run /scoutflo:connect"; exit 1; }
-if [ -n "${GOOGLE_APPLICATION_CREDENTIALS:-}" ]; then
-  echo "identity: $(jq -r '.client_email // "unknown"' "$GOOGLE_APPLICATION_CREDENTIALS") (key file)"
+# Identity comes from gcp.credentials_env (the variable NAME holding the key-file path), not from
+# an ambient GOOGLE_APPLICATION_CREDENTIALS an unrelated shell may have left set. Resolve the name;
+# print the key's service-account identity (client_email is not a secret), else the active login.
+GCP_CRED_VAR="$(sh "$TT" "$CFG" gcp get "$GCP_IDX" credentials_env)"
+if [ -n "$GCP_CRED_VAR" ]; then
+  GCP_CRED_PATH="$(printenv "$GCP_CRED_VAR" 2>/dev/null || true)"
+  { [ -n "$GCP_CRED_PATH" ] && [ -f "$GCP_CRED_PATH" ]; } || { echo "live-safety gate failed: gcp.credentials_env ('${GCP_CRED_VAR}') is unset or names a missing key file"; exit 1; }
+  echo "identity: $(jq -r '.client_email // "unknown"' "$GCP_CRED_PATH") (key file via ${GCP_CRED_VAR})"
 else
   echo "identity: $(gcloud auth list --filter=status:ACTIVE --format='value(account)' | head -1)"
 fi
@@ -174,7 +188,15 @@ GCP_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$GCP_
 GCP_LABEL=$(sh "$TT" "$CFG" gcp label "$GCP_IDX"); GCP_PROJECT=$(sh "$TT" "$CFG" gcp get "$GCP_IDX" project)
 if [ "$GCP_KIND" = seq ]; then GCP_SEG="gcp/${GCP_LABEL}"; else GCP_SEG="gcp"; fi
 MON_API="https://monitoring.googleapis.com/v3"
-if [ -n "${GOOGLE_APPLICATION_CREDENTIALS:-}" ]; then TOKEN="$(gcloud auth application-default print-access-token)"; export CLOUDSDK_AUTH_ACCESS_TOKEN="$TOKEN"; else TOKEN="$(gcloud auth print-access-token)"; fi
+# Same identity resolution as the doctor gate: gcp.credentials_env names the key-file-path variable.
+GCP_CRED_VAR="$(sh "$TT" "$CFG" gcp get "$GCP_IDX" credentials_env)"
+if [ -n "$GCP_CRED_VAR" ]; then
+  GCP_CRED_PATH="$(printenv "$GCP_CRED_VAR" 2>/dev/null || true)"
+  { [ -n "$GCP_CRED_PATH" ] && [ -f "$GCP_CRED_PATH" ]; } || { echo "gcp.credentials_env ('${GCP_CRED_VAR}') is unset or names a missing key file"; exit 1; }
+  export GOOGLE_APPLICATION_CREDENTIALS="$GCP_CRED_PATH"; TOKEN="$(gcloud auth application-default print-access-token)"; export CLOUDSDK_AUTH_ACCESS_TOKEN="$TOKEN"
+else
+  TOKEN="$(gcloud auth print-access-token)"
+fi
 SMALL_MAX_OBJECTS="15"    # example, tune to your environment
 MEDIUM_MAX_OBJECTS="60"   # example, tune to your environment
 BATCH_SIZE="10"           # VMs per batch on the large path; example, tune it

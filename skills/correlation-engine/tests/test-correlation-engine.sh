@@ -219,5 +219,39 @@ jq -e '
   || fail "case7: two-level finding azure/prod-core/AZ-001 not detected as an overlap on svc-shared — dual-glob broken: $(jq -c '{total_findings_raw, total_overlaps_detected, overlaps}' "$corr7")"
 echo "PASS"
 
+# --- case 8: cross-tool COVERAGE correlation (gap-covered-elsewhere) ------------
+# A coverage-gap finding in one provider that is actively + routed-monitored by
+# ANOTHER provider must be classified covered-elsewhere (single-tool-dependency),
+# a gap nothing covers must be true-gap, and a disabled/route-less monitor must
+# NOT count as coverage. This locks the inventory.json read + the honesty bar.
+printf 'testing: cross-tool coverage classification (covered-elsewhere / true-gap / disabled-excluded) ... '
+D8="$TMP_ROOT/case8"
+write_findings "$D8" "azure" '[
+  {"id": "AZR-002", "title": "no metric alerts on checkout", "severity": "critical", "area": "coverage", "affected": ["checkout"]},
+  {"id": "AZR-003", "title": "no metric alerts on legacy-batch", "severity": "high", "area": "coverage", "affected": ["legacy-batch"]},
+  {"id": "AZR-004", "title": "no metric alerts on search", "severity": "high", "area": "coverage", "affected": ["search"]}
+]'
+# Datadog inventory: an ACTIVE routed monitor on checkout; a DISABLED monitor on search.
+mkdir -p "$D8/datadog/$DATE"
+jq -n '{target: "datadog", audit_date: "2026-01-15", items: [
+  {"kind": "monitor", "name": "checkout latency", "covers": "checkout", "enabled": true, "routes_to": "pagerduty"},
+  {"kind": "monitor", "name": "search errors", "covers": "search", "enabled": false, "routes_to": "slack"}
+]}' > "$D8/datadog/$DATE/inventory.json"
+run_engine "$D8"
+corr8="$D8/correlation.json"
+[ -f "$corr8" ] || fail "case8: correlation.json was not written"
+jq -e '.coverage[] | select(.finding_id=="AZR-002" and .classification=="covered-elsewhere" and (.covered_by[0].inventory_name=="checkout latency") and (.covered_by[0].match=="exact"))' "$corr8" >/dev/null \
+  || fail "case8: AZR-002 (checkout) not classified covered-elsewhere by the active Datadog monitor: $(jq -c '.coverage' "$corr8")"
+jq -e '.coverage[] | select(.finding_id=="AZR-003" and .classification=="true-gap")' "$corr8" >/dev/null \
+  || fail "case8: AZR-003 (legacy-batch, nothing covers it) not classified true-gap: $(jq -c '.coverage' "$corr8")"
+jq -e '.coverage[] | select(.finding_id=="AZR-004" and .classification=="true-gap")' "$corr8" >/dev/null \
+  || fail "case8: AZR-004 (search) must be true-gap — the covering monitor is disabled, so it is NOT active coverage: $(jq -c '.coverage' "$corr8")"
+[ "$(jq '.total_coverage_covered_elsewhere' "$corr8")" -eq 1 ] \
+  || fail "case8: expected total_coverage_covered_elsewhere=1, got $(jq '.total_coverage_covered_elsewhere' "$corr8")"
+# never mutate a finding's severity — coverage is advisory only
+jq -e '.coverage[] | select(.finding_id=="AZR-002") | has("severity") | not' "$corr8" >/dev/null \
+  || fail "case8: coverage entry must not carry/rewrite a finding severity (advisory only)"
+echo "PASS"
+
 echo
 echo "=== All correlation-engine tests passed ==="

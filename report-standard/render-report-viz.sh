@@ -290,8 +290,9 @@ HTMLFOOT
     fi
     NOVL="$(jq '(.overlaps // []) | length' "$C" 2>/dev/null || echo 0)"
     NCAS="$(jq '(.cascades // []) | length' "$C" 2>/dev/null || echo 0)"
-    if [ "${NOVL:-0}" -eq 0 ] && [ "${NCAS:-0}" -eq 0 ]; then
-      echo "No cross-stack overlaps or cascades detected this run — each finding is scoped to a single stack."
+    NCOV="$(jq '(.coverage // []) | length' "$C" 2>/dev/null || echo 0)"
+    if [ "${NOVL:-0}" -eq 0 ] && [ "${NCAS:-0}" -eq 0 ] && [ "${NCOV:-0}" -eq 0 ]; then
+      echo "No cross-stack overlaps, cascades, or cross-tool coverage reframing detected this run — each finding is scoped to a single stack."
       exit 0
     fi
     if [ "${NOVL:-0}" -gt 0 ]; then
@@ -315,6 +316,41 @@ HTMLFOOT
       jq -r '.cascades[]? | "- ROOT \(.root_cause.finding_id) \(.root_cause.title)\n  → effects: " + ((.effects // []) | map("\(.finding_id) \(.title)") | join(" | "))' "$C"
     else
       echo "_No cross-stack cascade chains detected this run._"
+    fi
+    if [ "${NCOV:-0}" -gt 0 ]; then
+      echo
+      echo "### Cross-tool coverage"
+      echo
+      NCE="$(jq '[.coverage[]? | select(.classification=="covered-elsewhere")] | length' "$C" 2>/dev/null || echo 0)"
+      NTG="$(jq '[.coverage[]? | select(.classification=="true-gap")] | length' "$C" 2>/dev/null || echo 0)"
+      NUM="$(jq '[.coverage[]? | select(.classification=="unmappable")] | length' "$C" 2>/dev/null || echo 0)"
+      if [ "${NCE:-0}" -gt 0 ]; then
+        echo "**Covered by another tool (single-tool dependency, NOT zero coverage — confirm the covering monitor watches the signal the gap names):**"
+        echo
+        echo "| Resource | Gap flagged by | Actively covered by | Note |"
+        echo "| --- | --- | --- | --- |"
+        jq -r 'def esc: tostring | gsub("\\|"; "\\|");
+          .coverage[]? | select(.classification=="covered-elsewhere")
+          | [ ((.resource // "") | esc), ((.target // "") | esc),
+              (([.covered_by[]? | "\(.provider):\(.inventory_name) → \(.routes_to)"] | join("; ")) | esc),
+              ("single-tool dependency" | esc) ] | @tsv' "$C" \
+        | while IFS="$(printf '\t')" read -r res tgt cov note; do
+            echo "| \`${res}\` | \`${tgt}\` | ${cov} | ${note} |"
+          done
+        echo
+      fi
+      if [ "${NTG:-0}" -gt 0 ]; then
+        echo "**True gaps — no active cross-tool coverage anywhere; these are real and should be elevated:**"
+        echo
+        jq -r '.coverage[]? | select(.classification=="true-gap") | "- \(.resource) (flagged by \(.target), \(.finding_id))"' "$C"
+        echo
+      fi
+      if [ "${NUM:-0}" -gt 0 ]; then
+        echo "**Possible coverage, unconfirmed — a name-only/fuzzy match; run \`/scoutflo:map-topology\` to join by canonical service name:**"
+        echo
+        jq -r '.coverage[]? | select(.classification=="unmappable") | "- \(.resource) (flagged by \(.target)) — maybe covered by \([.covered_by[]?.provider] | join(", "))"' "$C"
+        echo
+      fi
     fi
     ;;
 

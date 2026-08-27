@@ -81,16 +81,23 @@ note() { printf '%s\n' "$*" >&2; }
 # exists and is ours) so a token set once is seen here without re-exporting. It
 # only sets *_env variables; no secret value is printed. A profile that already
 # sources it makes this a no-op.
-SCOUTFLO_ENV="${HOME}/.scoutflo/env"
+# Resolve the store with the SAME layered resolver the audits use (override ->
+# project-local -> home), so doctor and every audit agree on where the secret store
+# lives even on sandboxed/project-local surfaces where $HOME is not shell-writable
+# (ci/env-load-parity-check.sh enforces this parity across doctor + audit-*).
+SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.scoutflo/env" ]; then SCOUTFLO_ENV="./.scoutflo/env"; else SCOUTFLO_ENV="$HOME/.scoutflo/env"; fi; }
+STORE_LOAD_FAILED=0
 if [ -f "$SCOUTFLO_ENV" ]; then
   # Suspend errexit/nounset while sourcing: this file is user-edited, so a
-  # single failing or unbound line inside it must degrade to a warning, not
+  # single failing or unbound line inside it must degrade to a diagnostic, not
   # abort the whole preflight. (Under `set -e`, a failure inside a sourced file
-  # exits the shell before the `|| note` can run, so the guard was inert.)
+  # exits the shell before the `|| ...` can run, so the guard was inert.)
   # A subshell can't be used — the exported *_env vars must land in this shell.
+  # A genuine parse failure (e.g. a wrapped paste with an unbalanced quote) is
+  # buffered here and surfaced as a matrix row once row()/MATRIX exist (below).
   set +eu
   # shellcheck disable=SC1090
-  . "$SCOUTFLO_ENV" || note "doctor: warning: could not source ${SCOUTFLO_ENV} (continuing with current environment)"
+  . "$SCOUTFLO_ENV" || { STORE_LOAD_FAILED=1; note "doctor: warning: could not source ${SCOUTFLO_ENV}; a pasted line may be malformed (continuing with current environment)"; }
   set -eu
 fi
 
@@ -98,7 +105,15 @@ fi
 # Print which toolkit version is answering, so any pasted output/screenshot is
 # self-diagnosing (a stale install is the #1 cause of "my picker looks different").
 # Plugins do not auto-update: refresh with `claude plugin update scoutflo@scoutflo`.
-PLUGIN_MANIFEST="${CLAUDE_PLUGIN_ROOT:-.}/.claude-plugin/plugin.json"
+# Resolve the manifest robustly: prefer CLAUDE_PLUGIN_ROOT when it actually holds the
+# manifest, else resolve relative to THIS script's dir (skills/doctor/scripts -> repo
+# root), so the version is surfaced even when doctor runs standalone (no CLAUDE_PLUGIN_ROOT).
+if [ -n "${CLAUDE_PLUGIN_ROOT:-}" ] && [ -f "${CLAUDE_PLUGIN_ROOT%/}/.claude-plugin/plugin.json" ]; then
+  PLUGIN_MANIFEST="${CLAUDE_PLUGIN_ROOT%/}/.claude-plugin/plugin.json"
+else
+  PLUGIN_MANIFEST="$(cd "$(dirname "$0")/../../.." 2>/dev/null && pwd)/.claude-plugin/plugin.json"
+fi
+TOOLKIT_VERSION=""
 if [ -f "$PLUGIN_MANIFEST" ]; then
   TOOLKIT_VERSION=$(sed -n 's/^[[:space:]]*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$PLUGIN_MANIFEST" | head -1)
   note "doctor: Scoutflo AI Readiness toolkit v${TOOLKIT_VERSION:-unknown} (update: claude plugin update scoutflo@scoutflo)"
@@ -253,6 +268,20 @@ row() {
     fail)        ANY_FAIL=1 ;;
     env-missing) ANY_ENV_MISSING=1 ;;
   esac
+}
+
+# missing_hint <VAR>: the uniform env-missing hint. The plugin runs in its own
+# process and cannot see a shell `export`; credentials must live in the secret store
+# connect writes (~/.scoutflo/env), which doctor sources above. If the store already
+# NAMES the variable but it did not load, that line is malformed — say so precisely.
+# Greps the NAME only; never reads or prints the value (leak-scan stays green).
+missing_hint() {
+  mh_var="$1"
+  if [ -f "$SCOUTFLO_ENV" ] && grep -qE "^[[:space:]]*export[[:space:]]+${mh_var}=" "$SCOUTFLO_ENV" 2>/dev/null; then
+    printf '%s' "${mh_var} appears in ~/.scoutflo/env but did not load — that line is malformed (a space in the name from a wrapped paste like HDX_E U_KEY, or a doubled =); fix that one line, then rerun doctor."
+  else
+    printf '%s' "${mh_var} is not in ~/.scoutflo/env — the plugin reads that file, not your shell. Add it: echo 'export ${mh_var}=\"<paste>\"' >> ~/.scoutflo/env; chmod 600 ~/.scoutflo/env (Windows: setx ${mh_var} \"<paste>\"), then rerun doctor."
+  fi
 }
 
 # --- token resolution (presence only, no eval) ---------------------------------
@@ -415,9 +444,9 @@ authed_json_check() {
 token_gate() {
   tg_int="$1"; shift
   if [ "$TOKEN_STATE" = "missing" ]; then
-    row "$tg_int" env yes "$TOKEN_VAR" env-missing - "add it once to ~/.scoutflo/env: echo 'export ${TOKEN_VAR}=\"<paste>\"' >> ~/.scoutflo/env (Windows PowerShell: setx ${TOKEN_VAR} \"<paste>\"), then rerun doctor; created per connect references/providers.md"
+    row "$tg_int" env yes "$TOKEN_VAR" env-missing - "$(missing_hint "$TOKEN_VAR")"
     for tg_chk in "$@"; do
-      row "$tg_int" "$tg_chk" yes "$TOKEN_VAR" skipped - "blocked: ${TOKEN_VAR} is not set"
+      row "$tg_int" "$tg_chk" yes "$TOKEN_VAR" skipped - "blocked: ${TOKEN_VAR} is not set — see the ${TOKEN_VAR} env row above, then rerun"
     done
     return 1
   fi
@@ -440,6 +469,16 @@ if command -v jq >/dev/null 2>&1; then
   row toolkit binary-jq yes - pass - -
 else
   row toolkit binary-jq yes - fail - "install jq; every audit and setup skill parses JSON with it"
+fi
+
+# Toolkit version row (in addition to the stderr note above): plugins do not
+# auto-update, and a stale install is the #1 cause of "my picker looks different".
+if [ -n "${TOOLKIT_VERSION:-}" ]; then
+  row toolkit version yes - pass - "v${TOOLKIT_VERSION}; plugins do not auto-update — if older than expected run /reload-plugins (or restart Claude Code), then rerun; update: claude plugin update scoutflo@scoutflo"
+fi
+# Buffered secret-store parse failure (detected above before row()/MATRIX existed).
+if [ "$STORE_LOAD_FAILED" -eq 1 ]; then
+  row env store-load yes - fail - "~/.scoutflo/env failed to parse (a pasted line may have wrapped, or has a stray char like == or a space in the variable name) — fix that line or re-run /scoutflo:connect, then rerun doctor."
 fi
 
 # --- grafana ---------------------------------------------------------------------
@@ -716,7 +755,7 @@ else
       if [ -z "$ELK_TOKEN_VAR" ]; then
         row "$E_INT" config yes - fail - "elk.token_env is empty in toolkit.yaml; name the variable holding the Kibana API key"
       elif [ "$ELK_TOKEN_STATE" = "missing" ]; then
-        row "$E_INT" env yes "$ELK_TOKEN_VAR" env-missing - "export ${ELK_TOKEN_VAR} in this shell, then rerun doctor; created per connect references/providers.md"
+        row "$E_INT" env yes "$ELK_TOKEN_VAR" env-missing - "$(missing_hint "$ELK_TOKEN_VAR")"
         row "$E_INT" alerting-health yes "$ELK_TOKEN_VAR" skipped - "blocked: ${ELK_TOKEN_VAR} is not set"
       else
         row "$E_INT" env yes "$ELK_TOKEN_VAR" pass - -
@@ -793,10 +832,10 @@ else
         JSM_EMAIL_VAL="$(printenv "$JSM_EMAIL_VAR" 2>/dev/null || true)"
         JSM_TOKEN_VAL="$(printenv "$JSM_TOKEN_VAR" 2>/dev/null || true)"
         if [ -z "$JSM_EMAIL_VAL" ]; then
-          row "$J_INT" env yes "$JSM_EMAIL_VAR" env-missing - "export ${JSM_EMAIL_VAR} in this shell, then rerun doctor; it is the Basic-auth username (your Atlassian email)"
+          row "$J_INT" env yes "$JSM_EMAIL_VAR" env-missing - "$(missing_hint "$JSM_EMAIL_VAR")"
           JSM_BLOCKED=1
         elif [ -z "$JSM_TOKEN_VAL" ]; then
-          row "$J_INT" env yes "$JSM_TOKEN_VAR" env-missing - "export ${JSM_TOKEN_VAR} in this shell, then rerun doctor; created per connect references/providers.md"
+          row "$J_INT" env yes "$JSM_TOKEN_VAR" env-missing - "$(missing_hint "$JSM_TOKEN_VAR")"
           JSM_BLOCKED=1
         else
           row "$J_INT" env yes "${JSM_EMAIL_VAR}+${JSM_TOKEN_VAR}" pass - -
@@ -868,7 +907,7 @@ else
       ZD_TOKEN="$(printenv "$ZD_TOKEN_VAR" 2>/dev/null || true)"
       [ -n "$ZD_TOKEN" ] && ZD_TOKEN_STATE="set"
       if [ "$ZD_TOKEN_STATE" = "missing" ]; then
-        row "$ZD_INT" env yes "$ZD_TOKEN_VAR" env-missing - "export ${ZD_TOKEN_VAR} in this shell, then rerun doctor; created per connect references/providers.md"
+        row "$ZD_INT" env yes "$ZD_TOKEN_VAR" env-missing - "$(missing_hint "$ZD_TOKEN_VAR")"
         row "$ZD_INT" teams-read yes "$ZD_TOKEN_VAR" skipped - "blocked: ${ZD_TOKEN_VAR} is not set"
       else
         row "$ZD_INT" env yes "$ZD_TOKEN_VAR" pass - -
@@ -922,7 +961,7 @@ else
       GC_API="${GC_API%/}"
       GC_BACKEND="$(tv groundcover "$GC_KIND" "$_gci" backend_id)"
       if [ -z "$GC_TOKEN" ]; then
-        row "$GC_INT" env yes "$GC_TOKEN_VAR" env-missing - "export ${GC_TOKEN_VAR} in this shell, then rerun doctor; created per connect references/providers.md"
+        row "$GC_INT" env yes "$GC_TOKEN_VAR" env-missing - "$(missing_hint "$GC_TOKEN_VAR")"
         row "$GC_INT" monitors-read yes "$GC_TOKEN_VAR" skipped - "blocked: ${GC_TOKEN_VAR} is not set"
       else
         row "$GC_INT" env yes "$GC_TOKEN_VAR" pass - -
@@ -973,7 +1012,7 @@ else
   PROM_BLOCKED=0
   if [ "$TOKEN_STATE" = "missing" ]; then
     PROM_BLOCKED=1
-    row prometheus env yes "$TOKEN_VAR" env-missing - "export ${TOKEN_VAR} in this shell, then rerun doctor"
+    row prometheus env yes "$TOKEN_VAR" env-missing - "$(missing_hint "$TOKEN_VAR")"
   elif [ "$TOKEN_STATE" = "set" ]; then
     row prometheus env yes "$TOKEN_VAR" pass - -
   fi
@@ -1091,7 +1130,7 @@ else
       if [ -z "$SIGNOZ_TOKEN_VAR" ]; then
         row "$SG_INT" config yes - fail - "signoz.api_key_env is empty in toolkit.yaml; name the variable holding the Service Account token"
       elif [ "$SIGNOZ_TOKEN_STATE" = "missing" ]; then
-        row "$SG_INT" env yes "$SIGNOZ_TOKEN_VAR" env-missing - "export ${SIGNOZ_TOKEN_VAR} in this shell, then rerun doctor; created per connect references/providers.md"
+        row "$SG_INT" env yes "$SIGNOZ_TOKEN_VAR" env-missing - "$(missing_hint "$SIGNOZ_TOKEN_VAR")"
         row "$SG_INT" rules-read yes "$SIGNOZ_TOKEN_VAR" skipped - "blocked: ${SIGNOZ_TOKEN_VAR} is not set"
       else
         row "$SG_INT" env yes "$SIGNOZ_TOKEN_VAR" pass - -
@@ -1197,7 +1236,7 @@ else
         if [ -n "$GCP_CRED_VAR" ]; then
           GCP_CRED_PATH="$(printenv "$GCP_CRED_VAR" 2>/dev/null || true)"
           if [ -z "$GCP_CRED_PATH" ]; then
-            row "$GCP_INT" env yes "$GCP_CRED_VAR" env-missing - "export ${GCP_CRED_VAR} in this shell, then rerun doctor; created per connect references/providers.md"
+            row "$GCP_INT" env yes "$GCP_CRED_VAR" env-missing - "$(missing_hint "$GCP_CRED_VAR")"
             GCP_BLOCKED=1
           elif [ ! -f "$GCP_CRED_PATH" ]; then
             row "$GCP_INT" env yes "$GCP_CRED_VAR" fail - "${GCP_CRED_VAR} names a file that does not exist: ${GCP_CRED_PATH}"
@@ -1269,7 +1308,7 @@ else
         if [ -n "$AWS_ROLE_VAR" ]; then
           AWS_ROLE_ARN="$(printenv "$AWS_ROLE_VAR" 2>/dev/null || true)"
           if [ -z "$AWS_ROLE_ARN" ]; then
-            row "$AWS_INT" env yes "$AWS_ROLE_VAR" env-missing - "export ${AWS_ROLE_VAR} in this shell, then rerun doctor"
+            row "$AWS_INT" env yes "$AWS_ROLE_VAR" env-missing - "$(missing_hint "$AWS_ROLE_VAR")"
             AWS_BLOCKED=1
           else
             row "$AWS_INT" env yes "$AWS_ROLE_VAR" pass - -
@@ -1382,7 +1421,7 @@ else
         elif [ "$K_LINE" = "no" ]; then
           row "$K_INT" rbac yes - fail - "context reaches the cluster but lacks read RBAC; bind the view ClusterRole per connect references/providers.md"
         else
-          row "$K_INT" rbac yes - fail - "context error: ${K_LINE}; run kubectl config get-contexts and fix kubernetes.context — a GKE/EKS context failing here often needs exec-plugin reauth (gcloud auth login / aws sso login), not an RBAC change"
+          row "$K_INT" rbac yes - fail - "context error: ${K_LINE}; run kubectl config get-contexts and fix kubernetes.context — a GKE/EKS/AKS context failing here often needs exec-plugin reauth (gcloud auth login / aws sso login / az aks get-credentials), not an RBAC change. A private or unreachable API server (no such host, dial tcp, i/o timeout, connection refused) is a NETWORK problem, not RBAC: run from inside the VNet, add your IP to the cluster API-server authorized ranges, or use 'az aks command invoke'"
         fi
       fi
     fi
@@ -1391,6 +1430,10 @@ else
 fi
 
 # --- clickstack (ClickHouse + HyperDX) ------------------------------------------------------
+# ClickHouse OR HyperDX — at least one; a HyperDX-only target is fully supported. The two lanes
+# are probed INDEPENDENTLY: the ClickHouse SELECT 1 runs only when clickhouse_url is set, and the
+# HyperDX probes run whenever hyperdx_url is set (never gated on ClickHouse). The target counts as
+# configured when EITHER lane is present, so a HyperDX-only config is never reported "not configured".
 
 CS_KIND="$(tkind clickstack)"; CS_N="$(tcount clickstack)"
 _csi=0
@@ -1398,13 +1441,18 @@ while [ "$_csi" -lt "${CS_N:-0}" ]; do
   CS_INT="$(tint clickstack "$_csi" "$CS_N")"
   CH_URL_CFG="$(tv clickstack "$CS_KIND" "$_csi" clickhouse_url)"
   HDX_URL_CFG="$(tv clickstack "$CS_KIND" "$_csi" hyperdx_url)"
-  if [ -n "$CH_URL_CFG" ]; then
+  # Count this target once when EITHER lane is configured (guard so ClickHouse+HyperDX
+  # on one target counts once, and a HyperDX-only target is not counted as absent).
+  if [ -n "$CH_URL_CFG" ] || [ -n "$HDX_URL_CFG" ]; then
     CONFIGURED_COUNT=$((CONFIGURED_COUNT + 1))
+  fi
+  # ClickHouse lane: read-only SELECT 1, only when clickhouse_url is set for THIS target.
+  if [ -n "$CH_URL_CFG" ]; then
     CH_USER_CFG="$(tv clickstack "$CS_KIND" "$_csi" clickhouse_user)"; [ -n "$CH_USER_CFG" ] || CH_USER_CFG="default"
     CH_PW_VAR="$(tv clickstack "$CS_KIND" "$_csi" clickhouse_password_env)"
     CH_PW=""; [ -n "$CH_PW_VAR" ] && CH_PW="$(printenv "$CH_PW_VAR" 2>/dev/null || true)"
     if [ -n "$CH_PW_VAR" ] && [ -z "$CH_PW" ]; then
-      row "$CS_INT" clickhouse yes "$CH_PW_VAR" env-missing - "clickstack.clickhouse_password_env names ${CH_PW_VAR} but it is not set; add it to ~/.scoutflo/env or run /scoutflo:connect"
+      row "$CS_INT" clickhouse yes "$CH_PW_VAR" env-missing - "$(missing_hint "$CH_PW_VAR")"
     else
       note "doctor: checking ${CS_INT} clickhouse: SELECT 1 against ${CH_URL_CFG}"
       CH_BODY="$(curl -s --connect-timeout "$CONNECT_TIMEOUT" --max-time "$MAX_TIME" \
@@ -1416,30 +1464,61 @@ while [ "$_csi" -lt "${CS_N:-0}" ]; do
         row "$CS_INT" clickhouse yes "${CH_PW_VAR:-none}" fail - "SELECT 1 as ${CH_USER_CFG} against ${CH_URL_CFG} did not return 1 — check the URL/port-forward, user, and password variable; audit-clickstack cannot read anything until this passes"
       fi
     fi
-    if [ -n "$HDX_URL_CFG" ]; then
-      # status-probe-ok: unauthenticated /api/health reachability ping (no credential sent); the authed read is the audit's /api/v2 probe with the Personal API Access Key.
-      HDX_HC="$(curl -s -o /dev/null -w '%{http_code}' --connect-timeout "$CONNECT_TIMEOUT" --max-time "$MAX_TIME" "${HDX_URL_CFG%/}/api/health")" || HDX_HC="000"
-      if [ "$HDX_HC" = "200" ]; then
-        row "$CS_INT" hyperdx-health yes - pass 200 "reachable; note: HyperDX reads via the external API v2 (/api/v2/*) with the per-user Personal API Access Key (Authorization: Bearer) set in hyperdx_api_key_env — NOT the team ingestion key (which 401s there). Legacy fallback: hyperdx_email_env + hyperdx_password_env (session login). With neither, the HyperDX categories are marked not-in-scope (expected)"
+  fi
+  # HyperDX lane: runs whenever hyperdx_url is set, INDEPENDENT of ClickHouse.
+  if [ -n "$HDX_URL_CFG" ]; then
+    # status-probe-ok: unauthenticated /api/health reachability ping (no credential sent); the authed read is the /api/v2 Bearer probe below with the Personal API Access Key.
+    HDX_HC="$(curl -s -o /dev/null -w '%{http_code}' --connect-timeout "$CONNECT_TIMEOUT" --max-time "$MAX_TIME" "${HDX_URL_CFG%/}/api/health")" || HDX_HC="000"
+    if [ "$HDX_HC" = "200" ]; then
+      row "$CS_INT" hyperdx-health yes - pass 200 "reachable; note: HyperDX reads via the external API v2 (/api/v2/*) with the per-user Personal API Access Key (Authorization: Bearer) set in hyperdx_api_key_env — NOT the team ingestion key (which 401s there). Legacy fallback: hyperdx_email_env + hyperdx_password_env (session login). With neither, the HyperDX categories are marked not-in-scope (expected)"
+    else
+      row "$CS_INT" hyperdx-health yes - fail "$HDX_HC" "GET ${HDX_URL_CFG%/}/api/health did not return 200 — check clickstack.hyperdx_url"
+    fi
+    # Optional v2 session-login credentials: presence-check only, never a login from doctor
+    # and never a value printed. Both-or-neither: one without the other cannot log in.
+    HDX_EMAIL_VAR="$(tv clickstack "$CS_KIND" "$_csi" hyperdx_email_env)"
+    HDX_PW_VAR="$(tv clickstack "$CS_KIND" "$_csi" hyperdx_password_env)"
+    if [ -n "$HDX_EMAIL_VAR" ] || [ -n "$HDX_PW_VAR" ]; then
+      HDX_EMAIL_VAL=""; [ -n "$HDX_EMAIL_VAR" ] && HDX_EMAIL_VAL="$(printenv "$HDX_EMAIL_VAR" 2>/dev/null || true)"
+      HDX_PW_VAL=""; [ -n "$HDX_PW_VAR" ] && HDX_PW_VAL="$(printenv "$HDX_PW_VAR" 2>/dev/null || true)"
+      if [ -n "$HDX_EMAIL_VAR" ] && [ -n "$HDX_PW_VAR" ] && [ -n "$HDX_EMAIL_VAL" ] && [ -n "$HDX_PW_VAL" ]; then
+        row "$CS_INT" hyperdx-login-env yes "$HDX_PW_VAR" pass - "v2 login credentials present (presence-checked only) — audit-clickstack obtains a session via POST /api/login/password (cookie in a 0600 mktemp jar, deleted on exit) and scores CS-040/CS-041"
       else
-        row "$CS_INT" hyperdx-health yes - fail "$HDX_HC" "GET ${HDX_URL_CFG%/}/api/health did not return 200 — check clickstack.hyperdx_url"
+        row "$CS_INT" hyperdx-login-env yes "${HDX_PW_VAR:-$HDX_EMAIL_VAR}" env-missing - "clickstack.hyperdx_email_env/hyperdx_password_env are configured but incomplete (both keys and both variables must be set); add the missing piece to ~/.scoutflo/env or run /scoutflo:connect — until then the v2 HyperDX categories stay not-in-scope"
       fi
-      # Optional v2 session-login credentials: presence-check only, never a login from doctor
-      # and never a value printed. Both-or-neither: one without the other cannot log in.
-      HDX_EMAIL_VAR="$(tv clickstack "$CS_KIND" "$_csi" hyperdx_email_env)"
-      HDX_PW_VAR="$(tv clickstack "$CS_KIND" "$_csi" hyperdx_password_env)"
-      if [ -n "$HDX_EMAIL_VAR" ] || [ -n "$HDX_PW_VAR" ]; then
-        HDX_EMAIL_VAL=""; [ -n "$HDX_EMAIL_VAR" ] && HDX_EMAIL_VAL="$(printenv "$HDX_EMAIL_VAR" 2>/dev/null || true)"
-        HDX_PW_VAL=""; [ -n "$HDX_PW_VAR" ] && HDX_PW_VAL="$(printenv "$HDX_PW_VAR" 2>/dev/null || true)"
-        if [ -n "$HDX_EMAIL_VAR" ] && [ -n "$HDX_PW_VAR" ] && [ -n "$HDX_EMAIL_VAL" ] && [ -n "$HDX_PW_VAL" ]; then
-          row "$CS_INT" hyperdx-login-env yes "$HDX_PW_VAR" pass - "v2 login credentials present (presence-checked only) — audit-clickstack obtains a session via POST /api/login/password (cookie in a 0600 mktemp jar, deleted on exit) and scores CS-040/CS-041"
+    fi
+    # Personal API Access Key: a LIVE JSON-asserting Bearer probe (the same pattern
+    # audit-clickstack uses), not a presence check — probe both the direct /api/v2 form
+    # and the app-proxy-doubled /api/api/v2 form, and credit only on a real JSON body.
+    HDX_KEY_VAR="$(tv clickstack "$CS_KIND" "$_csi" hyperdx_api_key_env)"
+    if [ -n "$HDX_KEY_VAR" ]; then
+      HDX_API_KEY="$(printenv "$HDX_KEY_VAR" 2>/dev/null || true)"
+      if [ -z "$HDX_API_KEY" ]; then
+        row "$CS_INT" hyperdx-api-key yes "$HDX_KEY_VAR" env-missing - "$(missing_hint "$HDX_KEY_VAR")"
+      else
+        note "doctor: checking ${CS_INT} hyperdx-api-key: GET ${HDX_URL_CFG%/}/api/v2/alerts (Bearer)"
+        _hdx_ok=0; _hdx_c=""
+        for _b in "/api/v2" "/api/api/v2"; do
+          _hb="$(mktemp)"
+          _meta="$(curl -s -o "$_hb" -w '%{http_code} %{content_type}' --max-time 10 -H "Authorization: Bearer ${HDX_API_KEY}" "${HDX_URL_CFG%/}${_b}/alerts")" || _meta="000 -"
+          _hdx_c="${_meta%% *}"; _hdx_ct="${_meta#* }"
+          if [ "$_hdx_c" = "200" ] && printf '%s' "$_hdx_ct" | grep -qi json && jq -e 'type=="array" or has("data") or has("alerts")' "$_hb" >/dev/null 2>&1; then
+            _hdx_ok=1; rm -f "$_hb"; break
+          fi
+          rm -f "$_hb"
+        done
+        if [ "$_hdx_ok" = "1" ]; then
+          row "$CS_INT" hyperdx-api-key yes "$HDX_KEY_VAR" pass 200 "Personal API Access Key verified (GET /api/v2/alerts -> 200 JSON)"
+        elif [ "$_hdx_c" = "401" ] || [ "$_hdx_c" = "403" ]; then
+          row "$CS_INT" hyperdx-api-key yes "$HDX_KEY_VAR" fail "$_hdx_c" "HTTP ${_hdx_c} on GET ${HDX_URL_CFG%/}/api/v2/alerts (also tried /api/api/v2): this looks like the team INGESTION key, not the per-user Personal API Access Key (Settings -> API Keys) — recreate per connect references/providers.md; legacy fallback: the hyperdx_email_env + hyperdx_password_env session pair"
+        elif [ "$_hdx_c" = "000" ] || [ -z "$_hdx_c" ]; then
+          row "$CS_INT" hyperdx-api-key yes "$HDX_KEY_VAR" fail "000" "could not reach ${HDX_URL_CFG%/}/api/v2/alerts (also tried /api/api/v2) — transport failure, not an auth error; check clickstack.hyperdx_url and the network path"
         else
-          row "$CS_INT" hyperdx-login-env yes "${HDX_PW_VAR:-$HDX_EMAIL_VAR}" env-missing - "clickstack.hyperdx_email_env/hyperdx_password_env are configured but incomplete (both keys and both variables must be set); add the missing piece to ~/.scoutflo/env or run /scoutflo:connect — until then the v2 HyperDX categories stay not-in-scope"
+          row "$CS_INT" hyperdx-api-key yes "$HDX_KEY_VAR" fail "$_hdx_c" "GET ${HDX_URL_CFG%/}/api/v2/alerts (also tried /api/api/v2) returned HTTP ${_hdx_c} without the expected JSON alerts body — $(http_hint "$_hdx_c"); if this fronts an SSO/SPA the Personal API Access Key never reached the API"
         fi
       fi
     fi
   fi
-
   # clickstack credential keys configured without a hyperdx_url are silently unused —
   # say so instead of leaving the user to wonder why HyperDX categories stay not-in-scope.
   if [ -n "$CH_URL_CFG" ] && [ -z "$HDX_URL_CFG" ]; then
@@ -1448,15 +1527,6 @@ while [ "$_csi" -lt "${CS_N:-0}" ]; do
       [ -n "$(tv clickstack "$CS_KIND" "$_csi" "$_k")" ] && _hdx_stray="${_hdx_stray} ${_k}"
     done
     [ -n "$_hdx_stray" ] && row "$CS_INT" hyperdx-config yes - warn - "clickstack.${_hdx_stray# } configured but clickstack.hyperdx_url is not set — these credentials are unused until hyperdx_url is added; HyperDX categories stay not-in-scope"
-  fi
-  # v1 REST-key path: presence-check the api-key variable when named (v2 ignores it for REST).
-  HDX_KEY_VAR="$(tv clickstack "$CS_KIND" "$_csi" hyperdx_api_key_env)"
-  if [ -n "$HDX_URL_CFG" ] && [ -n "$HDX_KEY_VAR" ]; then
-    if [ -n "$(printenv "$HDX_KEY_VAR" 2>/dev/null || true)" ]; then
-      row "$CS_INT" hyperdx-api-key-env yes "$HDX_KEY_VAR" pass - "present (presence-checked only); note: on HyperDX v2.x this key is ingestion-only — REST scoring needs the login env pair"
-    else
-      row "$CS_INT" hyperdx-api-key-env yes "$HDX_KEY_VAR" env-missing - "clickstack.hyperdx_api_key_env names ${HDX_KEY_VAR} but it is not set; add it to ~/.scoutflo/env or run /scoutflo:connect"
-    fi
   fi
   _csi=$((_csi+1))
 done
@@ -1477,7 +1547,7 @@ while [ "$_azi" -lt "${AZ_N:-0}" ]; do
       if az account show --subscription "$AZ_SUB" --query id -o tsv >/dev/null 2>&1; then
         row "$AZ_INT" identity yes - pass - -
       else
-        row "$AZ_INT" identity yes - fail - "az account show failed for subscription ${AZ_SUB} — run az login (or az account set) and confirm the subscription id in toolkit.yaml"
+        row "$AZ_INT" identity yes - fail - "az account show failed for subscription ${AZ_SUB} — run az login and confirm the subscription id in toolkit.yaml"
       fi
     fi
   fi
@@ -1538,7 +1608,7 @@ else
   CONFIGURED_COUNT=$((CONFIGURED_COUNT + 1))
   SLACK_URL="$(printenv "$SLACK_VAR" 2>/dev/null || true)"
   if [ -z "$SLACK_URL" ]; then
-    row slack env yes "$SLACK_VAR" env-missing - "export ${SLACK_VAR} in this shell, then rerun doctor; the webhook URL is itself the secret"
+    row slack env yes "$SLACK_VAR" env-missing - "$(missing_hint "$SLACK_VAR")"
     row slack webhook-post yes "$SLACK_VAR" skipped - "blocked: ${SLACK_VAR} is not set"
   elif [ "$SLACK_TEST" -eq 1 ]; then
     row slack env yes "$SLACK_VAR" pass - -
@@ -1569,7 +1639,7 @@ if [ "$CONFIGURED_COUNT" -eq 0 ]; then
   note "doctor: nothing is configured in ${CONFIG}; run /scoutflo:connect to add integrations"
 fi
 if [ "$ANY_ENV_MISSING" -eq 1 ]; then
-  note "doctor: FAIL (exit 2): required env vars are missing; export them in this shell, then rerun"
+  note "doctor: FAIL (exit 2): required env vars are missing — add them to ~/.scoutflo/env (the plugin reads that file, not your shell), then rerun; the env-missing rows above name the exact variables"
   exit 2
 fi
 if [ "$ANY_FAIL" -eq 1 ]; then

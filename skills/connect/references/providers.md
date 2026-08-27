@@ -2,10 +2,14 @@
 
 One section per integration: click path, minimal scopes per tier, the `toolkit.yaml` block and env var, and an immediate verification command. All URLs, org slugs, and channel names below are placeholders; substitute your own.
 
+### Where secrets live
+
+`~/.scoutflo/env` is the home-anchored file **every skill reads** at run time — `doctor` and every audit source it before they do anything, so a value added there is picked up in the same session. You write a value into it with the one-liner `scoutflo_addsecret <VAR>` (defined in `/scoutflo:connect` Step 4c): it takes the variable **name** as a fixed argument, prompts silently for the value, records it in `~/.scoutflo/env`, and exports it into your current shell so the verify command right below works immediately. A plain shell `export` sets the value only in the one terminal you type it in and is **invisible to the plugin's own process**, which is why every "Export and verify" section below uses `scoutflo_addsecret <VAR>` rather than a bare `export`.
+
 Two conventions apply everywhere below:
 
 - **Tier naming rule**: read-only credentials are named `scoutflo-audit`, elevated ones `scoutflo-setup`, in every provider that lets you name tokens, service accounts, or integrations. Every config block that names a `token_env` also records `tier: read-only` or `tier: elevated` for the token behind it.
-- **Human/agent boundary**: any command that prompts for or exports a secret value (the `read -rs` lines under Export headings) is yours to run in your own terminal. Agents display those commands and never execute them.
+- **Human/agent boundary**: any command that prompts for or writes a secret value (the `scoutflo_addsecret <VAR>` lines under Export headings) is yours to run in your own terminal. Agents display those commands and never execute them.
 
 ## Quick reference: read-only tier, all providers
 
@@ -61,7 +65,7 @@ OSS caveat: Grafana OSS has basic roles only. Listing datasources (`GET /api/dat
 
 ```bash
 # YOU run this in your own terminal; an agent never executes this line.
-printf 'GRAFANA_TOKEN: ' && read -rs GRAFANA_TOKEN && export GRAFANA_TOKEN && printf '\n'
+scoutflo_addsecret GRAFANA_TOKEN   # prompts silently, writes ~/.scoutflo/env, exports here (defined in /scoutflo:connect Step 4c)
 
 GRAFANA_URL="https://grafana.example.com"   # grafana.url
 curl -fsS --max-time 10 -H "Authorization: Bearer ${GRAFANA_TOKEN}" "${GRAFANA_URL}/api/health" | jq -e '.database=="ok"' >/dev/null \
@@ -142,7 +146,7 @@ Alternatives, and why they are second choice:
 
 ```bash
 # YOU run this in your own terminal; an agent never executes this line.
-printf 'SENTRY_TOKEN: ' && read -rs SENTRY_TOKEN && export SENTRY_TOKEN && printf '\n'
+scoutflo_addsecret SENTRY_TOKEN   # prompts silently, writes ~/.scoutflo/env, exports here (defined in /scoutflo:connect Step 4c)
 
 SENTRY_HOST="us.sentry.io"    # sentry.host
 SENTRY_ORG="your-org-slug"    # sentry.org
@@ -184,7 +188,8 @@ DigitalOcean supports custom-scoped API tokens. The API cannot introspect a toke
 ### Export and verify
 
 ```bash
-printf 'DIGITALOCEAN_ACCESS_TOKEN: ' && read -rs DIGITALOCEAN_ACCESS_TOKEN && export DIGITALOCEAN_ACCESS_TOKEN && printf '\n'
+# YOU run this in your own terminal; an agent never executes this line.
+scoutflo_addsecret DIGITALOCEAN_ACCESS_TOKEN   # prompts silently, writes ~/.scoutflo/env, exports here (defined in /scoutflo:connect Step 4c)
 
 doctl account get -o json | jq -e '(if type=="array" then .[0] else . end) | .status == "active"'
 # Expect: exit 0 (prints `true`). A failure here (or a 401 from doctl) means the
@@ -232,7 +237,7 @@ Two caveats to know at creation time:
 
 ```bash
 # YOU run this in your own terminal; an agent never executes this line.
-printf 'PAGERDUTY_TOKEN: ' && read -rs PAGERDUTY_TOKEN && export PAGERDUTY_TOKEN && printf '\n'
+scoutflo_addsecret PAGERDUTY_TOKEN   # prompts silently, writes ~/.scoutflo/env, exports here (defined in /scoutflo:connect Step 4c)
 
 PD_API="https://api.pagerduty.com"   # pagerduty.region: us -> api.pagerduty.com, eu -> api.eu.pagerduty.com
 # status-probe-ok: quick user sanity-check against api.pagerduty.com (fixed vendor JSON API, no SSO login fall-through); the authoritative JSON-asserting gate is /scoutflo:doctor.
@@ -301,8 +306,8 @@ Two things to know at creation time:
 
 ```bash
 # YOU run these in your own terminal; an agent never executes these lines.
-printf 'DATADOG_API_KEY: ' && read -rs DATADOG_API_KEY && export DATADOG_API_KEY && printf '\n'
-printf 'DATADOG_APP_KEY: ' && read -rs DATADOG_APP_KEY && export DATADOG_APP_KEY && printf '\n'
+scoutflo_addsecret DATADOG_API_KEY   # prompts silently, writes ~/.scoutflo/env, exports here (defined in /scoutflo:connect Step 4c)
+scoutflo_addsecret DATADOG_APP_KEY   # Datadog needs both keys — one call each
 
 DD_SITE="datadoghq.com"   # datadog.site
 # status-probe-ok: quick user sanity-check against api.<site> Datadog (fixed vendor JSON API, no SSO login fall-through); the authoritative JSON-asserting gate is /scoutflo:doctor.
@@ -396,10 +401,10 @@ If you also want the legacy-Watcher split check (ELK-032), add `"cluster": ["mon
 
 ```bash
 # YOU run this in your own terminal; an agent never executes this line.
-# This prompt shows NOTHING as you paste the key — that is the -s (silent) flag hiding the
-# value, not a hang. Paste and press Enter. (Prefer a visible paste? Use the plain form:
-#   export KIBANA_API_KEY="<paste-the-encoded-key-here>" )
-printf 'KIBANA_API_KEY: ' && read -rs KIBANA_API_KEY && export KIBANA_API_KEY && printf '\n'
+# The prompt shows NOTHING as you paste the encoded key — that is the silent read hiding the
+# value, not a hang. Paste and press Enter; the name is a fixed argument, so a wrapped paste
+# can never split it. (Defined in /scoutflo:connect Step 4c.)
+scoutflo_addsecret KIBANA_API_KEY   # prompts silently, writes ~/.scoutflo/env, exports here
 
 KIBANA_URL="https://kibana.example.com"   # elk.kibana_url
 # Kibana takes the encoded key as "Authorization: ApiKey <encoded>".
@@ -472,8 +477,8 @@ Notification policies and heartbeats in JSM Operations are **team-scoped**, not 
 
 ```bash
 # YOU run these in your own terminal; an agent never executes these lines.
-printf 'JSM_EMAIL: ' && read -r JSM_EMAIL && export JSM_EMAIL
-printf 'JSM_API_TOKEN: ' && read -rs JSM_API_TOKEN && export JSM_API_TOKEN && printf '\n'
+scoutflo_addsecret JSM_EMAIL       # the Basic-auth username; prompts silently (defined in /scoutflo:connect Step 4c)
+scoutflo_addsecret JSM_API_TOKEN   # the Basic-auth password — JSM needs both, one call each
 
 SITE="your-site.atlassian.net"   # jsm.site
 CLOUD_ID="$(curl -fsS --max-time 10 "https://${SITE}/_edge/tenant_info" | jq -r '.cloudId')"
@@ -522,8 +527,8 @@ Zenduty publishes strict, per-endpoint-class rate limits (for example, Incident 
 ### Export and verify
 
 ```bash
-# YOU run these in your own terminal; an agent never executes these lines.
-printf 'ZENDUTY_TOKEN: ' && read -rs ZENDUTY_TOKEN && export ZENDUTY_TOKEN && printf '\n'
+# YOU run this in your own terminal; an agent never executes this line.
+scoutflo_addsecret ZENDUTY_TOKEN   # prompts silently, writes ~/.scoutflo/env, exports here (defined in /scoutflo:connect Step 4c)
 
 # Teams is the cheapest list read and the doctor probe. Token, not Bearer.
 curl -fsS --max-time 10 -H "Authorization: Token ${ZENDUTY_TOKEN}" "https://www.zenduty.com/api/account/teams/" \
@@ -568,8 +573,8 @@ If your groundcover account has more than one backend, the API requires an `X-Ba
 ### Export and verify
 
 ```bash
-# YOU run these in your own terminal; an agent never executes these lines.
-printf 'GROUNDCOVER_API_KEY: ' && read -rs GROUNDCOVER_API_KEY && export GROUNDCOVER_API_KEY && printf '\n'
+# YOU run this in your own terminal; an agent never executes this line.
+scoutflo_addsecret GROUNDCOVER_API_KEY   # prompts silently, writes ~/.scoutflo/env, exports here (defined in /scoutflo:connect Step 4c)
 
 GC_API="https://api.groundcover.com"   # groundcover.api_url
 # Listing monitors is the cheapest read and the doctor probe (there is no whoami endpoint).
@@ -635,6 +640,21 @@ The managed policy `ReadOnlyAccess` covers the read-only tier but grants far mor
 4. For workstation use, create an access key for that identity (or configure SSO) and store it as a named profile: `aws configure --profile scoutflo-audit`.
 5. For setup work, create a second identity or role with the elevated policy instead of widening the audit one, and record `tier: elevated` in the block you use for setup runs.
 
+### Resolve account_id from a profile
+
+You configure `aws` by **account id**, but you think in profile names — so resolve the id from the profile you already have rather than hand-typing a 12-digit number (a transposed digit is unmemorable, passes every YAML check, and audits the wrong account). The active identity gives you the id; a name check confirms *which* account that id is (this is on the agent-runnable, non-secret side of the boundary):
+
+```bash
+AWS_PROFILE_NAME="your-aws-profile"   # aws.profile — the name you know the account by
+# The profile's own account id — copy this into aws.account_id:
+aws --profile "$AWS_PROFILE_NAME" sts get-caller-identity --query Account --output text
+# Confirm WHICH account that id is, by name:
+aws --profile "$AWS_PROFILE_NAME" iam list-account-aliases --query 'AccountAliases' --output text 2>/dev/null || true          # single account: its own alias
+aws --profile "$AWS_PROFILE_NAME" organizations list-accounts --query "Accounts[].{name:Name,id:Id}" --output table 2>/dev/null || true  # org mgmt/delegated account: every member name -> id
+```
+
+Drop the `--profile` flags if you use the active credential chain instead of a named profile. Write the printed 12-digit id into `aws.account_id` (quoted, so YAML keeps a leading zero).
+
 ### Export and verify
 
 ```bash
@@ -699,6 +719,20 @@ Never hand the audit an editor or owner identity when a viewer set will do; the 
 3. Grant the read-only roles from the table above on the project.
 4. Keys > Add key > Create new key (JSON) only if you chose the key-file path; store it where your secrets live and export its path as `GOOGLE_APPLICATION_CREDENTIALS`. Skip key creation entirely for the gcloud-login or impersonation paths.
 5. For setup work, create a second service account named `scoutflo-setup` with the elevated roles instead of widening the audit account, and record `tier: elevated` in the config block you use for setup runs.
+
+### Resolve project from a display name
+
+`gcp.project` is the **project ID** — the immutable string like `my-app-4291` — *not* the display name you pick from the console dropdown and *not* the all-digits project number. Map the name you know to its ID (read-only, agent-runnable):
+
+```bash
+# Every project this gcloud login can see: PROJECT_ID then NAME (tab-separated).
+gcloud projects list --format="value(projectId,name)"
+# Already know the display name? Filter to it and read just the id:
+DISPLAY_NAME="Production"   # the name as it shows in the console
+gcloud projects list --filter="name='${DISPLAY_NAME}'" --format="value(projectId)"
+```
+
+Write the printed `projectId` into `gcp.project`. A display name or a numeric project number will not resolve at audit time.
 
 ### Export and verify
 
@@ -870,20 +904,20 @@ GRANT SELECT ON default.* TO scoutflo_ro;   -- use your telemetry database name 
 GRANT SELECT ON system.* TO scoutflo_ro;
 ```
 
-Then export the password into the variable your config names:
+Then store that password under the variable your config names (it prompts silently — paste the same password you set above):
 
 ```bash
-export CH_KEY='<strong-password>'
+scoutflo_addsecret CH_KEY   # writes ~/.scoutflo/env, exports here (defined in /scoutflo:connect Step 4c)
 ```
 
 ### Create a HyperDX Personal API Access Key (the read credential)
 
 **HyperDX has two different tokens — use the right one.** The audit reads through the **external API v2** (`/api/v2/alerts`, `/api/v2/dashboards`, `/api/v2/sources`), which authenticates with the per-user **Personal API Access Key** sent as `Authorization: Bearer`. The team **Ingestion API Key** (the OTLP `authorization` header) is a *different* token and returns `401` on the read API — do not use it here.
 
-In HyperDX, open **Team Settings → API Keys** and copy the **"Personal API Access Key"** card (the per-user key; on v2.36+ the section is renamed "API & Agents"). Export it into the variable your config names:
+In HyperDX, open **Team Settings → API Keys** and copy the **"Personal API Access Key"** card (the per-user key; on v2.36+ the section is renamed "API & Agents"). Store it under the variable your config names (a long pasted key is exactly why the name is a fixed argument — it can never split):
 
 ```bash
-export HDX_API_KEY='<your-hyperdx-PERSONAL-api-access-key>'
+scoutflo_addsecret HDX_API_KEY   # prompts silently, writes ~/.scoutflo/env, exports here (defined in /scoutflo:connect Step 4c)
 ```
 
 Point `clickstack.hyperdx_url` at a URL that reaches the API: either the API-server port directly (then the audit uses `<url>/api/v2/...`) or the app/UI URL that proxies `/api` (the app strips one leading `/api`, so the audit automatically falls back to the doubled `<url>/api/api/v2/...`). The audit probes both forms and uses whichever returns JSON.
@@ -895,8 +929,8 @@ Point `clickstack.hyperdx_url` at a URL that reaches the API: either the API-ser
 Only if you cannot mint a Personal API Access Key. This is a deliberately **heavier posture** — a real user login. Prefer a dedicated least-privilege HyperDX member account, not an owner account. What the audit does with it (confirmed live): one `POST /api/login/password` with `{email, password}` per run, which answers `303` and sets a `connect.sid` session cookie; the cookie is held in a `mktemp` jar (`chmod 600`), used only for read-only `GET`s on the internal routes, deleted on exit, and never printed, logged, or written anywhere persistent.
 
 ```bash
-export HDX_EMAIL='<hyperdx-login-email>'
-export HDX_PASSWORD='<hyperdx-login-password>'
+scoutflo_addsecret HDX_EMAIL      # the login email; prompts silently (defined in /scoutflo:connect Step 4c)
+scoutflo_addsecret HDX_PASSWORD   # the login password — one call each
 ```
 
 Name both variables in `clickstack.hyperdx_email_env` / `clickstack.hyperdx_password_env`. Skipping this is fine — with a working Personal API Access Key it is not needed, and with neither, the HyperDX categories simply stay `not-in-scope`.
@@ -963,10 +997,10 @@ signoz:
 
 ### Create a Service Account token (assign it the `signoz-viewer` role)
 
-On current SigNoz (**v0.114+, including v0.138**) the only token path is **Settings → Service Accounts** — there is **no "API Keys" menu** (only very old builds, ~v0.85–v0.113, had *Settings → API Keys*). Create a service account, then **open it and assign the `signoz-viewer` role** via the Roles dropdown (a service account starts with **zero roles**, so an unroled token gets `403 authz_forbidden` on the read endpoints — that is a missing role, not "Viewer is insufficient"). `signoz-viewer` is read-only and is the least-privilege role that works; do not use Admin. Generate the key and export it into the variable your config names (it is sent as the `SIGNOZ-API-KEY` header):
+On current SigNoz (**v0.114+, including v0.138**) the only token path is **Settings → Service Accounts** — there is **no "API Keys" menu** (only very old builds, ~v0.85–v0.113, had *Settings → API Keys*). Create a service account, then **open it and assign the `signoz-viewer` role** via the Roles dropdown (a service account starts with **zero roles**, so an unroled token gets `403 authz_forbidden` on the read endpoints — that is a missing role, not "Viewer is insufficient"). `signoz-viewer` is read-only and is the least-privilege role that works; do not use Admin. Generate the key and store it under the variable your config names (it is sent as the `SIGNOZ-API-KEY` header):
 
 ```bash
-export SIGNOZ_API_KEY='<your-signoz-service-account-token>'
+scoutflo_addsecret SIGNOZ_API_KEY   # prompts silently, writes ~/.scoutflo/env, exports here (defined in /scoutflo:connect Step 4c)
 ```
 
 ### Optional: read-only ClickHouse user (deep backend lane)
@@ -982,7 +1016,7 @@ GRANT SELECT ON system.*         TO scoutflo_ro;
 ```
 
 ```bash
-export SIGNOZ_CH_KEY='<strong-password>'
+scoutflo_addsecret SIGNOZ_CH_KEY   # prompts silently, writes ~/.scoutflo/env, exports here (defined in /scoutflo:connect Step 4c)
 ```
 
 ### Verify
@@ -1055,8 +1089,11 @@ Never hand the audit a `Contributor`, `Owner`, or `User Access Administrator` id
 az login                                                       # opens a browser; populates the AzureCliCredential the skills fall back to
 AZURE_SUBSCRIPTION_ID="00000000-0000-0000-0000-000000000000"   # azure.subscription_id
 
-az account list --query "[].{name:name, id:id, state:state}" -o table
-# Find the subscription you intend to audit in the list and copy its id into azure.subscription_id.
+az account list -o json \
+  | jq -r '.[] | "\(.name)\t-> subscription_id \(.id)\ttenant_id \(.tenantId)\t(\(.state))"'
+# One row per subscription this login can see, pairing the NAME you know with the two ids the
+# config needs: copy .id into azure.subscription_id and .tenantId into azure.tenant_id. One call
+# arms both — the tenant_id pin lets audit-azure disambiguate a login that spans several Entra tenants.
 
 az account show --subscription "$AZURE_SUBSCRIPTION_ID" -o json \
   | jq -e --arg sub "$AZURE_SUBSCRIPTION_ID" '.id == $sub and .state == "Enabled"'
@@ -1103,6 +1140,11 @@ az aks get-credentials --name "$CLUSTER" --resource-group "your-resource-group"
 ```
 
 Use `--zone` in place of `--region` for a zonal GKE cluster or a zonal AKS node scope. Then run `kubectl config get-contexts`, copy the exact name that was added, and write it into `kubernetes.context`.
+
+**Two AKS `get-credentials` failures worth naming:**
+
+- `listClusterUserCredential ... AuthorizationFailed` means the identity lacks the **Azure Kubernetes Service Cluster User Role** — grant that role on the cluster (never reach for `--admin`, which bypasses cluster RBAC and is the wrong tier for a read-only audit).
+- `dial tcp ...azmk8s.io: no such host` (or a connection timeout) after the credentials are fetched means the cluster has a **private API server** — this is a network-reachability problem, not an RBAC one. Reach it from inside the cluster's network (VPN, a jumpbox, or a peered network), add your IP to the API server's authorized ranges, or use `az aks command invoke`. Even while the API server is unreachable, the cluster's monitoring posture is still auditable from the control-plane side with `/scoutflo:audit-azure` over Azure Resource Manager.
 
 **AKS with Microsoft Entra (Azure AD) integration** needs `kubelogin` for kubectl to obtain a token — without it, later commands fail with a cryptic exec-plugin error. Install it once, then convert the fetched context to use your Azure CLI login:
 
@@ -1175,7 +1217,7 @@ map-repos never writes to GitHub; there is no elevated tier for this integration
 
 ```bash
 # YOU run this in your own terminal; an agent never executes this line.
-printf 'GITHUB_TOKEN: ' && read -rs GITHUB_TOKEN && export GITHUB_TOKEN && printf '\n'
+scoutflo_addsecret GITHUB_TOKEN   # prompts silently, writes ~/.scoutflo/env, exports here (defined in /scoutflo:connect Step 4c)
 
 GITHUB_ORG="your-org"   # github.org
 # status-probe-ok: quick user sanity-check against api.github.com (fixed vendor JSON API, no SSO login fall-through); the authoritative gate is /scoutflo:doctor.
@@ -1209,7 +1251,7 @@ The webhook URL is itself the secret: anyone holding it can post to your channel
 
 ```bash
 # YOU run this in your own terminal; an agent never executes this line.
-printf 'SCOUTFLO_SLACK_WEBHOOK: ' && read -rs SCOUTFLO_SLACK_WEBHOOK && export SCOUTFLO_SLACK_WEBHOOK && printf '\n'
+scoutflo_addsecret SCOUTFLO_SLACK_WEBHOOK   # the webhook URL is the secret; prompts silently, writes ~/.scoutflo/env, exports here (defined in /scoutflo:connect Step 4c)
 ```
 
 Verification posts a visible message to the channel. Run it only when that is acceptable to the channel's members:

@@ -183,13 +183,28 @@ correlation.json schema (exactly what the lib writes):
   "total_findings_deduplicated": 42,
   "total_overlaps_detected": 23,
   "total_cascades_detected": 5,
+  "total_coverage_covered_elsewhere": 4,
+  "total_coverage_true_gap": 9,
+  "total_coverage_unmappable": 2,
   "overlaps": [ {...} ],
   "cascades": [ {...} ],
-  "method": "same-affected-service overlap grouping + database-to-alerting cascade heuristic; every referenced finding_id exists in this run"
+  "coverage": [
+    {
+      "finding_id": "AZR-002",
+      "target": "azure/prod",
+      "resource": "checkout",
+      "classification": "covered-elsewhere",
+      "covered_by": [ { "provider": "datadog", "inventory_name": "checkout latency", "routes_to": "pagerduty", "match": "exact" } ],
+      "recommendation": "single-tool-dependency: datadog monitor checkout latency actively covers checkout and routes to pagerduty; confirm it covers the specific signal this gap names before de-prioritizing"
+    }
+  ],
+  "method": "same-affected-service overlap grouping + database-to-alerting cascade heuristic + cross-tool coverage join; every referenced finding_id and inventory item exists in this run"
 }
 ```
 
-There is no `confidence` or `business_context_applied` field — the engine does not assign a confidence percentage; it groups by shared `affected` service and joins cascades on shared resources, and `method` states exactly how.
+There is no `confidence` or `business_context_applied` field — the engine does not assign a confidence percentage; it groups by shared `affected` service, joins cascades on shared resources, and reframes coverage from `inventory.json`, and `method` states exactly how.
+
+**Cross-tool coverage (`coverage[]`).** A coverage-gap finding in one provider (e.g. Azure "no metric alerts on checkout") is joined against **other** providers' *active, routed* monitors from their `inventory.json` (an item is active only when `kind` is a monitor/alert-type, `enabled != false`, and `routes_to` names a real receiver). Each affected resource is classified `covered-elsewhere` (an exact canonical-name match on an active monitor in a different provider — reframed as **single-tool-dependency**, never "covered"; the audit-owned severity is never mutated), `unmappable` (only a fuzzy/substring match — verify-pending, run `/scoutflo:map-topology` to join by canonical name), or `true-gap` (no active cross-tool coverage — a real gap to elevate). This is advisory only: `coverage[]` reframes how a gap is *presented* by `rca` and the report renderer; it never changes `findings.json`. Match confidence is highest when `map-topology` has run so both sides use the canonical service name.
 
 ## When correlation engine runs
 

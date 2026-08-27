@@ -7,7 +7,7 @@ description: 'Orientation for the Scoutflo AI Readiness: the local-only guarante
 
 This toolkit audits, hardens, and monitors your infrastructure and observability stacks from Claude Code. Audit skills produce a scored report with command-level evidence. Setup skills fix what an audit found, one confirmed change at a time. Harness skills, this one included, wire everything together.
 
-State your installed toolkit version in this orientation (read `version` from `${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json`). Plugins do not auto-update: if a teammate's skill list or picker looks different, compare versions first and update with `claude plugin update scoutflo@scoutflo`.
+**Open this orientation with the loaded toolkit version as the first line — this is mandatory, not optional** (read `version` from `${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json`). Plugins do not auto-update: if a teammate's skill list or picker looks different, compare versions first and update with `claude plugin update scoutflo@scoutflo`. And updating on disk is not enough while a session is live: a running Claude Code session keeps whatever plugin version it loaded at startup; after `claude plugin update scoutflo@scoutflo` run `/reload-plugins` (or restart Claude Code), then re-run — otherwise you are still on the old version.
 
 ## Everything runs on your side
 

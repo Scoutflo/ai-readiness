@@ -89,11 +89,23 @@ case "$EXEC_CMD" in
   *kubelogin*) command -v kubelogin >/dev/null \
     || { echo "context '$KUBE_CONTEXT' uses the kubelogin exec plugin (Entra-integrated AKS) but kubelogin is not installed; run: az aks install-cli"; exit 1; } ;;
 esac
-if ! kubectl --context "$KUBE_CONTEXT" auth can-i get pods -A >/dev/null 2>&1; then
-  # A failed can-i on an exec-plugin context is usually an EXPIRED CREDENTIAL, not a
-  # missing RBAC binding — so name the reauth path per exec plugin BEFORE the generic
-  # RBAC message (mirrors the kubelogin branch above). Only a non-exec context falls
-  # through to the RBAC fallback.
+# Capture stderr (send stdout to /dev/null) so a private/unreachable API server is told
+# apart from an RBAC or credential gap — `auth can-i` writes the transport error to stderr,
+# and a `>/dev/null 2>&1` probe would throw it away and misfile the failure below.
+K_ERR="$(kubectl --context "$KUBE_CONTEXT" auth can-i get pods -A 2>&1 1>/dev/null)" && K_RC=0 || K_RC=$?
+if [ "$K_RC" -ne 0 ]; then
+  # A private or unreachable API server (AKS private cluster, no VNet route, caller IP not
+  # in the API-server authorized ranges) is a NETWORK problem, not RBAC or an expired
+  # credential — match its transport signatures FIRST, before the exec-plugin/RBAC branches
+  # below misattribute it to "run az login" or "bind the view ClusterRole".
+  case "$K_ERR" in
+    *"no such host"*|*"dial tcp"*|*"i/o timeout"*|*"connection refused"*|*"Unable to connect"*|*"TLS handshake timeout"*|*privatelink*)
+      echo "context '$KUBE_CONTEXT': the AKS/API server is private or unreachable from here — run from inside the VNet (jumpbox/VPN/bastion), add your IP to the cluster API-server authorized IP ranges, or use \`az aks command invoke\`; this is NOT an RBAC or credential problem. The cluster monitoring posture is still auditable via /scoutflo:audit-azure over ARM (Container Insights, managed Prometheus, diagnostic settings) with no cluster network access."; exit 1 ;;
+  esac
+  # Not a network signature: a failed can-i on an exec-plugin context is usually an EXPIRED
+  # CREDENTIAL, not a missing RBAC binding — so name the reauth path per exec plugin BEFORE
+  # the generic RBAC message (mirrors the kubelogin branch above). Only a non-exec context
+  # falls through to the RBAC fallback.
   case "$EXEC_CMD" in
     *gke-gcloud-auth-plugin*) echo "context '$KUBE_CONTEXT' (GKE) could not authenticate — the gke-gcloud-auth-plugin credential is likely expired, not an RBAC gap; run: gcloud auth login (then gcloud container clusters get-credentials <cluster> to refresh the token), then retry"; exit 1 ;;
     *aws*)                    echo "context '$KUBE_CONTEXT' (EKS) could not authenticate — the aws exec-plugin credential is likely expired, not an RBAC gap; run: aws sso login (or otherwise refresh your AWS credentials), then retry"; exit 1 ;;
@@ -460,6 +472,7 @@ When context is available, apply it per [BUSINESS-CONTEXT-INTEGRATION-v0168.md](
 | A single replica with a PDB flagged as unresilient | K8S-005 fails only when single-replica AND no PDB; either replicas>1 or a PDB present is a pass |
 | Entra-integrated AKS context failing with a cryptic exec-plugin error | The doctor gate detects a `kubelogin` exec context and stops with `az aks install-cli` guidance before any check runs; cert/local-account AKS and EKS/GKE contexts skip the probe |
 | A GKE/EKS exec-plugin credential expiry mis-reported as an RBAC gap | On a failed `auth can-i`, the doctor gate branches on the exec command first: `gke-gcloud-auth-plugin` → `gcloud auth login` / token refresh, `aws` → `aws sso login` / credential refresh; only a non-exec context falls through to the "bind the view ClusterRole" RBAC message |
+| A private/unreachable AKS/EKS/GKE API server mis-reported as an RBAC or credential gap | The doctor gate captures `auth can-i` **stderr** (`K_ERR`) and matches transport signatures (`no such host`, `dial tcp`, `i/o timeout`, `connection refused`, `Unable to connect`, `TLS handshake timeout`, `privatelink`) BEFORE the exec-plugin/RBAC branches — a private API server is named as a NETWORK problem (run from inside the VNet, add your IP to the authorized ranges, or `az aks command invoke`), never "run az login" or "bind the view ClusterRole"; it also points at `/scoutflo:audit-azure` (ARM, no cluster network access) for the cluster's monitoring posture |
 | A live crash-loop dropped into the scorecard | K8SRT findings are a parallel non-scored section: `area: live-runtime` never appears in `score.categories` or `score.excluded`, severity is always `info`, `points_recoverable` is always 0; the scored posture finding (e.g. K8S-004) carries the points, the snapshot carries the proof |
 | Unavailable live probes faked, or scored as a failure | `le_can_probe` gates the section; without kubectl/context/RBAC/reachability it renders `skipped, reason: <exact reason>` — never a finding, never invented output, and the scored audit completes without it. `top` without metrics-server is skipped with that reason, never estimated |
 | A snapshot probe mutating the cluster | Every Phase 8 probe routes through the guarded `le_kubectl` wrapper (allowlisted read verbs only, pinned `--context`, bounded `--request-timeout`), mechanically enforced by `ci/liveness-readonly-check.sh`; no mutating verb exists on the allowlist |
