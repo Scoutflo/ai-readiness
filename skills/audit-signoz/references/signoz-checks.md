@@ -65,7 +65,7 @@ TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 SIG_N=$(sh "$TT" "$CFG" signoz count)
 SIG_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "${SIG_N:-0}" ]; do [ "$(sh "$TT" "$CFG" signoz label "$_i")" = "$SCOUTFLO_TARGET" ] && { SIG_IDX=$_i; break; }; _i=$((_i+1)); done; fi
 CH_URL=$(sh "$TT" "$CFG" signoz get "$SIG_IDX" clickhouse_url); CH_URL="${CH_URL%/}"          # signoz.clickhouse_url for THIS target
-CH_USER=$(sh "$TT" "$CFG" signoz get "$SIG_IDX" clickhouse_user); [ -n "$CH_USER" ] || CH_USER="signoz_ro"   # read-only audit user
+CH_USER=$(sh "$TT" "$CFG" signoz get "$SIG_IDX" clickhouse_user); [ -n "$CH_USER" ] || CH_USER="scoutflo_ro"   # read-only audit user (the connect recipe's CREATE USER name)
 SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.scoutflo/env" ]; then SCOUTFLO_ENV="./.scoutflo/env"; else SCOUTFLO_ENV="$HOME/.scoutflo/env"; fi; }
 [ -f "$SCOUTFLO_ENV" ] && . "$SCOUTFLO_ENV" || true
 CH_KEY_VAR=$(sh "$TT" "$CFG" signoz get "$SIG_IDX" clickhouse_password_env); [ -n "$CH_KEY_VAR" ] || CH_KEY_VAR="SIGNOZ_CH_KEY"   # names the password VARIABLE

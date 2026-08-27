@@ -115,7 +115,7 @@ SIG_URL=$(sh "$TT" "$CFG" signoz get "$SIG_IDX" url); SIG_URL="${SIG_URL%/}"    
 SIG_HOST="$(printf '%s' "${SIG_URL:-}" | sed -e 's#^[a-zA-Z][a-zA-Z0-9+.-]*://##' -e 's#[:/].*$##' -e 's#[^A-Za-z0-9._-]#-#g')"; [ -n "$SIG_HOST" ] || SIG_HOST="signoz-host"
 if [ "$SIG_KIND" = seq ]; then SIG_SEG="signoz/${SIG_LABEL}"; else SIG_SEG="signoz/${SIG_HOST}"; fi
 CH_URL=$(sh "$TT" "$CFG" signoz get "$SIG_IDX" clickhouse_url); CH_URL="${CH_URL%/}"   # signoz.clickhouse_url (optional deep lane)
-CH_USER=$(sh "$TT" "$CFG" signoz get "$SIG_IDX" clickhouse_user); [ -n "$CH_USER" ] || CH_USER="signoz_ro"   # signoz.clickhouse_user
+CH_USER=$(sh "$TT" "$CFG" signoz get "$SIG_IDX" clickhouse_user); [ -n "$CH_USER" ] || CH_USER="scoutflo_ro"   # signoz.clickhouse_user (defaults to the connect recipe's CREATE USER name)
 # CH lane presence: read the clickhouse_password_env variable (its NAME, never its value) after loading the store.
 SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.scoutflo/env" ]; then SCOUTFLO_ENV="./.scoutflo/env"; else SCOUTFLO_ENV="$HOME/.scoutflo/env"; fi; }
 [ -f "$SCOUTFLO_ENV" ] && . "$SCOUTFLO_ENV" || true
