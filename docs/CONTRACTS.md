@@ -150,8 +150,11 @@ names a gate/case that no longer exists, that is itself a defect.
   every audit's **Topology Readiness** section, `render-report-viz mermaid-topo`.
 - **Invariants:** edge semantics are fixed — `DEPLOYED_AS`/`PART_OF`/`ROUTES_TO`
   are **identity** edges (never a candidate cause); `CALLS`/`ServiceEntry` are
-  **dependency** edges. Consumers read `relationships[]` (a legacy `edges[]`
-  shape is gone — do not reintroduce a divergent reader). `map-topology` is
+  **dependency** edges. `map-topology` emits the canonical `relationships[]`;
+  consumers read `relationships[]` **and** tolerate a legacy `edges[]` shape as a
+  fallback (older or hand-authored exports). Keep the `edges[]` fallback in
+  `rca`/`render-report-viz` — it is backward-compat, not dead code — and do not add
+  a *third* divergent reader. `map-topology` is
   **per-cluster** (re-run per labeled kubernetes context; one shared `topology.md`
   describes the wrong cluster for the others).
 - **SSOT:** `skills/map-topology/references/scoutflo-export.md`.
@@ -243,7 +246,13 @@ names a gate/case that no longer exists, that is itself a defect.
   `audit-all` §7 surfaces it.
 - **Invariants:** advisory only — **never** mutates `findings.json` or an
   audit-owned severity. An item counts as active coverage only when its `kind` is
-  a monitor/alert type, `enabled != false`, and `routes_to` names a real receiver.
+  an alerting/monitor type that watches its `covers` resource — one of `monitor`,
+  `alarm`, `alert`, `alert_rule`, `alert_policy`, `log_alert`, `activity_log_alert`,
+  `uptime_check` (routing/muting/delivery kinds like `receiver`/`silence`/`route`/
+  `escalation_policy`/`notification_channel` never count) — `enabled != false`, and
+  `routes_to` names a real receiver. This kind list is the SSOT the `active()` filter
+  in `correlation-engine.sh` must match; adding a provider that emits a new alerting
+  kind means updating both.
   A `covered-elsewhere` verdict requires an **exact** normalized `covers==affected`
   match and is always worded **single-tool-dependency** (never "covered"); a fuzzy
   match is `unmappable` (verify-pending); nothing is `true-gap`. Confidence is

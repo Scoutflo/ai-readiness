@@ -42,7 +42,8 @@ cat > "$AUD/correlation.json" <<'JSON'
  "cascades":[{"root_cause":{"finding_id":"AWS-030","title":"RDS payments-db has no automated backup","target":"aws","shared_resources":["payments-db"]},
    "effects":[{"finding_id":"GRAF-050","title":"Alert on payments-db routes to a null receiver","target":"grafana","condition":"shares payments-db"}]}]}
 JSON
-# topology-export.json in the REAL generated shape (edges[], not relationships[]) + a null node (real data-quality case)
+# topology-export.json exercising the LEGACY edges[] fallback shape (map-topology now emits relationships[];
+# consumers still tolerate edges[] for older/hand-authored exports) + a null node (real data-quality case)
 cat > "$AUD/topology-export.json" <<'JSON'
 {"schema":"scoutflo-topology-export/v1","services":[{"name":"checkout-edge-api","business_criticality":"high"},{"name":null}],
  "resources":[{"name":"payments-db"}],
