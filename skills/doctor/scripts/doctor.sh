@@ -1163,7 +1163,7 @@ else
       # lane is not configured and the audit marks SIG-030/060/061 not-in-scope (no row).
       SIG_CH_URL="$(tv signoz "$SIGNOZ_KIND" "$_szi" clickhouse_url)"
       if [ -n "$SIG_CH_URL" ]; then
-        SIG_CH_USER="$(tv signoz "$SIGNOZ_KIND" "$_szi" clickhouse_user)"; [ -n "$SIG_CH_USER" ] || SIG_CH_USER="signoz_ro"
+        SIG_CH_USER="$(tv signoz "$SIGNOZ_KIND" "$_szi" clickhouse_user)"; [ -n "$SIG_CH_USER" ] || SIG_CH_USER="scoutflo_ro"   # matches the connect recipe's CREATE USER + audit-signoz default
         SIG_CH_PW_VAR="$(tv signoz "$SIGNOZ_KIND" "$_szi" clickhouse_password_env)"
         SIG_CH_PW=""; [ -n "$SIG_CH_PW_VAR" ] && SIG_CH_PW="$(printenv "$SIG_CH_PW_VAR" 2>/dev/null || true)"
         if [ -n "$SIG_CH_PW_VAR" ] && [ -z "$SIG_CH_PW" ]; then
@@ -1455,7 +1455,7 @@ while [ "$_csi" -lt "${CS_N:-0}" ]; do
   fi
   # ClickHouse lane: read-only SELECT 1, only when clickhouse_url is set for THIS target.
   if [ -n "$CH_URL_CFG" ]; then
-    CH_USER_CFG="$(tv clickstack "$CS_KIND" "$_csi" clickhouse_user)"; [ -n "$CH_USER_CFG" ] || CH_USER_CFG="default"
+    CH_USER_CFG="$(tv clickstack "$CS_KIND" "$_csi" clickhouse_user)"; [ -n "$CH_USER_CFG" ] || CH_USER_CFG="scoutflo_ro"   # the connect recipe's scoped RO user, never `default` (see connect providers.md)
     CH_PW_VAR="$(tv clickstack "$CS_KIND" "$_csi" clickhouse_password_env)"
     CH_PW=""; [ -n "$CH_PW_VAR" ] && CH_PW="$(printenv "$CH_PW_VAR" 2>/dev/null || true)"
     if [ -n "$CH_PW_VAR" ] && [ -z "$CH_PW" ]; then

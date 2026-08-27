@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.151
+
+One consistency fix: the ClickHouse read-only user the audits and doctor assume when `clickhouse_user` is omitted now matches the user the connect recipe tells you to create.
+
+- **ClickHouse RO-user default is now `scoutflo_ro` everywhere.** The connect recipes, both template examples, and the pressure scenarios all create/name the scoped read-only user `scoutflo_ro`, but the code fell back to a *different* name when `clickhouse_user` was left unset — `signoz_ro` for `audit-signoz` + its doctor preflight, and `default` for the ClickStack doctor preflight (which the ClickStack connect doc explicitly says is *never* used). So "follow the recipe, leave `clickhouse_user` unset" silently authenticated as the wrong user and failed. All ClickHouse RO-user defaults now resolve to `scoutflo_ro`: `audit-signoz` (SKILL.md + `references/signoz-checks.md`), `audit-clickstack` (SKILL.md + `references/clickstack-checks.md` — which previously had no fallback and fell through to the server-side `default` user, contradicting its own docs), and both ClickHouse preflights in `doctor`. Configs that set `clickhouse_user` explicitly are unchanged; only the unset-fallback path moves, and it now agrees with the documented convention.
+
 ## 0.1.150
 
 Closes out the remaining polish from the Whatfix review, plus two durable guards.

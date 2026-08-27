@@ -162,7 +162,7 @@ CS_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "${CS_N
 CS_LABEL=$(sh "$TT" "$CFG" clickstack label "$CS_IDX")
 if [ "$CS_KIND" = seq ]; then CS_SEG="clickstack/${CS_LABEL}"; else CS_SEG="clickstack"; fi
 CH_URL=$(sh "$TT" "$CFG" clickstack get "$CS_IDX" clickhouse_url)     # clickstack.clickhouse_url
-CH_USER=$(sh "$TT" "$CFG" clickstack get "$CS_IDX" clickhouse_user)   # clickstack.clickhouse_user (a read-only audit user)
+CH_USER=$(sh "$TT" "$CFG" clickstack get "$CS_IDX" clickhouse_user); [ -n "$CH_USER" ] || CH_USER="scoutflo_ro"   # clickstack.clickhouse_user (the connect recipe's scoped RO user; never falls through to the server `default`)
 HDX_URL=$(sh "$TT" "$CFG" clickstack get "$CS_IDX" hyperdx_url)       # clickstack.hyperdx_url
 echo "clickstack target: ${CS_LABEL} -> ${CS_SEG}/"
 echo "ClickHouse HTTP : ${CH_URL}  (user: ${CH_USER})"

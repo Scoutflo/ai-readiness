@@ -25,7 +25,7 @@ TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 CS_N=$(sh "$TT" "$CFG" clickstack count)
 CS_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "${CS_N:-0}" ]; do [ "$(sh "$TT" "$CFG" clickstack label "$_i")" = "$SCOUTFLO_TARGET" ] && { CS_IDX=$_i; break; }; _i=$((_i+1)); done; fi
 CH_URL=$(sh "$TT" "$CFG" clickstack get "$CS_IDX" clickhouse_url)     # clickstack.clickhouse_url for THIS target
-CH_USER=$(sh "$TT" "$CFG" clickstack get "$CS_IDX" clickhouse_user)   # clickstack.clickhouse_user (the read-only audit user)
+CH_USER=$(sh "$TT" "$CFG" clickstack get "$CS_IDX" clickhouse_user); [ -n "$CH_USER" ] || CH_USER="scoutflo_ro"   # clickstack.clickhouse_user (the connect recipe's scoped RO user; never falls through to the server `default`)
 # clickstack.clickhouse_password_env names the VARIABLE holding the password (e.g. CH_KEY); read it
 # with printenv on that name (default to CH_KEY when the key is absent). NEVER print the value.
 CH_KEY_VAR=$(sh "$TT" "$CFG" clickstack get "$CS_IDX" clickhouse_password_env); [ -n "$CH_KEY_VAR" ] || CH_KEY_VAR="CH_KEY"
