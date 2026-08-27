@@ -1,12 +1,15 @@
 #!/bin/sh
-# structure-check.sh — composes 17 checks: frontmatter, anchor, cross-block,
+# structure-check.sh — composes 19 checks: frontmatter, anchor, cross-block,
 # coverage, remediation-map, skill-completeness, the four behavioral-parity
 # gates (scope-checkpoint, redaction-parity, business-context-parity,
 # env-load-parity), manifest-compat, min-version-consistency,
 # catalog-consistency, liveness-readonly, audit-dir, named-section,
-# content-type-probe (authed HTTP probes must assert JSON, not a bare 200), and
+# content-type-probe (authed HTTP probes must assert JSON, not a bare 200),
 # multi-target-parity (every own-block audit resolves targets via the shared
-# enumerator and nests output per target).
+# enumerator and nests output per target), multi-target-consumer (the three
+# shared consumers glob the two-level <integration>/<label>/<date>/ layout too),
+# and audit-all-map (every own-block audit has a Phase-1 map row in audit-all and
+# no forbidden sync-ready jargon).
 # Keep this count in sync with AGENTS.md ("composes N checks").
 set -eu
 DIR="${1:-.}"
@@ -37,4 +40,6 @@ sh "$SELF_DIR/audit-dir-check.sh" "$DIR" || FAIL=1
 sh "$SELF_DIR/named-section-check.sh" "$DIR" || FAIL=1
 sh "$SELF_DIR/content-type-probe-check.sh" "$DIR" || FAIL=1
 sh "$SELF_DIR/multi-target-parity-check.sh" "$DIR" || FAIL=1
+sh "$SELF_DIR/multi-target-consumer-check.sh" "$DIR" || FAIL=1
+sh "$SELF_DIR/audit-all-map-check.sh" "$DIR" || FAIL=1
 [ "$FAIL" -eq 0 ] && echo STRUCTURE-OK || exit 1

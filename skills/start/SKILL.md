@@ -80,6 +80,13 @@ Every audit run writes its reports and runtime data under one reports directory:
       findings.json        # machine-readable: score, severities, evidence
       report.md            # human-readable: at-a-glance dashboard, scorecard, findings, actions
       report.html          # standalone visual dashboard (score donut, bars) — open in a browser
+      inventory.json       # current-state catalog of everything you have (scoutflo-inventory/v1); every audit but cost/all
+  <integration>/           # two-level when one integration holds several labeled targets in toolkit.yaml
+    <label>/               #   (e.g. clickstack/hdx-eu/, azure/prod-sub/) — one dir + history.jsonl per target
+      history.jsonl
+      <YYYY-MM-DD>/        # same findings.json / report.md / report.html / inventory.json inside
+  signoz/<host>/           # single-block signoz nests under its URL host (kubernetes under kubernetes/<context>/);
+    <YYYY-MM-DD>/          #   a labeled signoz/kubernetes list uses <label>/ like the block above
   all/                     # combined summaries from /scoutflo:audit-all
   topology.md              # your service map, written by /scoutflo:map-topology
   topology-export.json     # machine-readable topology (the blast-radius graph source)

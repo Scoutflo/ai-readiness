@@ -88,7 +88,17 @@ none="$(topology_guided_check_overlap "FAKE-999" "$correlation")"
 [ -z "$none" ] || fail "FAKE-999 should match no overlap, got: $none"
 echo "PASS"
 
-echo "Test 6: missing correlation.json degrades to empty, not a crash"
+echo "Test 6: cascade-root recommendation reports a real step count, not null"
+rec="$(topology_guided_get_recommendation "AWS-030" "payments-db" "RDS payments-db no backup")"
+printf '%s' "$rec" | jq -e '.recommendation_type == "CASCADE_ROOT"' > /dev/null \
+  || fail "AWS-030 should yield a CASCADE_ROOT recommendation: $rec"
+printf '%s' "$rec" | jq -e '.rationale | test("prevents [0-9]+-step cascade")' > /dev/null \
+  || fail "rationale must name a real step count, not \"null\": $rec"
+printf '%s' "$rec" | jq -e '.rationale | contains("null") | not' > /dev/null \
+  || fail "rationale must not contain the literal \"null\": $rec"
+echo "PASS"
+
+echo "Test 7: missing correlation.json degrades to empty, not a crash"
 rm "$SCOUTFLO_AUDIT_DIR/correlation.json"
 empty="$(_load_correlation)"
 printf '%s' "$empty" | jq -e '.overlaps == [] and .cascades == []' > /dev/null \

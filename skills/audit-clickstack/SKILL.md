@@ -172,15 +172,41 @@ This skill reads the optional business-context SSOT to honor your guardrails:
 
 ```bash
 set -eu
-BC_JSON="${HOME}/.scoutflo/business_context.json"      # derived from business_context.md (the SSOT)
+BC_JSON="${HOME}/.scoutflo/business_context.json"      # workspace projection, derived from the SSOT
+BC_MD="${HOME}/.scoutflo/business_context.md"          # the SSOT itself (authoritative)
 METADATA="${HOME}/.scoutflo/computed_metadata.jsonl"   # per-resource cache from business-context-resolver
-LOAD_METADATA_MODE="none"
-if [ -f "$METADATA" ] && jq -e '.' "$METADATA" >/dev/null 2>&1; then
-  LOAD_METADATA_MODE="per-resource"
-elif [ -f "$BC_JSON" ] && jq -e '.' "$BC_JSON" >/dev/null 2>&1; then
-  LOAD_METADATA_MODE="workspace"
-fi
+
+# The workspace layer and the per-resource layer load TOGETHER, not either/or.
+HAVE_PER_RESOURCE=0; HAVE_WORKSPACE=0
+[ -f "$METADATA" ] && jq -e '.' "$METADATA" >/dev/null 2>&1 && HAVE_PER_RESOURCE=1
+[ -f "$BC_JSON" ]  && jq -e '.' "$BC_JSON"  >/dev/null 2>&1 && HAVE_WORKSPACE=1
+# Workspace source: the derived json, else the markdown SSOT directly (ssot-md fallback).
+BC_SRC=""
+if [ "$HAVE_WORKSPACE" -eq 1 ]; then BC_SRC="$BC_JSON"; elif [ -f "$BC_MD" ]; then BC_SRC="$BC_MD"; fi
+if   [ "$HAVE_PER_RESOURCE" -eq 1 ] && [ "$HAVE_WORKSPACE" -eq 1 ]; then LOAD_METADATA_MODE="per-resource+workspace"
+elif [ "$HAVE_PER_RESOURCE" -eq 1 ];                                then LOAD_METADATA_MODE="per-resource"
+elif [ "$HAVE_WORKSPACE" -eq 1 ];                                   then LOAD_METADATA_MODE="workspace"
+elif [ -n "$BC_SRC" ];                                              then LOAD_METADATA_MODE="ssot-md"
+else                                                                     LOAD_METADATA_MODE="none"; fi
 echo "metadata mode: $LOAD_METADATA_MODE"
+
+# Load the workspace rules the apply step below honors. All fields optional; absence = neutral default.
+if [ "$HAVE_WORKSPACE" -eq 1 ]; then
+  ENVIRONMENT="$(jq -r '.environment // "production"' "$BC_JSON" 2>/dev/null || echo production)"
+  COST_SENSITIVITY="$(jq -r '.cost_sensitivity // "medium"' "$BC_JSON" 2>/dev/null || echo medium)"
+  CRITICAL="$(jq -r '.critical_dependencies[]? // empty' "$BC_JSON" 2>/dev/null || true)"
+  EXCLUSIONS="$(jq -r '.exclusions // {} | [.accounts?, .regions?, .services?, .resources?] | add // [] | .[]? // empty' "$BC_JSON" 2>/dev/null || true)"
+  jq -r --arg e "$ENVIRONMENT" '.environment_map[]? | select(.environment==$e)' "$BC_JSON" 2>/dev/null || true  # per-env profile/project/context + uptime_sla
+  jq -r '.service_slas[]? | "\(.service)=\(.sla)"' "$BC_JSON" 2>/dev/null || true                               # per-service SLA (wins over the env default)
+elif [ "$LOAD_METADATA_MODE" = "ssot-md" ]; then
+  # Only business_context.md exists (json not derived): read the same rules from the SSOT directly.
+  ENVIRONMENT="$(grep -iA5 '^## Environment' "$BC_MD" | grep -iE 'Stage:' | head -1 | sed -E 's/.*Stage:\**[[:space:]]*//; s/[][]//g; s/[[:space:]]*$//' | tr 'A-Z' 'a-z')"; [ -n "$ENVIRONMENT" ] || ENVIRONMENT="production"
+  COST_SENSITIVITY="$(grep -iA3 '^## Cost Sensitivity' "$BC_MD" | grep -iE 'Primary:' | head -1 | sed -E 's/.*Primary:\**[[:space:]]*//; s/[][]//g; s/[[:space:]]*$//' | tr 'A-Z' 'a-z')"; [ -n "$COST_SENSITIVITY" ] || COST_SENSITIVITY="medium"
+  CRITICAL="$(awk '/^## Critical Services/{f=1;next} /^## /{f=0} f' "$BC_MD" | grep -oE '`[^`]+`' | tr -d '`')"
+  EXCLUSIONS="$(awk '/^## Exclusions/{f=1;next} /^## /{f=0} f' "$BC_MD" | grep -oE '`[^`]+`' | tr -d '`')"
+fi
+# When HAVE_PER_RESOURCE=1, look each finding's affected resource up in computed_metadata.jsonl and let
+# its per-resource action/escalation/sla refine (never weaken) the workspace rule for that one resource.
 ```
 
 When context is available, apply it per [BUSINESS-CONTEXT-INTEGRATION-v0168.md](../../docs/BUSINESS-CONTEXT-INTEGRATION-v0168.md): **exclude** services matched by an exclusion (record them `not-in-scope` with the reason, never a fail); **escalate** a coverage or freshness gap on a `critical_dependencies` service; **reduce severity** for a gap that exists only in a non-production `environment` (a short retention TTL on a dev telemetry table is not a prod compliance gap); and apply `cost_sensitivity` to the ordering of the retention (CS-020) and cardinality findings. With no context, run neutral defaults and say so — never invent a business rule.
@@ -323,11 +349,13 @@ Read the per-table **TTL** from the confirmed read path — `SHOW CREATE TABLE {
 
 Read retention; never guess it. A missing TTL is a finding, not an assumption of "probably fine".
 
-## Phase 6: ClickHouse health (CS-030) and security posture (CS-050)
+## Phase 6: ClickHouse health (CS-030, CS-060, CS-061) and security posture (CS-050)
 
-Inspection only, from the confirmed `system.*` tables (commands in sections 6 and 8):
+Inspection only, from the confirmed `system.*` tables (commands in sections 6, 6b, and 8). CS-030, CS-060, and CS-061 all score into the **ClickHouse health** category:
 
 - **CS-030 (ClickHouse health):** `system.parts` (active part counts and bytes per table — a runaway part count signals merge pressure), `system.replicas` (replicas in sync, no growing queue), `system.errors` (no spiking error codes — read `name`, `code`, `value`, `last_error_time`), `system.mutations` (none stuck / long-running). A spiking error code or a stuck mutation is a health finding.
+- **CS-060 (capacity / days-to-read-only):** disk headroom vs telemetry growth (commands in section 6b) — compute days-to-full from `used_pct` and the observed `otel_*` growth rate. A disk that hits read-only in N days is a high finding; at 243 `NOT_ENOUGH_SPACE` **every** `otel_*` INSERT is rejected at once, not one table.
+- **CS-061 (write-path INSERT failures):** collector writes rejected by ClickHouse (section 6b) — fresh `query_log` Insert exceptions or a spiking write-path code (243 disk-full → CS-060, 252 `TOO_MANY_PARTS`, 164 `READONLY`, 201 `QUOTA_EXCEEDED`). This is what distinguishes "collector stopped sending" (CS-011 stale, no insert exceptions) from "collector still sending, ClickHouse rejecting every write" (fresh exceptions).
 - **CS-050 (Security posture):** from `system.users` (confirmed columns `name`, `auth_type`, `auth_params`, `host_ip`):
   - The **external `default` user must require a password** — probe it with an unauthenticated `SELECT 1` over HTTP; a `200` means the default user is open (critical), a `401`/auth error means it requires a password (good).
   - **Service users must not sit on `plaintext_password`** — any user with `auth_type = plaintext_password` is a posture finding; the hardened forms are `sha256_password` / `double_sha1_password`.

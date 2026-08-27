@@ -10,16 +10,26 @@ phase. The source of truth is `~/.scoutflo/business_context.md`; skills read its
 
 ## The load order (what Metadata Load resolves)
 
+Two layers load **together**, not either/or. The workspace layer always carries
+the estate-wide rules; the per-resource layer, when the resolver has run, refines
+individual resources on top of it.
+
 ```
-computed_metadata.jsonl   (per-resource: team/env/SLA/escalation/action) — richest, if the resolver has run
-  else business_context.json (workspace-level: environment, cost_sensitivity, critical_dependencies, environment_map)
-  else business_context.md   (parse the SSOT directly if the json was not derived)
-  else none                  (no business context; audit runs with neutral defaults)
+workspace layer    business_context.json  (environment, cost_sensitivity, critical_dependencies,
+                                            environment_map[].uptime_sla, service_slas[], exclusions)
+                     else business_context.md   (ssot-md fallback: parse the SSOT directly when the json was not derived)
+                     else none                  (no business context; audit runs with neutral defaults)
+
+per-resource layer computed_metadata.jsonl (per-resource team/env/sla/escalation/action) — loaded ON TOP of the
+                                            workspace layer to refine individual resources; its absence is not a
+                                            fallback down a chain, just less detail on the same workspace rules
 ```
 
 `business_context.md` is authoritative; `business_context.json` is derived from
 it and never overrides it; `computed_metadata.jsonl` is a per-resource cache the
-resolver builds from live labels/tags plus the SSOT's rules.
+resolver builds from live labels/tags plus the SSOT's rules. An audit loads the
+workspace layer **and** (when present) the per-resource layer in the same run —
+the per-resource cache never replaces the workspace rules, it only adds detail.
 
 ## What each field does to an audit
 
@@ -27,31 +37,52 @@ resolver builds from live labels/tags plus the SSOT's rules.
 | --- | --- |
 | `environment` (per run) | A gap that exists only in a non-production environment is reported at reduced severity (a staging-only gap is not a production incident). Production stays full severity. State the environment in the executive summary. |
 | `environment_map[]` | Per-environment access + SLA. When present, judge a finding against **that environment's** `uptime_sla`, and target that environment with its own `aws_profile` / `gcp_project` / `kube_context` — never audit staging with the production profile. |
+| `service_slas[]` | Per-service SLA/SLO. When a finding's affected service has a row here, judge it against **that service's** SLA — a per-service SLA wins over the environment default from `environment_map[]`. |
 | `critical_dependencies[]` | A finding on a critical service is escalated (raise Reliability findings to high; mark it in the coverage matrix). Never lower a critical-service finding. |
 | `cost_sensitivity` | `high` → the cost section / audit-cost orders opportunities ROI-first (largest annual savings first); `low` → impact-first. Never changes a reliability score. |
-| Exclusions (regions/accounts/services/resources) | A resource matched by an exclusion is skipped and recorded as `not-in-scope` with the exclusion as the reason — never silently dropped, never scored as a fail. |
+| `exclusions` (regions/accounts/services/resources) | A resource matched by an exclusion is skipped and recorded as `not-in-scope` with the exclusion as the reason — never silently dropped, never scored as a fail. |
+| `computed_metadata.jsonl` (per-resource) | When the resolver has run, a finding's affected resource is looked up here for its own `environment` / `sla` / `escalation` / `action`, refining the workspace rule for that one resource (e.g. an `action:"skip"` exclusion or `escalation:"CRITICAL"` mark that applies to just that resource). It adds detail; it never overrides the workspace exclusions/critical lists. |
 | Risky Operations (setup skills) | A setup gates the listed operation behind explicit approval; a critical-service change requires the second confirmation. |
 | Custom Rules / Runbooks | Read as additional guidance; honor a stated rule (e.g. a retention policy, a paging window) when it applies to a finding. |
 
 ## The Metadata Load block audit skills embed
 
+This is the **canonical block** every own-block `audit-*` embeds verbatim (the
+`business-context-parity` gate asserts it is present and names an apply behavior;
+`audit-lgtm` / `audit-alert-routing` are the shared-backend exemptions). It loads
+the workspace layer and the per-resource layer **together**:
+
 ```bash
 set -eu
-BC_JSON="${HOME}/.scoutflo/business_context.json"      # derived from the SSOT
-BC_MD="${HOME}/.scoutflo/business_context.md"          # the SSOT itself
-METADATA="${HOME}/.scoutflo/computed_metadata.jsonl"   # per-resource cache (resolver)
-LOAD_METADATA_MODE="none"
-if [ -f "$METADATA" ] && jq -e '.' "$METADATA" >/dev/null 2>&1; then
-  LOAD_METADATA_MODE="per-resource"      # richest
-elif [ -f "$BC_JSON" ] && jq -e '.' "$BC_JSON" >/dev/null 2>&1; then
-  LOAD_METADATA_MODE="workspace"         # environment / cost / critical deps / env map
+BC_JSON="${HOME}/.scoutflo/business_context.json"      # workspace projection, derived from the SSOT
+BC_MD="${HOME}/.scoutflo/business_context.md"          # the SSOT itself (authoritative)
+METADATA="${HOME}/.scoutflo/computed_metadata.jsonl"   # per-resource cache (business-context-resolver)
+
+# Detect both layers independently — they load together, not either/or.
+HAVE_PER_RESOURCE=0
+HAVE_WORKSPACE=0
+[ -f "$METADATA" ] && jq -e '.' "$METADATA" >/dev/null 2>&1 && HAVE_PER_RESOURCE=1
+[ -f "$BC_JSON" ]  && jq -e '.' "$BC_JSON"  >/dev/null 2>&1 && HAVE_WORKSPACE=1
+
+# Workspace source: the derived json, else the markdown SSOT (ssot-md fallback).
+BC_SRC=""
+if [ "$HAVE_WORKSPACE" -eq 1 ]; then
+  BC_SRC="$BC_JSON"
 elif [ -f "$BC_MD" ]; then
-  LOAD_METADATA_MODE="ssot-md"           # parse the markdown SSOT directly
+  BC_SRC="$BC_MD"          # ssot-md fallback: parse business_context.md directly
+fi
+
+if   [ "$HAVE_PER_RESOURCE" -eq 1 ] && [ "$HAVE_WORKSPACE" -eq 1 ]; then LOAD_METADATA_MODE="per-resource+workspace"
+elif [ "$HAVE_PER_RESOURCE" -eq 1 ];                                then LOAD_METADATA_MODE="per-resource"
+elif [ "$HAVE_WORKSPACE" -eq 1 ];                                   then LOAD_METADATA_MODE="workspace"
+elif [ -n "$BC_SRC" ];                                              then LOAD_METADATA_MODE="ssot-md"
+else                                                                     LOAD_METADATA_MODE="none"
 fi
 echo "metadata mode: $LOAD_METADATA_MODE"
 ```
 
-Read the resolved values (workspace mode):
+Read the workspace rules from `business_context.json` (all fields optional —
+absence means the neutral default, never an invented rule):
 
 ```bash
 set -eu
@@ -59,9 +90,44 @@ BC_JSON="${HOME}/.scoutflo/business_context.json"
 ENVIRONMENT="$(jq -r '.environment // "production"' "$BC_JSON" 2>/dev/null || echo production)"
 COST_SENSITIVITY="$(jq -r '.cost_sensitivity // "medium"' "$BC_JSON" 2>/dev/null || echo medium)"
 CRITICAL="$(jq -r '.critical_dependencies[]? // empty' "$BC_JSON" 2>/dev/null || true)"
-# environment_map row for the environment being audited (profile/project/context/SLA):
+EXCLUSIONS="$(jq -r '.exclusions // {} | [.accounts?, .regions?, .services?, .resources?] | add // [] | .[]? // empty' "$BC_JSON" 2>/dev/null || true)"
+# environment_map row for the environment being audited (profile/project/context + uptime_sla):
 jq -r --arg e "$ENVIRONMENT" '.environment_map[]? | select(.environment==$e)' "$BC_JSON" 2>/dev/null || true
+# per-service SLA table, consulted per finding's affected service (wins over the env SLA):
+jq -r '.service_slas[]? | "\(.service)=\(.sla)"' "$BC_JSON" 2>/dev/null || true
 ```
+
+When only the markdown SSOT exists (`LOAD_METADATA_MODE="ssot-md"`), read the same
+rules straight from `business_context.md` — the sections `business-context` writes:
+
+```bash
+set -eu
+BC_MD="${HOME}/.scoutflo/business_context.md"
+ENVIRONMENT="$(grep -iA5 '^## Environment' "$BC_MD" | grep -iE 'Stage:' | head -1 | sed -E 's/.*Stage:\**[[:space:]]*//; s/[][]//g; s/[[:space:]]*$//' | tr 'A-Z' 'a-z')"
+[ -n "$ENVIRONMENT" ] || ENVIRONMENT="production"
+COST_SENSITIVITY="$(grep -iA3 '^## Cost Sensitivity' "$BC_MD" | grep -iE 'Primary:' | head -1 | sed -E 's/.*Primary:\**[[:space:]]*//; s/[][]//g; s/[[:space:]]*$//' | tr 'A-Z' 'a-z')"
+[ -n "$COST_SENSITIVITY" ] || COST_SENSITIVITY="medium"
+CRITICAL="$(awk '/^## Critical Services/{f=1;next} /^## /{f=0} f' "$BC_MD" | grep -oE '`[^`]+`' | tr -d '`')"
+EXCLUSIONS="$(awk '/^## Exclusions/{f=1;next} /^## /{f=0} f' "$BC_MD" | grep -oE '`[^`]+`' | tr -d '`')"
+```
+
+Then, when `HAVE_PER_RESOURCE=1`, look each finding's affected resource up in
+`computed_metadata.jsonl` and let its per-resource `action` / `escalation` / `sla`
+refine (never weaken) the workspace rule for that one resource.
+
+**Apply behaviors (identical in every mode):**
+
+- **Exclude** — a resource matched by `exclusions` (or a per-resource `action:"skip"`)
+  is recorded `not-in-scope` with the exclusion as the reason; never a fail, never
+  silently dropped.
+- **Escalate critical** — a finding on a `critical_dependencies` service (or a
+  per-resource `escalation:"CRITICAL"`) is raised, never lowered.
+- **Per-environment SLA** — judge a finding against its environment's `uptime_sla`
+  from `environment_map[]`, and target that environment with its own
+  profile/project/context; **per-service `service_slas[]` wins** where a row exists.
+- **Cost sensitivity** — `high` orders opportunities ROI-first, `low` impact-first;
+  it never changes a reliability score.
+- Reduce severity for a gap that exists only in a non-production `environment`.
 
 When `LOAD_METADATA_MODE="none"`, run with neutral defaults (production severity,
 medium cost sensitivity, no exclusions) and say so in the report — never invent a

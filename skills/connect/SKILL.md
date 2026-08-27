@@ -119,6 +119,8 @@ Judgment step: collect the non-secret facts for every integration you picked bef
 | GitHub | `github.org`, `github.token_env`; optional `tier` | `org: your-org` |
 | Slack | `slack.webhook_env` | `webhook_env: SCOUTFLO_SLACK_WEBHOOK` |
 
+**Multiple targets of one integration (same environment).** If Step 1 identified more than one instance of the same integration in one environment (e.g. two HyperDX instances, N Azure subscriptions), gather the facts *per target*: a unique `label:` slug (lowercase letters/digits/hyphens, unique within that block) **and a distinct `*_env` variable name for each target's own secret**, alongside that target's own host/URL/ID. Two HyperDX instances, for example, each get their own `hyperdx_url` and their own `hyperdx_api_key_env` (say `HDX_EU_KEY` and `HDX_US_KEY`) so no target ever reads another's credential. Every other key in each target's mapping is the same set the table above lists for the single-block form; you are only repeating the mapping once per target and adding the `label:`. These get assembled into a YAML list in Steps 5–6.
+
 A minimal assembled config, for a team running only Grafana and an unauthenticated in-cluster Prometheus, looks like this:
 
 ```yaml
@@ -162,7 +164,9 @@ Before asking you to create or paste anything, the agent runs this **presence-on
 for V in GRAFANA_TOKEN PROM_TOKEN LOKI_TOKEN TEMPO_TOKEN MIMIR_TOKEN VM_TOKEN \
          DATADOG_API_KEY DATADOG_APP_KEY SENTRY_TOKEN PAGERDUTY_TOKEN \
          KIBANA_API_KEY JSM_EMAIL JSM_API_TOKEN ZENDUTY_TOKEN GROUNDCOVER_API_KEY \
-         DIGITALOCEAN_ACCESS_TOKEN SCOUTFLO_SLACK_WEBHOOK; do
+         CH_KEY HDX_API_KEY SIGNOZ_API_KEY SIGNOZ_CH_KEY \
+         DIGITALOCEAN_ACCESS_TOKEN GITHUB_TOKEN AWS_ROLE_ARN GOOGLE_APPLICATION_CREDENTIALS \
+         SCOUTFLO_SLACK_WEBHOOK; do
   if [ -n "$(printenv "$V" 2>/dev/null || true)" ]; then echo "$V = already set"; else echo "$V = not set"; fi
 done
 ```
@@ -243,6 +247,7 @@ Confirmation gate, no exceptions: before anything is written to `~/.scoutflo/too
 
 - ❌ The user says "connect my Grafana", so the agent writes a `grafana:` block from a URL it found in shell history.
 - ✅ The agent shows the assembled `grafana:` block with the URL the user stated, asks "write this to ~/.scoutflo/toolkit.yaml?", and writes only after a yes.
+- When Step 1 named more than one instance of an integration in one environment, the block you assemble here is a **YAML list**: one list item per target, each the provider's normal mapping plus its unique `label:` and its own `*_env` name. Show the full list and wait for approval the same way — no target is written until the whole list is approved.
 
 ## Step 6: Write ~/.scoutflo/toolkit.yaml
 
@@ -288,6 +293,7 @@ Then apply the approved blocks from Step 5:
 - Delete the blocks for integrations you do not run. Deleting them is correct, not destructive: a leftover placeholder block (for example `grafana.example.com`) makes doctor probe a fake host and fail with noise, and the shape of every deleted block stays available in this plugin's template and in providers.md.
 - On a re-run, touch only the blocks for the integrations you are adding or changing; leave the rest of the file alone.
 - **Re-adding an integration that was deleted earlier:** copy its block verbatim from the provider's **Config** section in [references/providers.md](references/providers.md) (or from `${CLAUDE_PLUGIN_ROOT}/templates/toolkit.yaml.example`), then fill in the approved values. Never reconstruct a block's keys from memory — key names like `token_env` vs `api_key_env`+`app_key_env` (Datadog), `kibana_url` (ELK, not the Elasticsearch URL), `account_id` quoted (AWS), or `context` (Kubernetes) differ per provider, and an invented key silently reads as "not configured" to doctor and every audit.
+- **Multiple targets of one integration in one environment:** assemble the block as a **YAML list** — one item per target, each item the provider's normal mapping plus a unique `label:` slug and its own `*_env` variable name. Copy the labeled-list shape verbatim from that provider's **Config** section in [references/providers.md](references/providers.md) (or the worked example at the top of `${CLAUDE_PLUGIN_ROOT}/templates/toolkit.yaml.example`); the same "never reconstruct the keys from memory" rule applies to the list form. The audit runs once per target and writes to `<integration>/<label>/<date>/`; a single target stays a plain mapping and writes the flat `<integration>/<date>/`.
 
 Confirm the file parses:
 

@@ -31,7 +31,7 @@ All api-versions, property paths, and auth behavior cited below are the ones liv
 
 | Integration | toolkit.yaml keys | Secret | Minimum scope | Tier |
 | --- | --- | --- | --- | --- |
-| Azure | `azure.subscription_id`, optional `azure.tenant_id`, optional `azure.region` | none stored; auth is `az login` (`DefaultAzureCredential` → `AzureCliCredential` fallback, confirmed) | `Reader` + `Monitoring Reader` on the subscription; `Log Analytics Reader` for data-plane queries; `Cost Management Reader` only for the non-scored cost section (recipe in `/scoutflo:connect`) | read-only |
+| Azure | `azure.subscription_id`, optional `azure.tenant_id` (pins the Entra tenant — asserted at the live-safety gate), optional `azure.region` (reserved for future regional-scope narrowing; not consulted today) | none stored; auth is `az login` (`DefaultAzureCredential` → `AzureCliCredential` fallback, confirmed) | `Reader` + `Monitoring Reader` on the subscription; `Log Analytics Reader` for data-plane queries; `Cost Management Reader` only for the non-scored cost section (recipe in `/scoutflo:connect`) | read-only |
 | Slack (optional) | `slack.webhook_env` | webhook variable | post to one channel | n/a |
 
 ```bash
@@ -122,7 +122,14 @@ echo "azure target: ${AZ_LABEL} -> subscription ${AZ_SUB_CFG}"
 # target; `az account set` is never used. A target this identity cannot see stops the run.
 az account list --query '[].id' -o tsv 2>/dev/null | grep -qxF "$AZ_SUB_CFG" \
   || { echo "STOP: azure target '${AZ_LABEL}' subscription ${AZ_SUB_CFG} is not visible to this identity ($(printf '%s' "$ACCT" | jq -r '.user.name')) in 'az account list'; az login to the right tenant/account, or fix the config"; exit 1; }
-echo "live-safety gate passed: identity + tenant printed; target subscription ${AZ_SUB_CFG} is visible and will be named explicitly on every command"
+# Optional tenant pin: when azure.tenant_id is set for this target, the resolved account's tenant
+# MUST match it — protects against auditing a same-named subscription in the wrong Entra tenant.
+AZ_TENANT_CFG=$(sh "$TT" "$CONFIG" azure get "$AZ_IDX" tenant_id)
+if [ -n "$AZ_TENANT_CFG" ]; then
+  [ "$(printf '%s' "$ACCT" | jq -r '.tenantId')" = "$AZ_TENANT_CFG" ] \
+    || { echo "STOP: azure target '${AZ_LABEL}' resolved tenant $(printf '%s' "$ACCT" | jq -r '.tenantId') != configured azure.tenant_id ${AZ_TENANT_CFG}; az login to the intended tenant, or fix the config"; exit 1; }
+fi
+echo "live-safety gate passed: identity + tenant printed${AZ_TENANT_CFG:+ (tenant pinned to ${AZ_TENANT_CFG})}; target subscription ${AZ_SUB_CFG} is visible and will be named explicitly on every command"
 ```
 
 The assertion is the gate: the target subscription must be **visible to this identity** (`az account list`) or the block exits nonzero and stops the run. A multi-subscription estate audits each configured target in turn (the runner sets `SCOUTFLO_TARGET=<label>`), so — unlike a single-subscription equality check — the ambient `az` default is **not** required to equal the target; instead every command names `--subscription "$SUB"` explicitly, so the run can never touch a subscription other than the one it resolved from `toolkit.yaml`. If the printed identity or tenant is not the one your team intends for audits, stop and report the mismatch even though the visibility check passed; identity, tenant, and subscription are separate checks. `az account set` is never used, and pointing the audit elsewhere is an edit to `toolkit.yaml`.
@@ -437,15 +444,41 @@ This skill reads the optional business-context SSOT to honor your guardrails:
 
 ```bash
 set -eu
-BC_JSON="${HOME}/.scoutflo/business_context.json"      # derived from business_context.md (the SSOT)
+BC_JSON="${HOME}/.scoutflo/business_context.json"      # workspace projection, derived from the SSOT
+BC_MD="${HOME}/.scoutflo/business_context.md"          # the SSOT itself (authoritative)
 METADATA="${HOME}/.scoutflo/computed_metadata.jsonl"   # per-resource cache from business-context-resolver
-LOAD_METADATA_MODE="none"
-if [ -f "$METADATA" ] && jq -e '.' "$METADATA" >/dev/null 2>&1; then
-  LOAD_METADATA_MODE="per-resource"
-elif [ -f "$BC_JSON" ] && jq -e '.' "$BC_JSON" >/dev/null 2>&1; then
-  LOAD_METADATA_MODE="workspace"
-fi
+
+# The workspace layer and the per-resource layer load TOGETHER, not either/or.
+HAVE_PER_RESOURCE=0; HAVE_WORKSPACE=0
+[ -f "$METADATA" ] && jq -e '.' "$METADATA" >/dev/null 2>&1 && HAVE_PER_RESOURCE=1
+[ -f "$BC_JSON" ]  && jq -e '.' "$BC_JSON"  >/dev/null 2>&1 && HAVE_WORKSPACE=1
+# Workspace source: the derived json, else the markdown SSOT directly (ssot-md fallback).
+BC_SRC=""
+if [ "$HAVE_WORKSPACE" -eq 1 ]; then BC_SRC="$BC_JSON"; elif [ -f "$BC_MD" ]; then BC_SRC="$BC_MD"; fi
+if   [ "$HAVE_PER_RESOURCE" -eq 1 ] && [ "$HAVE_WORKSPACE" -eq 1 ]; then LOAD_METADATA_MODE="per-resource+workspace"
+elif [ "$HAVE_PER_RESOURCE" -eq 1 ];                                then LOAD_METADATA_MODE="per-resource"
+elif [ "$HAVE_WORKSPACE" -eq 1 ];                                   then LOAD_METADATA_MODE="workspace"
+elif [ -n "$BC_SRC" ];                                              then LOAD_METADATA_MODE="ssot-md"
+else                                                                     LOAD_METADATA_MODE="none"; fi
 echo "metadata mode: $LOAD_METADATA_MODE"
+
+# Load the workspace rules the apply step below honors. All fields optional; absence = neutral default.
+if [ "$HAVE_WORKSPACE" -eq 1 ]; then
+  ENVIRONMENT="$(jq -r '.environment // "production"' "$BC_JSON" 2>/dev/null || echo production)"
+  COST_SENSITIVITY="$(jq -r '.cost_sensitivity // "medium"' "$BC_JSON" 2>/dev/null || echo medium)"
+  CRITICAL="$(jq -r '.critical_dependencies[]? // empty' "$BC_JSON" 2>/dev/null || true)"
+  EXCLUSIONS="$(jq -r '.exclusions // {} | [.accounts?, .regions?, .services?, .resources?] | add // [] | .[]? // empty' "$BC_JSON" 2>/dev/null || true)"
+  jq -r --arg e "$ENVIRONMENT" '.environment_map[]? | select(.environment==$e)' "$BC_JSON" 2>/dev/null || true  # per-env profile/project/context + uptime_sla
+  jq -r '.service_slas[]? | "\(.service)=\(.sla)"' "$BC_JSON" 2>/dev/null || true                               # per-service SLA (wins over the env default)
+elif [ "$LOAD_METADATA_MODE" = "ssot-md" ]; then
+  # Only business_context.md exists (json not derived): read the same rules from the SSOT directly.
+  ENVIRONMENT="$(grep -iA5 '^## Environment' "$BC_MD" | grep -iE 'Stage:' | head -1 | sed -E 's/.*Stage:\**[[:space:]]*//; s/[][]//g; s/[[:space:]]*$//' | tr 'A-Z' 'a-z')"; [ -n "$ENVIRONMENT" ] || ENVIRONMENT="production"
+  COST_SENSITIVITY="$(grep -iA3 '^## Cost Sensitivity' "$BC_MD" | grep -iE 'Primary:' | head -1 | sed -E 's/.*Primary:\**[[:space:]]*//; s/[][]//g; s/[[:space:]]*$//' | tr 'A-Z' 'a-z')"; [ -n "$COST_SENSITIVITY" ] || COST_SENSITIVITY="medium"
+  CRITICAL="$(awk '/^## Critical Services/{f=1;next} /^## /{f=0} f' "$BC_MD" | grep -oE '`[^`]+`' | tr -d '`')"
+  EXCLUSIONS="$(awk '/^## Exclusions/{f=1;next} /^## /{f=0} f' "$BC_MD" | grep -oE '`[^`]+`' | tr -d '`')"
+fi
+# When HAVE_PER_RESOURCE=1, look each finding's affected resource up in computed_metadata.jsonl and let
+# its per-resource action/escalation/sla refine (never weaken) the workspace rule for that one resource.
 ```
 
 When context is available, apply it per [BUSINESS-CONTEXT-INTEGRATION-v0168.md](../../docs/BUSINESS-CONTEXT-INTEGRATION-v0168.md): **exclude** resources matched by an exclusion (record them `not-in-scope` with the reason, never a fail); **escalate** findings on a `critical_dependencies` service; **reduce severity** for a gap that exists only in a non-production `environment` (per-env SLA); and apply `cost_sensitivity` to ordering. With no context, run neutral defaults and say so — never invent a business rule.

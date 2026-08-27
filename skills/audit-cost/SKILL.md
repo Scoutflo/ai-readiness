@@ -185,6 +185,8 @@ Close with: the savings headline (`Potential savings ~$X/mo (~$Y/yr) across N pr
 
 When the business-context SSOT projection `~/.scoutflo/business_context.json` names `critical_dependencies` and `cost_sensitivity`, use them to order the report: on `cost_sensitivity: high`, lead with the highest annual-savings opportunities; mark opportunities on critical-dependency resources so a reader sees the reliability trade-off before acting. Metadata never changes a dollar figure or invents one.
 
+**Deliberate exemption — exclusions are advisory here, not scope-limiting.** Unlike the scored own-block audits (which drop `exclusions`-matched resources as `not-in-scope`), `audit-cost` is a ranked-savings, report-only skill: it still surfaces a savings opportunity on an excluded/vendor-managed resource, but annotates it with the exclusion so the reader knows the resource is out of the operational audit's scope. This keeps a real, large saving from being silently hidden by an exclusion that exists for a different (reliability/compliance) reason. If you want an excluded resource omitted entirely, exclude it at the provider query, not via `business_context.json`.
+
 ## Remediation pointers
 
 Every finding is report-only (cost changes are out of scope for automation here — resizing/deleting live infra is materially riskier than a reliability fix). The `recommendation` states the concrete action and the console/CLI path; it does not point at a `setup-*` write. Where a provider's own reference documents the safe manual procedure, cite it.

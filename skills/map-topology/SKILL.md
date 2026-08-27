@@ -17,6 +17,8 @@ Full command recipes live in [references/istio-queries.md](references/istio-quer
 - Triage starts here: the entry points section shows where user traffic lands, the traffic map shows who calls whom, and the watchpoints table shows which monitoring backend to open for each service.
 - Only this skill and you edit the file. Audits may propose updates when live discovery contradicts the map, but they never write it.
 
+It describes **one** cluster. With a multi-cluster estate (a labeled `kubernetes` list), keep a separate map per cluster — see [Prerequisites](#prerequisites) — so no audit ever reads the wrong cluster's services.
+
 Refresh cadence (example, tune to your release rhythm):
 
 - Re-run after any deploy that adds, removes, or renames a service.
@@ -33,11 +35,13 @@ Keep `./scoutflo-audits/` out of public version control. The map names your name
 | `kubectl` | every cluster read | yes |
 | `jq` | JSON parsing | yes |
 | `istioctl` | proxy sync status on the mesh path | no; the mesh path degrades to `kubectl`-only checks, the fallback path never needs it |
-| `kubernetes.context` in `~/.scoutflo/toolkit.yaml` | names the cluster to map | yes |
+| `kubernetes` in `~/.scoutflo/toolkit.yaml` — a single block with one `context`, **or** a labeled list of targets each with its own `context` | names the cluster(s) to map; map-topology maps **one** per run | yes |
 
 Credentials: none beyond your kubeconfig. The kubeconfig user needs `get` and `list` on namespaces, pods, services, endpoints, deployments, statefulsets, daemonsets, and ingresses, plus the `networking.istio.io` resources when the mesh path runs. This is the read-only tier; no elevated access, no secrets, no `*_env` variables.
 
 Managed clusters (EKS, GKE, AKS) whose context is not yet in your kubeconfig: fetch it once with the provider CLI as shown in `/scoutflo:connect` (Kubernetes → Fetching a cluster context). AKS with Microsoft Entra integration also needs `kubelogin` (`az aks install-cli`). Once the context exists this skill maps it unchanged — AKS is just another context.
+
+map-topology is **per-cluster**: one run maps one cluster and writes one `topology.md`. A single `kubernetes` block is the whole story — nothing below changes for it. When `kubernetes` is instead a **labeled list** of contexts — the same shape `audit-kubernetes` iterates — run map-topology **once per labeled context**: select the target with `SCOUTFLO_TARGET=<label>` and resolve its `context` through the shared enumerator `report-standard/toolkit-targets.sh` (`count`/`label`/`get`), never a single `kubernetes.context` scalar (Phase 0 does exactly this). Give each cluster its **own** map by pointing `SCOUTFLO_AUDIT_DIR` at a per-cluster directory, so each run writes its own `topology.md` and `topology-export.json` instead of overwriting the last (audits read both from that same `SCOUTFLO_AUDIT_DIR` root, so a per-cluster workspace keeps map and audits aligned). One shared `topology.md` reused across clusters would describe the wrong cluster for all but one — the same-service-name-across-clusters hazard the Common Failure Modes table already warns about.
 
 If `/scoutflo:doctor` is set up, run it first; it validates the same context this skill depends on.
 
@@ -47,8 +51,22 @@ Never map a cluster you have not positively identified. Every command in this sk
 
 ```bash
 set -eu
-# Resolved from ~/.scoutflo/toolkit.yaml
-KUBE_CONTEXT="your-kube-context"   # kubernetes.context
+CFG="${SCOUTFLO_CONFIG:-}"
+[ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done
+[ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+
+# Resolve the kubernetes context through the shared enumerator so a single block (one `context`)
+# and a labeled LIST of targets read the SAME way — never assume a single `kubernetes.context`
+# scalar, no yq required. A single block returns its own `context` (behaves identically to before);
+# a labeled list returns the SCOUTFLO_TARGET-selected item's `context`. map-topology maps ONE
+# cluster per run — re-run once per label for a multi-cluster estate (see Prerequisites).
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+K8S_N=$(sh "$TT" "$CFG" kubernetes count)
+[ "${K8S_N:-0}" -ge 1 ] || { echo "no kubernetes target configured in $CFG; run /scoutflo:connect"; exit 1; }
+K8S_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$K8S_N" ]; do [ "$(sh "$TT" "$CFG" kubernetes label "$_i")" = "$SCOUTFLO_TARGET" ] && { K8S_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+K8S_LABEL=$(sh "$TT" "$CFG" kubernetes label "$K8S_IDX"); KUBE_CONTEXT=$(sh "$TT" "$CFG" kubernetes get "$K8S_IDX" context)
+[ -n "$KUBE_CONTEXT" ] || { echo "kubernetes target '${K8S_LABEL:-?}' has no context in $CFG; run /scoutflo:connect"; exit 1; }
+[ "${K8S_N}" -gt 1 ] && echo "note: ${K8S_N} kubernetes targets configured — mapping '${K8S_LABEL}' only; re-run once per label (SCOUTFLO_TARGET=<label>), each with its own SCOUTFLO_AUDIT_DIR" || true
 
 command -v kubectl >/dev/null || { echo "kubectl not installed"; exit 1; }
 command -v jq >/dev/null      || { echo "jq not installed"; exit 1; }
@@ -89,7 +107,7 @@ Before sizing, pick the `NS_EXCLUDE` preset for your provider — GKE, EKS, AKS,
 
 ```bash
 set -eu
-KUBE_CONTEXT="your-kube-context"   # kubernetes.context
+KUBE_CONTEXT="your-kube-context"   # the context resolved in Phase 0 (single block, or the SCOUTFLO_TARGET-selected list item)
 NS_EXCLUDE="^(kube-system|kube-public|kube-node-lease|istio-system)$"   # vanilla preset; pick your provider's (cookbook: "Namespace-exclude presets"), then extend
 SMALL_MAX_WORKLOADS="30"     # single-pass ceiling; example, tune to your environment
 MEDIUM_MAX_WORKLOADS="150"   # one-run ceiling; example, tune to your environment
@@ -123,7 +141,7 @@ Proportionality is a rule in both directions:
 
 ```bash
 set -eu
-KUBE_CONTEXT="your-kube-context"   # kubernetes.context
+KUBE_CONTEXT="your-kube-context"   # the context resolved in Phase 0 (single block, or the SCOUTFLO_TARGET-selected list item)
 
 if kubectl --context "${KUBE_CONTEXT}" get crd virtualservices.networking.istio.io >/dev/null 2>&1; then
   echo "istio CRDs: present"
