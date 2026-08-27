@@ -313,9 +313,9 @@ Commands in section 6. This is the alert-hygiene category for the paging layer. 
 
 Honest ceiling, stated in the report every run: notification policies, alias, and alert policies are metadata about intent; whether an alert actually deduplicated or was suppressed lives in the alert stream, which this audit reads at the list level (`count`, `status`, `alias`) but does not fully reconstruct. Integration-level Ignore/Create-Alert filters — the earliest native noise lever — are not exposed uniformly on the list API; where they cannot be read, say so rather than implying the policy layer is the whole story.
 
-## Phase 5: Coverage and health (JSM-020 to JSM-023)
+## Phase 5: Coverage and health (JSM-020 to JSM-024)
 
-Commands in section 7. Heartbeats responsive — a heartbeat in `status: Unresponsive`, or a `status: Off` heartbeat that was meant to be live, is a source that stopped reporting with no one alerted (`JSM-020`, critical: it is silent monitoring, looks configured, detects nothing), critical services from topology each covered by a team and a routing path (`JSM-021`, high), the audited teams named and any team not audited named as uncovered rather than silently dropped (`JSM-022`), and the integration inventory read for stale or disabled integrations that are drift rather than live paths (`JSM-023`, low).
+Commands in section 7. Heartbeats responsive — a heartbeat in `status: Unresponsive`, or a `status: Off` heartbeat that was meant to be live, is a source that stopped reporting with no one alerted (`JSM-020`, critical: it is silent monitoring, looks configured, detects nothing), critical services from topology each covered by a team and a routing path (`JSM-021`, high), the audited teams named and any team not audited named as uncovered rather than silently dropped (`JSM-022`), and the integration inventory read for stale or disabled integrations that are drift rather than live paths (`JSM-023`, low). Teams must be visible to this key at all — zero teams visible trips the empty/hidden-teams guardrail (`JSM-024`, high; the Phase 4 Case-B guardrail), which `blocks` the team-scoped categories with the visibility-gap reason rather than scoring a confident empty.
 
 ## Phase 6: Actionability (JSM-030 to JSM-032)
 
@@ -349,7 +349,7 @@ Score per [severity-and-scoring.md](../../report-standard/severity-and-scoring.m
 | --- | ---: | --- |
 | Alert delivery and escalation | 30 | JSM-001 to JSM-005 |
 | Alert noise | 25 | JSM-010 to JSM-018 |
-| Coverage and health | 25 | JSM-020 to JSM-023 |
+| Coverage and health | 25 | JSM-020 to JSM-024 |
 | Actionability | 20 | JSM-030 to JSM-033 |
 
 Weights sum to 100 and are unchanged: JSM-018 folds into the existing **Alert noise** category and JSM-033 into **Actionability** (both new checks are verify-pending — see [references/jsm-checks.md](references/jsm-checks.md) sections 6.1 and 8.1). Adding a check to a category changes only that category's denominator (credit ratio), never the cross-category weights.
@@ -427,15 +427,41 @@ This skill reads the optional business-context SSOT to honor your guardrails:
 
 ```bash
 set -eu
-BC_JSON="${HOME}/.scoutflo/business_context.json"      # derived from business_context.md (the SSOT)
+BC_JSON="${HOME}/.scoutflo/business_context.json"      # workspace projection, derived from the SSOT
+BC_MD="${HOME}/.scoutflo/business_context.md"          # the SSOT itself (authoritative)
 METADATA="${HOME}/.scoutflo/computed_metadata.jsonl"   # per-resource cache from business-context-resolver
-LOAD_METADATA_MODE="none"
-if [ -f "$METADATA" ] && jq -e '.' "$METADATA" >/dev/null 2>&1; then
-  LOAD_METADATA_MODE="per-resource"
-elif [ -f "$BC_JSON" ] && jq -e '.' "$BC_JSON" >/dev/null 2>&1; then
-  LOAD_METADATA_MODE="workspace"
-fi
+
+# The workspace layer and the per-resource layer load TOGETHER, not either/or.
+HAVE_PER_RESOURCE=0; HAVE_WORKSPACE=0
+[ -f "$METADATA" ] && jq -e '.' "$METADATA" >/dev/null 2>&1 && HAVE_PER_RESOURCE=1
+[ -f "$BC_JSON" ]  && jq -e '.' "$BC_JSON"  >/dev/null 2>&1 && HAVE_WORKSPACE=1
+# Workspace source: the derived json, else the markdown SSOT directly (ssot-md fallback).
+BC_SRC=""
+if [ "$HAVE_WORKSPACE" -eq 1 ]; then BC_SRC="$BC_JSON"; elif [ -f "$BC_MD" ]; then BC_SRC="$BC_MD"; fi
+if   [ "$HAVE_PER_RESOURCE" -eq 1 ] && [ "$HAVE_WORKSPACE" -eq 1 ]; then LOAD_METADATA_MODE="per-resource+workspace"
+elif [ "$HAVE_PER_RESOURCE" -eq 1 ];                                then LOAD_METADATA_MODE="per-resource"
+elif [ "$HAVE_WORKSPACE" -eq 1 ];                                   then LOAD_METADATA_MODE="workspace"
+elif [ -n "$BC_SRC" ];                                              then LOAD_METADATA_MODE="ssot-md"
+else                                                                     LOAD_METADATA_MODE="none"; fi
 echo "metadata mode: $LOAD_METADATA_MODE"
+
+# Load the workspace rules the apply step below honors. All fields optional; absence = neutral default.
+if [ "$HAVE_WORKSPACE" -eq 1 ]; then
+  ENVIRONMENT="$(jq -r '.environment // "production"' "$BC_JSON" 2>/dev/null || echo production)"
+  COST_SENSITIVITY="$(jq -r '.cost_sensitivity // "medium"' "$BC_JSON" 2>/dev/null || echo medium)"
+  CRITICAL="$(jq -r '.critical_dependencies[]? // empty' "$BC_JSON" 2>/dev/null || true)"
+  EXCLUSIONS="$(jq -r '.exclusions // {} | [.accounts?, .regions?, .services?, .resources?] | add // [] | .[]? // empty' "$BC_JSON" 2>/dev/null || true)"
+  jq -r --arg e "$ENVIRONMENT" '.environment_map[]? | select(.environment==$e)' "$BC_JSON" 2>/dev/null || true  # per-env profile/project/context + uptime_sla
+  jq -r '.service_slas[]? | "\(.service)=\(.sla)"' "$BC_JSON" 2>/dev/null || true                               # per-service SLA (wins over the env default)
+elif [ "$LOAD_METADATA_MODE" = "ssot-md" ]; then
+  # Only business_context.md exists (json not derived): read the same rules from the SSOT directly.
+  ENVIRONMENT="$(grep -iA5 '^## Environment' "$BC_MD" | grep -iE 'Stage:' | head -1 | sed -E 's/.*Stage:\**[[:space:]]*//; s/[][]//g; s/[[:space:]]*$//' | tr 'A-Z' 'a-z')"; [ -n "$ENVIRONMENT" ] || ENVIRONMENT="production"
+  COST_SENSITIVITY="$(grep -iA3 '^## Cost Sensitivity' "$BC_MD" | grep -iE 'Primary:' | head -1 | sed -E 's/.*Primary:\**[[:space:]]*//; s/[][]//g; s/[[:space:]]*$//' | tr 'A-Z' 'a-z')"; [ -n "$COST_SENSITIVITY" ] || COST_SENSITIVITY="medium"
+  CRITICAL="$(awk '/^## Critical Services/{f=1;next} /^## /{f=0} f' "$BC_MD" | grep -oE '`[^`]+`' | tr -d '`')"
+  EXCLUSIONS="$(awk '/^## Exclusions/{f=1;next} /^## /{f=0} f' "$BC_MD" | grep -oE '`[^`]+`' | tr -d '`')"
+fi
+# When HAVE_PER_RESOURCE=1, look each finding's affected resource up in computed_metadata.jsonl and let
+# its per-resource action/escalation/sla refine (never weaken) the workspace rule for that one resource.
 ```
 
 When context is available, apply it per [BUSINESS-CONTEXT-INTEGRATION-v0168.md](../../docs/BUSINESS-CONTEXT-INTEGRATION-v0168.md): **exclude** resources matched by an exclusion (record them `not-in-scope` with the reason, never a fail); **escalate** findings on a `critical_dependencies` service; reduce severity for a gap that exists only in a non-production `environment`; and apply `cost_sensitivity` to ordering. With no context, run neutral defaults and say so — never invent a business rule.

@@ -238,9 +238,9 @@ If `./scoutflo-audits/topology.md` exists, load it. Its service list is the crit
 
 Build the raw picture with the commands in [references/pagerduty-checks.md](references/pagerduty-checks.md) section 4: all services with grouping parameters and integration IDs, escalation policies with rule shapes, schedules, users with contact-method types, priorities, business services, rulesets, and maintenance windows. Judgment starts in Phase 3; inventory records what exists. A 403 on any surface is an auth-scope note attached to the checks that need it.
 
-## Phase 3: Escalation and on-call (PD-001 to PD-007)
+## Phase 3: Escalation and on-call (PD-001 to PD-009)
 
-Commands in section 5. Judge whether a page reaches a reachable human: every active service has an escalation policy (`PD-001`, critical when missing), no single-point-of-failure policy shape on production services (`PD-002`), loops and final rules are deliberate (`PD-003`), rendered schedule coverage is 100 percent over the audit window (`PD-004` — always pass `since`/`until`; the field is null without them, and v3-upgraded schedules follow the trap rule above), every schedule referenced by a policy resolves and staffs an on-call now (`PD-005`), responders are reachable beyond email alone (`PD-006` — the vendor's own docs rank push as the most reliable channel), and no never-logged-in invitee sits inside an escalation target (`PD-007`).
+Commands in section 5. Judge whether a page reaches a reachable human: every active service has an escalation policy (`PD-001`, critical when missing), no single-point-of-failure policy shape on production services (`PD-002`), loops and final rules are deliberate (`PD-003`), rendered schedule coverage is 100 percent over the audit window (`PD-004` — always pass `since`/`until`; the field is null without them, and v3-upgraded schedules follow the trap rule above), every schedule referenced by a policy resolves and staffs an on-call now (`PD-005`), responders are reachable beyond email alone (`PD-006` — the vendor's own docs rank push as the most reliable channel), and no never-logged-in invitee sits inside an escalation target (`PD-007`). Two further high-severity escalation checks, run per the recipes in reference section 5.1 and scored in this category, complete the "does a page reach a human" picture: a delayed first page — an escalation-target user missing a 0-minute high-urgency notification rule, so the first page lands late (`PD-008`, high) — and a single-participant on-call layer that is a human single point of failure (`PD-009`, high).
 
 - ❌ `Escalation pass: every service names a policy.`
 - ✅ `Escalation partial: every service names a policy, but checkout's policy is one rule, one user, no loop (PD-002), and the weekend schedule renders 92/100 coverage for the last 14 days (PD-004); affected: checkout, payments.`
@@ -368,15 +368,41 @@ This skill reads the optional business-context SSOT to honor your guardrails:
 
 ```bash
 set -eu
-BC_JSON="${HOME}/.scoutflo/business_context.json"      # derived from business_context.md (the SSOT)
+BC_JSON="${HOME}/.scoutflo/business_context.json"      # workspace projection, derived from the SSOT
+BC_MD="${HOME}/.scoutflo/business_context.md"          # the SSOT itself (authoritative)
 METADATA="${HOME}/.scoutflo/computed_metadata.jsonl"   # per-resource cache from business-context-resolver
-LOAD_METADATA_MODE="none"
-if [ -f "$METADATA" ] && jq -e '.' "$METADATA" >/dev/null 2>&1; then
-  LOAD_METADATA_MODE="per-resource"
-elif [ -f "$BC_JSON" ] && jq -e '.' "$BC_JSON" >/dev/null 2>&1; then
-  LOAD_METADATA_MODE="workspace"
-fi
+
+# The workspace layer and the per-resource layer load TOGETHER, not either/or.
+HAVE_PER_RESOURCE=0; HAVE_WORKSPACE=0
+[ -f "$METADATA" ] && jq -e '.' "$METADATA" >/dev/null 2>&1 && HAVE_PER_RESOURCE=1
+[ -f "$BC_JSON" ]  && jq -e '.' "$BC_JSON"  >/dev/null 2>&1 && HAVE_WORKSPACE=1
+# Workspace source: the derived json, else the markdown SSOT directly (ssot-md fallback).
+BC_SRC=""
+if [ "$HAVE_WORKSPACE" -eq 1 ]; then BC_SRC="$BC_JSON"; elif [ -f "$BC_MD" ]; then BC_SRC="$BC_MD"; fi
+if   [ "$HAVE_PER_RESOURCE" -eq 1 ] && [ "$HAVE_WORKSPACE" -eq 1 ]; then LOAD_METADATA_MODE="per-resource+workspace"
+elif [ "$HAVE_PER_RESOURCE" -eq 1 ];                                then LOAD_METADATA_MODE="per-resource"
+elif [ "$HAVE_WORKSPACE" -eq 1 ];                                   then LOAD_METADATA_MODE="workspace"
+elif [ -n "$BC_SRC" ];                                              then LOAD_METADATA_MODE="ssot-md"
+else                                                                     LOAD_METADATA_MODE="none"; fi
 echo "metadata mode: $LOAD_METADATA_MODE"
+
+# Load the workspace rules the apply step below honors. All fields optional; absence = neutral default.
+if [ "$HAVE_WORKSPACE" -eq 1 ]; then
+  ENVIRONMENT="$(jq -r '.environment // "production"' "$BC_JSON" 2>/dev/null || echo production)"
+  COST_SENSITIVITY="$(jq -r '.cost_sensitivity // "medium"' "$BC_JSON" 2>/dev/null || echo medium)"
+  CRITICAL="$(jq -r '.critical_dependencies[]? // empty' "$BC_JSON" 2>/dev/null || true)"
+  EXCLUSIONS="$(jq -r '.exclusions // {} | [.accounts?, .regions?, .services?, .resources?] | add // [] | .[]? // empty' "$BC_JSON" 2>/dev/null || true)"
+  jq -r --arg e "$ENVIRONMENT" '.environment_map[]? | select(.environment==$e)' "$BC_JSON" 2>/dev/null || true  # per-env profile/project/context + uptime_sla
+  jq -r '.service_slas[]? | "\(.service)=\(.sla)"' "$BC_JSON" 2>/dev/null || true                               # per-service SLA (wins over the env default)
+elif [ "$LOAD_METADATA_MODE" = "ssot-md" ]; then
+  # Only business_context.md exists (json not derived): read the same rules from the SSOT directly.
+  ENVIRONMENT="$(grep -iA5 '^## Environment' "$BC_MD" | grep -iE 'Stage:' | head -1 | sed -E 's/.*Stage:\**[[:space:]]*//; s/[][]//g; s/[[:space:]]*$//' | tr 'A-Z' 'a-z')"; [ -n "$ENVIRONMENT" ] || ENVIRONMENT="production"
+  COST_SENSITIVITY="$(grep -iA3 '^## Cost Sensitivity' "$BC_MD" | grep -iE 'Primary:' | head -1 | sed -E 's/.*Primary:\**[[:space:]]*//; s/[][]//g; s/[[:space:]]*$//' | tr 'A-Z' 'a-z')"; [ -n "$COST_SENSITIVITY" ] || COST_SENSITIVITY="medium"
+  CRITICAL="$(awk '/^## Critical Services/{f=1;next} /^## /{f=0} f' "$BC_MD" | grep -oE '`[^`]+`' | tr -d '`')"
+  EXCLUSIONS="$(awk '/^## Exclusions/{f=1;next} /^## /{f=0} f' "$BC_MD" | grep -oE '`[^`]+`' | tr -d '`')"
+fi
+# When HAVE_PER_RESOURCE=1, look each finding's affected resource up in computed_metadata.jsonl and let
+# its per-resource action/escalation/sla refine (never weaken) the workspace rule for that one resource.
 ```
 
 When context is available, apply it per [BUSINESS-CONTEXT-INTEGRATION-v0168.md](../../docs/BUSINESS-CONTEXT-INTEGRATION-v0168.md): **exclude** resources matched by an exclusion (record them `not-in-scope` with the reason, never a fail); **escalate** findings on a `critical_dependencies` service; reduce severity for a gap that exists only in a non-production `environment`; and apply `cost_sensitivity` to ordering. With no context, run neutral defaults and say so — never invent a business rule.

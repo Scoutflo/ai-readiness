@@ -47,13 +47,16 @@ Expected output: one key per line, for example `grafana`, `sentry`, `prometheus`
 | `digitalocean` | `audit-digitalocean` |
 | `gcp` | `audit-gcp` |
 | `aws` | `audit-aws` |
+| `azure` | `audit-azure` |
 | `kubernetes` | `audit-kubernetes` |
+| `clickstack` | `audit-clickstack` |
+| `signoz` | `audit-signoz` |
 
-Show the plan before running anything: every queued audit in order, and every skipped audit with the reason "not configured". If `./scoutflo-audits/topology.md` is missing, note that findings will use inferred service names and suggest `/scoutflo:map-topology`, but do not block.
+Show the plan before running anything: every queued audit in order, and every skipped audit with the reason "not configured". For each queued own-block audit, enumerate its targets with `sh "${CLAUDE_PLUGIN_ROOT}/report-standard/toolkit-targets.sh" "$CONFIG" <block> labels` and show one plan line per target when a block is a labeled list (e.g. `azure (prod-core)`, `azure (prod-data)`), so the plan makes the per-target fan-out visible rather than hiding N targets behind one row. If `./scoutflo-audits/topology.md` is missing, note that findings will use inferred service names and suggest `/scoutflo:map-topology`, but do not block.
 
 ## Phase 2: Run each audit
 
-Run the queued audits one at a time, in the table's order, each exactly per its own `SKILL.md`: its doctor gate, its checks, its `findings.json` and `report.md`. Two overrides apply under orchestration:
+Run the queued audits one at a time, in the table's order, each exactly per its own `SKILL.md`: its doctor gate, its checks, its `findings.json` and `report.md`. An own-block audit whose integration is a labeled list iterates **every** target per its own SKILL.md (running its full sequence once per label with `SCOUTFLO_TARGET=<label>` set) — never collapse a labeled list to its first target; each target writes its own `<integration>/<label>/<date>/` directory, which the Phase 3 roll-ups and Phase 3.5 correlation already aggregate. Two overrides apply under orchestration:
 
 1. Individual audits send no Slack brief. The combined brief in Phase 5 is the run's only message.
 2. A failure in one audit never stops the others.
@@ -81,7 +84,7 @@ for f in "$AUDITS_DIR"/*/"$RUN_DATE"/findings.json "$AUDITS_DIR"/*/*/"$RUN_DATE"
   # Skip the roll-up dirs (cost-analysis/, all/): their findings.json is not the
   # per-audit schema (no .target, no .score, severity-less findings). Mirrors the
   # render-report-viz.sh guard (case "$tgt" in all|"?").
-  case "$(jq -r '.target // "?"' "$f" 2>/dev/null)" in (all|"?") continue ;; esac
+  case "$(jq -r '.target // "?"' "$f" 2>/dev/null)" in (all|cost|cost-analysis|doctor|"?") continue ;; esac
   jq -r '"\(.target): \(.score.overall)/100 | critical=\(.severity_counts.critical) high=\(.severity_counts.high) medium=\(.severity_counts.medium) low=\(.severity_counts.low) info=\(.severity_counts.info)"' "$f"
 done
 ```
@@ -122,7 +125,7 @@ RUN_DATE="$(date -u +%F)"        # UTC run date; matches each audit's directory 
 for f in "$AUDITS_DIR"/*/"$RUN_DATE"/findings.json "$AUDITS_DIR"/*/*/"$RUN_DATE"/findings.json; do
   [ -e "$f" ] || continue
   # Skip the roll-up dirs (cost-analysis/, all/): not the per-audit schema.
-  case "$(jq -r '.target // "?"' "$f" 2>/dev/null)" in (all|"?") continue ;; esac
+  case "$(jq -r '.target // "?"' "$f" 2>/dev/null)" in (all|cost|cost-analysis|doctor|"?") continue ;; esac
   jq -r '"\(.target): " + (if .estate then "\(.estate.objects) objects, \(.estate.path) path" else "estate not recorded" end)' "$f"
 done
 ```
@@ -166,7 +169,7 @@ RUN_DATE="$(date -u +%F)"        # UTC run date; matches each audit's directory 
 for f in "$AUDITS_DIR"/*/"$RUN_DATE"/findings.json "$AUDITS_DIR"/*/*/"$RUN_DATE"/findings.json; do
   [ -e "$f" ] || continue
   # Skip the roll-up dirs (cost-analysis/, all/): not the per-audit schema.
-  case "$(jq -r '.target // "?"' "$f" 2>/dev/null)" in (all|"?") continue ;; esac
+  case "$(jq -r '.target // "?"' "$f" 2>/dev/null)" in (all|cost|cost-analysis|doctor|"?") continue ;; esac
   jq -r '.target as $t | .findings[] | select(.lifecycle == "regressed") | "\($t): \(.id) [\(.severity)] \(.title)"' "$f"
 done
 ```
@@ -184,7 +187,7 @@ TOTAL=0
 for f in "$AUDITS_DIR"/*/"$RUN_DATE"/findings.json "$AUDITS_DIR"/*/*/"$RUN_DATE"/findings.json; do
   [ -e "$f" ] || continue
   # Skip the roll-up dirs (cost-analysis/, all/): not the per-audit schema.
-  case "$(jq -r '.target // "?"' "$f" 2>/dev/null)" in (all|"?") continue ;; esac
+  case "$(jq -r '.target // "?"' "$f" 2>/dev/null)" in (all|cost|cost-analysis|doctor|"?") continue ;; esac
   t=$(jq -r '.target' "$f")
   n=$(jq -r '[.findings[] | select(.lifecycle == "suppressed")] | length' "$f")
   echo "${t}: ${n} suppressed via exemptions"
@@ -195,7 +198,7 @@ echo "total suppressed across all targets: ${TOTAL}"
 
 Expected output: one line per target plus a total, for example `lgtm: 2 suppressed via exemptions` then `total suppressed across all targets: 5`. A target with zero suppressed findings still gets its line, at `0`.
 
-Topology readiness per target, read from each target's own `report.md` (the headline is not a `findings.json` field; [topology-readiness.md](../../report-standard/topology-readiness.md) defines it as the report's section headline `<r> of <n> critical services sync-ready`):
+Topology readiness per target, read from each target's own `report.md` (the headline is not a `findings.json` field; [topology-readiness.md](../../report-standard/topology-readiness.md) defines it as the report's plain-language section headline `<r> of <n> critical services are ready for automatic Scoutflo correlation` — the report standard forbids the old "sync-ready" jargon, so match the plain-language phrase):
 
 ```bash
 set -eu
@@ -205,11 +208,11 @@ RUN_DATE="$(date -u +%F)"        # UTC run date; matches each audit's directory 
 for f in "$AUDITS_DIR"/*/"$RUN_DATE"/findings.json "$AUDITS_DIR"/*/*/"$RUN_DATE"/findings.json; do
   [ -e "$f" ] || continue
   # Skip the roll-up dirs (cost-analysis/, all/): not the per-audit schema.
-  case "$(jq -r '.target // "?"' "$f" 2>/dev/null)" in (all|"?") continue ;; esac
+  case "$(jq -r '.target // "?"' "$f" 2>/dev/null)" in (all|cost|cost-analysis|doctor|"?") continue ;; esac
   t=$(jq -r '.target' "$f")
   REPORT="$(dirname "$f")/report.md"
   if [ -f "$REPORT" ]; then
-    LINE="$(grep -m1 -o '[0-9]\+ of [0-9]\+ critical services sync-ready' "$REPORT" || true)"
+    LINE="$(grep -m1 -o '[0-9]\+ of [0-9]\+ critical services are ready for automatic Scoutflo correlation' "$REPORT" || true)"
     if [ -n "$LINE" ]; then
       echo "${t}: ${LINE}"
     else
@@ -221,7 +224,7 @@ for f in "$AUDITS_DIR"/*/"$RUN_DATE"/findings.json "$AUDITS_DIR"/*/*/"$RUN_DATE"
 done
 ```
 
-Expected output: one line per completed target, for example `lgtm: 4 of 6 critical services sync-ready`. A target whose report has no readiness section (map-topology never run, or the audit skill predates the section) reads `readiness not recorded`; never guess a count.
+Expected output: one line per completed target, for example `lgtm: 4 of 6 critical services are ready for automatic Scoutflo correlation`. A target whose report has no readiness section (map-topology never run, or the audit skill predates the section) reads `readiness not recorded`; never guess a count.
 
 ## Phase 3.5: Correlation engine (v0.1.66+)
 
@@ -283,7 +286,7 @@ Expected output: `[cost-analysis] Report complete: <audits-dir>/cost-analysis/<d
 - `<audits-dir>/cost-analysis/<date>/findings.json` — aggregated cost findings sorted with provider-native savings figures first (largest first), presence facts after
 - `<audits-dir>/cost-analysis.jsonl` — one appended history line per analyzed run
 
-**Honesty rules (same as the per-audit cost sections):** savings totals sum only `estimated_monthly_savings_usd` values the audits copied verbatim from provider-native recommendations (Compute Optimizer, Cost Explorer, Datadog usage); presence-fact findings are counted but never given an invented dollar figure; no 0-100 cost score is computed — cost findings are a non-scored parallel section per the report standard.
+**Honesty rules (same as the per-audit cost sections):** savings totals sum only `estimated_monthly_savings_usd` values the audits copied verbatim from provider-native savings recommendations (Compute Optimizer, Cost Explorer, GCP Recommender). A Datadog usage figure is a monthly **spend** (`estimated_monthly_cost_usd`), not a saving, so it is reported on its DDOPT finding but never added into the savings total; presence-fact findings are counted but never given an invented dollar figure; no 0-100 cost score is computed — cost findings are a non-scored parallel section per the report standard.
 
 **Use cases:**
 - One cross-provider list of cost opportunities with real, provider-sourced savings totals
@@ -327,11 +330,11 @@ Write `./scoutflo-audits/all/<YYYY-MM-DD>/report.md`. It summarizes and links; i
 3. **Scores**: one row per completed target: score, severity counts, estate size and sizing path (from the Phase 3 roll-up; `estate not recorded` when the audit did not emit one), delta versus that target's previous run (`+9`, `-3`, or `first run`), the score trend from its `history.jsonl` (last five runs, oldest first; `no history yet` when the ledger is missing), and the relative path to its full `report.md`. One score line per target, never a combined average: an average hides a failing stack behind a healthy one.
 4. **Blocked audits**: one row per blocked audit with reason and fix pointer. Omit the section only when nothing was blocked, and then state "No audits blocked."
 5. **Regressions**: the Phase 3 regressions list, one row per regressed finding with its target, ID, severity, and title, ordered highest severity first. State "No regressions this run." when the list is empty. This section always precedes Top findings; regressions are the highest-signal state in the lifecycle model and are named before anything else.
-6. **Topology Readiness (combined)**: one row per completed target, its "`<r> of <n> critical services sync-ready`" headline from the Phase 3 topology-readiness roll-up, and a link to that target's own Scoutflo Topology Readiness section for the per-service detail. A target whose roll-up line read `readiness not recorded` gets that exact phrase in its row, not a blank or a guess.
+6. **Topology Readiness (combined)**: one row per completed target, its "`<r> of <n> critical services are ready for automatic Scoutflo correlation`" headline from the Phase 3 topology-readiness roll-up, and a link to that target's own Scoutflo Topology Readiness section for the per-service detail. A target whose roll-up line read `readiness not recorded` gets that exact phrase in its row, not a blank or a guess.
 
-   | Target | Sync-ready | Detail |
+   | Target | Readiness | Detail |
    | --- | --- | --- |
-   | `<target>` | `<r> of <n> critical services sync-ready` or `readiness not recorded` | link to that target's `report.md#scoutflo-topology-readiness` |
+   | `<target>` | `<r> of <n> critical services are ready for automatic Scoutflo correlation` or `readiness not recorded` | link to that target's `report.md#scoutflo-topology-readiness` |
 
 7. **Cross-stack correlation**: paste the output of `sh "${CLAUDE_PLUGIN_ROOT}/report-standard/render-report-viz.sh" overlaps "<audits-dir>/correlation.json"` — the redundant-monitoring overlaps (one service flagged by two or more stacks) and any cascade chains that the Phase 3.5 correlation engine already computed into `correlation.json`. This is the only cross-stack synthesis in the run; it renders the engine's output verbatim and never re-derives or re-scores correlation. It degrades to "No cross-stack overlaps or cascades detected this run" when the engine found none, and to a run-`/scoutflo:audit-all` note when `correlation.json` is absent.
 8. **Estate inventory (all stacks)**: paste the output of `sh "${CLAUDE_PLUGIN_ROOT}/report-standard/render-report-viz.sh" inventory-rollup "<audits-dir>" "<run-date>"` — the cross-stack current-state catalog (each stack's object totals by kind), read from every audit's `inventory.json`. This is the estate-level AI Readiness inventory deliverable: what you actually have configured, next to what's failing. It renders the per-stack `inventory.json` verbatim and never re-derives it; it degrades to "No `inventory.json` for `<run-date>`" when no audit emitted one.
@@ -364,7 +367,7 @@ n=0
 for f in "$AUDITS_DIR"/*/"$RUN_DATE"/findings.json "$AUDITS_DIR"/*/*/"$RUN_DATE"/findings.json; do
   [ -e "$f" ] || continue
   # Skip the roll-up dirs (cost-analysis/, all/): they have no per-target score row.
-  case "$(jq -r '.target // "?"' "$f" 2>/dev/null)" in (all|"?") continue ;; esac
+  case "$(jq -r '.target // "?"' "$f" 2>/dev/null)" in (all|cost|cost-analysis|doctor|"?") continue ;; esac
   t=$(jq -r '.target' "$f")
   grep -q "| ${t} " "${REPORT}" || { echo "score row missing for ${t}"; exit 1; }
   n=$((n + 1))
@@ -398,7 +401,7 @@ RUN_DATE="$(date -u +%F)"        # UTC run date
 REGRESSIONS="$(for f in "$AUDITS_DIR"/*/"$RUN_DATE"/findings.json "$AUDITS_DIR"/*/*/"$RUN_DATE"/findings.json; do
   [ -e "$f" ] || continue
   # Skip the roll-up dirs (cost-analysis/, all/): not the per-audit schema.
-  case "$(jq -r '.target // "?"' "$f" 2>/dev/null)" in (all|"?") continue ;; esac
+  case "$(jq -r '.target // "?"' "$f" 2>/dev/null)" in (all|cost|cost-analysis|doctor|"?") continue ;; esac
   jq -r '.target as $t | .findings[] | select(.lifecycle == "regressed") | "\($t): \(.id) \(.title)"' "$f"
 done)"
 [ -n "$REGRESSIONS" ] || REGRESSIONS="none"
@@ -407,7 +410,7 @@ SUPPRESSED_TOTAL=0
 for f in "$AUDITS_DIR"/*/"$RUN_DATE"/findings.json "$AUDITS_DIR"/*/*/"$RUN_DATE"/findings.json; do
   [ -e "$f" ] || continue
   # Skip the roll-up dirs (cost-analysis/, all/): not the per-audit schema.
-  case "$(jq -r '.target // "?"' "$f" 2>/dev/null)" in (all|"?") continue ;; esac
+  case "$(jq -r '.target // "?"' "$f" 2>/dev/null)" in (all|cost|cost-analysis|doctor|"?") continue ;; esac
   n=$(jq -r '[.findings[] | select(.lifecycle == "suppressed")] | length' "$f")
   SUPPRESSED_TOTAL=$((SUPPRESSED_TOTAL + n))
 done
@@ -418,7 +421,7 @@ for f in "$AUDITS_DIR"/*/"$RUN_DATE"/findings.json "$AUDITS_DIR"/*/*/"$RUN_DATE"
   [ -e "$f" ] || continue
   # Skip the roll-up dirs (cost-analysis/, all/): no .score.categories to sum —
   # iterating .score.categories[] on the null-score roll-up crashes under set -e.
-  case "$(jq -r '.target // "?"' "$f" 2>/dev/null)" in (all|"?") continue ;; esac
+  case "$(jq -r '.target // "?"' "$f" 2>/dev/null)" in (all|cost|cost-analysis|doctor|"?") continue ;; esac
   p=$(jq -r '[.score.categories[].checks_passed] | add // 0' "$f")
   t=$(jq -r '[.score.categories[].checks_total] | add // 0' "$f")
   CHECKS_PASSED=$((CHECKS_PASSED + p))

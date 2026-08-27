@@ -10,10 +10,18 @@
 # this only renders it.
 #
 # Usage:
-#   render-report-viz.sh at-a-glance  <findings.json> [history.jsonl]
-#   render-report-viz.sh scorecard    <findings.json>
-#   render-report-viz.sh mermaid-topo <topology-export.json> <target>
-#   render-report-viz.sh html         <findings.json> <out.html> [history.jsonl]
+#   render-report-viz.sh at-a-glance      <findings.json> [history.jsonl]
+#   render-report-viz.sh scorecard        <findings.json>
+#   render-report-viz.sh mermaid-topo     <topology-export.json> <target>
+#   render-report-viz.sh html             <findings.json> <out.html> [history.jsonl]
+#   render-report-viz.sh overlaps         <correlation.json>
+#   render-report-viz.sh rollup           <audits-dir> <run-date>
+#   render-report-viz.sh inventory        <inventory.json>
+#   render-report-viz.sh inventory-rollup <audits-dir> <run-date>
+#
+# The rollup / inventory-rollup modes glob BOTH the one-level <target>/<date>/ and
+# the two-level <integration>/<label>/<date>/ layouts (multi-target labels, and
+# single-block signoz/kubernetes which always nest), matching audit-all.
 #
 # Read-only over local artifacts; prints markdown to stdout (or writes the HTML
 # file). No secrets: it renders only structured fields (scores, counts, titles,
@@ -317,11 +325,14 @@ HTMLFOOT
     D="${1:?audits-dir}"; RD="${2:?run-date}"
     echo "## At a glance (all stacks)"
     echo
+    # Glob BOTH the one-level `<target>/<date>/` and two-level
+    # `<integration>/<label>/<date>/` layouts (multi-target labels, and single-block
+    # signoz/kubernetes which always nest), mirroring audit-all's Phase-3 loops.
     ROWS=""; total=0; passing=0
-    for f in "$D"/*/"$RD"/findings.json; do
+    for f in "$D"/*/"$RD"/findings.json "$D"/*/*/"$RD"/findings.json; do
       [ -f "$f" ] || continue
       tgt="$(jq -r '.target // "?"' "$f" 2>/dev/null)"
-      case "$tgt" in all|"?") continue;; esac
+      case "$tgt" in all|cost|cost-analysis|doctor|"?") continue;; esac
       sc="$(jq -r '.score.overall // 0' "$f" 2>/dev/null)"
       case "$sc" in *[!0-9]*) sc=0;; esac
       total=$((total + 1)); [ "$sc" -ge "$GATE" ] && passing=$((passing + 1))
@@ -387,16 +398,17 @@ HTMLFOOT
     echo "## Estate inventory (all stacks)"
     echo
     found=0
-    for f in "$D"/*/"$RD"/inventory.json; do [ -f "$f" ] && found=1; done
+    for f in "$D"/*/"$RD"/inventory.json "$D"/*/*/"$RD"/inventory.json; do [ -f "$f" ] && found=1; done
     if [ "$found" -eq 0 ]; then echo "_No \`inventory.json\` for ${RD}._"; exit 0; fi
     echo "Everything the configured stacks have, by type — the current-state catalog across the estate."
     echo
     echo "| Stack | Total | By kind |"
     echo "| --- | ---: | --- |"
-    for f in "$D"/*/"$RD"/inventory.json; do
+    # Two-level glob included so multi-target labels and single-block signoz/kubernetes appear.
+    for f in "$D"/*/"$RD"/inventory.json "$D"/*/*/"$RD"/inventory.json; do
       [ -f "$f" ] || continue
       tgt="$(jq -r '.target // "?"' "$f" 2>/dev/null)"
-      case "$tgt" in all|"?") continue;; esac
+      case "$tgt" in all|cost|cost-analysis|doctor|"?") continue;; esac
       tot="$(jq -r '.counts.total // (.items|length) // 0' "$f" 2>/dev/null)"
       bk="$(jq -r '(.counts.by_kind // {}) | to_entries | map("\(.key): \(.value)") | join(", ")' "$f" 2>/dev/null)"
       echo "| \`${tgt}\` | ${tot} | ${bk:--} |"

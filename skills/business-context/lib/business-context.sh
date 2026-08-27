@@ -81,10 +81,27 @@ bc_validate() {
   fi
 }
 
+# --- Parse one Exclusions subsection into a JSON string array -----------------
+# Slices the "## Exclusions" section, then the given "### <name>" subsection
+# (Regions / Accounts / Services / Resources), and returns its bullet values as
+# a JSON array — reason parentheticals stripped, bracketed placeholders dropped.
+# Same idiom as the critical-services / environment-map parsers below.
+bc_exclusion_list() {
+  awk -v want="$1" '
+    /^## Exclusions/{inx=1; next}
+    inx && /^## /{inx=0}
+    inx && /^### /{cur=$0; sub(/^### /,"",cur); insub=(cur ~ ("^" want))?1:0; next}
+    inx && insub && /^-[[:space:]]/{print}
+  ' "$SSOT_MD" \
+    | sed -E 's/^-[[:space:]]*//; s/[[:space:]]*\(reason:.*$//; s/[[:space:]]*$//' \
+    | jq -R . | jq -s 'map(select(length>0 and (test("^\\[")|not)))' 2>/dev/null || echo '[]'
+}
+
 # --- Derive the machine projection the shell libs read ------------------------
 # business_context.json holds the structured fields the libs consume
-# (environment, cost_sensitivity, critical_dependencies, per-env SLA map).
-# It is ALWAYS regenerated from the .md; never hand-edited.
+# (environment, cost_sensitivity, critical_dependencies, per-env SLA map,
+# per-service SLAs, and exclusions). It is ALWAYS regenerated from the .md;
+# never hand-edited.
 bc_derive_json() {
   [ -f "$SSOT_MD" ] || { echo "no SSOT to derive from"; return 1; }
   bc_init_dir
@@ -111,19 +128,45 @@ bc_derive_json() {
     | jq -s 'map(select(.environment|test("^\\[")|not) | select(.environment|length>0))' 2>/dev/null || echo '[]')"
   [ -n "$envmap" ] || envmap='[]'
 
+  # Per-service SLAs: parse the "## SLAs / SLOs" table (service + SLA columns).
+  svcslas="$(awk '/^## SLAs/{f=1;next} /^## /{f=0} f' "$SSOT_MD" \
+    | grep -E '^\|' | grep -vE '^\|[[:space:]]*Service|^\|[[:space:]]*-' \
+    | awk -F'|' 'NF>=4 {
+        for(i=1;i<=NF;i++){gsub(/^[[:space:]]+|[[:space:]]+$/,"",$i)}
+        printf "{\"service\":\"%s\",\"sla\":\"%s\"}\n",$2,$3
+      }' \
+    | jq -s 'map(select(.service|test("^\\[")|not) | select(.service|length>0))' 2>/dev/null || echo '[]')"
+  [ -n "$svcslas" ] || svcslas='[]'
+
+  # Exclusions: one string array per "## Exclusions" subsection.
+  excl_regions="$(bc_exclusion_list Regions)";     [ -n "$excl_regions" ]   || excl_regions='[]'
+  excl_accounts="$(bc_exclusion_list Accounts)";   [ -n "$excl_accounts" ]  || excl_accounts='[]'
+  excl_services="$(bc_exclusion_list Services)";   [ -n "$excl_services" ]  || excl_services='[]'
+  excl_resources="$(bc_exclusion_list Resources)"; [ -n "$excl_resources" ] || excl_resources='[]'
+
   now="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date)"
   jq -n \
     --arg env "$stage" --arg cost "$cost" --arg now "$now" \
     --argjson crit "$crit" --argjson envmap "$envmap" \
+    --argjson svcslas "$svcslas" \
+    --argjson excl_accounts "$excl_accounts" --argjson excl_regions "$excl_regions" \
+    --argjson excl_services "$excl_services" --argjson excl_resources "$excl_resources" \
     '{
       source: "business_context.md",
       environment: $env,
       cost_sensitivity: $cost,
       critical_dependencies: $crit,
       environment_map: $envmap,
+      service_slas: $svcslas,
+      exclusions: {
+        accounts: $excl_accounts,
+        regions: $excl_regions,
+        services: $excl_services,
+        resources: $excl_resources
+      },
       derived_at: $now
     }' > "$SSOT_JSON"
-  echo "[derived] $SSOT_JSON (environment=$stage cost=$cost critical=$(echo "$crit" | jq 'length') envs=$(echo "$envmap" | jq 'length'))"
+  echo "[derived] $SSOT_JSON (environment=$stage cost=$cost critical=$(echo "$crit" | jq 'length') envs=$(echo "$envmap" | jq 'length') slas=$(echo "$svcslas" | jq 'length'))"
 }
 
 # --- Read helpers other skills can source -------------------------------------

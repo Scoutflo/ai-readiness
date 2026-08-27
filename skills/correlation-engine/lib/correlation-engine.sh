@@ -5,7 +5,10 @@
 # (audit-all, sequential, or a targeted subset).
 #
 # Reads:  ${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/<target>/<date>/findings.json
-#         (the report-standard layout every audit writes)
+#         and ${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/<integration>/<label>/<date>/findings.json
+#         (the report-standard layout every audit writes; the two-level form is
+#         used by every multi-target labeled list AND by single-block signoz
+#         (signoz/<host>/) and kubernetes (kubernetes/<context>/), which always nest)
 # Writes: ${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/correlation.json
 #         (single canonical location; cost-analysis and topology-guided-setup read it here)
 
@@ -13,19 +16,26 @@ set -eu
 
 AUDITS_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}"
 CORRELATION_FILE="${AUDITS_DIR}/correlation.json"
+# Pre-v0.1.80 migration remnant: business context now lives at ~/.scoutflo/business_context.json
+# (the primary source, used below). This ~/.scoutflo/topology.json path is written by no current
+# skill; the fallback below only fires when business_context.json is absent, then resolves to a
+# non-existent file and returns the hardcoded safe defaults — the intended no-context behavior.
 TOPOLOGY_FILE="${TOPOLOGY_FILE:-$HOME/.scoutflo/topology.json}"
 
 # Collect all findings for one run date across every target directory.
 # Emits a flat JSON array; each finding gains a `target` field from its file.
-# Skips the `all/` combined-report dir and the `cost-analysis/` derived dir,
-# whose findings.json files do not follow the per-audit schema.
+# Skips the `all/` combined-report dir, the `cost-analysis/` and `cost/` derived
+# dirs, and the `doctor/` dir, whose findings.json files do not follow the
+# per-audit schema. Globs BOTH the one-level `<target>/<date>/` and the two-level
+# `<integration>/<label>/<date>/` layouts (multi-target labels, and single-block
+# signoz/kubernetes which always nest), mirroring audit-all's aggregation.
 correlation_collect_findings() {
   date="$1"
   set --
-  for f in "$AUDITS_DIR"/*/"$date"/findings.json; do
+  for f in "$AUDITS_DIR"/*/"$date"/findings.json "$AUDITS_DIR"/*/*/"$date"/findings.json; do
     [ -e "$f" ] || continue
     case "$f" in
-      */all/*|*/cost-analysis/*) continue ;;
+      */all/*|*/cost-analysis/*|*/cost/*|*/doctor/*) continue ;;
     esac
     set -- "$@" "$f"
   done

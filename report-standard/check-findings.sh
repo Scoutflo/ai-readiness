@@ -35,15 +35,20 @@ done
 sch="$(jq -r '.schema // ""' "$F")"
 [ "$sch" = "scoutflo-findings/v1" ] || fail "schema is '$sch', expected 'scoutflo-findings/v1'"
 
-# 2. severity_counts must equal the actual histogram of findings[].severity.
+# 2. severity_counts must equal the actual histogram of NON-SUPPRESSED
+#    findings[].severity. Suppressed findings (lifecycle=="suppressed") move to the
+#    report's Suppressed appendix and are excluded from the severity counts (per
+#    findings-schema.md and report-template.md), so the histogram is computed over
+#    findings whose lifecycle != "suppressed" to match the schema. (The suppressed
+#    lifecycle enum itself is still validated in 7d below.)
 declared="$(jq -cS '.severity_counts' "$F")"
-actual="$(jq -cS '[.findings[].severity]
+actual="$(jq -cS '[.findings[] | select(.lifecycle != "suppressed") | .severity]
   | {critical:(map(select(.=="critical"))|length),
      high:(map(select(.=="high"))|length),
      medium:(map(select(.=="medium"))|length),
      low:(map(select(.=="low"))|length),
      info:(map(select(.=="info"))|length)}' "$F")"
-[ "$declared" = "$actual" ] || fail "severity_counts $declared != actual histogram $actual"
+[ "$declared" = "$actual" ] || fail "severity_counts $declared != actual histogram of non-suppressed findings $actual"
 
 # 3. Category weights (included + excluded) must sum to 100.
 wsum="$(jq '([.score.categories[]?.weight] + [.score.excluded[]?.weight // 0]) | add // 0' "$F")"

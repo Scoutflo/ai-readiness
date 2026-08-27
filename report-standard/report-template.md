@@ -126,7 +126,7 @@ are called out here.>
 
 ## Scoutflo Topology Readiness
 
-**<r> of <n> critical services sync-ready.** <One sentence: what fixing
+**<r> of <n> critical services are ready for automatic Scoutflo correlation.** <One sentence: what fixing
 the blocking findings unlocks (platform source and correlation sync).>
 
 | Service | Service identity | Workload mapping | Telemetry connections | Connection details | Tool identity | Match confidence | Verdict |
@@ -261,7 +261,7 @@ When Slack delivery is configured, the skill derives one brief per run from the 
 3a. Check totals: `41/47 checks passed`.
 4. Top 3 to 5 finding titles, highest severity first, each with its ID.
 5. Delta line: `3 fixed, 1 new, 6 unchanged` (or `first run`).
-6. Topology readiness line: `Topology readiness: 4/6 services sync-ready` (counts only, no service names required).
+6. Topology readiness line: `Topology readiness: 4 of 6 critical services are ready for automatic Scoutflo correlation` (counts only, no service names required).
 7. The local report path.
 
 Hard rules:

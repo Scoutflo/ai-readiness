@@ -17,7 +17,7 @@ Run standalone with `/scoutflo:business-context-resolver`, or automatically afte
 
 | Requirement | Check |
 | --- | --- |
-| `business_context.md` | Required; run `/scoutflo:connect` first to create it |
+| `business_context.md` | Required; run `/scoutflo:business-context` first to create it |
 | `kubectl` | Optional; discovered only if installed and kubeconfig valid |
 | `aws` CLI | Optional; discovered only if installed and credentials valid |
 | `git` | Optional; discovered only if installed and .git exists locally |
@@ -25,12 +25,12 @@ Run standalone with `/scoutflo:business-context-resolver`, or automatically afte
 
 ## Doctor gate
 
-Check that `~/.scoutflo/business_context.md` exists (created by `/scoutflo:connect`). All discovery sources (K8s, AWS, GitHub) are optional:
+Check that `~/.scoutflo/business_context.md` exists (created by `/scoutflo:business-context`). All discovery sources (K8s, AWS, GitHub) are optional:
 
 ```bash
 set -eu
 CONTEXT="${HOME}/.scoutflo/business_context.md"
-[ -f "$CONTEXT" ] || { echo "missing $CONTEXT; run /scoutflo:connect first"; exit 1; }
+[ -f "$CONTEXT" ] || { echo "missing $CONTEXT; run /scoutflo:business-context first"; exit 1; }
 for bin in jq; do
   command -v "$bin" >/dev/null || { echo "missing binary: $bin"; exit 1; }
 done
@@ -54,17 +54,20 @@ echo "live-safety gate: pass (discovery is read-only, no mutations)"
 
 ## Phase 1: Load business_context.md
 
-Parse `~/.scoutflo/business_context.md` (created by `/scoutflo:connect`). Extract:
-- `Teams` section: team names, responsibility areas
-- `Global Rules` section: SLA defaults, cost sensitivity defaults, excluded environments
-- `Discovery Configuration` section: K8s label namespaces, AWS tag keys, GitHub CODEOWNERS path
+Parse `~/.scoutflo/business_context.md` (created by `/scoutflo:business-context`). Extract the sections the business-context skill actually writes (see [templates/business_context_template.md](../../templates/business_context_template.md)):
+- `Environment` section: stage (prod/staging/dev) and risk level
+- `Environment Map` table: per-environment `Uptime SLA` and target (profile / project / context)
+- `SLAs / SLOs` table: per-service SLA defaults
+- `Cost Sensitivity` section: the `Primary:` high/medium/low ordering rule
+- `Critical Services` section: services that escalate and gate on approval
+- `Exclusions` section: regions / accounts / services / resources never audited
 
 ## Phase 2: Discover Kubernetes metadata
 
 If `kubectl` is available and kubeconfig is valid, enumerate all resources and extract labels:
 
 ```bash
-kubectl get resources -A -o json | jq '.items[] | {
+kubectl get deployments,statefulsets,daemonsets,services -A -o json | jq -c '.items[] | {
   type: .kind,
   name: .metadata.name,
   namespace: .metadata.namespace,
@@ -108,32 +111,42 @@ Map path patterns to teams, then resolve service ownership by code path.
 For each discovered resource, apply the discovery configuration:
 
 ```bash
-# Per resource: combine discovered metadata with business context rules
-for resource in $(cat /tmp/discovered_resources.jsonl); do
-  RESOURCE_ID=$(echo "$resource" | jq -r '.resource_id')
-  TEAM=$(echo "$resource" | jq -r '.team')
-  ENVIRONMENT=$(echo "$resource" | jq -r '.environment')
-  
-  # Look up SLA rule: (team, environment) → SLA
-  SLA=$(grep -i "^${TEAM}" ~/.scoutflo/business_context.md | grep -i "${ENVIRONMENT}" | cut -d= -f2)
-  
-  # Look up escalation: if production + critical service → CRITICAL escalation
+set -eu
+BC="${HOME}/.scoutflo/business_context.md"
+
+# Pull the workspace rules once, from the sections the business-context skill writes.
+# Critical Services + Exclusions: the backtick-quoted names under each heading.
+CRITICAL_SVCS="$(awk '/^## Critical Services/{f=1;next} /^## /{f=0} f' "$BC" | grep -oE '`[^`]+`' | tr -d '`')"
+EXCLUSIONS="$(awk '/^## Exclusions/{f=1;next} /^## /{f=0} f' "$BC" | grep -oE '`[^`]+`' | tr -d '`')"
+# Cost Sensitivity: the global Primary ordering rule (high|medium|low).
+COST_DEFAULT="$(grep -iA3 '^## Cost Sensitivity' "$BC" | grep -iE 'Primary:' | head -1 | sed -E 's/.*Primary:\**[[:space:]]*//; s/[][]//g; s/[[:space:]]*$//' | tr 'A-Z' 'a-z')"
+[ -n "$COST_DEFAULT" ] || COST_DEFAULT="medium"
+
+# Per resource: combine discovered metadata with business context rules.
+while IFS= read -r resource; do
+  [ -n "$resource" ] || continue
+  RESOURCE_ID="$(echo "$resource" | jq -r '.resource_id')"
+  TEAM="$(echo "$resource" | jq -r '.team')"
+  ENVIRONMENT="$(echo "$resource" | jq -r '.environment')"
+
+  # SLA: per-service row from the SLAs / SLOs table; else this environment's
+  # Uptime SLA from the Environment Map table.
+  SLA="$(awk -F'|' -v s="$RESOURCE_ID" '/^## SLAs/{f=1;next} /^## /{f=0} f && /^\|/ {gsub(/^[[:space:]]+|[[:space:]]+$/,"",$2); gsub(/^[[:space:]]+|[[:space:]]+$/,"",$3); if ($2==s) print $3}' "$BC" | head -1)"
+  [ -n "$SLA" ] || SLA="$(awk -F'|' -v e="$ENVIRONMENT" '/^## Environment Map/{f=1;next} /^## /{f=0} f && /^\|/ {for(i=1;i<=NF;i++) gsub(/^[[:space:]]+|[[:space:]]+$/,"",$i); if ($2==e) print $7}' "$BC" | head -1)"
+
+  # Escalation: a Critical Service is escalated (POSIX word-list membership test).
   ESCALATION="normal"
-  if [ "$ENVIRONMENT" = "prod" ] && grep -q "$RESOURCE_ID" ~/.scoutflo/critical_services.txt; then
-    ESCALATION="CRITICAL"
-  fi
-  
-  # Look up cost sensitivity: team default or environment override
-  COST_SENSITIVITY=$(grep -i "^${TEAM}" ~/.scoutflo/business_context.md | grep "cost-sensitivity" | cut -d= -f2)
-  
-  # Determine action: skip, audit, or escalate
+  case " $(echo "$CRITICAL_SVCS" | tr '\n' ' ') " in *" ${RESOURCE_ID} "*) ESCALATION="CRITICAL" ;; esac
+
+  # Cost sensitivity: the workspace default ordering rule.
+  COST_SENSITIVITY="$COST_DEFAULT"
+
+  # Action: a resource named in the Exclusions block is out of scope (never a fail).
   ACTION="audit"
-  if grep -q "$RESOURCE_ID" ~/.scoutflo/business_context.md | grep -i "exclude"; then
-    ACTION="skip"
-  fi
-  
+  case " $(echo "$EXCLUSIONS" | tr '\n' ' ') " in *" ${RESOURCE_ID} "*) ACTION="skip" ;; esac
+
   echo "{\"resource_id\":\"${RESOURCE_ID}\",\"team\":\"${TEAM}\",\"environment\":\"${ENVIRONMENT}\",\"sla\":\"${SLA}\",\"escalation\":\"${ESCALATION}\",\"cost_sensitivity\":\"${COST_SENSITIVITY}\",\"action\":\"${ACTION}\",\"resolved_at\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}"
-done
+done < /tmp/discovered_resources.jsonl
 ```
 
 ## Phase 6: Write computed_metadata.jsonl

@@ -47,78 +47,100 @@ Day 3: /scoutflo:audit-sentry
 
 ```json
 {
-  "overlap_id": "OVL-001",
+  "overlap_id": "OVL-payment-svc",
   "type": "redundant_monitoring",
-  "services": ["payment-svc"],
+  "service": "payment-svc",
+  "targets": ["aws", "grafana"],
   "findings": [
     {
-      "skill": "audit-aws",
+      "target": "aws",
       "finding_id": "AWS-023",
-      "title": "CloudWatch Alarms Not Configured"
+      "title": "CloudWatch Alarms Not Configured",
+      "severity": "high"
     },
     {
-      "skill": "audit-grafana",
+      "target": "grafana",
       "finding_id": "GRAFANA-045",
-      "title": "Alert Rule Missing for Payment Service"
+      "title": "Alert Rule Missing for Payment Service",
+      "severity": "medium"
     }
   ],
-  "redundancy_level": "full",
-  "recommendation": "Keep Grafana as primary (lower noise), remove CloudWatch duplicate"
+  "recommendation": "Multiple stacks report findings against payment-svc; review whether the monitoring overlaps and consolidate the paging path"
 }
 ```
 
-**Interpretation:** Both AWS and Grafana are alerting on the same metric. You only need one. Keeping the lower-noise source (Grafana) and removing AWS reduces alert fatigue.
+The `overlap_id` is `OVL-<service>` and `service` is the single shared affected service the group is keyed on; `targets` lists the distinct stacks that named it. The `recommendation` is a fixed template built from the service name.
+
+**Interpretation:** Both stacks report findings against the same service — candidate redundant monitoring. Review whether they overlap and consolidate onto one paging path to cut alert fatigue.
 
 ### Cascades: Dependency Chains
 
 ```json
 {
-  "cascade_id": "CASC-001",
-  "chain_length": 3,
+  "cascade_id": "CASC-AWS-055",
   "root_cause": {
     "finding_id": "AWS-055",
     "title": "MySQL Master Instance Unhealthy",
-    "service": "database-svc",
-    "impact": "Database unavailable"
+    "target": "aws",
+    "shared_resources": ["mysql-primary"]
   },
   "effects": [
     {
-      "step": 1,
       "finding_id": "GRAFANA-022",
       "title": "Alert Rule Disabled",
-      "condition": "if root_cause happens"
+      "target": "grafana",
+      "condition": "shares a resource with the datastore finding; verify its signal survives if that datastore degrades"
     },
     {
-      "step": 2,
       "finding_id": "PAGERDUTY-008",
       "title": "Incident Cannot Be Created",
-      "condition": "if monitoring is down"
+      "target": "pagerduty",
+      "condition": "shares a resource with the datastore finding; verify its signal survives if that datastore degrades"
     }
   ]
 }
 ```
 
+The `cascade_id` is `CASC-<root finding id>`. `shared_resources` are the concrete affected tokens the root names; each effect is emitted only because it shares one of those tokens (a real join, not a keyword guess), so `condition` is the same fixed sentence on every effect. There is no `chain_length`, `service`, `impact`, or `step` field.
+
 **Interpretation:** Fixing the root cause (MySQL) prevents cascading failures. Fix order matters: prioritize root-cause findings.
 
 ## Business Context Applied
 
-If you ran `/scoutflo:business-context`, correlation engine uses it:
+correlation.json is **context-neutral**. It records overlaps, cascades, and the
+dedup counters — nothing more — and never embeds business-context weighting.
 
-| Setting | Effect on Correlation |
+If you ran `/scoutflo:business-context`, the engine *does* read it (via
+`correlation_load_context`, which loads `environment`, `cost_sensitivity`, and
+`critical_dependencies`) and computes an advisory `context_note` on each finding
+during the run: staging low/medium gaps are noted as possibly intentional, and
+findings that touch a `critical_dependencies` service are flagged as
+business-critical. But that note is **not persisted** — the overlaps and cascades
+written out are rebuilt from their own member objects (`target`, `finding_id`,
+`title`, `severity`), and the annotated findings array is discarded. The engine
+also never changes a finding's audit-owned `severity`.
+
+So business-context weighting is applied by the **downstream consumers** that read
+both correlation.json and the business-context SSOT, not by the engine itself:
+
+| Setting | Where it takes effect |
 |---------|----------------------|
-| `environment: "staging"` | Staging gaps marked LOW (intentional). Prod gaps stay CRITICAL. |
-| `critical_dependencies: ["payment-svc", "checkout-svc"]` | Findings on these services bubble to top. Setup uses "approve before fix" mode. |
-| `cost_sensitivity: "high"` | Overlaps sorted by cost ROI (most expensive redundancy first). |
+| `environment: "staging"` | `rca` uses it to calibrate severity language (a staging-only chain is real but not an incident). |
+| `critical_dependencies: [...]` | `rca` leads with and raises urgency for findings on these services. |
+| `cost_sensitivity: "high"` | `cost-analysis` records it verbatim; savings are ranked by provider-native monthly figure (the sensitivity value does not re-sort). |
 
 ### Safe Defaults (if business-context not set)
 
-If you've never run `/scoutflo:business-context`, correlation engine uses:
+If you've never run `/scoutflo:business-context`, `correlation_load_context` falls
+back to:
 - `environment: "production"` (conservative; all issues real)
 - `cost_sensitivity: "medium"` (balanced prioritization)
 - `critical_dependencies: []` (no special treatment)
-- `sla: 99.9%` (industry standard)
 
-**Effect:** Findings severity NOT adjusted. Running business-context later will re-weight findings on next audit.
+**Effect:** No `context_note` is added, and correlation.json is identical either
+way — it is context-neutral regardless. Business context only changes how the
+downstream consumers (`rca`, `cost-analysis`) present the same overlaps and
+cascades.
 
 ## Integration with Topology-Guided Setup
 

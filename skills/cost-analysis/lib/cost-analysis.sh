@@ -59,14 +59,16 @@ cost_analysis_load_context() {
 cost_analysis_aggregate_findings() {
   audit_date="$1"
 
+  # Glob BOTH the one-level `<target>/<date>/` and the two-level
+  # `<integration>/<label>/<date>/` layouts (multi-target labels, and single-block
+  # signoz/kubernetes which always nest), mirroring audit-all's aggregation. Skip
+  # the derived/combined dirs whose findings.json is not a scored per-audit file.
   set --
-  for audit_dir in "$AUDITS_DIR"/*; do
-    [ -d "$audit_dir" ] || continue
-    case "$audit_dir" in
-      */all|*/cost-analysis) continue ;;
-    esac
-    findings_file="$audit_dir/$audit_date/findings.json"
+  for findings_file in "$AUDITS_DIR"/*/"$audit_date"/findings.json "$AUDITS_DIR"/*/*/"$audit_date"/findings.json; do
     [ -e "$findings_file" ] || continue
+    case "$findings_file" in
+      */all/*|*/cost-analysis/*|*/cost/*|*/doctor/*) continue ;;
+    esac
     set -- "$@" "$findings_file"
   done
 

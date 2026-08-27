@@ -26,6 +26,8 @@ The file follows [templates/business_context_template.md](../../templates/busine
 | Notification Preferences | Per-event routing (Slack / email / PagerDuty / Jira). |
 | Custom Runbooks + Custom Rules | Named team procedures, and any free-form rule the sections above do not capture. |
 
+> **Design decision D1:** multiple targets of one integration in one environment (e.g. three ClickStack instances or several Azure subscriptions under one label set) are all judged against that one environment's context above, and a single integration block must not mix environments across its labels — put a staging target in a separate environment / config file so it is judged against staging's SLA and access, never production's.
+
 ## The four ways to provide context (offer all, use any)
 
 After the doctor gate, offer these in order. The user picks any combination; everything past the core is optional.
@@ -104,7 +106,7 @@ bc_derive_json              # regenerate ~/.scoutflo/business_context.json from 
 | File | Role | Edited by |
 | --- | --- | --- |
 | `~/.scoutflo/business_context.md` | **Source of truth** — human-authored, rich, version-controllable | you (this skill, or directly) |
-| `~/.scoutflo/business_context.json` | **Derived projection** — the structured fields (environment, cost_sensitivity, critical_dependencies, environment_map) the shell libs read | regenerated from the .md, never hand-edited |
+| `~/.scoutflo/business_context.json` | **Derived projection** — the structured fields (environment, cost_sensitivity, critical_dependencies, environment_map, service_slas, exclusions) the shell libs read | regenerated from the .md, never hand-edited |
 
 Editing the `.md` and re-running `bc_derive_json` (or the skill) refreshes the `.json`. The `.json` never overrides the `.md`.
 

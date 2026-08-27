@@ -92,11 +92,28 @@ for pair in grafana:82 aws:20 sentry:91; do
   n="${pair%%:*}"; s="${pair##*:}"; mkdir -p "$WORK/roll/$n/2026-08-16"
   printf '{"schema":"scoutflo-findings/v1","skill":"audit-%s","target":"%s","run_date":"2026-08-16","generated_at":"x","score":{"overall":%s,"categories":[],"excluded":[]},"severity_counts":{"critical":0,"high":0,"medium":0,"low":0,"info":0},"findings":[]}' "$n" "$n" "$s" > "$WORK/roll/$n/2026-08-16/findings.json"
 done
+# Two-level layout: signoz/kubernetes always nest as <int>/<label>/<date>/, so the rollup
+# must reach findings via its two-level glob too — regression-lock for the dual-glob fix.
+mkdir -p "$WORK/roll/kubernetes/ctx-a/2026-08-16"
+printf '{"schema":"scoutflo-findings/v1","skill":"audit-kubernetes","target":"kubernetes/ctx-a","run_date":"2026-08-16","generated_at":"x","score":{"overall":90,"categories":[],"excluded":[]},"severity_counts":{"critical":0,"high":0,"medium":0,"low":0,"info":0},"findings":[]}' > "$WORK/roll/kubernetes/ctx-a/2026-08-16/findings.json"
 RU="$(sh "$VIZ" rollup "$WORK/roll" 2026-08-16)"
-printf '%s' "$RU" | grep -q 'Stacks passing the 85 gate: 1/3' || fail "gate count wrong (want 1/3)"
+printf '%s' "$RU" | grep -q 'Stacks passing the 85 gate: 2/4' || fail "gate count wrong (want 2/4 incl. the two-level kubernetes/ctx-a stack)"
+printf '%s' "$RU" | grep -q '`kubernetes/ctx-a` | 90/100' || fail "two-level kubernetes/ctx-a score row missing from rollup"
 printf '%s' "$RU" | grep -qi 'never a combined average' || fail "missing no-average note"
 # worst-first: aws (20) must appear before sentry (91)
 printf '%s' "$RU" | awk '/`aws`/{a=NR} /`sentry`/{s=NR} END{exit !(a<s)}' || fail "rollup not worst-first ordered"
+echo "PASS"
+
+echo "Test 11: inventory-rollup includes BOTH the one-level and the two-level (kubernetes/ctx-a) stacks"
+# reuse the roll dir from Test 10: a one-level inventory.json + a two-level one (single-block
+# kubernetes always nests) — the dual-glob must reach both. (regression-lock for the fix.)
+printf '{"schema":"scoutflo-inventory/v1","target":"grafana","generated_at":"x","counts":{"total":3,"by_kind":{"alert_rule":2,"contact_point":1}},"items":[]}' > "$WORK/roll/grafana/2026-08-16/inventory.json"
+printf '{"schema":"scoutflo-inventory/v1","target":"kubernetes/ctx-a","generated_at":"x","counts":{"total":5,"by_kind":{"workload":4,"networkpolicy":1}},"items":[]}' > "$WORK/roll/kubernetes/ctx-a/2026-08-16/inventory.json"
+IR="$(sh "$VIZ" inventory-rollup "$WORK/roll" 2026-08-16)"
+printf '%s' "$IR" | grep -q '## Estate inventory' || fail "no estate inventory heading"
+printf '%s' "$IR" | grep -q '`grafana` | 3 |' || fail "one-level grafana inventory row missing"
+printf '%s' "$IR" | grep -q '`kubernetes/ctx-a` | 5 |' || fail "two-level kubernetes/ctx-a inventory row missing"
+printf '%s' "$IR" | grep -q 'workload: 4' || fail "two-level by-kind counts missing"
 echo "PASS"
 
 echo

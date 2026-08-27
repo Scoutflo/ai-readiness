@@ -35,6 +35,16 @@ write_findings() {
     > "$1/$2/$DATE/findings.json"
 }
 
+# write_findings_2level <dir> <integration> <label> <target-field> <findings-json-array>
+# Writes the two-level <integration>/<label>/<date>/findings.json layout a
+# multi-target labeled audit (and single-block signoz/kubernetes) emits.
+write_findings_2level() {
+  mkdir -p "$1/$2/$3/$DATE"
+  jq -n --arg t "$4" --argjson f "$5" \
+    '{target: $t, audit_date: "2026-01-15", findings: $f}' \
+    > "$1/$2/$3/$DATE/findings.json"
+}
+
 # run_engine <audit-dir> — runs correlation_run in a subshell so each case gets
 # its own SCOUTFLO_AUDIT_DIR (the lib resolves paths at source time) and no
 # machine state (~/.scoutflo business context / topology) leaks in.
@@ -177,6 +187,36 @@ mkdir -p "$D6"
 run_engine "$D6" || fail "case6: engine must exit 0 when there is nothing to correlate"
 [ ! -f "$D6/correlation.json" ] \
   || fail "case6: correlation.json must not be written for an empty run"
+echo "PASS"
+
+echo "Test 7: two-level <integration>/<label>/<date> layout is collected (dual-glob regression lock)"
+# A multi-target labeled audit (e.g. azure/prod-core/) writes findings.json one
+# level deeper than a single-target audit. The engine globs BOTH the one-level
+# <target>/<date>/ and the two-level <integration>/<label>/<date>/ layouts; a
+# one-level-only regression would silently drop these findings. Here the
+# two-level finding shares an affected service with a one-level finding, so it
+# must be BOTH collected (raw == 2) AND detected as a cross-target overlap.
+D7="$TMP_ROOT/case7"
+write_findings "$D7" "target-a" '[
+  {"id": "AAA-001", "title": "one-level gap", "severity": "high", "area": "alerting",
+   "affected": ["svc-shared"]}
+]'
+write_findings_2level "$D7" "azure" "prod-core" "azure/prod-core" '[
+  {"id": "AZ-001", "title": "two-level gap", "severity": "medium", "area": "alerting",
+   "affected": ["svc-shared"]}
+]'
+run_engine "$D7"
+corr7="$D7/correlation.json"
+[ -f "$corr7" ] || fail "case7: correlation.json was not written"
+raw7=$(jq '.total_findings_raw' "$corr7")
+[ "$raw7" -eq 2 ] \
+  || fail "case7: two-level finding not collected — expected raw 2, got $raw7 (one-level-only glob regression)"
+jq -e '
+  [ .overlaps[] | select(.service == "svc-shared") | .findings[]
+    | "\(.target)/\(.finding_id)" ]
+  | any(. == "azure/prod-core/AZ-001")
+' "$corr7" > /dev/null \
+  || fail "case7: two-level finding azure/prod-core/AZ-001 not detected as an overlap on svc-shared — dual-glob broken: $(jq -c '{total_findings_raw, total_overlaps_detected, overlaps}' "$corr7")"
 echo "PASS"
 
 echo

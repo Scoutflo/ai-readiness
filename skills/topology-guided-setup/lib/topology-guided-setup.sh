@@ -176,7 +176,7 @@ topology_guided_get_recommendation() {
       {
         recommendation_type: "CASCADE_ROOT",
         action: "FIX_FIRST_PRIORITY",
-        rationale: ("Fix root cause prevents " + ($data[0].chain_length | tostring) + "-step cascade"),
+        rationale: ("Fix root cause prevents " + ($data[0].effect_count | tostring) + "-step cascade"),
         prevents_failures: $data[0].effects | length,
         tokens_saved: "30%+"
       }

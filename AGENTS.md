@@ -13,7 +13,7 @@ sh ci/run-tests.sh .
 claude plugin validate . --strict
 ```
 
-`ci/structure-check.sh` composes 17 checks: anchor, cross-block, coverage,
+`ci/structure-check.sh` composes 19 checks: anchor, cross-block, coverage,
 remediation-map, **skill-completeness**, the four behavioral-parity gates
 (scope-checkpoint, redaction-parity, business-context-parity, **env-load-parity**),
 and manifest-compat, min-version-consistency, catalog-consistency,
@@ -30,7 +30,15 @@ resolves its targets through the shared `report-standard/toolkit-targets.sh`
 enumerator and nests output by a resolved `<PREFIX>_SEG` segment, so multiple
 targets of one integration in one environment — 3 HyperDX instances, N Azure
 subscriptions — never collide; shared-backend audits `audit-lgtm`/`audit-alert-routing`
-are the documented exemptions).
+are the documented exemptions), **multi-target-consumer** (the three shared
+aggregators — `correlation-engine`, `cost-analysis`, and the report renderer's
+rollups — must glob the two-level `<integration>/<label>/<date>/` layout as well as
+the one-level form, so a multi-target label or a single-block signoz/kubernetes run
+is never silently dropped from correlation, the combined report, or the cost
+roll-up), and **audit-all-map** (every own-block `audit-*` is mapped in
+`audit-all`'s Phase-1 config→audit table so "audit everything" can never silently
+skip a configured provider, and `audit-all` never greps for the forbidden
+"sync-ready" jargon the report standard rejects).
 `ci/run-tests.sh` executes
 every `tests/*.sh` and `skills/*/tests/*.sh` under `/bin/sh` (and rejects dead
 bats-syntax files that cannot run). All four run in CI on every push/PR — a

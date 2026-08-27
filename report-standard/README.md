@@ -1,15 +1,17 @@
 # Report Standard
 
-Every audit skill in the Scoutflo AI Readiness emits the same two artifacts, in the same place, under the same rules. That is what makes runs comparable over time, deltas computable, scores meaningful across audits, and Slack briefs derivable without per-skill custom code.
+Every audit skill in the Scoutflo AI Readiness emits the same set of artifacts, in the same place, under the same rules. That is what makes runs comparable over time, deltas computable, scores meaningful across audits, and Slack briefs derivable without per-skill custom code.
 
 ## The artifacts
 
-Each audit run writes exactly two files:
+Each audit run writes the same set of files — `findings.json` and `report.md` always, plus `report.html` and `inventory.json` on every `audit-*` skill (`audit-cost` and the combined `audit-all` report are the documented inventory exemptions):
 
 | File | Purpose |
 | --- | --- |
 | `findings.json` | Machine-readable result: score, severity counts, every finding with evidence. Contract in [findings-schema.md](findings-schema.md). |
 | `report.md` | Human-readable report built from the same data: executive summary, scorecard, findings, coverage matrix, next safe actions, delta, evidence appendix. Skeleton in [report-template.md](report-template.md). |
+| `report.html` | Standalone visual dashboard rendered from the same `findings.json` (At-a-glance block, scorecard bars, optional blast-radius graph) by [render-report-viz.sh](render-report-viz.sh); see [report-template.md](report-template.md). |
+| `inventory.json` | Current-state asset/alert catalog — "everything you have," distinct from the gaps in `findings.json`. Contract in [inventory-schema.md](inventory-schema.md). `audit-cost` and the combined `audit-all` report are exempt (they carry no inventory). |
 
 Both live under one reports directory, `<reports-dir>/`:
 
@@ -18,9 +20,11 @@ Both live under one reports directory, `<reports-dir>/`:
   <target>/
     history.jsonl        # one line per run; see History ledger below
     <YYYY-MM-DD>/
-      findings.json
-      report.md
-  all/<YYYY-MM-DD>/report.md   # combined audit-all summary (no findings.json; per-target files stay canonical)
+      findings.json      # canonical machine result (findings-schema.md)
+      report.md          # human report, derived (report-template.md)
+      report.html        # standalone visual dashboard, derived (render-report-viz.sh)
+      inventory.json     # current-state asset/alert catalog (inventory-schema.md); audit-cost/audit-all exempt
+  all/<YYYY-MM-DD>/report.md   # combined audit-all summary (no findings.json/inventory.json; per-target files stay canonical)
   topology.md            # optional, written by /scoutflo:map-topology
   exemptions.yaml        # optional, owned by you; see Exemptions below
 ```
@@ -141,6 +145,7 @@ This is why `map-topology`'s own T1/T2 pre-check (in its own SKILL.md) exists: i
 | [findings-schema.md](findings-schema.md) | The findings.json contract: envelope, finding object, ID rules, evidence rules |
 | [severity-and-scoring.md](severity-and-scoring.md) | Severity definitions, status values, the weighted scoring model, the end-to-end gate, the coverage definition |
 | [report-template.md](report-template.md) | The report.md skeleton and the Slack brief derivation |
+| [inventory-schema.md](inventory-schema.md) | The `scoutflo-inventory/v1` contract for `inventory.json`: the current-state asset/alert catalog every audit writes beside its findings (`audit-cost`/`audit-all` exempt) |
 | [cost-schema.md](cost-schema.md) | The separate `scoutflo-cost/v1` ranked-savings contract emitted by `audit-cost` (non-scored, `COST-<PROVIDER>` IDs, validated by `check-cost.sh`) |
 | [estate-scope-checkpoint.md](estate-scope-checkpoint.md) | The shared estate-sizing thresholds (small/medium/large/xlarge) and the large-estate scope-pause every audit wires in |
 | [secret-redaction.md](secret-redaction.md) | The secret-redaction discipline: capture credentials by key/name only, never print or write a value |

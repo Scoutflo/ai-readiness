@@ -33,8 +33,35 @@ AUD="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}"
 CFG="${SCOUTFLO_CONFIG:-}"
 [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done
 [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
-KUBE_CONTEXT="$(sed -n 's/^[[:space:]]*context:[[:space:]]*//p' "$CFG" 2>/dev/null | head -1)"
-REPORTS=0; [ -d "$AUD" ] && REPORTS="$(find "$AUD" -name findings.json 2>/dev/null | wc -l | tr -d ' ')"
+# Resolve the kubernetes context for the live probe through the shared enumerator — never `head -1` a
+# scalar. kubernetes may be a single block (one context) OR a labeled list where each item has its own
+# context, and the failing resource lives in exactly ONE cluster. Pick it with SCOUTFLO_TARGET; with a
+# labeled list and no selector, list the labels and leave the live branch off (report-only still runs)
+# rather than guess which cluster the resource is in.
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+KUBE_CONTEXT=""
+if [ -f "$CFG" ] && [ -f "$TT" ]; then
+  K8S_KIND=$(sh "$TT" "$CFG" kubernetes kind); K8S_N=$(sh "$TT" "$CFG" kubernetes count)
+  if [ "${K8S_N:-0}" -ge 1 ]; then
+    if [ "$K8S_KIND" = seq ] && [ "$K8S_N" -gt 1 ] && [ -z "${SCOUTFLO_TARGET:-}" ]; then
+      echo "kubernetes is a labeled list ($K8S_N targets); set SCOUTFLO_TARGET=<label> for the cluster the resource lives in to probe live (report-only proceeds meanwhile):"
+      sh "$TT" "$CFG" kubernetes labels | sed 's/^/  - /'
+    else
+      K8S_IDX=0
+      if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$K8S_N" ]; do [ "$(sh "$TT" "$CFG" kubernetes label "$_i")" = "$SCOUTFLO_TARGET" ] && { K8S_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+      KUBE_CONTEXT=$(sh "$TT" "$CFG" kubernetes get "$K8S_IDX" context)
+    fi
+  fi
+fi
+# Count local report signals, skipping the roll-up dirs (all/cost-analysis/cost/doctor) — their
+# findings.json is a roll-up, not a per-resource report signal for an RCA (mirrors audit-all's guard).
+REPORTS=0
+if [ -d "$AUD" ]; then
+  REPORTS="$(find "$AUD" -name findings.json 2>/dev/null | while IFS= read -r f; do
+    case "$f" in */all/*|*/cost-analysis/*|*/cost/*|*/doctor/*) continue ;; esac
+    echo x
+  done | wc -l | tr -d ' ')"
+fi
 LIVE=0; le_can_probe "$KUBE_CONTEXT" >/dev/null 2>&1 && LIVE=1
 if [ "$REPORTS" -eq 0 ] && [ "$LIVE" -eq 0 ]; then
   echo "no reports under $AUD and no live cluster access — run /scoutflo:audit-all (or a specific audit) first, or configure kubernetes.context so rca can probe live"; exit 1
@@ -48,7 +75,7 @@ The report path is read-only over local files. The live path makes read-only cal
 
 ```bash
 set -eu
-KUBE_CONTEXT="my-cluster"   # kubernetes.context (the doctor gate confirmed live access; report-only mode skips this block)
+KUBE_CONTEXT="my-cluster"   # the resolved target's context (single block, or the SCOUTFLO_TARGET-selected labeled item — never head -1); the doctor gate confirmed live access; report-only mode skips this block
 SERVER="$(kubectl --context "$KUBE_CONTEXT" config view --minify -o jsonpath='{.clusters[0].cluster.server}' 2>/dev/null)"
 VER="$(kubectl --context "$KUBE_CONTEXT" version -o json 2>/dev/null | jq -r '.serverVersion.gitVersion // "unknown"')"
 echo "live target: context=${KUBE_CONTEXT} server=${SERVER} k8s=${VER}"
@@ -77,11 +104,16 @@ Assemble every finding whose `affected[]`/`title`/`id` names the target, grouped
 set -eu
 AUD="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}"
 TARGET="checkout"   # the resource/service/finding-id the user asked about
-find "$AUD" -name findings.json 2>/dev/null | while read -r f; do
-  jq -r --arg t "$TARGET" '.findings[]
+find "$AUD" -name findings.json 2>/dev/null | while IFS= read -r f; do
+  # Skip the roll-up dirs (all/cost-analysis/cost/doctor): their findings.json is a roll-up, not a
+  # per-audit report signal, and carries no per-resource .target for a resource-level RCA.
+  case "$f" in */all/*|*/cost-analysis/*|*/cost/*|*/doctor/*) continue ;; esac
+  # Prefix each finding with the audit's own .target slug — the full "integration/label"
+  # (e.g. kubernetes/prod-cluster, azure/prod-core, or a bare "lgtm" single block) — never a
+  # basename that drops the integration for a two-level (multi-target) layout.
+  jq -r --arg t "$TARGET" '(.target // "?") as $tg | .findings[]
     | select(( ((.affected // []) | join(" ")) + " " + (.title // "") + " " + (.id // "") ) | test($t; "i"))
-    | "\(.id)\t\(.severity)\t\(.area)\t\(.title)"' "$f" 2>/dev/null \
-    | sed "s#^#$(basename "$(dirname "$(dirname "$f")")")\t#"
+    | "\($tg)\t\(.id)\t\(.severity)\t\(.area)\t\(.title)"' "$f" 2>/dev/null
 done
 ```
 
@@ -106,8 +138,8 @@ jq -r --arg t "$TARGET" '
   (( .relationships // [] ) | map({from: .from.name, to: .to.name, rel: .relation, conf: (.confidence // "?")}))
   + (( .edges // [] )       | map({from: .from,      to: .to,      rel: .type,     conf: (.confidence // "?")}))
   | .[] | select(.from == $t or .to == $t)
-  | (if   (.rel|test("DEPLOYED_AS|PART_OF"))                 then "identity   "
-     elif (.rel|test("CALLS|ROUTES_TO|ServiceEntry"))        then (if .from==$t then "suspect(up)" else "blast(down)" end)
+  | (if   (.rel|test("DEPLOYED_AS|PART_OF|ROUTES_TO"))       then "identity   "
+     elif (.rel|test("CALLS|ServiceEntry"))                  then (if .from==$t then "suspect(up)" else "blast(down)" end)
      elif (.rel|test("MONITORED_BY|SENDS_"))                 then "observation"
      else "other      " end) as $role
   | "\($role)\t\(.from) -\(.rel)-> \(.to)  (conf \(.conf))"' "$TOPO" | sort
@@ -121,7 +153,7 @@ If the doctor live branch is up, this is where the cause is established. Probe t
 set -eu
 . "${CLAUDE_PLUGIN_ROOT}/skills/redaction/lib/redaction.sh" 2>/dev/null || true
 . "${CLAUDE_PLUGIN_ROOT}/skills/live-evidence/lib/live-evidence.sh"
-KUBE_CONTEXT="my-cluster"   # kubernetes.context, resolved in the doctor gate
+KUBE_CONTEXT="my-cluster"   # the resolved target's context (SCOUTFLO_TARGET-selected for a labeled list), from the doctor gate
 NS="platform"; POD="checkout-abc"     # resolved in Phase 1
 if le_can_probe "$KUBE_CONTEXT" >/dev/null 2>&1; then
   probe_pod_status "$KUBE_CONTEXT" "$NS" "$POD"                # phase, restartCount, waiting/terminated reason+exitCode
@@ -211,7 +243,7 @@ If neither reports, topology, correlation, nor live probes yield a cause: do **n
 | Failure | Prevention |
 | --- | --- |
 | Inventing a cause with no report/edge/probe behind it | Every clause cites evidence with a provenance tag; no citation → labelled hypothesis or a stated gap, never a fact |
-| Treating an identity edge as a cause (`DEPLOYED_AS`) | Identity edges (DEPLOYED_AS/PART_OF) only *resolve* the target; only dependency edges (CALLS/ROUTES_TO) generate suspects |
+| Treating an identity edge as a cause (`DEPLOYED_AS`) | Identity edges (DEPLOYED_AS/PART_OF/ROUTES_TO) only *resolve* the target; only dependency edges (CALLS/ServiceEntry) generate suspects |
 | Edge-direction inversion (blaming blast radius, exonerating the real upstream) | Direction is load-bearing: for A-CALLS->B, B is the suspect when target==A, A is downstream when target==B |
 | Reading a null / blocked / RBAC-denied probe as "healthy" | A failed probe is a gap with verdict=unknown and a stated next step, never a pass |
 | Naming a cause from a benign symptom (restarts during a rollout) | A taxonomy branch requires its specific observed field (terminated reason/exit code, event); restartCount alone is a symptom |

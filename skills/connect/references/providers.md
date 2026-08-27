@@ -595,6 +595,22 @@ aws:
   #                                         # Optimization section even when the cost permissions are present
 ```
 
+**Multiple AWS accounts in ONE environment — make `aws` a YAML list.** Each item is the same mapping **plus a required `label:`** (a lowercase-hyphen slug, unique within the block) with its own `account_id` and its own `profile`/`role_env` for that account's credentials. The audit runs once per target and writes each to `aws/<label>/<date>/`; the single block above is unchanged and writes the flat `aws/<date>/`. (This is one environment spanning several accounts; for prod-vs-staging keep separate `toolkit-<env>.yaml` files picked with `SCOUTFLO_CONFIG`.)
+
+```yaml
+aws:
+  - label: prod-core
+    account_id: "123456789012"       # each account's own quoted 12-digit id
+    region: us-east-1
+    profile: scoutflo-audit-core     # a named profile per account keeps credentials from colliding
+    tier: read-only
+  - label: prod-data
+    account_id: "<second-account-id>"
+    region: us-west-2
+    profile: scoutflo-audit-data
+    tier: read-only
+```
+
 The AWS CLI is a prerequisite for the AWS skills (install AWS CLI v2 from your package manager; `aws --version` is the doctor check). There is no `token_env`: auth rides the AWS credential chain, not a pasted token. `account_id` is quoted so YAML never strips a leading zero. Pick one auth path:
 
 1. **Named profile (recommended on a workstation).** Configure a profile in `~/.aws/config` (SSO or access keys) and set `aws.profile`. Every skill command passes `--profile` and `--region` explicitly, so nothing depends on ambient shell state.
@@ -646,6 +662,20 @@ gcp:
   # region: us-central1                    # example; only for regional load balancer checks
   # credentials_env: GOOGLE_APPLICATION_CREDENTIALS  # only for key-file auth; see below
   tier: read-only                          # tier of the identity behind the auth path
+```
+
+**Multiple GCP projects in ONE environment — make `gcp` a YAML list.** Each item is the same mapping **plus a required `label:`** (a lowercase-hyphen slug, unique within the block) with its own `project` (and its own `credentials_env` when you use per-project key files). The audit runs once per target and writes each to `gcp/<label>/<date>/`; the single block above is unchanged and writes the flat `gcp/<date>/`. (This is one environment spanning several projects; for prod-vs-staging keep separate `toolkit-<env>.yaml` files picked with `SCOUTFLO_CONFIG`.)
+
+```yaml
+gcp:
+  - label: prod-core
+    project: your-prod-core-project-id
+    credentials_env: GCP_PROD_CORE_SA_KEY
+    tier: read-only
+  - label: prod-data
+    project: your-prod-data-project-id
+    credentials_env: GCP_PROD_DATA_SA_KEY
+    tier: read-only
 ```
 
 `gcloud` is a prerequisite for the GCP skills (install the Google Cloud CLI from your package manager; `gcloud --version` is the doctor check). There is no `token_env`: auth rides Google credentials, not a pasted token. Two paths, pick one:
@@ -812,6 +842,24 @@ clickstack:
   # hyperdx_password_env: HDX_PASSWORD
 ```
 
+**Multiple ClickStack instances in ONE environment — make `clickstack` a YAML list.** Each item is the same mapping (ClickHouse + HyperDX) **plus a required `label:`** (a lowercase-hyphen slug, unique within the block) and its own `*_env` names for its own secrets. The audit runs once per target and writes each to `clickstack/<label>/<date>/`; the single block above is unchanged and writes the flat `clickstack/<date>/`. (This is one environment; for prod-vs-staging keep separate `toolkit-<env>.yaml` files picked with `SCOUTFLO_CONFIG`.)
+
+```yaml
+clickstack:
+  - label: hdx-eu
+    clickhouse_url: https://clickhouse-eu.example.com:8123
+    clickhouse_user: scoutflo_ro
+    clickhouse_password_env: CH_EU_KEY
+    hyperdx_url: https://hdx-eu.example.com:8080
+    hyperdx_api_key_env: HDX_EU_KEY              # Personal API Access Key, not the ingestion key
+  - label: hdx-us
+    clickhouse_url: https://clickhouse-us.example.com:8123
+    clickhouse_user: scoutflo_ro
+    clickhouse_password_env: CH_US_KEY
+    hyperdx_url: https://hdx-us.example.com:8080
+    hyperdx_api_key_env: HDX_US_KEY
+```
+
 ### Create a read-only ClickHouse user
 
 Run as a ClickHouse admin (this is a cluster change; apply it deliberately). It grants `SELECT` on the telemetry database and the `system` tables the audit reads, and nothing else:
@@ -955,6 +1003,71 @@ case "$CODE" in
   *)   echo "SigNoz token FAIL — got $CODE";;
 esac
 rm -f "$SB"
+```
+
+## Azure
+
+### Config
+
+```yaml
+azure:
+  subscription_id: 00000000-0000-0000-0000-000000000000   # the subscription the audits target (one per run)
+  # tenant_id: 00000000-0000-0000-0000-000000000000        # optional; pin the Entra tenant when your az login spans several
+  # region: eastus                                         # optional; only for regional load balancer / App Gateway checks
+  tier: read-only                                          # read-only | elevated; audits require read-only
+```
+
+**Multiple subscriptions in ONE environment — make `azure` a YAML list.** Each item is the same mapping **plus a required `label:`** (a lowercase-hyphen slug, unique within the block), each with its own `subscription_id`. The audit runs once per target and writes each to `azure/<label>/<date>/`; the single block above is unchanged and writes the flat `azure/<date>/`. (This is one environment; for prod-vs-staging keep separate `toolkit-<env>.yaml` files picked with `SCOUTFLO_CONFIG`.)
+
+```yaml
+azure:
+  - label: prod-core
+    subscription_id: 00000000-0000-0000-0000-000000000001
+    tier: read-only
+  - label: prod-data
+    subscription_id: 00000000-0000-0000-0000-000000000002
+    tier: read-only
+```
+
+The Azure CLI is a prerequisite for the Azure skills (install `az` from your package manager; `az version` is the doctor check). There is no `token_env`: auth rides the Azure credential chain, not a pasted token — the skills use `DefaultAzureCredential`, which falls back to your `az login` session (`AzureCliCredential`). Every command names `--subscription` explicitly, so the ambient `az` default is never trusted or changed (`az account set` is as forbidden as a cloud write). Set `tenant_id` only when your login spans several Entra tenants and you want the subscription pinned to one.
+
+### Roles per tier
+
+| Tier | Used by | IAM roles on the subscription |
+| --- | --- | --- |
+| Read-only | audit-azure | `Reader` + `Monitoring Reader`; add `Log Analytics Reader` for the scheduled-query (log) alert and Log Analytics data-plane checks, and `Cost Management Reader` (Advisor rides `Reader`) only for the non-scored Cost & Resource Optimization section |
+| Elevated | setup-azure | the read-only roles plus the write roles setup-azure grants; creating the role assignments themselves needs `User Access Administrator` or `Owner` — `Contributor` alone cannot create role assignments |
+
+Never hand the audit a `Contributor`, `Owner`, or `User Access Administrator` identity when the viewer roles will do; the audit runs, but records that its credential can write, which is itself a posture gap.
+
+### Where to click
+
+1. Sign in to the Azure portal with rights to manage RBAC on the target subscription.
+2. Subscriptions > pick the subscription you will audit > Access control (IAM) > Add > Add role assignment.
+3. Assign `Reader` and `Monitoring Reader` to the audit identity (a dedicated user, group, or service principal named for its tier, for example `scoutflo-audit`). Add `Log Analytics Reader` for data-plane queries and `Cost Management Reader` for the cost section.
+4. On your workstation, `az login` as that identity (a service principal uses `az login --service-principal`); read its subscription id from `az account list` and write it into `azure.subscription_id`.
+5. For setup work, grant the elevated roles to a second identity instead of widening the audit one, and record `tier: elevated` in the block you use for setup runs.
+
+### Export and verify
+
+```bash
+# YOU run these in your own terminal; an agent never handles the credentials.
+az login                                                       # opens a browser; populates the AzureCliCredential the skills fall back to
+AZURE_SUBSCRIPTION_ID="00000000-0000-0000-0000-000000000000"   # azure.subscription_id
+
+az account list --query "[].{name:name, id:id, state:state}" -o table
+# Find the subscription you intend to audit in the list and copy its id into azure.subscription_id.
+
+az account show --subscription "$AZURE_SUBSCRIPTION_ID" -o json \
+  | jq -e --arg sub "$AZURE_SUBSCRIPTION_ID" '.id == $sub and .state == "Enabled"'
+# Expect: exit 0 (prints `true`). A different .id means az is pointed at the wrong
+# subscription — fix azure.subscription_id rather than running `az account set`, because
+# every skill passes --subscription explicitly; doctor enforces this same match.
+
+az monitor action-group list --subscription "$AZURE_SUBSCRIPTION_ID" -o none \
+  && echo "Azure PASS" || echo "FAIL: action-group list denied — grant Reader + Monitoring Reader on the subscription"
+# Expect: Azure PASS. A 403 here means the identity lacks Monitoring Reader; a
+# subscription-not-found error means a wrong subscription id.
 ```
 
 ## Kubernetes
