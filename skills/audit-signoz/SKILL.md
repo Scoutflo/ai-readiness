@@ -86,7 +86,7 @@ echo "signoz target: ${SIG_LABEL} (${SIG_URL}) -> ${SIG_SEG}/"
 # so references/signoz-checks.md and doctor resolve the same variable per target.
 SIG_KEY_VAR=$(sh "$TT" "$CFG" signoz get "$SIG_IDX" api_key_env); [ -n "$SIG_KEY_VAR" ] || SIG_KEY_VAR="SIGNOZ_API_KEY"
 SIGNOZ_API_KEY=$(printenv "$SIG_KEY_VAR" 2>/dev/null || true)
-[ -n "${SIGNOZ_API_KEY:-}" ] || { echo "signoz target '${SIG_LABEL}' configured but its Service Account token variable (${SIG_KEY_VAR}, from signoz.api_key_env) is not set; the authed SigNoz endpoints need a read-role service-account token — run /scoutflo:connect"; exit 1; }
+[ -n "${SIGNOZ_API_KEY:-}" ] || { echo "signoz target '${SIG_LABEL}' configured but its Service Account token variable (${SIG_KEY_VAR}, from signoz.api_key_env) is not set; the authed SigNoz endpoints need a read-role service-account token — add it to ~/.scoutflo/env (echo 'export ${SIG_KEY_VAR}=\"<paste>\"' >> ~/.scoutflo/env; chmod 600 ~/.scoutflo/env), or run /scoutflo:connect. The plugin reads that file, not your interactive shell."; exit 1; }
 CH_KEY_VAR=$(sh "$TT" "$CFG" signoz get "$SIG_IDX" clickhouse_password_env); [ -n "$CH_KEY_VAR" ] || CH_KEY_VAR="SIGNOZ_CH_KEY"
 SIGNOZ_CH_KEY=$(printenv "$CH_KEY_VAR" 2>/dev/null || true)
 if [ -n "${SIGNOZ_CH_KEY:-}" ]; then

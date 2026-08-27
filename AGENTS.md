@@ -13,7 +13,7 @@ sh ci/run-tests.sh .
 claude plugin validate . --strict
 ```
 
-`ci/structure-check.sh` composes 22 checks: anchor, cross-block, coverage,
+`ci/structure-check.sh` composes 23 checks: anchor, cross-block, coverage,
 remediation-map, **skill-completeness**, the four behavioral-parity gates
 (scope-checkpoint, redaction-parity, business-context-parity, **env-load-parity**),
 and manifest-compat, min-version-consistency, catalog-consistency,
@@ -43,9 +43,11 @@ skip a configured provider, and `audit-all` never greps for the forbidden
 template — modulo the `alertmanager`/`vmalert` sub-keys — so a provider is never
 probed-but-unconfigurable or configurable-but-unprobed), **prefix-registry**
 (every finding-ID prefix a skill emits is registered in `findings-schema.md`, so
-prefixes stay one-per-audit and never collide), and **contract-map** (keeps
-[docs/CONTRACTS.md](docs/CONTRACTS.md) honest — every composed gate is documented
-there and every gate it names exists).
+prefixes stay one-per-audit and never collide), **optional-key-parity** (per-provider
+required keys and either-or lane contracts — e.g. ClickStack = ClickHouse OR HyperDX —
+are reflected in the config template, the sub-key granularity `config-key-agreement`
+does not cover), and **contract-map** (keeps [docs/CONTRACTS.md](docs/CONTRACTS.md)
+honest — every composed gate is documented there and every gate it names exists).
 
 **Before adding or changing any skill, read [docs/CONTRACTS.md](docs/CONTRACTS.md)** —
 the map of every cross-skill contract (producer → consumer → invariant → guard).

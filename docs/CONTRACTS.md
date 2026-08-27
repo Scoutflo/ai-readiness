@@ -231,7 +231,10 @@ names a gate/case that no longer exists, that is itself a defect.
 
 - **Producers:** every audit's `inventory.json` records its **active** monitors/
   alerts (`kind` + `covers` + `enabled` + `routes_to`); an audit's coverage-gap
-  findings carry the affected resource in `affected[]`.
+  findings carry the affected resource in `affected[]`, and MAY carry an optional
+  `coverage_gap: {signal, kind}` (findings-schema) that names the exact signal so
+  the engine identifies the gap without the area+title heuristic and words the
+  reframe against that signal.
 - **Consumer:** `correlation-engine.sh` (`correlation_collect_coverage` +
   `correlation_find_coverage`) joins each coverage-gap finding against **other**
   providers' active, routed monitors and writes a `coverage[]` array +
@@ -251,7 +254,24 @@ names a gate/case that no longer exists, that is itself a defect.
   name when known).
 - **Guards:** `ci/multi-target-consumer-check.sh` (locks the coverage collector to
   the two-level `inventory.json` glob), `skills/correlation-engine/tests/`
-  (covered-elsewhere / true-gap / disabled-excluded case).
+  (covered-elsewhere / true-gap / disabled-excluded + `coverage_gap.signal` cases).
+
+## C15 — Required vs optional config keys (per provider)
+
+- **Contract:** each provider's config keys have a required/optional shape the
+  operator-facing surfaces must reflect: a genuinely **required** key is present
+  and uncommented in `templates/toolkit.yaml.example`; an **either-or lane** (e.g.
+  ClickStack = ClickHouse **or** HyperDX; at least one) keeps ≥1 member uncommented;
+  a genuinely optional key is commented or absent. This is the sub-key granularity
+  that block-level C9 (`config-key-agreement`) does not see — it is the class behind
+  the ClickStack HyperDX-only blocker (the setup surface called a lane optional while
+  the audit hard-required it).
+- **SSOT:** the declaration embedded in `ci/optional-key-parity-check.sh` (kept in
+  lockstep with each audit's doctor gate).
+- **Guard:** `ci/optional-key-parity-check.sh` asserts the template matches the
+  declaration (required keys uncommented; each `oneof` lane has a member). Its scope
+  is the operator-facing declaration + template; the audit-side enforcement of the
+  same optionality is the skill's own doctor-gate behavior + the maintainer review.
 
 ---
 
@@ -272,6 +292,7 @@ Structural / linkage:
 `ci/liveness-readonly-check.sh` · `ci/audit-dir-check.sh` (output paths via `SCOUTFLO_AUDIT_DIR`) ·
 `ci/named-section-check.sh` (every `(cookbook: "...")` resolves) ·
 `ci/config-key-agreement-check.sh` (**C9** — doctor KNOWN_BLOCKS == configurable template blocks) ·
+`ci/optional-key-parity-check.sh` (**C15** — per-provider required keys + either-or lane contracts reflected in the template) ·
 `ci/prefix-registry-check.sh` (**C1/C9** — every emitted finding-ID prefix is registered) ·
 `ci/audit-all-map-check.sh` (**C8/C10** — every own-block audit mapped in audit-all; no `sync-ready` jargon) ·
 `ci/contract-map-check.sh` (**this file** — the map stays honest).

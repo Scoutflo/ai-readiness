@@ -219,7 +219,7 @@ else
 fi
 # A missing enumerator must fail loudly, never silently make every block look absent
 # (that would reintroduce the zero-rows false-green this preflight exists to kill).
-[ -f "$TT" ] || { echo "doctor: cannot locate report-standard/toolkit-targets.sh (via CLAUDE_PLUGIN_ROOT or the doctor script dir); cannot resolve integration targets" >&2; exit 2; }
+[ -f "$TT" ] || { echo "doctor: cannot locate report-standard/toolkit-targets.sh (via CLAUDE_PLUGIN_ROOT or the doctor script dir); cannot resolve integration targets; repair the install: claude plugin update scoutflo@scoutflo, or run doctor.sh from the plugin repo root so report-standard/ resolves" >&2; exit 2; }
 
 # tkind <block>: "seq" (labeled list), "map" (single block), or "absent".
 tkind()  { sh "$TT" "$CONFIG" "$1" kind 2>/dev/null || echo absent; }
@@ -468,7 +468,7 @@ fi
 if command -v jq >/dev/null 2>&1; then
   row toolkit binary-jq yes - pass - -
 else
-  row toolkit binary-jq yes - fail - "install jq; every audit and setup skill parses JSON with it"
+  row toolkit binary-jq yes - fail - "install jq; every audit and setup skill parses JSON with it (macOS: brew install jq; Debian/Ubuntu: apt-get install -y jq)"
 fi
 
 # Toolkit version row (in addition to the stderr note above): plugins do not
@@ -653,8 +653,8 @@ else
         fi
       fi
       if [ "$DD_BLOCKED" -eq 1 ]; then
-        row "$DD_INT" validate yes "${DD_API_VAR:-none}" skipped - "blocked: both Datadog keys must be set"
-        row "$DD_INT" monitors-read yes "${DD_APP_VAR:-none}" skipped - "blocked: both Datadog keys must be set"
+        row "$DD_INT" validate yes "${DD_API_VAR:-none}" skipped - "blocked: both Datadog keys must be set — see the datadog env/config row above, then rerun"
+        row "$DD_INT" monitors-read yes "${DD_APP_VAR:-none}" skipped - "blocked: both Datadog keys must be set — see the datadog env/config row above, then rerun"
       else
         DD_HOST="api.${DD_SITE}"
         note "doctor: checking ${DD_INT} validate: GET https://${DD_HOST}/api/v1/validate"
@@ -719,7 +719,7 @@ else
             fi
           fi
         else
-          row "$DD_INT" monitors-read yes "$DD_APP_VAR" skipped - "blocked: API key validation failed above"
+          row "$DD_INT" monitors-read yes "$DD_APP_VAR" skipped - "blocked: API key validation failed above — see the validate row above, then rerun"
         fi
       fi
     fi
@@ -756,7 +756,7 @@ else
         row "$E_INT" config yes - fail - "elk.token_env is empty in toolkit.yaml; name the variable holding the Kibana API key"
       elif [ "$ELK_TOKEN_STATE" = "missing" ]; then
         row "$E_INT" env yes "$ELK_TOKEN_VAR" env-missing - "$(missing_hint "$ELK_TOKEN_VAR")"
-        row "$E_INT" alerting-health yes "$ELK_TOKEN_VAR" skipped - "blocked: ${ELK_TOKEN_VAR} is not set"
+        row "$E_INT" alerting-health yes "$ELK_TOKEN_VAR" skipped - "blocked: ${ELK_TOKEN_VAR} is not set — see the ${ELK_TOKEN_VAR} env row above, then rerun"
       else
         row "$E_INT" env yes "$ELK_TOKEN_VAR" pass - -
         note "doctor: checking ${E_INT} alerting-health: GET ${ELK_KIBANA_URL}/api/alerting/_health"
@@ -842,7 +842,7 @@ else
         fi
       fi
       if [ "$JSM_BLOCKED" -eq 1 ]; then
-        row "$J_INT" alerts-read yes "${JSM_TOKEN_VAR:-none}" skipped - "blocked: JSM credentials not resolved"
+        row "$J_INT" alerts-read yes "${JSM_TOKEN_VAR:-none}" skipped - "blocked: JSM credentials not resolved — see the env/config row above, then rerun"
       else
         # Resolve cloud_id: config value wins; else tenant_info (unauthenticated, no secret).
         JSM_CLOUD_ID="$JSM_CLOUD_ID_CFG"
@@ -908,7 +908,7 @@ else
       [ -n "$ZD_TOKEN" ] && ZD_TOKEN_STATE="set"
       if [ "$ZD_TOKEN_STATE" = "missing" ]; then
         row "$ZD_INT" env yes "$ZD_TOKEN_VAR" env-missing - "$(missing_hint "$ZD_TOKEN_VAR")"
-        row "$ZD_INT" teams-read yes "$ZD_TOKEN_VAR" skipped - "blocked: ${ZD_TOKEN_VAR} is not set"
+        row "$ZD_INT" teams-read yes "$ZD_TOKEN_VAR" skipped - "blocked: ${ZD_TOKEN_VAR} is not set — see the ${ZD_TOKEN_VAR} env row above, then rerun"
       else
         row "$ZD_INT" env yes "$ZD_TOKEN_VAR" pass - -
         note "doctor: checking ${ZD_INT} teams-read: GET https://www.zenduty.com/api/account/teams/"
@@ -962,7 +962,7 @@ else
       GC_BACKEND="$(tv groundcover "$GC_KIND" "$_gci" backend_id)"
       if [ -z "$GC_TOKEN" ]; then
         row "$GC_INT" env yes "$GC_TOKEN_VAR" env-missing - "$(missing_hint "$GC_TOKEN_VAR")"
-        row "$GC_INT" monitors-read yes "$GC_TOKEN_VAR" skipped - "blocked: ${GC_TOKEN_VAR} is not set"
+        row "$GC_INT" monitors-read yes "$GC_TOKEN_VAR" skipped - "blocked: ${GC_TOKEN_VAR} is not set — see the ${GC_TOKEN_VAR} env row above, then rerun"
       else
         row "$GC_INT" env yes "$GC_TOKEN_VAR" pass - -
         note "doctor: checking ${GC_INT} monitors-read: POST ${GC_API}/api/monitors/list"
@@ -1020,7 +1020,7 @@ else
     CONFIGURED_COUNT=$((CONFIGURED_COUNT + 1))
     PROM_URL="${PROM_URL%/}"
     if [ "$PROM_BLOCKED" -eq 1 ]; then
-      row prometheus query yes "$TOKEN_VAR" skipped - "blocked: ${TOKEN_VAR} is not set"
+      row prometheus query yes "$TOKEN_VAR" skipped - "blocked: ${TOKEN_VAR} is not set — see the ${TOKEN_VAR} env row above, then rerun"
     else
       # vector(1) succeeds on a server with zero targets: it tests the API, not the fleet.
       # Assert the Prometheus JSON envelope so a 200 HTML/proxy page fails closed.
@@ -1033,7 +1033,7 @@ else
     CONFIGURED_COUNT=$((CONFIGURED_COUNT + 1))
     AM_URL="${AM_URL%/}"
     if [ "$PROM_BLOCKED" -eq 1 ]; then
-      row alertmanager status yes "$TOKEN_VAR" skipped - "blocked: ${TOKEN_VAR} is not set"
+      row alertmanager status yes "$TOKEN_VAR" skipped - "blocked: ${TOKEN_VAR} is not set — see the ${TOKEN_VAR} env row above, then rerun"
     else
       live_check alertmanager status "${AM_URL}/api/v2/status" "${TOKEN_VAR:-none}" "$TOKEN" '.cluster != null or .versionInfo != null'
     fi
@@ -1125,13 +1125,13 @@ else
       if [ -n "$SIG_VER" ]; then
         row "$SG_INT" version yes - pass 200 "SigNoz ${SIG_VER}"
       else
-        row "$SG_INT" version yes - fail - "GET ${SIGNOZ_URL}/api/v1/version did not return JSON with a .version — wrong host/port, or not a SigNoz API"
+        row "$SG_INT" version yes - fail - "GET ${SIGNOZ_URL}/api/v1/version did not return JSON with a .version — wrong host/port, or not a SigNoz API; verify signoz.url in toolkit.yaml"
       fi
       if [ -z "$SIGNOZ_TOKEN_VAR" ]; then
         row "$SG_INT" config yes - fail - "signoz.api_key_env is empty in toolkit.yaml; name the variable holding the Service Account token"
       elif [ "$SIGNOZ_TOKEN_STATE" = "missing" ]; then
         row "$SG_INT" env yes "$SIGNOZ_TOKEN_VAR" env-missing - "$(missing_hint "$SIGNOZ_TOKEN_VAR")"
-        row "$SG_INT" rules-read yes "$SIGNOZ_TOKEN_VAR" skipped - "blocked: ${SIGNOZ_TOKEN_VAR} is not set"
+        row "$SG_INT" rules-read yes "$SIGNOZ_TOKEN_VAR" skipped - "blocked: ${SIGNOZ_TOKEN_VAR} is not set — see the ${SIGNOZ_TOKEN_VAR} env row above, then rerun"
       else
         row "$SG_INT" env yes "$SIGNOZ_TOKEN_VAR" pass - -
         note "doctor: checking ${SG_INT} rules-read: GET ${SIGNOZ_URL}/api/v1/rules"
@@ -1250,7 +1250,7 @@ else
           GCP_TOKEN="$(gcloud auth print-access-token 2>/dev/null || true)"
         fi
         if [ "$GCP_BLOCKED" -eq 1 ]; then
-          row "$GCP_INT" identity yes "${GCP_CRED_VAR:-none}" skipped - "blocked: credentials not resolved"
+          row "$GCP_INT" identity yes "${GCP_CRED_VAR:-none}" skipped - "blocked: credentials not resolved — see the ${GCP_CRED_VAR:-none} env row above, then rerun"
         elif [ -z "$GCP_TOKEN" ]; then
           row "$GCP_INT" identity yes "${GCP_CRED_VAR:-none}" fail - "gcloud produced no access token; run gcloud auth login (or point credentials_env at a service-account key) and rerun doctor"
         else
@@ -1287,73 +1287,80 @@ else
   while [ "$_awi" -lt "$AWS_N" ]; do
     AWS_INT="$(tint aws "$_awi" "$AWS_N")"
     AWS_ACCOUNT="$(tv aws "$AWS_KIND" "$_awi" account_id)"
-    if [ -z "$AWS_ACCOUNT" ]; then
-      row "$AWS_INT" configured no - skipped - "add an aws block via /scoutflo:connect if you run AWS"
+    # aws.account_id is OPTIONAL here: audit-aws runs on the ambient credential chain
+    # (profile/region/assumed role), NOT on a pinned account_id — so doctor probes that
+    # SAME chain and always emits a pass/fail identity row instead of skipping when
+    # account_id is unset, so doctor and the audit agree on when AWS is auditable. When
+    # account_id IS set, doctor additionally asserts the live account matches it.
+    CONFIGURED_COUNT=$((CONFIGURED_COUNT + 1))
+    if ! command -v aws >/dev/null 2>&1; then
+      row "$AWS_INT" binary-aws yes - fail - "aws is configured but the AWS CLI is not installed; install AWS CLI v2 (https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html) — macOS: brew install awscli"
     else
-      CONFIGURED_COUNT=$((CONFIGURED_COUNT + 1))
-      if ! command -v aws >/dev/null 2>&1; then
-        row "$AWS_INT" binary-aws yes - fail - "aws is configured but the AWS CLI is not installed; install AWS CLI v2 (https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html) — macOS: brew install awscli"
-      else
-        AWS_PROFILE_CFG="$(tv aws "$AWS_KIND" "$_awi" profile)"
-        AWS_REGION_CFG="$(tv aws "$AWS_KIND" "$_awi" region)"
-        AWS_ROLE_VAR="$(tv aws "$AWS_KIND" "$_awi" role_env)"
-        aws_cli() {
-          if [ -n "$AWS_PROFILE_CFG" ]; then
-            aws --profile "$AWS_PROFILE_CFG" ${AWS_REGION_CFG:+--region "$AWS_REGION_CFG"} "$@"
-          else
-            aws ${AWS_REGION_CFG:+--region "$AWS_REGION_CFG"} "$@"
-          fi
-        }
-        AWS_BLOCKED=0
-        if [ -n "$AWS_ROLE_VAR" ]; then
-          AWS_ROLE_ARN="$(printenv "$AWS_ROLE_VAR" 2>/dev/null || true)"
-          if [ -z "$AWS_ROLE_ARN" ]; then
-            row "$AWS_INT" env yes "$AWS_ROLE_VAR" env-missing - "$(missing_hint "$AWS_ROLE_VAR")"
-            AWS_BLOCKED=1
-          else
-            row "$AWS_INT" env yes "$AWS_ROLE_VAR" pass - -
-          fi
+      AWS_PROFILE_CFG="$(tv aws "$AWS_KIND" "$_awi" profile)"
+      AWS_REGION_CFG="$(tv aws "$AWS_KIND" "$_awi" region)"
+      AWS_ROLE_VAR="$(tv aws "$AWS_KIND" "$_awi" role_env)"
+      aws_cli() {
+        if [ -n "$AWS_PROFILE_CFG" ]; then
+          aws --profile "$AWS_PROFILE_CFG" ${AWS_REGION_CFG:+--region "$AWS_REGION_CFG"} "$@"
         else
-          row "$AWS_INT" env yes none pass - -
+          aws ${AWS_REGION_CFG:+--region "$AWS_REGION_CFG"} "$@"
         fi
-        if [ "$AWS_BLOCKED" -eq 1 ]; then
-          row "$AWS_INT" identity yes "${AWS_ROLE_VAR:-none}" skipped - "blocked: role ARN not resolved"
+      }
+      AWS_BLOCKED=0
+      if [ -n "$AWS_ROLE_VAR" ]; then
+        AWS_ROLE_ARN="$(printenv "$AWS_ROLE_VAR" 2>/dev/null || true)"
+        if [ -z "$AWS_ROLE_ARN" ]; then
+          row "$AWS_INT" env yes "$AWS_ROLE_VAR" env-missing - "$(missing_hint "$AWS_ROLE_VAR")"
+          AWS_BLOCKED=1
         else
-          note "doctor: checking ${AWS_INT} identity: aws sts get-caller-identity"
-          STS_RC=0
-          STS_OUT="$(aws_cli sts get-caller-identity --output json 2>&1)" || STS_RC=$?
-          if [ "$STS_RC" -ne 0 ]; then
-            row "$AWS_INT" identity yes "${AWS_ROLE_VAR:-none}" fail - "aws sts get-caller-identity failed: run aws configure (or export AWS credentials), then rerun doctor"
+          row "$AWS_INT" env yes "$AWS_ROLE_VAR" pass - -
+        fi
+      else
+        row "$AWS_INT" env yes none pass - -
+      fi
+      if [ "$AWS_BLOCKED" -eq 1 ]; then
+        row "$AWS_INT" identity yes "${AWS_ROLE_VAR:-none}" skipped - "blocked: role ARN not resolved — see the ${AWS_ROLE_VAR:-none} env row above, then rerun"
+      else
+        note "doctor: checking ${AWS_INT} identity: aws sts get-caller-identity"
+        STS_RC=0
+        STS_OUT="$(aws_cli sts get-caller-identity --output json 2>&1)" || STS_RC=$?
+        if [ "$STS_RC" -ne 0 ]; then
+          row "$AWS_INT" identity yes "${AWS_ROLE_VAR:-none}" fail - "aws sts get-caller-identity failed: run aws configure (or export AWS credentials), then rerun doctor"
+        else
+          LIVE_ACCOUNT="$(printf '%s' "$STS_OUT" | jq -r '.Account // empty' 2>/dev/null || true)"
+          if [ -z "$AWS_ACCOUNT" ]; then
+            # account_id not pinned in toolkit.yaml: prove identity on the credential chain
+            # (the audit uses the same chain) with no account match to assert. Surface the live
+            # account so a wrong-account credential is still visible; pin aws.account_id to have
+            # doctor enforce the expected-account match.
+            row "$AWS_INT" identity yes "${AWS_ROLE_VAR:-none}" pass - "authenticated as account ${LIVE_ACCOUNT:-unknown}; aws.account_id is unset in toolkit.yaml so no expected account is pinned — set aws.account_id to have doctor assert the credential resolves to it"
+          elif [ "$LIVE_ACCOUNT" = "$AWS_ACCOUNT" ]; then
+            row "$AWS_INT" identity yes "${AWS_ROLE_VAR:-none}" pass - -
           else
-            LIVE_ACCOUNT="$(printf '%s' "$STS_OUT" | jq -r '.Account // empty' 2>/dev/null || true)"
-            if [ "$LIVE_ACCOUNT" = "$AWS_ACCOUNT" ]; then
-              row "$AWS_INT" identity yes "${AWS_ROLE_VAR:-none}" pass - -
+            row "$AWS_INT" identity yes "${AWS_ROLE_VAR:-none}" fail - "live account ${LIVE_ACCOUNT:-unknown} does not match aws.account_id ${AWS_ACCOUNT} in toolkit.yaml; fix the config or switch credentials"
+          fi
+          note "doctor: checking ${AWS_INT} cloudwatch reachability: aws cloudwatch describe-alarms --max-records 1"
+          CW_RC=0
+          aws_cli cloudwatch describe-alarms --max-records 1 >/dev/null 2>&1 || CW_RC=$?
+          if [ "$CW_RC" -eq 0 ]; then
+            row "$AWS_INT" cloudwatch-read yes "${AWS_ROLE_VAR:-none}" pass - -
+          else
+            row "$AWS_INT" cloudwatch-read yes "${AWS_ROLE_VAR:-none}" fail - "cloudwatch:DescribeAlarms denied or unreachable; grant the read-only policy in connect references/providers.md"
+          fi
+          # Optional cost-permission probe. Informational only: a missing scope here
+          # never fails doctor or blocks the reliability checks. audit-aws reads this
+          # row to decide whether to run the Cost & Resource Optimization section or
+          # report it excluded with a reason.
+          COST_CHECKS="$(tv aws "$AWS_KIND" "$_awi" cost_checks)"
+          if [ "$COST_CHECKS" = "false" ]; then
+            row "$AWS_INT" cost-permissions yes "${AWS_ROLE_VAR:-none}" skipped - "aws.cost_checks is false in toolkit.yaml; Cost & Resource Optimization section will be skipped"
+          else
+            CO_RC=0
+            aws_cli compute-optimizer get-enrollment-status >/dev/null 2>&1 || CO_RC=$?
+            if [ "$CO_RC" -eq 0 ]; then
+              row "$AWS_INT" cost-permissions yes "${AWS_ROLE_VAR:-none}" pass - -
             else
-              row "$AWS_INT" identity yes "${AWS_ROLE_VAR:-none}" fail - "live account ${LIVE_ACCOUNT:-unknown} does not match aws.account_id ${AWS_ACCOUNT} in toolkit.yaml; fix the config or switch credentials"
-            fi
-            note "doctor: checking ${AWS_INT} cloudwatch reachability: aws cloudwatch describe-alarms --max-records 1"
-            CW_RC=0
-            aws_cli cloudwatch describe-alarms --max-records 1 >/dev/null 2>&1 || CW_RC=$?
-            if [ "$CW_RC" -eq 0 ]; then
-              row "$AWS_INT" cloudwatch-read yes "${AWS_ROLE_VAR:-none}" pass - -
-            else
-              row "$AWS_INT" cloudwatch-read yes "${AWS_ROLE_VAR:-none}" fail - "cloudwatch:DescribeAlarms denied or unreachable; grant the read-only policy in connect references/providers.md"
-            fi
-            # Optional cost-permission probe. Informational only: a missing scope here
-            # never fails doctor or blocks the reliability checks. audit-aws reads this
-            # row to decide whether to run the Cost & Resource Optimization section or
-            # report it excluded with a reason.
-            COST_CHECKS="$(tv aws "$AWS_KIND" "$_awi" cost_checks)"
-            if [ "$COST_CHECKS" = "false" ]; then
-              row "$AWS_INT" cost-permissions yes "${AWS_ROLE_VAR:-none}" skipped - "aws.cost_checks is false in toolkit.yaml; Cost & Resource Optimization section will be skipped"
-            else
-              CO_RC=0
-              aws_cli compute-optimizer get-enrollment-status >/dev/null 2>&1 || CO_RC=$?
-              if [ "$CO_RC" -eq 0 ]; then
-                row "$AWS_INT" cost-permissions yes "${AWS_ROLE_VAR:-none}" pass - -
-              else
-                row "$AWS_INT" cost-permissions yes "${AWS_ROLE_VAR:-none}" skipped - "compute-optimizer/ce/support permissions not confirmed; audit-aws will report the affected Cost & Resource Optimization rows as excluded with this reason, not fail"
-              fi
+              row "$AWS_INT" cost-permissions yes "${AWS_ROLE_VAR:-none}" skipped - "compute-optimizer/ce/support permissions not confirmed; audit-aws will report the affected Cost & Resource Optimization rows as excluded with this reason, not fail"
             fi
           fi
         fi
@@ -1609,7 +1616,7 @@ else
   SLACK_URL="$(printenv "$SLACK_VAR" 2>/dev/null || true)"
   if [ -z "$SLACK_URL" ]; then
     row slack env yes "$SLACK_VAR" env-missing - "$(missing_hint "$SLACK_VAR")"
-    row slack webhook-post yes "$SLACK_VAR" skipped - "blocked: ${SLACK_VAR} is not set"
+    row slack webhook-post yes "$SLACK_VAR" skipped - "blocked: ${SLACK_VAR} is not set — see the ${SLACK_VAR} env row above, then rerun"
   elif [ "$SLACK_TEST" -eq 1 ]; then
     row slack env yes "$SLACK_VAR" pass - -
     note "doctor: checking slack webhook-post: POST to the configured webhook (URL hidden; it is a credential)"

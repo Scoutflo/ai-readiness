@@ -74,7 +74,7 @@ ZD_TOKVAR=$(sh "$TT" "$CFG" zenduty get "$ZD_IDX" token_env); ZD_TOKVAR="${ZD_TO
 ZENDUTY_TOKEN="$(printenv "$ZD_TOKVAR" 2>/dev/null || true)"; export ZENDUTY_TOKEN
 echo "zenduty target: ${ZD_LABEL} -> ${ZD_SEG}/ (token via ${ZD_TOKVAR})"
 # zenduty.token_env names the variable; presence check only, never print the value.
-[ -n "${ZENDUTY_TOKEN:-}" ] || { echo "ZENDUTY_TOKEN is not set; run /scoutflo:connect"; exit 1; }
+[ -n "${ZENDUTY_TOKEN:-}" ] || { echo "ZENDUTY_TOKEN is not set — add it to ~/.scoutflo/env (echo 'export ZENDUTY_TOKEN=\"<paste>\"' >> ~/.scoutflo/env; chmod 600 ~/.scoutflo/env), or run /scoutflo:connect. The plugin reads that file, not your interactive shell."; exit 1; }
 
 ZD_API="https://www.zenduty.com/api"
 # Teams is the cheapest list read. Auth is "Token <key>", the literal word Token, not Bearer.
@@ -123,7 +123,7 @@ ZD_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$ZD_N"
 ZD_LABEL=$(sh "$TT" "$CFG" zenduty label "$ZD_IDX")
 ZD_TOKVAR=$(sh "$TT" "$CFG" zenduty get "$ZD_IDX" token_env); ZD_TOKVAR="${ZD_TOKVAR:-ZENDUTY_TOKEN}"
 ZENDUTY_TOKEN="$(printenv "$ZD_TOKVAR" 2>/dev/null || true)"; export ZENDUTY_TOKEN
-[ -n "${ZENDUTY_TOKEN:-}" ] || { echo "zenduty target '${ZD_LABEL}' token variable ${ZD_TOKVAR} is not set; run /scoutflo:connect"; exit 1; }
+[ -n "${ZENDUTY_TOKEN:-}" ] || { echo "zenduty target '${ZD_LABEL}' token variable ${ZD_TOKVAR} is not set — add it to ~/.scoutflo/env (echo 'export ${ZD_TOKVAR}=\"<paste>\"' >> ~/.scoutflo/env; chmod 600 ~/.scoutflo/env), or run /scoutflo:connect. The plugin reads that file, not your interactive shell."; exit 1; }
 # Zenduty has no whoami; the account is identified by the teams the key reads.
 TEAMS_SAMPLE="$(curl -fsS --max-time 15 -H "Authorization: Token ${ZENDUTY_TOKEN}" "${ZD_API}/account/teams/")"
 COUNT="$(printf '%s' "$TEAMS_SAMPLE" | jq 'if type=="array" then length else (.results // []) | length end')"

@@ -109,7 +109,7 @@ Judgment step: collect the non-secret facts for every integration you picked bef
 | Zenduty | `zenduty.token_env`, `zenduty.tier`; optional `teams` | `token_env: ZENDUTY_TOKEN` |
 | Groundcover | `groundcover.token_env`, `groundcover.tier`; optional `backend_id`, `api_url` | `token_env: GROUNDCOVER_API_KEY` |
 | Prometheus + Alertmanager | `prometheus.url`, `prometheus.alertmanager_url`; add `token_env` and `tier` only behind an auth proxy | `url: https://prometheus.example.com` |
-| ClickStack | `clickstack.clickhouse_url`, `clickstack.clickhouse_user`, `clickstack.clickhouse_password_env`, `clickstack.hyperdx_url`, `clickstack.hyperdx_api_key_env` | `clickhouse_url: https://your-clickhouse-host:8123` |
+| ClickStack | `clickstack.clickhouse_url` / `clickstack.clickhouse_user` / `clickstack.clickhouse_password_env` **optional (ClickHouse lane)**; `clickstack.hyperdx_url` / `clickstack.hyperdx_api_key_env` **optional (HyperDX lane)** — configure at least one lane; a HyperDX-only or ClickHouse-only ClickStack config is valid and the audit scores the lane you have | `clickhouse_url: https://your-clickhouse-host:8123` |
 | SigNoz | `signoz.url`, `signoz.api_key_env`, and optional `signoz.clickhouse_url`, `signoz.clickhouse_user`, `signoz.clickhouse_password_env` | `url: https://your-signoz-host` |
 | Loki | `loki.url`; optional `token_env` and `tier` | `url: https://loki.example.com` |
 | Tempo | `tempo.url`; optional `token_env` and `tier` | `url: https://tempo.example.com` |

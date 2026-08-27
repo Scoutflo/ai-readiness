@@ -79,7 +79,7 @@ done
 # each target uses its own key. Presence check only, never print the value.
 GC_TOKVAR=$(sh "$TT" "$CFG" groundcover get "$GC_IDX" token_env); [ -n "$GC_TOKVAR" ] || GC_TOKVAR=GROUNDCOVER_API_KEY
 GROUNDCOVER_API_KEY=$(printenv "$GC_TOKVAR" 2>/dev/null || true)
-[ -n "${GROUNDCOVER_API_KEY:-}" ] || { echo "GROUNDCOVER_API_KEY is not set; run /scoutflo:connect"; exit 1; }
+[ -n "${GROUNDCOVER_API_KEY:-}" ] || { echo "GROUNDCOVER_API_KEY is not set — add it to ~/.scoutflo/env (echo 'export GROUNDCOVER_API_KEY=\"<paste>\"' >> ~/.scoutflo/env; chmod 600 ~/.scoutflo/env), or run /scoutflo:connect. The plugin reads that file, not your interactive shell."; exit 1; }
 
 # There is no whoami endpoint; listing monitors is the auth probe. The X-Backend-Id header
 # (from groundcover.backend_id) is sent on multi-backend accounts. This POST lists, it does not mutate.
@@ -130,7 +130,7 @@ GC_API="${GC_API%/}"
 GC_BACKEND_ID=$(sh "$TT" "$CFG" groundcover get "$GC_IDX" backend_id)   # groundcover.backend_id; X-Backend-Id on multi-backend accounts
 GC_TOKVAR=$(sh "$TT" "$CFG" groundcover get "$GC_IDX" token_env); [ -n "$GC_TOKVAR" ] || GC_TOKVAR=GROUNDCOVER_API_KEY
 GROUNDCOVER_API_KEY=$(printenv "$GC_TOKVAR" 2>/dev/null || true)   # token_env names the variable; never a hardcoded name
-[ -n "${GROUNDCOVER_API_KEY:-}" ] || { echo "GROUNDCOVER_API_KEY is not set; run /scoutflo:connect"; exit 1; }
+[ -n "${GROUNDCOVER_API_KEY:-}" ] || { echo "GROUNDCOVER_API_KEY is not set — add it to ~/.scoutflo/env (echo 'export GROUNDCOVER_API_KEY=\"<paste>\"' >> ~/.scoutflo/env; chmod 600 ~/.scoutflo/env), or run /scoutflo:connect. The plugin reads that file, not your interactive shell."; exit 1; }
 # groundcover has no whoami; the account is identified by the monitors the key reads.
 if [ -n "$GC_BACKEND_ID" ]; then
   MON_SAMPLE="$(curl -fsS --max-time 15 -H "Authorization: Bearer ${GROUNDCOVER_API_KEY}" -H "X-Backend-Id: ${GC_BACKEND_ID}" \
@@ -194,7 +194,7 @@ GC_API="${GC_API%/}"
 GC_BACKEND_ID=$(sh "$TT" "$CFG" groundcover get "$GC_IDX" backend_id)   # groundcover.backend_id; X-Backend-Id on multi-backend accounts
 GC_TOKVAR=$(sh "$TT" "$CFG" groundcover get "$GC_IDX" token_env); [ -n "$GC_TOKVAR" ] || GC_TOKVAR=GROUNDCOVER_API_KEY
 GROUNDCOVER_API_KEY=$(printenv "$GC_TOKVAR" 2>/dev/null || true)   # token_env names the variable; never a hardcoded name
-[ -n "${GROUNDCOVER_API_KEY:-}" ] || { echo "GROUNDCOVER_API_KEY is not set; run /scoutflo:connect"; exit 1; }
+[ -n "${GROUNDCOVER_API_KEY:-}" ] || { echo "GROUNDCOVER_API_KEY is not set — add it to ~/.scoutflo/env (echo 'export GROUNDCOVER_API_KEY=\"<paste>\"' >> ~/.scoutflo/env; chmod 600 ~/.scoutflo/env), or run /scoutflo:connect. The plugin reads that file, not your interactive shell."; exit 1; }
 SMALL_MAX_OBJECTS="30"    # example, tune to your environment
 MEDIUM_MAX_OBJECTS="150"  # example, tune to your environment
 BATCH_SIZE="50"           # monitors per batch on the large path; example, tune it

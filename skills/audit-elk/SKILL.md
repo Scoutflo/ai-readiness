@@ -75,7 +75,7 @@ KIBANA_URL="${KIBANA_URL%/}"
 # value from the environment (the store sourced above). Presence check only, never print the value.
 ELK_TOKEN_VAR=$(sh "$TT" "$CFG" elk get "$ELK_IDX" token_env); [ -n "$ELK_TOKEN_VAR" ] || ELK_TOKEN_VAR="KIBANA_API_KEY"
 KIBANA_API_KEY=$(printenv "$ELK_TOKEN_VAR" 2>/dev/null || true)
-[ -n "${KIBANA_API_KEY:-}" ] || { echo "\$${ELK_TOKEN_VAR} (elk.token_env) is not set; run /scoutflo:connect"; exit 1; }
+[ -n "${KIBANA_API_KEY:-}" ] || { echo "\$${ELK_TOKEN_VAR} (elk.token_env) is not set — add it to ~/.scoutflo/env (echo 'export ${ELK_TOKEN_VAR}=\"<paste>\"' >> ~/.scoutflo/env; chmod 600 ~/.scoutflo/env), or run /scoutflo:connect. The plugin reads that file, not your interactive shell."; exit 1; }
 echo "elk target: ${ELK_LABEL} (${KIBANA_URL}) -> ${ELK_SEG}/"
 # Kibana is browser-facing behind SSO, so a 200 that returns an HTML login/SPA page is a
 # false-green. Judge the body, not the status code alone: capture BOTH the status and the
