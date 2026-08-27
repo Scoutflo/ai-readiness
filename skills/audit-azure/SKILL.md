@@ -77,6 +77,17 @@ if [ "$AZ_KIND" = seq ]; then AZ_SEG="azure/${AZ_LABEL}"; else AZ_SEG="azure"; f
 echo "azure target: ${AZ_LABEL} (subscription ${SUB}) -> ${AZ_SEG}/"
 # Confirmed auth path: DefaultAzureCredential -> AzureCliCredential (via az login).
 ACCT="$(az account show -o json)" || { echo "az account show failed; run 'az login'"; exit 1; }
+# subscription_id may hold a subscription NAME as well as a GUID: `az` accepts either on --subscription,
+# but the ARM REST path below needs the GUID, so resolve a NAME to its id here and use the id hereafter.
+# A value matching a visible id is used as-is; a value matching neither an id nor a name is left as-is
+# so the ARM reachability probe reports it (404 = wrong subscription id), unchanged from before.
+SUB_ACCTS="$(az account list -o json 2>/dev/null || echo '[]')"
+if ! printf '%s' "$SUB_ACCTS" | jq -e --arg s "$SUB" 'any(.[]; .id==$s)' >/dev/null 2>&1; then
+  SUB_NAME_HITS="$(printf '%s' "$SUB_ACCTS" | jq -r --arg s "$SUB" '[.[] | select(.name==$s)] | length')"
+  [ "${SUB_NAME_HITS:-0}" -le 1 ] || { echo "azure subscription_id '${SUB}' matches ${SUB_NAME_HITS} visible subscriptions by NAME; set it to the subscription id (GUID) to disambiguate"; exit 1; }
+  SUB_ID="$(printf '%s' "$SUB_ACCTS" | jq -r --arg s "$SUB" 'map(select(.name==$s)) | .[0].id // empty')"
+  [ -n "$SUB_ID" ] && { echo "note: azure subscription_id '${SUB}' matched a subscription NAME; resolved to id ${SUB_ID}"; SUB="$SUB_ID"; }
+fi
 echo "identity: $(printf '%s' "$ACCT" | jq -r '.user.name'); auditing subscription ${SUB}"
 ARM_TOKEN="$(az account get-access-token --subscription "$SUB" --resource https://management.azure.com --query accessToken -o tsv)"
 # One cheap ARM read at a CONFIRMED api-version proves reachability + the token works.
@@ -117,11 +128,25 @@ echo "identity: $(printf '%s' "$ACCT" | jq -r '.user.name')"
 echo "tenant: $(printf '%s' "$ACCT" | jq -r '.tenantId')"
 echo "azure target: ${AZ_LABEL} -> subscription ${AZ_SUB_CFG}"
 # Multi-target safety: the target subscription must be one THIS identity can see (`az account list`),
-# and every command passes --subscription "${AZ_SUB_CFG}" explicitly. A multi-subscription estate
-# audits several subscriptions in one run, so the ambient default is NOT required to equal the
-# target; `az account set` is never used. A target this identity cannot see stops the run.
-az account list --query '[].id' -o tsv 2>/dev/null | grep -qxF "$AZ_SUB_CFG" \
-  || { echo "STOP: azure target '${AZ_LABEL}' subscription ${AZ_SUB_CFG} is not visible to this identity ($(printf '%s' "$ACCT" | jq -r '.user.name')) in 'az account list'; az login to the right tenant/account, or fix the config"; exit 1; }
+# matched by id OR by subscription NAME (subscription_id may legitimately hold either), and every
+# command passes --subscription "${AZ_SUB_CFG}" explicitly. A multi-subscription estate audits several
+# subscriptions in one run, so the ambient default is NOT required to equal the target; `az account
+# set` is never used. A value visible neither by id nor by name genuinely stops the run.
+AZ_ACCTS="$(az account list -o json 2>/dev/null || echo '[]')"
+AZ_SUB_ID="$(printf '%s' "$AZ_ACCTS" | jq -r --arg s "$AZ_SUB_CFG" 'map(select(.id==$s)) | .[0].id // empty')"
+if [ -z "$AZ_SUB_ID" ]; then
+  # No id match: a subscription NAME in subscription_id is allowed, but resolve it to its id so every
+  # --subscription (and the ARM REST path, which needs the GUID) uses the id, never the bare name.
+  # An ambiguous name (2+ visible subscriptions share it) stops rather than guessing which to audit.
+  AZ_NAME_HITS="$(printf '%s' "$AZ_ACCTS" | jq -r --arg s "$AZ_SUB_CFG" '[.[] | select(.name==$s)] | length')"
+  [ "${AZ_NAME_HITS:-0}" -le 1 ] \
+    || { echo "STOP: azure target '${AZ_LABEL}' subscription_id '${AZ_SUB_CFG}' matches ${AZ_NAME_HITS} visible subscriptions by NAME; set azure.subscription_id to the subscription id (GUID) to disambiguate"; exit 1; }
+  AZ_SUB_ID="$(printf '%s' "$AZ_ACCTS" | jq -r --arg s "$AZ_SUB_CFG" 'map(select(.name==$s)) | .[0].id // empty')"
+  [ -n "$AZ_SUB_ID" ] && echo "note: azure target '${AZ_LABEL}' subscription_id '${AZ_SUB_CFG}' matched a subscription NAME; resolved to id ${AZ_SUB_ID}, used on every --subscription hereafter"
+fi
+[ -n "$AZ_SUB_ID" ] \
+  || { echo "STOP: azure target '${AZ_LABEL}' subscription '${AZ_SUB_CFG}' is not visible to this identity ($(printf '%s' "$ACCT" | jq -r '.user.name')) in 'az account list' (by id or name); az login to the right tenant/account, or fix the config"; exit 1; }
+AZ_SUB_CFG="$AZ_SUB_ID"
 # Optional tenant pin: when azure.tenant_id is set for this target, the resolved account's tenant
 # MUST match it — protects against auditing a same-named subscription in the wrong Entra tenant.
 AZ_TENANT_CFG=$(sh "$TT" "$CONFIG" azure get "$AZ_IDX" tenant_id)

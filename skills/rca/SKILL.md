@@ -206,6 +206,30 @@ How overlap agreement is weighed — supporting evidence only, never a cause:
 - **Absence changes nothing.** No overlap group naming the target neither lowers confidence nor exonerates anything — a single-audit finding is often the only coverage a service has.
 - **Never invent.** Cite only `overlap_id`s and `finding_id`s actually present in `correlation.json`. If you enter this phase holding a finding id instead of a service name, the correlation-engine library exposes the same lookup keyed on finding id: source `skills/correlation-engine/lib/correlation-engine.sh` and call `correlation_find_related <finding-id>` to get the first overlap group containing that finding.
 
+## Phase 5.5: Cross-tool coverage reframe
+
+`correlation.json` also carries a `coverage[]` array (built from other providers' `inventory.json`): when a **coverage gap** on the target service is actually covered by an **active, routed monitor in another tool**, it is classified `covered-elsewhere`. Use it so the RCA never tells someone they have "no alerting" on a service another tool actively pages on.
+
+```bash
+set -eu
+AUD="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}"; CORR="$AUD/correlation.json"; TARGET="checkout"
+[ -f "$CORR" ] || exit 0
+jq -r --arg t "$TARGET" '
+  [ (.coverage // [])[] | select(.resource == $t) ] as $c
+  | if ($c | length) == 0 then "no cross-tool coverage record for \($t) — the gap stands as reported"
+    else ($c[] | "COVERAGE \(.classification) for \(.resource): "
+                 + ( if .classification=="covered-elsewhere"
+                     then ([.covered_by[] | "\(.provider):\(.inventory_name)→\(.routes_to)"] | join(", "))
+                     else .recommendation end )) end' "$CORR"
+```
+
+How it weighs:
+
+- **`covered-elsewhere` reframes, it does not exonerate.** When the target's finding is a coverage gap and `coverage[]` shows another provider actively covers it, cite it with a `[coverage]` tag and reframe the RCA from "no coverage" to **single-tool dependency** — "Azure-native alerting is absent on `checkout`, but Datadog monitor `checkout latency` actively covers it and routes to PagerDuty `[coverage]`". This may raise confidence at most one step (mirroring the bounded overlap rule), and only when the covering monitor plausibly watches the failing signal — say so as a caveat.
+- **`true-gap` is a real gap** — nothing covers it; keep the finding's severity and lead with it if it is on the causal path.
+- **`unmappable` changes nothing** — a name-only match is not confirmation; note it as a possible coverage to verify (`/scoutflo:map-topology`), never as coverage.
+- **Never invent a covering monitor** not present in `coverage[]`.
+
 ## Phase 6: Weigh by business context
 
 Read `~/.scoutflo/business_context.json`. If the target or a downstream neighbor is in `critical_dependencies`, lead with that (the blast radius hits something the business cares about). Use `environment` to calibrate severity language (a staging-only chain is real but not an incident). Never invent criticality the context doesn't state.
@@ -218,7 +242,7 @@ Open with a one-line **mode banner** so freshness is unmissable: `[live-verified
 ## RCA: <target> — <one-line verdict>   [live-verified @ <ts> | report-only, as of <date>]
 
 **Most likely root cause (confidence: high | medium | low):**
-<1–3 sentences, each clause tagged [live@ts] / [report@date] / [topology@gen] / [correlation] / [hypothesis]>
+<1–3 sentences, each clause tagged [live@ts] / [report@date] / [topology@gen] / [correlation] / [coverage] / [hypothesis]>
 
 **How it fails (the chain):** <root → effect walk, each step cited>
 
@@ -229,6 +253,7 @@ Open with a one-line **mode banner** so freshness is unmissable: `[live-verified
 - [report@date] <finding-id: title (provider, severity)>
 - [topology@gen] <edge, confidence n, observed/asserted>
 - [correlation] <OVL-id: N audits independently flagged <service>: <target>/<finding-id> (<severity>), …  — omit when no overlap group names the target>
+- [coverage] <covered-elsewhere: <provider>:<monitor>→<receiver> actively covers <service> — reframes a "no alerting" gap as single-tool dependency; omit when no coverage record names the target, keep the gap as-is for a true-gap>
 
 **What I could NOT determine (do this to confirm):**
 <explicit gaps: blocked probes, suspects not reached, stale reports not re-probed; if signal was thin, say the cause is a hypothesis, not established>

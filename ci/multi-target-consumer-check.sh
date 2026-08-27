@@ -42,6 +42,7 @@ consumer() {
 # correlation-engine and cost-analysis aggregate findings.json; render-report-viz
 # aggregates findings.json (rollup) and inventory.json (inventory-rollup).
 consumer "skills/correlation-engine/lib/correlation-engine.sh" 'findings\.json'
+consumer "skills/correlation-engine/lib/correlation-engine.sh" 'inventory\.json'
 consumer "skills/cost-analysis/lib/cost-analysis.sh"           'findings\.json'
 consumer "report-standard/render-report-viz.sh"                'findings\.json'
 consumer "report-standard/render-report-viz.sh"                'inventory\.json'

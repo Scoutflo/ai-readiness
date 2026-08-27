@@ -108,6 +108,8 @@ names a gate/case that no longer exists, that is itself a defect.
   `effects[].step` (a phantom `chain_length` read once rendered "prevents
   null-step cascade"). `correlation.json` is **context-neutral**: business-context
   weighting happens in the consumers (`rca`, `cost-analysis`), not in the engine.
+  `correlation.json` also carries `coverage[]` (see C14) and its counters; that
+  section is likewise advisory — it never mutates a finding or its severity.
 - **SSOT:** `skills/correlation-engine/SKILL.md` "What correlation.json contains"
   (must match the lib exactly).
 - **Guards:** `skills/correlation-engine/tests/`,
@@ -214,9 +216,42 @@ names a gate/case that no longer exists, that is itself a defect.
 
 - **Contract:** every `audit-*` wires the estate-sizing scope checkpoint, the
   secret-redaction discipline (secrets by key/name only, never printed/written),
-  and sources the home-anchored `~/.scoutflo/env` store in its doctor gate.
+  and sources the home-anchored secret store in its doctor gate. **`doctor` and
+  every audit must resolve that store identically** via the layered resolver
+  (`SCOUTFLO_ENV_FILE` → `./.scoutflo/env` → `$HOME/.scoutflo/env`) — a hardcoded
+  `$HOME`-only path in one and the layered path in the other is a real
+  doctor↔audit asymmetry on sandboxed/project-local surfaces. Secrets live in the
+  store, not the operator's interactive shell (the plugin runs in its own process
+  and cannot see a shell `export`); `connect` writes the store for the operator.
 - **Guards:** `ci/scope-checkpoint-check.sh`, `ci/redaction-parity-check.sh`,
-  `ci/env-load-parity-check.sh`, `ci/leak-scan.sh`. Selftest: `layer_parity`.
+  `ci/env-load-parity-check.sh` (asserts the layered resolver in every `audit-*`
+  **and** in `doctor.sh`), `ci/leak-scan.sh`. Selftest: `layer_parity`.
+
+## C14 — Cross-tool coverage correlation (a gap in one tool covered by another)
+
+- **Producers:** every audit's `inventory.json` records its **active** monitors/
+  alerts (`kind` + `covers` + `enabled` + `routes_to`); an audit's coverage-gap
+  findings carry the affected resource in `affected[]`.
+- **Consumer:** `correlation-engine.sh` (`correlation_collect_coverage` +
+  `correlation_find_coverage`) joins each coverage-gap finding against **other**
+  providers' active, routed monitors and writes a `coverage[]` array +
+  `total_coverage_*` counters to `correlation.json`; `render-report-viz overlaps`
+  renders the "Cross-tool coverage" subsection, `rca` Phase 5.5 reframes, and
+  `audit-all` §7 surfaces it.
+- **Invariants:** advisory only — **never** mutates `findings.json` or an
+  audit-owned severity. An item counts as active coverage only when its `kind` is
+  a monitor/alert type, `enabled != false`, and `routes_to` names a real receiver.
+  A `covered-elsewhere` verdict requires an **exact** normalized `covers==affected`
+  match and is always worded **single-tool-dependency** (never "covered"); a fuzzy
+  match is `unmappable` (verify-pending); nothing is `true-gap`. Confidence is
+  highest when `map-topology` has run so both sides use the canonical service name.
+  Every `covered_by` entry names an inventory item present in this run.
+- **SSOT:** `skills/correlation-engine/SKILL.md` (`coverage[]` schema, must match
+  the lib) and `report-standard/inventory-schema.md` (`covers` = canonical service
+  name when known).
+- **Guards:** `ci/multi-target-consumer-check.sh` (locks the coverage collector to
+  the two-level `inventory.json` glob), `skills/correlation-engine/tests/`
+  (covered-elsewhere / true-gap / disabled-excluded case).
 
 ---
 

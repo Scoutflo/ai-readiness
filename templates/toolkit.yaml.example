@@ -4,7 +4,9 @@
 # Rules:
 # - Hosts, orgs, and names go here in plain text.
 # - Secrets NEVER go in this file. Every *_env field names an environment
-#   variable that holds the secret. Export those vars in your shell or CI.
+#   variable that holds the secret. Put each secret in ~/.scoutflo/env (the file
+#   every skill reads) via /scoutflo:connect or scoutflo_addsecret <VAR>; a plain
+#   shell export is invisible to the plugin process.
 # - Delete the blocks for integrations you do not use.
 # - Multiple targets of the same integration IN ONE environment: make the block a
 #   YAML LIST, where each item is the same mapping PLUS a required `label:` (a

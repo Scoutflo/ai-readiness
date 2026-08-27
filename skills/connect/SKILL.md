@@ -18,7 +18,7 @@ Every question in this flow (which integrations, host, org slug, tier, tenant ID
 Two hard rules for this whole flow:
 
 - Never paste a token, webhook URL, or any secret into this conversation. `toolkit.yaml` never contains a secret either: every `*_env` key names an environment variable, and the value lives only in your environment.
-- Any command that reads, exports, or prompts for a secret value is shown for you to run in your own terminal. An agent driving this skill displays those commands and never executes them; the agent's own commands are limited to non-secret work (creating directories, copying the template, parsing the config, running the presence-only env scan in Step 4a, running doctor).
+- Any command that reads, exports, or prompts for a secret value is shown for you to run in your own terminal. An agent driving this skill displays those commands and never executes them; the agent's own commands are limited to non-secret work (creating directories, copying the template, parsing the config, running the presence-only env scan in Step 4a, the read-only name→ID discovery in Step 2a — `az account list`, `gcloud projects list`, and `aws sts get-caller-identity` / `aws iam list-account-aliases` / `aws organizations list-accounts` — and running doctor).
 - For every credential a chosen integration needs, the agent must hand you an exact, copy-pasteable command to **set** the variable (the placeholder `export`/`$Env:` form for your OS in Step 4), not merely a command to read or display an existing token. First it runs the Step 4a presence scan and, for anything already set, asks whether to reuse it before asking you to set a new one.
 - If a secret does get pasted into a conversation, treat it as exposed: revoke it in the provider UI, mint a fresh credential under the same name, and re-export. A rotated token costs a minute; an exposed one is permanent.
 
@@ -115,6 +115,9 @@ Judgment step: collect the non-secret facts for every integration you picked bef
 | Tempo | `tempo.url`; optional `token_env` and `tier` | `url: https://tempo.example.com` |
 | Mimir | `mimir.url`; optional `tenant_id`, `token_env`, `tier` | `tenant_id: your-tenant` |
 | VictoriaMetrics | `victoriametrics.url`; optional `vmalert_url`, `token_env`, `tier` | `vmalert_url: https://vmalert.example.com` |
+| GCP | `gcp.project`, `gcp.tier`; optional `credentials_env` | resolve `project` in Step 2a / the recipe in [references/providers.md](references/providers.md#google-cloud-gcp) — never hand-type it |
+| Azure | `azure.subscription_id`, `azure.tier`; optional `tenant_id` | resolve `subscription_id` (+`tenant_id`) in Step 2a / the recipe in [references/providers.md](references/providers.md#azure) |
+| AWS | `aws.account_id` (quoted), `aws.region`, `aws.tier`; optional `profile`, `role_env` | resolve `account_id` in Step 2a / the recipe in [references/providers.md](references/providers.md#aws) |
 | Kubernetes | `kubernetes.context`; optional `monitoring_namespace` | `context: your-kube-context` |
 | GitHub | `github.org`, `github.token_env`; optional `tier` | `org: your-org` |
 | Slack | `slack.webhook_env` | `webhook_env: SCOUTFLO_SLACK_WEBHOOK` |
@@ -133,6 +136,40 @@ prometheus:
   url: https://prometheus.example.com
   alertmanager_url: https://alertmanager.example.com
 ```
+
+## Step 2a: Resolve names to IDs (agent-run, read-only)
+
+The cloud providers are keyed by an **ID**, not a name: `azure` needs `subscription_id` (a GUID), `gcp` needs `project` (the project ID, not the display name), `aws` needs a quoted 12-digit `account_id`. You think of them as "Production" or "Engineering Operations"; the config needs the identifier behind that name. Guessing or hand-typing a GUID is exactly how a run ends up auditing the wrong estate — a transposed subscription id is unmemorable and passes every YAML check.
+
+So for each cloud provider you picked, the agent runs a **read-only discovery** first (this is on the non-secret, agent-runnable side of the boundary rule — it lists identifiers, never touches a credential value), then resolves each name to its ID before any credential work. Run only the block(s) for the providers you picked:
+
+```bash
+# Azure — every subscription this `az login` can see, with tenant + state.
+az account list --query "[].{name:name, id:id, tenantId:tenantId, state:state}" -o table
+```
+
+```bash
+# GCP — every project this `gcloud` login can see.
+gcloud projects list --format="table(projectId, name, projectNumber)"
+```
+
+```bash
+# AWS — the active identity first; then, IF this is an Organizations management/delegated
+# account, every member account (the list call is harmless — `|| true` — where it is denied).
+aws sts get-caller-identity --output json
+aws iam list-account-aliases --output json 2>/dev/null || true
+aws organizations list-accounts --query "Accounts[].{name:Name, id:Id, status:Status}" --output table 2>/dev/null || true
+```
+
+From that output the agent builds a plain-text **resolution table** — one row per visible target, `<name you use> -> <resolved id>[+ tenant] (<state>)` — and shows **every** subscription/project/account the login can see, not only the ones you mentioned:
+
+```
+name (as you call it)    ->  resolved id                    [+ tenant]         (state)     selection
+Production               ->  <prod-subscription-guid>       tenant <guid>      Enabled     [selected]
+Engineering Operations   ->  <other-subscription-guid>      tenant <guid>      Enabled     [NOT selected]
+```
+
+Then the agent asks which targets to audit and, before moving on, **names every visible-but-unselected target back to you** — "you did not pick *Engineering Operations*; skip it, or add it?" — so a real account is a deliberate exclusion, never a silent omission (that near-miss is why this step exists). Each target you select becomes one entry: a single target fills the provider's `subscription_id`/`project`/`account_id` directly; several targets of one provider in one environment become a **labeled YAML list** (Steps 5–6), each list item carrying a unique `label:` slug plus its resolved ID. Keep the finished `name -> id` mapping — Step 5 makes you confirm it and Step 6 checks that every name you selected here ended up written.
 
 ## Step 3: Create each credential
 
@@ -193,12 +230,7 @@ $Env:GRAFANA_TOKEN = "<paste-your-grafana-token-here>"
 
 **Windows — Git Bash** (the shell the plugin's skills actually run in on Windows): use the macOS/Linux `export` form above, in the Git Bash window.
 
-Prefer not to have the token sit in your shell history? Use the silent-prompt form instead — it reads the value without echoing it and without a history entry:
-
-```bash
-# macOS/Linux/Git Bash: prompts silently, exports for this shell session.
-printf 'GRAFANA_TOKEN: ' && read -rs GRAFANA_TOKEN && export GRAFANA_TOKEN && printf '\n'
-```
+A bare `export`/`$Env:` sets the value **only in the shell you type it in**. The plugin's skills run in their *own* process and read every secret from the home-anchored store `~/.scoutflo/env` (Step 4a sources it, and so do `doctor` and every audit) — so a plain `export` in your terminal is **invisible to the plugin**. The forms above are for running a provider's Step 3 verify command right now, in the same shell; for anything the toolkit must see later, use the one-line store-writer `scoutflo_addsecret` in Step 4c, which both records the value in `~/.scoutflo/env` **and** exports it into your current shell. Prefer it especially for any value you paste (a long HyperDX key, a webhook URL): it takes the variable **name as a fixed argument** and reads the value with a single silent `read`, so a wrapped paste can never split the name in two (`HDX_EU_KEY` arriving as `HDX_E U_KEY`), leave the token in your shell history, or double an `=`.
 
 Swap `GRAFANA_TOKEN` for the exact `*_env` name of whatever you are setting (`DATADOG_API_KEY`, `PROM_TOKEN`, `PAGERDUTY_TOKEN`, …). Datadog needs two (`DATADOG_API_KEY` and `DATADOG_APP_KEY`); JSM needs `JSM_EMAIL` plus `JSM_API_TOKEN`.
 
@@ -216,11 +248,25 @@ mkdir -p ~/.scoutflo && touch ~/.scoutflo/env && chmod 600 ~/.scoutflo/env
 grep -q 'scoutflo/env' ~/.zshrc 2>/dev/null || echo '[ -f ~/.scoutflo/env ] && . ~/.scoutflo/env' >> ~/.zshrc
 # bash users: same line into ~/.bashrc instead of ~/.zshrc.
 
-# 3) Add each credential to ~/.scoutflo/env (one line per variable). Best: pull from a
-#    secret manager so no secret is written to disk; simpler: a literal value (the file is
-#    already chmod 600). Then run: source ~/.scoutflo/env  (or open a new terminal).
-echo 'export GRAFANA_TOKEN="<paste-your-grafana-token-here>"' >> ~/.scoutflo/env
+# 3) Define the store-writer ONCE per shell (paste this block; add it to your profile to
+#    keep it). It takes the variable NAME as its argument and prompts silently for the value:
+scoutflo_addsecret() {
+  _n="$1"; [ -n "$_n" ] || { echo "usage: scoutflo_addsecret VARNAME" >&2; return 2; }
+  mkdir -p ~/.scoutflo && touch ~/.scoutflo/env && chmod 600 ~/.scoutflo/env
+  printf '%s: ' "$_n" >&2; stty -echo 2>/dev/null; IFS= read -r _v; stty echo 2>/dev/null; printf '\n' >&2
+  _e=$(printf '%s' "$_v" | sed "s/'/'\\''/g")
+  grep -v "^export ${_n}=" ~/.scoutflo/env > ~/.scoutflo/env.$$ 2>/dev/null || :
+  printf "export %s='%s'\n" "$_n" "$_e" >> ~/.scoutflo/env.$$
+  mv ~/.scoutflo/env.$$ ~/.scoutflo/env && chmod 600 ~/.scoutflo/env
+  export "$_n=$_v"; unset _v _e; echo "$_n written to ~/.scoutflo/env and exported here" >&2
+}
+
+# 4) Add each credential by NAME (one call per variable). It prompts silently — paste the
+#    value at the prompt and press Enter; nothing echoes and nothing lands in shell history:
+scoutflo_addsecret GRAFANA_TOKEN
 ```
+
+Why this is the safe path and not a hand-typed `echo … >> env`: the **name is a fixed argument**, so a wrapped paste can never turn `HDX_EU_KEY` into `HDX_E U_KEY` and there is no keyboard path to an `export VAR==` typo; the value is read once, silently, and never enters shell history; it is single-quote-escaped before storage, so a `$`, `"`, or backtick in a token is stored literally; a re-run **replaces** that variable's line rather than appending a duplicate; the file stays `chmod 600`; and it `export`s the value into your current shell too, so a provider's Step 3 verify command works in the same terminal without opening a new one. Swap `GRAFANA_TOKEN` for the exact `*_env` name you are setting.
 
 **Windows — PowerShell — one-time, persists for your user across all new terminals:**
 
@@ -247,6 +293,7 @@ Confirmation gate, no exceptions: before anything is written to `~/.scoutflo/too
 
 - ❌ The user says "connect my Grafana", so the agent writes a `grafana:` block from a URL it found in shell history.
 - ✅ The agent shows the assembled `grafana:` block with the URL the user stated, asks "write this to ~/.scoutflo/toolkit.yaml?", and writes only after a yes.
+- **For any cloud provider resolved in Step 2a, confirm the mapping before the YAML.** First echo the `name -> resolved id [+ tenant]` table (`Production -> <subscription-guid>`, one row per selected target) as plain text and get an explicit "yes, that pairing is right". You are confirming the **mapping**, not eyeballing a GUID: a subscription/project/account id is unmemorable, so the operator can only vouch that the *name* beside it is the estate they mean — show the name against every id and approve the pairing, then show the YAML those ids go into.
 - When Step 1 named more than one instance of an integration in one environment, the block you assemble here is a **YAML list**: one list item per target, each the provider's normal mapping plus its unique `label:` and its own `*_env` name. Show the full list and wait for approval the same way — no target is written until the whole list is approved.
 
 ## Step 6: Write ~/.scoutflo/toolkit.yaml
@@ -322,6 +369,27 @@ printf '%s\n' "$CONFIG" > "$HOME/.scoutflo/active-config" 2>/dev/null \
 
 A one-off `export SCOUTFLO_CONFIG=<other>` still overrides this pointer for a single run, and re-running `connect` changes the remembered default. In the **multiple-environments** case below, point it at the environment new terminals should default to — never leave the default ambiguous.
 
+**Completeness check — every target you named in Step 1 is actually written.** A dropped list item (a paste that lost a target, a slug typo) leaves the config parsing fine while silently auditing fewer estates than you meant. So for each integration you configured, enumerate the written targets with the shared enumerator and reconcile the count and the names against Step 1 — this stays inline, no new library. Run it once per integration you wrote, filling `BLOCK` / `EXPECT_N` / `EXPECT_LABELS` from Step 1 (for a single target the written label is the block name; for a labeled list they are the slugs you assigned in Step 2a):
+
+```bash
+CONFIG="${SCOUTFLO_CONFIG:-}"
+[ -n "$CONFIG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CONFIG="$_c"; break; }; done
+[ -n "$CONFIG" ] || CONFIG="$HOME/.scoutflo/toolkit.yaml"
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"   # the shared target enumerator
+BLOCK="azure"                                    # the block you just wrote
+EXPECT_N="2"                                     # how many targets you named for it in Step 1
+EXPECT_LABELS="production engineering-operations" # each selected target's label (block name if single)
+WRITTEN_N="$(sh "$TT" "$CONFIG" "$BLOCK" count)"
+echo "written labels for ${BLOCK}:"; sh "$TT" "$CONFIG" "$BLOCK" labels
+if [ "$WRITTEN_N" = "$EXPECT_N" ]; then echo "COUNT OK: ${BLOCK} wrote ${WRITTEN_N} target(s), matching the ${EXPECT_N} named in Step 1"; else echo "COUNT MISMATCH: ${BLOCK} wrote ${WRITTEN_N} target(s) but Step 1 named ${EXPECT_N} — a stated target is missing"; fi
+WRITTEN_LABELS="$(sh "$TT" "$CONFIG" "$BLOCK" labels)"
+for _name in $EXPECT_LABELS; do
+  if printf '%s\n' "$WRITTEN_LABELS" | grep -qxF "$_name"; then echo "  ok: '${_name}' -> written"; else echo "  MISSING: '${_name}' was named in Step 1 but has no written target in ${BLOCK}"; fi
+done
+# Expect: COUNT OK and every name "ok". Any COUNT MISMATCH or MISSING line names a target
+# you meant to audit that did not make it into the file — fix the block and re-run this check.
+```
+
 ## Step 7: Verify with doctor
 
 Doctor checks every configured block, verifies each `*_env` variable is set (presence only, values are never printed), makes one cheap read-only call per integration, and emits a connection matrix with fix hints:
@@ -372,7 +440,9 @@ owns that file and its rich capture flow.
 | Sentry commands hit the wrong region and every call 404s | Set `sentry.host` explicitly; run the region probe in [references/providers.md](references/providers.md) before writing the config |
 | One admin token reused for both tiers | Separate credentials named `scoutflo-audit` and `scoutflo-setup`; record each block's `tier:` and revoke the elevated one when setup work is done |
 | Slack webhook URL treated as non-secret config | The URL is the credential; it goes in the env var named by `slack.webhook_env`, never in the file |
-| Secrets exported in one terminal, doctor run in another | Env vars are per-shell; load them from your profile or re-export in the shell where you run skills |
+| Secrets exported in one terminal, doctor run in another (or invisible to the plugin) | A bare `export` lives only in that shell and the plugin reads its own process; write the value to `~/.scoutflo/env` with `scoutflo_addsecret <VAR>` (Step 4c) so every session, terminal, and the plugin pick it up |
+| A pasted key wraps and the name splits (`HDX_E U_KEY`) or an `export VAR==` typo slips in | Use `scoutflo_addsecret <VAR>` (Step 4c): the name is a fixed argument and the value is a single silent read, so a wrapped paste can't break the name and there is no `==` keyboard path |
+| A named cloud target is silently dropped from the config | Step 2a resolves and lists every visible subscription/project/account and Step 6's completeness check reconciles written targets against the names from Step 1 |
 | Audits pointed at an admin kube context | Use a read-only context bound to the `view` ClusterRole; name it in `kubernetes.context` |
 | Mimir or VictoriaMetrics queries return empty because tenancy was skipped | Set `mimir.tenant_id` (or the VM tenant path) during connect, not mid-audit |
 | Old config clobbered on re-run | Back up first with the timestamped copy in Step 6; edit blocks in place |

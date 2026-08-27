@@ -121,6 +121,84 @@ correlation_find_cascades() {
   '
 }
 
+# Collect ACTIVE coverage (positive monitors/alerts), not gaps, from every target's
+# inventory.json (scoutflo-inventory/v1). This is what lets the engine tell "provider A
+# reports no alarm on X, but provider B actively monitors X" — the cross-tool coverage join.
+# Same dual-glob + skip set as the findings collector. Each item is tagged with its provider
+# (first path segment of .target, e.g. "azure" from "azure/prod-core").
+correlation_collect_coverage() {
+  date="$1"
+  set --
+  for f in "$AUDITS_DIR"/*/"$date"/inventory.json "$AUDITS_DIR"/*/*/"$date"/inventory.json; do
+    [ -e "$f" ] || continue
+    case "$f" in
+      */all/*|*/cost-analysis/*|*/cost/*|*/doctor/*) continue ;;
+    esac
+    set -- "$@" "$f"
+  done
+  if [ "$#" -eq 0 ]; then
+    echo "[]"
+    return 0
+  fi
+  jq -s '[ .[] | (.target // "unknown") as $t | ($t | split("/")[0]) as $prov
+           | (.items // [])[]
+           | {provider: $prov, target: $t, name: (.name // ""), kind: (.kind // ""),
+              covers: (.covers // ""), enabled: (.enabled != false), routes_to: (.routes_to // "")} ]' "$@"
+}
+
+# Cross-tool COVERAGE correlation (advisory only; never mutates a finding or its severity).
+# For each coverage-GAP finding, check whether ANOTHER provider has an ACTIVE, ROUTED monitor
+# on the same resource identity, and classify:
+#   covered-elsewhere : an exact normalized covers==affected match on an enabled, routed monitor
+#                       in a different provider -> single-tool-dependency, NOT zero coverage.
+#   unmappable        : only a fuzzy/substring match -> possible coverage, unconfirmed (verify-pending).
+#   true-gap          : no active cross-tool coverage anywhere -> a real gap to elevate.
+# HONESTY BAR: covered-elsewhere requires enabled != false AND a real routes_to AND an exact
+# canonical-name match; the wording is always "single-tool-dependency ... confirm the signal",
+# never "covered". Confidence is highest when map-topology has run (canonical names on both sides).
+# Reads findings on stdin; coverage items passed as $1.
+correlation_find_coverage() {
+  cov="$1"
+  jq --argjson cov "$cov" '
+    def norm: (. // "") | ascii_downcase | gsub("^[[:space:]]+|[[:space:]]+$";"");
+    def active($prov):
+      [ $cov[] | select(
+          (.provider != $prov)
+          and ((.kind // "") | test("^(monitor|alert_rule|log_alert|activity_log_alert)$"))
+          and ((.enabled) != false)
+          and (((.routes_to) | norm) as $r | ($r != "" and $r != "none" and $r != "-")) ) ];
+    [ .[]
+      | . as $f
+      | ($f.target | split("/")[0]) as $prov
+      | select( (($f.area // "") | test("coverage|alert|monitor|metric";"i"))
+                and (($f.title // "") | test("no |missing|lacks|absent|not configured|no metric|without";"i")) )
+      | (active($prov)) as $act
+      | (($f.affected // [])[]) as $r0
+      | ($r0 | norm) as $r
+      | select($r != "")
+      | ([ $act[] | (.covers|norm) as $cn | select($cn == $r) ]) as $exact
+      | ([ $act[] | (.covers|norm) as $cn
+                   | select($cn != $r and ($cn|length) > 0 and (($cn|contains($r)) or ($r|contains($cn)))) ]) as $fuzzy
+      | if ($exact|length) > 0 then
+          { finding_id: $f.id, target: $f.target, resource: $r0, classification: "covered-elsewhere",
+            covered_by: [ $exact[] | {provider, inventory_name: .name, routes_to, match: "exact"} ],
+            recommendation: ("single-tool-dependency: " + $exact[0].provider + " monitor " + $exact[0].name
+                             + " actively covers " + $r0 + " and routes to " + $exact[0].routes_to
+                             + "; confirm it covers the specific signal this gap names before de-prioritizing") }
+        elif ($fuzzy|length) > 0 then
+          { finding_id: $f.id, target: $f.target, resource: $r0, classification: "unmappable",
+            covered_by: [ $fuzzy[] | {provider, inventory_name: .name, routes_to, match: "fuzzy"} ],
+            recommendation: ("possible coverage in " + $fuzzy[0].provider + " (monitor " + $fuzzy[0].name
+                             + ") — could not confirm it is the same resource; run /scoutflo:map-topology to join by canonical service name") }
+        else
+          { finding_id: $f.id, target: $f.target, resource: $r0, classification: "true-gap",
+            covered_by: [],
+            recommendation: "no active cross-tool coverage found for this resource — elevate; this is a real gap" }
+        end
+    ]
+  '
+}
+
 # Load business context (with safe defaults).
 # Precedence: business_context.json (derived from the SSOT) is authoritative;
 # legacy topology.json:.business_context is the migration fallback.
@@ -177,10 +255,14 @@ correlation_save() {
   overlaps="$2"
   cascades="$3"
   findings="$4"
+  coverage="${5:-[]}"
 
   total_raw=$(printf '%s\n' "$findings" | jq 'length')
   total_overlaps=$(printf '%s\n' "$overlaps" | jq 'length')
   total_cascades=$(printf '%s\n' "$cascades" | jq 'length')
+  cov_covered=$(printf '%s\n' "$coverage" | jq '[.[] | select(.classification=="covered-elsewhere")] | length')
+  cov_true_gap=$(printf '%s\n' "$coverage" | jq '[.[] | select(.classification=="true-gap")] | length')
+  cov_unmappable=$(printf '%s\n' "$coverage" | jq '[.[] | select(.classification=="unmappable")] | length')
   # Candidate duplicates are counted per DISTINCT finding, never per
   # (finding, service) row. Overlap groups are per-service, so one finding
   # that names many affected services sits in many groups; the old
@@ -210,6 +292,10 @@ correlation_save() {
     --argjson total_dedup "$total_dedup" \
     --argjson overlaps "$overlaps" \
     --argjson cascades "$cascades" \
+    --argjson coverage "$coverage" \
+    --argjson cov_covered "$cov_covered" \
+    --argjson cov_true_gap "$cov_true_gap" \
+    --argjson cov_unmappable "$cov_unmappable" \
     '{
       version: $version,
       generated_at: $generated_at,
@@ -218,13 +304,17 @@ correlation_save() {
       total_findings_deduplicated: $total_dedup,
       total_overlaps_detected: $total_overlaps,
       total_cascades_detected: $total_cascades,
+      total_coverage_covered_elsewhere: $cov_covered,
+      total_coverage_true_gap: $cov_true_gap,
+      total_coverage_unmappable: $cov_unmappable,
       overlaps: $overlaps,
       cascades: $cascades,
-      method: "same-affected-service overlap grouping + database-to-alerting cascade heuristic; every referenced finding_id exists in this run"
+      coverage: $coverage,
+      method: "same-affected-service overlap grouping + database-to-alerting cascade heuristic + cross-tool coverage join (a coverage-gap finding matched against another provider active, routed monitor from inventory.json); advisory only, never mutates a finding severity; every referenced finding_id and inventory item exists in this run"
     }' > "$CORRELATION_FILE"
 
   echo "[correlation] Written $CORRELATION_FILE"
-  echo "[correlation] Raw findings: $total_raw | Deduplicated: $total_dedup | Overlaps: $total_overlaps | Cascades: $total_cascades"
+  echo "[correlation] Raw findings: $total_raw | Deduplicated: $total_dedup | Overlaps: $total_overlaps | Cascades: $total_cascades | Coverage: covered-elsewhere=$cov_covered true-gap=$cov_true_gap unmappable=$cov_unmappable"
 }
 
 # Main entry point
@@ -244,8 +334,10 @@ correlation_run() {
   findings=$(printf '%s\n' "$findings" | correlation_apply_context)
   overlaps=$(printf '%s\n' "$findings" | correlation_find_overlaps)
   cascades=$(printf '%s\n' "$findings" | correlation_find_cascades)
+  coverage_items=$(correlation_collect_coverage "$audit_date")
+  coverage=$(printf '%s\n' "$findings" | correlation_find_coverage "$coverage_items")
 
-  correlation_save "$audit_date" "$overlaps" "$cascades" "$findings"
+  correlation_save "$audit_date" "$overlaps" "$cascades" "$findings" "$coverage"
 
   echo "[correlation] Done. Ready for cost-analysis and topology-guided setup."
 }
@@ -257,6 +349,10 @@ correlation_get_overlaps() {
 
 correlation_get_cascades() {
   jq '.cascades' "$CORRELATION_FILE" 2>/dev/null || echo "[]"
+}
+
+correlation_get_coverage() {
+  jq '.coverage // []' "$CORRELATION_FILE" 2>/dev/null || echo "[]"
 }
 
 correlation_find_related() {

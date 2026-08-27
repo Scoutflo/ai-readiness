@@ -24,7 +24,7 @@ Provenance note: the ClickHouse read surface and HyperDX endpoint/auth model cit
 
 ## Doctor gate
 
-Requirements. Configure only the blocks that exist in your environment; delete the rest from `~/.scoutflo/toolkit.yaml`. ClickHouse must be configured for this audit to be worth running; HyperDX is configured additionally when you want the alerting/dashboard categories scored.
+Requirements. Configure only the blocks that exist in your environment; delete the rest from `~/.scoutflo/toolkit.yaml`. Configure **ClickHouse OR HyperDX — at least one** (both when you have both). ClickHouse scores telemetry coverage, ingestion freshness, retention, DB health, and security posture; HyperDX scores alerting (CS-040) and dashboards/sources (CS-041). A lane you do not configure — or one whose endpoint is unreachable this run (e.g. a ClickHouse on a private network you cannot reach yet) — has its categories marked `not-in-scope` and the overall score renormalizes over the lane you do have. A **HyperDX-only** run is fully supported; the audit only stops when *neither* lane is usable.
 
 | Integration | toolkit.yaml keys | Secret | Minimum scope | Tier |
 | --- | --- | --- | --- | --- |
@@ -89,11 +89,22 @@ HDX_EMAIL=$(printenv "$HDX_EMAIL_VAR" 2>/dev/null || true)
 HDX_PASSWORD_VAR=$(sh "$TT" "$CFG" clickstack get "$CS_IDX" hyperdx_password_env); [ -n "$HDX_PASSWORD_VAR" ] || HDX_PASSWORD_VAR="HDX_PASSWORD"
 HDX_PASSWORD=$(printenv "$HDX_PASSWORD_VAR" 2>/dev/null || true)
 echo "clickstack target: ${CS_LABEL} -> ${CS_SEG}/"
-if [ "${CS_N:-0}" -ge 1 ]; then
-  [ -n "${CH_KEY:-}" ] || { echo "clickstack target '${CS_LABEL}' configured but its ClickHouse password variable (${CH_KEY_VAR}, from clickstack.clickhouse_password_env) is not set; the default user requires a password over HTTP :8123 — run /scoutflo:connect"; exit 1; }
-else
+if [ "${CS_N:-0}" -lt 1 ]; then
   echo "clickstack block not configured in toolkit.yaml; this audit has nothing to read — configure it or run a different audit"; exit 1
 fi
+# ClickHouse OR HyperDX — at least one usable lane (a HyperDX-only run is supported). Require the
+# ClickHouse password ONLY when clickhouse_url is set for THIS target; a missing password (or no
+# clickhouse_url at all) marks the ClickHouse lane not-in-scope rather than aborting the run.
+CH_URL_D=$(sh "$TT" "$CFG" clickstack get "$CS_IDX" clickhouse_url)   # ClickHouse for THIS target (enumerator, not ambient)
+CH_LANE=0
+if [ -n "$CH_URL_D" ]; then
+  if [ -n "${CH_KEY:-}" ]; then
+    CH_LANE=1
+  else
+    echo "clickstack target '${CS_LABEL}': clickhouse_url is set but its password variable (${CH_KEY_VAR}, from clickstack.clickhouse_password_env) is not — the ClickHouse lane (telemetry coverage/freshness/retention/DB health/security) is not-in-scope this run; add ${CH_KEY_VAR} via /scoutflo:connect to enable it."
+  fi
+fi
+HDX_LANE=0   # set to 1 by any working HyperDX read path below (Personal API Access Key, or session-login fallback)
 if [ -n "${HDX_API_KEY:-}" ]; then
   # HyperDX REST auth (confirmed live + v2.29 source): the PRIMARY path is the per-user Personal
   # API Access Key (Bearer) against the external API v2 (/api/v2/*). Probe BOTH path forms — the
@@ -108,12 +119,13 @@ if [ -n "${HDX_API_KEY:-}" ]; then
       _meta=$(curl -s -o "$_hb" -w '%{http_code} %{content_type}' --max-time 10 -H "Authorization: Bearer ${HDX_API_KEY}" "${HDX_URL_D}${_b}/alerts") || _meta="000 -"
       _c="${_meta%% *}"; _ct="${_meta#* }"
       if [ "$_c" = "200" ] && printf '%s' "$_ct" | grep -qi json && jq -e 'type=="array" or has("data") or has("alerts")' "$_hb" >/dev/null 2>&1; then
-        echo "HyperDX in scope (Personal API Access Key -> GET ${_b}/alerts -> 200 JSON)"; _hdx_ok=1; rm -f "$_hb"; break
+        echo "HyperDX in scope (Personal API Access Key -> GET ${_b}/alerts -> 200 JSON)"; _hdx_ok=1; HDX_LANE=1; rm -f "$_hb"; break
       fi
       rm -f "$_hb"
     done
     if [ "$_hdx_ok" = "0" ]; then
       if [ -n "${HDX_EMAIL:-}" ] && [ -n "${HDX_PASSWORD:-}" ]; then
+        HDX_LANE=1
         echo "HyperDX Personal API Access Key did not authenticate the external API v2 (tried ${HDX_URL_D}/api/v2/alerts and ${HDX_URL_D}/api/api/v2/alerts), but login credentials are set — the audit falls back to a session (POST /api/login/password; cookie in a 0600 mktemp jar, deleted on exit, never printed) and scores CS-040/CS-041"
       else
         echo "HyperDX credential set but no working read path: the Personal API Access Key did not authenticate the external API v2 (tried ${HDX_URL_D}/api/v2/alerts and ${HDX_URL_D}/api/api/v2/alerts). Likely the configured token is the team INGESTION key, not the per-user 'Personal API Access Key' (Settings -> API Keys), or hyperdx_url does not reach the API. CS-040/CS-041 = not-in-scope (not a failure). Optional legacy fallback: set clickstack.hyperdx_email_env + hyperdx_password_env via /scoutflo:connect."
@@ -121,10 +133,16 @@ if [ -n "${HDX_API_KEY:-}" ]; then
     fi
   fi
 elif [ -n "${HDX_EMAIL:-}" ] && [ -n "${HDX_PASSWORD:-}" ]; then
+  HDX_LANE=1
   echo "HyperDX API key not set but login credentials are — the audit scores CS-040/CS-041 via the v2 session login (presence-checked only; never printed)"
 else
   echo "no HyperDX credential set (neither clickstack.hyperdx_api_key_env nor hyperdx_email_env + hyperdx_password_env); alerting (CS-040) and dashboards/sources (CS-041) will be marked not-in-scope"
 fi
+# At least one usable lane, or there is nothing to audit — the only hard stop.
+if [ "$CH_LANE" = 0 ] && [ "$HDX_LANE" = 0 ]; then
+  echo "clickstack target '${CS_LABEL}': neither lane is usable — no ClickHouse creds/URL AND no working HyperDX credential (Personal API Access Key or login). Nothing to audit; configure ClickHouse (clickhouse_url + password) or a HyperDX Personal API Access Key via /scoutflo:connect."; exit 1
+fi
+echo "clickstack target '${CS_LABEL}': lanes -> ClickHouse $([ "$CH_LANE" = 1 ] && echo in-scope || echo not-in-scope), HyperDX $([ "$HDX_LANE" = 1 ] && echo in-scope || echo not-in-scope). A not-in-scope lane's categories are blocked and the score renormalizes over the usable lane (CS-007)."
 ```
 
 Then one cheap live call per configured integration: a ClickHouse `SELECT 1` over HTTP with the read-only session flag, and the open HyperDX `GET /api/health` (200) followed by one authenticated call (the keyed probe, or on v2.x the session-login probe from the helper). Exact commands are in [references/clickstack-checks.md](references/clickstack-checks.md) section 1. `/scoutflo:doctor` runs the same checks standalone.
@@ -306,6 +324,7 @@ Behavior this enforces:
 
 - **Reachable ClickHouse, zero rows everywhere:** do **not** score CS-010 (Telemetry coverage) and CS-011 (Ingestion freshness) as a confident `0/100`, and do not score them a vacuous high from an empty set. Mark those two categories `blocked` with the visibility-gap reason, **keep ClickHouse health (CS-030) and Security posture (CS-050) included** (they read `system.*` and do not depend on any telemetry existing), renormalize per [severity-and-scoring.md](../../report-standard/severity-and-scoring.md), and emit finding **CS-007** naming the gap (collector down / wrong database / wrong instance) and the fix. Keeping DB-health and security included means at least one scored category always remains, which `check-findings.sh` requires.
 - **HyperDX reachable, zero alerts:** exclude CS-040 (alerting) and CS-041 (dashboards/sources) as `blocked` with the reason, renormalize, and emit **CS-007** — an instance with no alerts at all is a coverage gap to fix, never a confident zero.
+- **Whole lane not-in-scope (HyperDX-only, or ClickHouse-only, run):** when the doctor gate resolved only one usable lane (`CH_LANE`/`HDX_LANE`), mark **every** category of the absent lane `not-in-scope` and score over the lane you have. HyperDX-only (ClickHouse absent, no creds, or its endpoint unreachable — e.g. a private-network ClickHouse): block CS-010/CS-011/CS-020/CS-030/CS-050/CS-060/CS-061, **keep CS-040 (weight 20) + CS-041 (weight 5) scored**, renormalize over those two, and state plainly in the report that ClickHouse was not in scope this run and why (name the enable step: add `clickhouse_url` + its password var, or reach the private endpoint). ClickHouse-only (no working HyperDX credential): block CS-040/CS-041, keep the ClickHouse categories, renormalize. `check-findings.sh`'s "≥1 scored category" invariant always holds because at least one lane is usable (the gate exits when neither is). Never present a not-in-scope lane as a `0` or as end-to-end coverage.
 - **Never** write a confident `0/100`, a vacuously-high score, or an end-to-end claim on a tripped guardrail.
 
 ## Phase 2: Read-only inventory
