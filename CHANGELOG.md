@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.148
+
+Maintainability: a durable, self-validating contract map so the next build checks every cross-skill touch point by default.
+
+- **New `docs/CONTRACTS.md`** — the single map of every cross-skill contract (C1–C13): producer → consumer(s) → invariant → the guard that enforces it (CI gate + test suite + selftest case). It is the "read before building anything" reference, and `AGENTS.md` + the integration-kit Playbook now point at it. Covers the per-audit output schema, multi-target output + the target resolver, the findings→correlation→rca chain, the business-context Metadata Load block, topology, the topology-readiness headline, config-key agreement, the audit-all map, catalog/surface consistency, authed-probe content-type, and behavioral parity.
+- **Three new CI gates** (`ci/structure-check.sh` now composes **22**): **config-key-agreement** (doctor's `KNOWN_BLOCKS` equals the configurable top-level template blocks, modulo the `alertmanager`/`vmalert` sub-keys — so a provider can never be probed-but-unconfigurable or configurable-but-unprobed, the class that let Azure ship without a config scaffold); **prefix-registry** (every finding-ID prefix a skill emits is registered in `findings-schema.md`, so prefixes stay one-per-audit and never collide — the class that left AZR/AZROPT/DDOPT/DORT unregistered); and **contract-map** (the self-validating meta-gate: every gate `structure-check` composes must be documented in `CONTRACTS.md`, and every gate the map names must exist — the map cannot silently drift from reality).
+- Local-only tooling: `selftest/run.sh` updated to assert the 22-gate composition, all five linkage-gate markers, and the presence of the contract map; the integration-kit Playbook reads `CONTRACTS.md` first and maps each phase to its contracts.
+
 ## 0.1.147
 
 Cross-skill consistency & linkage hardening — a full audit of the plugin's shared machinery and the data contracts between skills (findings → correlation → rca, business-context APPLY, topology → consumers, doctor ↔ connect ↔ audit config) after the multi-target rollout, fixing every defect that silently dropped data or misled a user. Two new CI gates lock the two contract sides that had drifted.

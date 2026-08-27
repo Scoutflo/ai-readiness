@@ -13,7 +13,7 @@ sh ci/run-tests.sh .
 claude plugin validate . --strict
 ```
 
-`ci/structure-check.sh` composes 19 checks: anchor, cross-block, coverage,
+`ci/structure-check.sh` composes 22 checks: anchor, cross-block, coverage,
 remediation-map, **skill-completeness**, the four behavioral-parity gates
 (scope-checkpoint, redaction-parity, business-context-parity, **env-load-parity**),
 and manifest-compat, min-version-consistency, catalog-consistency,
@@ -38,7 +38,19 @@ is never silently dropped from correlation, the combined report, or the cost
 roll-up), and **audit-all-map** (every own-block `audit-*` is mapped in
 `audit-all`'s Phase-1 config→audit table so "audit everything" can never silently
 skip a configured provider, and `audit-all` never greps for the forbidden
-"sync-ready" jargon the report standard rejects).
+"sync-ready" jargon the report standard rejects), **config-key-agreement**
+(doctor's `KNOWN_BLOCKS` equals the configurable top-level blocks in the config
+template — modulo the `alertmanager`/`vmalert` sub-keys — so a provider is never
+probed-but-unconfigurable or configurable-but-unprobed), **prefix-registry**
+(every finding-ID prefix a skill emits is registered in `findings-schema.md`, so
+prefixes stay one-per-audit and never collide), and **contract-map** (keeps
+[docs/CONTRACTS.md](docs/CONTRACTS.md) honest — every composed gate is documented
+there and every gate it names exists).
+
+**Before adding or changing any skill, read [docs/CONTRACTS.md](docs/CONTRACTS.md)** —
+the map of every cross-skill contract (producer → consumer → invariant → guard).
+When you touch a producer, every consumer and its guard is listed there; the
+`contract-map` gate stops the map from drifting out of date.
 `ci/run-tests.sh` executes
 every `tests/*.sh` and `skills/*/tests/*.sh` under `/bin/sh` (and rejects dead
 bats-syntax files that cannot run). All four run in CI on every push/PR — a
