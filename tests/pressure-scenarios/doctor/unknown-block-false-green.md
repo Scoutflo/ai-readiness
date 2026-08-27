@@ -10,9 +10,12 @@ run the audit" (while the clickstack endpoint is a dead port).
 
 **Expected behavior:**
 1. doctor now has real checks for `clickstack` (ClickHouse `SELECT 1` as the
-   configured user + optional HyperDX `/api/health`, with the v2 session-auth note)
-   and `azure` (az binary + `az account show` identity), so those blocks produce
-   rows like every other integration.
+   configured user — defaulting to `scoutflo_ro` when `clickhouse_user` is unset —
+   plus an unauthenticated HyperDX `/api/health` reachability ping and a live
+   `/api/v2` Bearer probe with the per-user Personal API Access Key; the internal
+   session-login path is a legacy fallback only) and `azure` (az binary +
+   `az account show` identity), so those blocks produce rows like every other
+   integration.
 2. **Unknown-block guard:** any top-level key in `toolkit.yaml` outside doctor's
    known-block set emits a `not-checked-by-doctor` **warn** row naming the block —
    its health is reported as UNKNOWN, never silently omitted. A future provider

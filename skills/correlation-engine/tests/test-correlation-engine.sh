@@ -273,5 +273,41 @@ jq -e '.coverage[] | select(.finding_id=="AZR-050" and .classification=="covered
   || fail "case9: covered-elsewhere recommendation did not name the coverage_gap.signal (CPU% metric alert): $(jq -c '.coverage' "$corr9")"
 echo "PASS"
 
+# --- case 10: non-monitor alerting kinds count as coverage (v0.1.152 regex fix) -
+# Before v0.1.152 the active() kind-regex only matched monitor|alert_rule|log_alert|
+# activity_log_alert, so an AWS alarm / GCP alert_policy / ClickStack alert covering an
+# Azure coverage-gap was silently dropped and the gap was falsely called true-gap. Lock
+# the fix: an active+routed AWS alarm and GCP alert_policy must classify the matching
+# Azure gaps covered-elsewhere, while a resource nothing covers stays true-gap.
+printf 'testing: AWS alarm / GCP alert_policy count as active cross-tool coverage (kind-regex fix) ... '
+D10="$TMP_ROOT/case10"
+write_findings "$D10" "azure" '[
+  {"id": "AZR-101", "title": "no metric alerts on checkout", "severity": "critical", "area": "coverage", "affected": ["checkout"]},
+  {"id": "AZR-102", "title": "no metric alerts on search",   "severity": "high",     "area": "coverage", "affected": ["search"]},
+  {"id": "AZR-103", "title": "no metric alerts on legacy-batch", "severity": "high",  "area": "coverage", "affected": ["legacy-batch"]}
+]'
+# AWS inventory: an ACTIVE routed CloudWatch alarm (kind alarm) on checkout.
+mkdir -p "$D10/aws/$DATE"
+jq -n '{target: "aws", audit_date: "2026-01-15", items: [
+  {"kind": "alarm", "name": "checkout 5xx", "covers": "checkout", "enabled": true, "routes_to": "sns-payments"}
+]}' > "$D10/aws/$DATE/inventory.json"
+# GCP inventory: an ACTIVE routed alert policy (kind alert_policy) on search.
+mkdir -p "$D10/gcp/$DATE"
+jq -n '{target: "gcp", audit_date: "2026-01-15", items: [
+  {"kind": "alert_policy", "name": "search latency", "covers": "search", "enabled": true, "routes_to": "pagerduty"}
+]}' > "$D10/gcp/$DATE/inventory.json"
+run_engine "$D10"
+corr10="$D10/correlation.json"
+[ -f "$corr10" ] || fail "case10: correlation.json was not written"
+jq -e '.coverage[] | select(.finding_id=="AZR-101" and .classification=="covered-elsewhere" and (.covered_by[0].provider=="aws") and (.covered_by[0].inventory_name=="checkout 5xx"))' "$corr10" >/dev/null \
+  || fail "case10: AZR-101 (checkout) not covered by the AWS alarm kind — the kind-regex still drops non-monitor alerting kinds: $(jq -c '.coverage' "$corr10")"
+jq -e '.coverage[] | select(.finding_id=="AZR-102" and .classification=="covered-elsewhere" and (.covered_by[0].provider=="gcp"))' "$corr10" >/dev/null \
+  || fail "case10: AZR-102 (search) not covered by the GCP alert_policy kind: $(jq -c '.coverage' "$corr10")"
+jq -e '.coverage[] | select(.finding_id=="AZR-103" and .classification=="true-gap")' "$corr10" >/dev/null \
+  || fail "case10: AZR-103 (legacy-batch, nothing covers it) must stay true-gap: $(jq -c '.coverage' "$corr10")"
+[ "$(jq '.total_coverage_covered_elsewhere' "$corr10")" -eq 2 ] \
+  || fail "case10: expected total_coverage_covered_elsewhere=2 (alarm + alert_policy), got $(jq '.total_coverage_covered_elsewhere' "$corr10")"
+echo "PASS"
+
 echo
 echo "=== All correlation-engine tests passed ==="

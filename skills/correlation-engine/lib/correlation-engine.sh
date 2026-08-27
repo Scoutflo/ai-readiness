@@ -162,9 +162,18 @@ correlation_find_coverage() {
   jq --argjson cov "$cov" '
     def norm: (. // "") | ascii_downcase | gsub("^[[:space:]]+|[[:space:]]+$";"");
     def active($prov):
+      # Coverage-bearing kinds: an inventory object that actively WATCHES its `covers`
+      # resource and can page — a metric/log/activity alert, a monitor, an alarm, or an
+      # uptime check. This list MUST stay in sync with the alerting `kind` values each
+      # audit emits (report-standard/inventory-schema.md) and contract C14: AWS emits
+      # `alarm`, GCP/DigitalOcean emit `alert_policy`, ClickStack/HyperDX emit `alert`,
+      # Azure emits `alert_rule`/`log_alert`/`activity_log_alert`, Datadog/Groundcover
+      # emit `monitor`. Routing/muting/delivery kinds (receiver, silence, route,
+      # escalation_policy, notification_channel, action_group, contact_point,
+      # notification_policy, schedule) are NOT coverage — they never appear here.
       [ $cov[] | select(
           (.provider != $prov)
-          and ((.kind // "") | test("^(monitor|alert_rule|log_alert|activity_log_alert)$"))
+          and ((.kind // "") | test("^(monitor|alarm|alert|alert_rule|alert_policy|log_alert|activity_log_alert|uptime_check)$"))
           and ((.enabled) != false)
           and (((.routes_to) | norm) as $r | ($r != "" and $r != "none" and $r != "-")) ) ];
     [ .[]
