@@ -253,5 +253,25 @@ jq -e '.coverage[] | select(.finding_id=="AZR-002") | has("severity") | not' "$c
   || fail "case8: coverage entry must not carry/rewrite a finding severity (advisory only)"
 echo "PASS"
 
+# --- case 9: coverage_gap.signal precision --------------------------------------
+# A finding carrying an explicit coverage_gap object is recognized as a coverage
+# gap (no area+title heuristic needed) and the covered-elsewhere reframe names the
+# exact signal, closing the service-matches-but-signal-differs blind spot.
+printf 'testing: coverage_gap.signal drives precise covered-elsewhere wording ... '
+D9="$TMP_ROOT/case9"
+write_findings "$D9" "azure" '[
+  {"id": "AZR-050", "title": "metric alert coverage", "severity": "critical", "area": "coverage", "affected": ["checkout"], "coverage_gap": {"signal": "CPU% metric alert", "kind": "metric_alert"}}
+]'
+mkdir -p "$D9/datadog/$DATE"
+jq -n '{target: "datadog", audit_date: "2026-01-15", items: [
+  {"kind": "monitor", "name": "checkout latency", "covers": "checkout", "enabled": true, "routes_to": "pagerduty"}
+]}' > "$D9/datadog/$DATE/inventory.json"
+run_engine "$D9"
+corr9="$D9/correlation.json"
+[ -f "$corr9" ] || fail "case9: correlation.json was not written"
+jq -e '.coverage[] | select(.finding_id=="AZR-050" and .classification=="covered-elsewhere" and (.recommendation | test("CPU% metric alert")))' "$corr9" >/dev/null \
+  || fail "case9: covered-elsewhere recommendation did not name the coverage_gap.signal (CPU% metric alert): $(jq -c '.coverage' "$corr9")"
+echo "PASS"
+
 echo
 echo "=== All correlation-engine tests passed ==="

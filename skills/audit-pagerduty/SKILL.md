@@ -78,7 +78,7 @@ PD_REGION=$(sh "$TT" "$CFG" pagerduty get "$PD_IDX" region); PD_REGION="${PD_REG
 if [ "$PD_REGION" = "eu" ]; then PD_API="https://api.eu.pagerduty.com"; else PD_API="https://api.pagerduty.com"; fi
 echo "pagerduty target: ${PD_LABEL} -> ${PD_SEG}/ (token via ${PD_TOKVAR}, region ${PD_REGION})"
 # pagerduty.token_env names the variable; presence check only, never print the value.
-[ -n "${PAGERDUTY_TOKEN:-}" ] || { echo "pagerduty target '${PD_LABEL}' token variable ${PD_TOKVAR} is not set; run /scoutflo:connect"; exit 1; }
+[ -n "${PAGERDUTY_TOKEN:-}" ] || { echo "pagerduty target '${PD_LABEL}' token variable ${PD_TOKVAR} is not set — add it to ~/.scoutflo/env (echo 'export ${PD_TOKVAR}=\"<paste>\"' >> ~/.scoutflo/env; chmod 600 ~/.scoutflo/env), or run /scoutflo:connect. The plugin reads that file, not your interactive shell."; exit 1; }
 # Keep the body (do NOT discard to /dev/null) and capture the content-type, so a 200 that is
 # really an HTML SSO/login/SPA/proxy page fails closed instead of passing on the status alone.
 PD_BODY="$(mktemp)"
@@ -113,7 +113,7 @@ PD_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$PD_N"
 PD_LABEL=$(sh "$TT" "$CFG" pagerduty label "$PD_IDX")
 PD_TOKVAR=$(sh "$TT" "$CFG" pagerduty get "$PD_IDX" token_env); PD_TOKVAR="${PD_TOKVAR:-PAGERDUTY_TOKEN}"
 PAGERDUTY_TOKEN="$(printenv "$PD_TOKVAR" 2>/dev/null || true)"; export PAGERDUTY_TOKEN
-[ -n "${PAGERDUTY_TOKEN:-}" ] || { echo "pagerduty target '${PD_LABEL}' token variable ${PD_TOKVAR} is not set; run /scoutflo:connect"; exit 1; }
+[ -n "${PAGERDUTY_TOKEN:-}" ] || { echo "pagerduty target '${PD_LABEL}' token variable ${PD_TOKVAR} is not set — add it to ~/.scoutflo/env (echo 'export ${PD_TOKVAR}=\"<paste>\"' >> ~/.scoutflo/env; chmod 600 ~/.scoutflo/env), or run /scoutflo:connect. The plugin reads that file, not your interactive shell."; exit 1; }
 PD_REGION=$(sh "$TT" "$CFG" pagerduty get "$PD_IDX" region); PD_REGION="${PD_REGION:-us}"
 if [ "$PD_REGION" = "eu" ]; then PD_API="https://api.eu.pagerduty.com"; else PD_API="https://api.pagerduty.com"; fi
 # PagerDuty account keys have no whoami; the account is identified by what the key reads.

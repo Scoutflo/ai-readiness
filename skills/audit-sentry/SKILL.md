@@ -60,7 +60,7 @@ SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.s
 # each target uses its own token. Presence check only, never print the value.
 SNTRY_TOKVAR=$(sh "$TT" "$CFG" sentry get "$SNTRY_IDX" token_env); [ -n "$SNTRY_TOKVAR" ] || SNTRY_TOKVAR=SENTRY_TOKEN
 SENTRY_TOKEN=$(printenv "$SNTRY_TOKVAR" 2>/dev/null || true)
-[ -n "${SENTRY_TOKEN:-}" ] || { echo "SENTRY_TOKEN is not set; run /scoutflo:connect"; exit 1; }
+[ -n "${SENTRY_TOKEN:-}" ] || { echo "SENTRY_TOKEN is not set — add it to ~/.scoutflo/env (echo 'export SENTRY_TOKEN=\"<paste>\"' >> ~/.scoutflo/env; chmod 600 ~/.scoutflo/env), or run /scoutflo:connect. The plugin reads that file, not your interactive shell."; exit 1; }
 command -v curl >/dev/null || { echo "curl is required"; exit 1; }
 command -v jq   >/dev/null || { echo "jq is required"; exit 1; }
 
@@ -117,7 +117,7 @@ SENTRY_ORG=$(sh "$TT" "$CFG" sentry get "$SNTRY_IDX" org)     # sentry.org
 API="https://${SENTRY_HOST}/api/0"
 SNTRY_TOKVAR=$(sh "$TT" "$CFG" sentry get "$SNTRY_IDX" token_env); [ -n "$SNTRY_TOKVAR" ] || SNTRY_TOKVAR=SENTRY_TOKEN
 SENTRY_TOKEN=$(printenv "$SNTRY_TOKVAR" 2>/dev/null || true)   # token_env names the variable; never a hardcoded name
-[ -n "${SENTRY_TOKEN:-}" ] || { echo "SENTRY_TOKEN is not set; run /scoutflo:connect"; exit 1; }
+[ -n "${SENTRY_TOKEN:-}" ] || { echo "SENTRY_TOKEN is not set — add it to ~/.scoutflo/env (echo 'export SENTRY_TOKEN=\"<paste>\"' >> ~/.scoutflo/env; chmod 600 ~/.scoutflo/env), or run /scoutflo:connect. The plugin reads that file, not your interactive shell."; exit 1; }
 
 SMALL_MAX_PROJECTS="15"    # single-pass ceiling; example, tune to your environment
 MEDIUM_MAX_PROJECTS="60"   # one-run ceiling; example, tune to your environment
@@ -223,7 +223,7 @@ SENTRY_ORG=$(sh "$TT" "$CFG" sentry get "$SNTRY_IDX" org)     # sentry.org
 API="https://${SENTRY_HOST}/api/0"
 SNTRY_TOKVAR=$(sh "$TT" "$CFG" sentry get "$SNTRY_IDX" token_env); [ -n "$SNTRY_TOKVAR" ] || SNTRY_TOKVAR=SENTRY_TOKEN
 SENTRY_TOKEN=$(printenv "$SNTRY_TOKVAR" 2>/dev/null || true)   # token_env names the variable; never a hardcoded name
-[ -n "${SENTRY_TOKEN:-}" ] || { echo "SENTRY_TOKEN is not set; run /scoutflo:connect"; exit 1; }
+[ -n "${SENTRY_TOKEN:-}" ] || { echo "SENTRY_TOKEN is not set — add it to ~/.scoutflo/env (echo 'export SENTRY_TOKEN=\"<paste>\"' >> ~/.scoutflo/env; chmod 600 ~/.scoutflo/env), or run /scoutflo:connect. The plugin reads that file, not your interactive shell."; exit 1; }
 RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${SNTRY_SEG}/$(date -u +%Y-%m-%d)/raw"
 mkdir -p "${RAW_DIR}/projects"
 

@@ -77,8 +77,8 @@ DD_API_VAR=$(sh "$TT" "$CFG" datadog get "$DD_IDX" api_key_env); DD_API_VAR="${D
 DD_APP_VAR=$(sh "$TT" "$CFG" datadog get "$DD_IDX" app_key_env); DD_APP_VAR="${DD_APP_VAR:-DATADOG_APP_KEY}"
 DATADOG_API_KEY="$(printenv "$DD_API_VAR" 2>/dev/null || true)"; export DATADOG_API_KEY
 DATADOG_APP_KEY="$(printenv "$DD_APP_VAR" 2>/dev/null || true)"; export DATADOG_APP_KEY
-[ -n "${DATADOG_API_KEY:-}" ] || { echo "DATADOG_API_KEY is not set; run /scoutflo:connect"; exit 1; }
-[ -n "${DATADOG_APP_KEY:-}" ] || { echo "DATADOG_APP_KEY is not set; both keys are required; run /scoutflo:connect"; exit 1; }
+[ -n "${DATADOG_API_KEY:-}" ] || { echo "DATADOG_API_KEY is not set — add it to ~/.scoutflo/env (echo 'export DATADOG_API_KEY=\"<paste>\"' >> ~/.scoutflo/env; chmod 600 ~/.scoutflo/env), or run /scoutflo:connect. The plugin reads that file, not your interactive shell."; exit 1; }
+[ -n "${DATADOG_APP_KEY:-}" ] || { echo "DATADOG_APP_KEY is not set (both keys are required) — add it to ~/.scoutflo/env (echo 'export DATADOG_APP_KEY=\"<paste>\"' >> ~/.scoutflo/env; chmod 600 ~/.scoutflo/env), or run /scoutflo:connect. The plugin reads that file, not your interactive shell."; exit 1; }
 # Datadog is SaaS so the risk is low, but as defense-in-depth keep the body and content-type
 # (do NOT discard to /dev/null) so a 200 that is really an HTML login/SPA/proxy page fails closed.
 DDV_BODY="$(mktemp)"
@@ -125,8 +125,8 @@ DD_API_VAR=$(sh "$TT" "$CFG" datadog get "$DD_IDX" api_key_env); DD_API_VAR="${D
 DD_APP_VAR=$(sh "$TT" "$CFG" datadog get "$DD_IDX" app_key_env); DD_APP_VAR="${DD_APP_VAR:-DATADOG_APP_KEY}"
 DATADOG_API_KEY="$(printenv "$DD_API_VAR" 2>/dev/null || true)"; export DATADOG_API_KEY
 DATADOG_APP_KEY="$(printenv "$DD_APP_VAR" 2>/dev/null || true)"; export DATADOG_APP_KEY
-[ -n "${DATADOG_API_KEY:-}" ] || { echo "datadog target '${DD_LABEL}' key variable ${DD_API_VAR} is not set; run /scoutflo:connect"; exit 1; }
-[ -n "${DATADOG_APP_KEY:-}" ] || { echo "datadog target '${DD_LABEL}' app-key variable ${DD_APP_VAR} is not set; run /scoutflo:connect"; exit 1; }
+[ -n "${DATADOG_API_KEY:-}" ] || { echo "datadog target '${DD_LABEL}' key variable ${DD_API_VAR} is not set — add it to ~/.scoutflo/env (echo 'export ${DD_API_VAR}=\"<paste>\"' >> ~/.scoutflo/env; chmod 600 ~/.scoutflo/env), or run /scoutflo:connect. The plugin reads that file, not your interactive shell."; exit 1; }
+[ -n "${DATADOG_APP_KEY:-}" ] || { echo "datadog target '${DD_LABEL}' app-key variable ${DD_APP_VAR} is not set — add it to ~/.scoutflo/env (echo 'export ${DD_APP_VAR}=\"<paste>\"' >> ~/.scoutflo/env; chmod 600 ~/.scoutflo/env), or run /scoutflo:connect. The plugin reads that file, not your interactive shell."; exit 1; }
 # There is no org-name whoami on the key pair; identify the org by what it reads and by
 # the site it is bound to. A mismatch between the exported keys' site and datadog.site
 # surfaces here as a 403 rather than a wrong-account read.

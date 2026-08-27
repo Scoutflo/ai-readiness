@@ -72,7 +72,7 @@ command -v kubectl >/dev/null || echo "WARN: kubectl missing; cluster-side check
 # gated here; each check block in references/backend-checks.md resolves them
 # itself and falls back to an unauthenticated call when unset.
 if grep -q '^grafana:' "$CFG"; then
-  [ -n "${GRAFANA_TOKEN:-}" ] || { echo "grafana block configured but GRAFANA_TOKEN not set; run /scoutflo:connect"; exit 1; }
+  [ -n "${GRAFANA_TOKEN:-}" ] || { echo "grafana block configured but GRAFANA_TOKEN is not set — add it to ~/.scoutflo/env (echo 'export GRAFANA_TOKEN=\"<paste>\"' >> ~/.scoutflo/env; chmod 600 ~/.scoutflo/env), or run /scoutflo:connect. The plugin reads that file, not your interactive shell."; exit 1; }
 else
   echo "grafana block not configured in toolkit.yaml; Grafana and dashboard checks (Phase 9) will be marked not-in-scope"
 fi

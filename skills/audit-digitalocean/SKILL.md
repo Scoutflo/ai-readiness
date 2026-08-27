@@ -72,7 +72,7 @@ if [ "$DO_KIND" = seq ]; then DO_SEG="digitalocean/${DO_LABEL}"; else DO_SEG="di
 # digitalocean.token_env names THIS target's token variable; presence-check only, never print the value.
 DO_TOKEN_VAR=$(sh "$TT" "$CFG" digitalocean get "$DO_IDX" token_env); [ -n "$DO_TOKEN_VAR" ] || DO_TOKEN_VAR="DIGITALOCEAN_ACCESS_TOKEN"
 export DIGITALOCEAN_ACCESS_TOKEN="$(printenv "$DO_TOKEN_VAR" 2>/dev/null || true)"
-[ -n "${DIGITALOCEAN_ACCESS_TOKEN:-}" ] || { echo "${DO_TOKEN_VAR} is not set; run /scoutflo:connect"; exit 1; }
+[ -n "${DIGITALOCEAN_ACCESS_TOKEN:-}" ] || { echo "${DO_TOKEN_VAR} is not set — add it to ~/.scoutflo/env (echo 'export ${DO_TOKEN_VAR}=\"<paste>\"' >> ~/.scoutflo/env; chmod 600 ~/.scoutflo/env), or run /scoutflo:connect. The plugin reads that file, not your interactive shell."; exit 1; }
 echo "digitalocean target: ${DO_LABEL} -> ${DO_SEG}/"
 
 DOCTL_VERSION="$(doctl version)"

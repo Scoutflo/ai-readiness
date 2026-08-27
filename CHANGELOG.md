@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.150
+
+Closes out the remaining polish from the Whatfix review, plus two durable guards.
+
+- **Signal-level precision for cross-tool coverage.** A finding may carry an optional `coverage_gap: {signal, kind}` (findings-schema) that names the exact signal a coverage gap is about; the correlation engine then recognizes the gap without the area+title heuristic and words the "covered-elsewhere" reframe against that signal ("confirm the covering monitor watches `<CPU% metric alert>`") — closing the service-matches-but-signal-differs blind spot. Advisory; `check-findings.sh` neither requires nor validates it.
+- **New `optional-key-parity` CI gate (C15).** Makes the per-provider required-vs-optional config-key contract explicit and template-enforced — including **either-or lanes** like ClickStack = ClickHouse **or** HyperDX — so the "setup surface calls a lane optional while the audit hard-requires it" drift class (the ClickStack HyperDX-only blocker) cannot silently recur. This is the sub-key granularity block-level `config-key-agreement` doesn't see. `structure-check` now composes **23** gates.
+- **Operator-message polish.** All 11 own-block audits with a token-not-set exit now mirror doctor's store-directed hint (`add it to ~/.scoutflo/env … the plugin reads that file, not your shell`) instead of a bare "run /scoutflo:connect"; doctor's remaining bare `blocked:` rows point at the sibling env row; the exit-2, signoz-URL, and `jq`-install hints gained a concrete next step; connect's Step 2 marks the ClickStack lanes optional (at least one).
+- **AWS doctor↔audit consistency.** `doctor` now probes AWS identity on the active credential chain even when `aws.account_id` is unset (it still asserts the match when set), instead of skipping AWS entirely — so doctor and the audit agree on when AWS is auditable.
+
 ## 0.1.149
 
 Customer-experience hardening from a live Whatfix onboarding call — the plugin no longer blocks or misleads an operator mid-call, and it now reflects cross-tool reality.

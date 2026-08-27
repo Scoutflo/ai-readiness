@@ -616,7 +616,7 @@ aws:
     tier: read-only
 ```
 
-The AWS CLI is a prerequisite for the AWS skills (install AWS CLI v2 from your package manager; `aws --version` is the doctor check). There is no `token_env`: auth rides the AWS credential chain, not a pasted token. `account_id` is quoted so YAML never strips a leading zero. Pick one auth path:
+The AWS CLI is a prerequisite for the AWS skills (install AWS CLI v2 from your package manager; `aws --version` is the doctor check). There is no `token_env`: auth rides the AWS credential chain, not a pasted token. `account_id` is quoted so YAML never strips a leading zero. `account_id` is **optional**: set it and the audit (and doctor) assert the live caller identity matches it — a safety pin against auditing the wrong account; leave it unset and the audit and doctor simply run on whatever the active credential chain resolves to. Pick one auth path:
 
 1. **Named profile (recommended on a workstation).** Configure a profile in `~/.aws/config` (SSO or access keys) and set `aws.profile`. Every skill command passes `--profile` and `--region` explicitly, so nothing depends on ambient shell state.
 2. **Active credential chain (CI, instance roles).** Leave `profile` unset; the environment variables, instance role, or SSO session already in effect become the identity.

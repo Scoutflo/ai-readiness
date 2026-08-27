@@ -50,7 +50,7 @@ SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.s
 # grafana.token_env names the variable holding THIS target's token; presence check only, never print the value.
 GRAF_TOKEN_VAR=$(sh "$TT" "$CFG" grafana get "$GRAF_IDX" token_env); [ -n "$GRAF_TOKEN_VAR" ] || GRAF_TOKEN_VAR="GRAFANA_TOKEN"
 GRAFANA_TOKEN=$(printenv "$GRAF_TOKEN_VAR" 2>/dev/null || true)
-[ -n "${GRAFANA_TOKEN:-}" ] || { echo "${GRAF_TOKEN_VAR} is not set; run /scoutflo:connect"; exit 1; }
+[ -n "${GRAFANA_TOKEN:-}" ] || { echo "${GRAF_TOKEN_VAR} is not set — add it to ~/.scoutflo/env (echo 'export ${GRAF_TOKEN_VAR}=\"<paste>\"' >> ~/.scoutflo/env; chmod 600 ~/.scoutflo/env), or run /scoutflo:connect. The plugin reads that file, not your interactive shell."; exit 1; }
 command -v curl >/dev/null || { echo "curl is required"; exit 1; }
 command -v jq   >/dev/null || { echo "jq is required"; exit 1; }
 echo "grafana target: ${GRAF_LABEL} (${GRAFANA_URL}) -> ${GRAF_SEG}/"
@@ -119,7 +119,7 @@ SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.s
 [ -f "$SCOUTFLO_ENV" ] && . "$SCOUTFLO_ENV" || true
 GRAF_TOKEN_VAR=$(sh "$TT" "$CFG" grafana get "$GRAF_IDX" token_env); [ -n "$GRAF_TOKEN_VAR" ] || GRAF_TOKEN_VAR="GRAFANA_TOKEN"
 GRAFANA_TOKEN=$(printenv "$GRAF_TOKEN_VAR" 2>/dev/null || true)
-[ -n "${GRAFANA_TOKEN:-}" ] || { echo "${GRAF_TOKEN_VAR} is not set; run /scoutflo:connect"; exit 1; }
+[ -n "${GRAFANA_TOKEN:-}" ] || { echo "${GRAF_TOKEN_VAR} is not set — add it to ~/.scoutflo/env (echo 'export ${GRAF_TOKEN_VAR}=\"<paste>\"' >> ~/.scoutflo/env; chmod 600 ~/.scoutflo/env), or run /scoutflo:connect. The plugin reads that file, not your interactive shell."; exit 1; }
 
 SMALL_MAX_OBJECTS="40"    # dashboards + alert rules + datasources combined; example, tune to your environment
 MEDIUM_MAX_OBJECTS="200"  # example, tune to your environment
@@ -260,7 +260,7 @@ Runs on the large path only. State lives under a run-ID-keyed run directory, `./
    [ -f "$SCOUTFLO_ENV" ] && . "$SCOUTFLO_ENV" || true
    GRAF_TOKEN_VAR=$(sh "$TT" "$CFG" grafana get "$GRAF_IDX" token_env); [ -n "$GRAF_TOKEN_VAR" ] || GRAF_TOKEN_VAR="GRAFANA_TOKEN"
    GRAFANA_TOKEN=$(printenv "$GRAF_TOKEN_VAR" 2>/dev/null || true)
-   [ -n "${GRAFANA_TOKEN:-}" ] || { echo "${GRAF_TOKEN_VAR} is not set; run /scoutflo:connect"; exit 1; }
+   [ -n "${GRAFANA_TOKEN:-}" ] || { echo "${GRAF_TOKEN_VAR} is not set — add it to ~/.scoutflo/env (echo 'export ${GRAF_TOKEN_VAR}=\"<paste>\"' >> ~/.scoutflo/env; chmod 600 ~/.scoutflo/env), or run /scoutflo:connect. The plugin reads that file, not your interactive shell."; exit 1; }
    RUN_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${GRAF_SEG}/runs/20260717T140500Z"   # example; this run's resolved RUN_DIR
    WORKLIST="${RUN_DIR}/worklist.tsv"
 

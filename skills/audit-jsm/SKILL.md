@@ -77,8 +77,8 @@ JSM_EMAIL_VAR=$(sh "$TT" "$CFG" jsm get "$JT_IDX" email_env); [ -n "$JSM_EMAIL_V
 JSM_TOKEN_VAR=$(sh "$TT" "$CFG" jsm get "$JT_IDX" token_env); [ -n "$JSM_TOKEN_VAR" ] || JSM_TOKEN_VAR="JSM_API_TOKEN"
 JSM_EMAIL=$(printenv "$JSM_EMAIL_VAR" 2>/dev/null || true)
 JSM_API_TOKEN=$(printenv "$JSM_TOKEN_VAR" 2>/dev/null || true)
-[ -n "${JSM_EMAIL:-}" ]     || { echo "${JSM_EMAIL_VAR} is not set (jsm target '${JT_LABEL}'); run /scoutflo:connect"; exit 1; }
-[ -n "${JSM_API_TOKEN:-}" ] || { echo "${JSM_TOKEN_VAR} is not set (jsm target '${JT_LABEL}'); run /scoutflo:connect"; exit 1; }
+[ -n "${JSM_EMAIL:-}" ]     || { echo "${JSM_EMAIL_VAR} is not set (jsm target '${JT_LABEL}') — add it to ~/.scoutflo/env (echo 'export ${JSM_EMAIL_VAR}=\"<paste>\"' >> ~/.scoutflo/env; chmod 600 ~/.scoutflo/env), or run /scoutflo:connect. The plugin reads that file, not your interactive shell."; exit 1; }
+[ -n "${JSM_API_TOKEN:-}" ] || { echo "${JSM_TOKEN_VAR} is not set (jsm target '${JT_LABEL}') — add it to ~/.scoutflo/env (echo 'export ${JSM_TOKEN_VAR}=\"<paste>\"' >> ~/.scoutflo/env; chmod 600 ~/.scoutflo/env), or run /scoutflo:connect. The plugin reads that file, not your interactive shell."; exit 1; }
 # jsm.cloud_id when set on THIS target; else resolve from the site's tenant_info edge route.
 CLOUD_ID=$(sh "$TT" "$CFG" jsm get "$JT_IDX" cloud_id)
 [ -n "$CLOUD_ID" ] || CLOUD_ID="$(curl -fsS --max-time 10 "https://${JSM_SITE}/_edge/tenant_info" | jq -r '.cloudId // empty')"

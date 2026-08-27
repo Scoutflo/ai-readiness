@@ -170,8 +170,12 @@ correlation_find_coverage() {
     [ .[]
       | . as $f
       | ($f.target | split("/")[0]) as $prov
-      | select( (($f.area // "") | test("coverage|alert|monitor|metric";"i"))
-                and (($f.title // "") | test("no |missing|lacks|absent|not configured|no metric|without";"i")) )
+      # A finding is a coverage-gap candidate if it carries an explicit coverage_gap
+      # object (the precise, audit-declared signal) OR matches the area+title heuristic
+      # (the fallback when an audit has not yet adopted the optional coverage_gap field).
+      | select( ($f.coverage_gap != null)
+                or ( (($f.area // "") | test("coverage|alert|monitor|metric";"i"))
+                     and (($f.title // "") | test("no |missing|lacks|absent|not configured|no metric|without";"i")) ) )
       | (active($prov)) as $act
       | (($f.affected // [])[]) as $r0
       | ($r0 | norm) as $r
@@ -184,7 +188,8 @@ correlation_find_coverage() {
             covered_by: [ $exact[] | {provider, inventory_name: .name, routes_to, match: "exact"} ],
             recommendation: ("single-tool-dependency: " + $exact[0].provider + " monitor " + $exact[0].name
                              + " actively covers " + $r0 + " and routes to " + $exact[0].routes_to
-                             + "; confirm it covers the specific signal this gap names before de-prioritizing") }
+                             + "; confirm it covers " + (($f.coverage_gap.signal) // "the specific signal this gap names")
+                             + " before de-prioritizing") }
         elif ($fuzzy|length) > 0 then
           { finding_id: $f.id, target: $f.target, resource: $r0, classification: "unmappable",
             covered_by: [ $fuzzy[] | {provider, inventory_name: .name, routes_to, match: "fuzzy"} ],
