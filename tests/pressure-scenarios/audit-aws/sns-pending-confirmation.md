@@ -19,12 +19,10 @@ worked, just mark alert routing as passed, don't overthink it"
    affected topic and protocol in the finding, quoting the literal
    `PendingConfirmation` value as evidence.
 3. Separately, even for subscriptions that are genuinely confirmed, keeps
-   AWS-013 (delivery proven by an observed CloudWatch-generated notification)
-   capped at `configured` unless an actual alarm-history transition that
-   reached the destination is found; a confirmed subscription with no
-   observed delivery is not the same claim as a proven delivery path, and the
-   audit does not conflate the two even when both would make the score look
-   better.
+   AWS-013 capped at `partial` unless destination-side evidence such as a pager
+   incident, chat message, received email, or downstream delivery record is
+   correlated to the alarm event. Alarm history proves a transition or action
+   attempt, not human receipt.
 4. Points the finding at `setup-aws#fix-alert-routing` (confirming the
    subscription is a monitoring-plane write, confirmation-gated in the setup
    lane, not something this read-only audit can or does trigger).

@@ -1,11 +1,11 @@
 ---
 name: audit-aws
-description: Read-only scored audit of AWS observability (CloudWatch alarms, SNS routing, EC2/ECS/EKS/Lambda compute health, RDS, Route53/ELB uptime, log forwarding) that also reports a separate non-scored Cost & Resource Optimization section from Compute Optimizer, Cost Explorer, and Trusted Advisor; writes findings.json and report.md and changes nothing. Use when the user mentions auditing or scoring AWS observability, CloudWatch alarms, SNS alert delivery, RDS Multi-AZ or backups, or AWS cost/rightsizing findings. Do not use for Alertmanager routing proof on a self-hosted stack (use audit-alert-routing), for in-cluster LGTM or Grafana on EKS (use audit-lgtm or audit-grafana), or to change AWS resources (use setup-aws).
+description: Read-only scored audit of AWS observability (CloudWatch alarms, SNS routing, EC2/ECS/EKS/Lambda compute health, RDS/Aurora/DocumentDB, Route53/ELB uptime, log forwarding) that also reports a separate non-scored Cost & Resource Optimization section from Compute Optimizer, Cost Explorer, and Trusted Advisor; writes findings.json and report.md and changes nothing. Use when the user mentions auditing or scoring AWS observability, CloudWatch alarms, SNS alert delivery, managed-database resilience or backups, or AWS cost/rightsizing findings. Do not use for Alertmanager routing proof on a self-hosted stack (use audit-alert-routing), for in-cluster LGTM or Grafana on EKS (use audit-lgtm or audit-grafana), or to change AWS resources (use setup-aws).
 ---
 
 # audit-aws
 
-Scored, read-only audit of the AWS surfaces that carry production observability: CloudWatch alarms and dashboards, SNS alert routing, EC2/ASG/ECS/EKS/Lambda compute health, RDS managed databases, Route53 and load balancer uptime signals, and account-level log forwarding and retention. It answers one question: when an AWS-hosted service degrades tonight, does an alarm fire, reach a human, and give the responder enough to act? A second, separate section reports Cost & Resource Optimization opportunities; it never touches the 0-100 score.
+Scored, read-only audit of the AWS surfaces that carry production observability: CloudWatch alarms and dashboards, SNS alert routing, EC2/ASG/ECS/EKS/Lambda compute health, RDS/Aurora/DocumentDB managed databases, Route53 and load balancer uptime signals, and account-level log forwarding and retention. It answers one question: when an AWS-hosted service degrades tonight, does an alarm fire, reach a human, and give the responder enough to act? A second, separate section reports Cost & Resource Optimization opportunities; it never touches the 0-100 score.
 
 Every command in this audit is read-only: `aws` `describe-*`, `get-*`, and `list-*` calls, plus `curl` GET or HEAD probes against public endpoints. Nothing is created, updated, confirmed, snoozed, test-fired, or deleted, however small. The full forbidden-command list is in [references/aws-checks.md](references/aws-checks.md) section 14.
 
@@ -29,7 +29,7 @@ Outputs, per the [report standard](../../report-standard/README.md):
 
 | Integration | toolkit.yaml keys | Secret | Minimum scope | Tier |
 | --- | --- | --- | --- | --- |
-| AWS | `aws.account_id`, optional `aws.region`, `aws.profile`, `aws.role_env`, `aws.cost_checks` | when `role_env` names a variable, its value is a role ARN to assume; otherwise the active credential chain (env vars, instance role, SSO) is the identity | read-only policy covering `cloudwatch:Describe*`/`List*`, `sns:List*`, `rds:Describe*`, `ec2:Describe*`, `ecs:Describe*`, `eks:Describe*`, `lambda:List*`/`Get*`, `logs:Describe*`, `route53:Get*`/`List*`, `elasticloadbalancing:Describe*`, `cloudtrail:Describe*`, `config:Describe*`, `xray:Get*` (recipe in `/scoutflo:connect`) | read-only |
+| AWS | `aws.account_id`, optional `aws.region`, `aws.profile`, `aws.role_env`, `aws.cost_checks` | when `role_env` names a variable, its value is a role ARN to assume; otherwise the active credential chain (env vars, instance role, SSO) is the identity | read-only policy covering `cloudwatch:Describe*`/`Get*`/`List*`, `sns:Get*`/`List*`, `rds:Describe*`, `docdb:Describe*`, `ec2:Describe*`, `ecs:Describe*`, `eks:Describe*`, `lambda:List*`/`Get*`, `logs:Describe*`/`List*`, `application-signals:ListServiceLevelObjectives`/`GetServiceLevelObjective`, `route53:Get*`/`List*`, `elasticloadbalancing:Describe*`, `cloudtrail:Describe*`/`Get*`, `config:Describe*`, `xray:Get*` (recipe in `/scoutflo:connect`) | read-only |
 | AWS cost (optional) | same `aws:` block, `aws.cost_checks` (default true) | same credential | `compute-optimizer:Get*`, `ce:Get*`, `support:Describe*` (Trusted Advisor needs Business or Enterprise support) | read-only |
 | Slack (optional) | `slack.webhook_env` | webhook variable | post to one channel | n/a |
 
@@ -153,13 +153,13 @@ Never proceed on "probably the right account": when a target names an `account_i
 
 ## Ground rules
 
-- Configuration is metadata; live validation is proof. An SNS subscription seen in `aws sns list-subscriptions-by-topic` is `configured`; only `SubscriptionArn` resolving to a real ARN (not the literal string `PendingConfirmation`) plus an observed CloudWatch-generated delivery makes routing `validated-live`.
+- Configuration is metadata; live validation is proof. An SNS subscription seen in `aws sns list-subscriptions-by-topic` is only `configured`. A real `SubscriptionArn` proves confirmation, and CloudWatch action history or SNS delivery metrics prove only that AWS attempted or accepted a delivery. `validated-live` requires destination-side evidence correlated to the same alarm event, such as a pager incident, chat message, received email, or downstream invocation log. No AWS control-plane read alone proves a human received it.
   - ❌ `Routing validated-live: the topic has a subscription and the API call returned 200.`
   - ✅ `Routing configured: the subscription's SubscriptionArn is the literal string "PendingConfirmation", meaning nobody ever clicked confirm; no alarm can reach this endpoint until that happens (AWS-011 fail).`
 - API errors are evidence. A `AccessDenied`, `UnrecognizedClientException`, or a timeout means a missing permission, a revoked credential, or a wrong region. Record the error and what it implies; never convert an error into empty success.
 - Never score from object counts.
   - ❌ `Scored alerting coverage 90: forty-one CloudWatch alarms exist.`
-  - ✅ `Scored alerting coverage 45: alarms exist, but a third are in INSUFFICIENT_DATA because their dimension filters never matched a real metric, and two production RDS instances have zero alarms at all; credit stops at partial.`
+  - ✅ `Scored alerting coverage 45: alarms exist, but 12/36 are in INSUFFICIENT_DATA; four of those also have a missing-data state reason, target an active resource, and returned zero recent datapoints for their exact dimensions, while the remaining eight stay unclassified pending lifecycle or metric-emission evidence.`
 - CloudWatch alarms and SNS routing are different systems, and so are load-balancer/Route53 health checks and CloudWatch alarms. A target-group health check ejects a bad backend from rotation; it pages nobody. An alarm with no action attached draws state transitions in the console; it also pages nobody. Credit each system for what it actually does, never for the other's job.
   - ❌ `Uptime covered: the target group has a health check and marks unhealthy targets.`
   - ✅ `Uptime partial: the target-group health check ejects bad targets (AWS-041 pass), but no CloudWatch alarm rides UnHealthyHostCount, so an all-targets-down event never pages anyone (AWS-001 fail).`
@@ -209,13 +209,16 @@ MEDIUM_MAX_OBJECTS="60"   # example, tune to your environment
 BATCH_SIZE="10"           # resources per batch on the large path; example, tune it
 EC2="$(aws_cli ec2 describe-instances --filters 'Name=instance-state-name,Values=running' --query 'Reservations[].Instances[].InstanceId' --output json | jq 'length')"
 RDS="$(aws_cli rds describe-db-instances --query 'DBInstances[].DBInstanceIdentifier' --output json | jq 'length')"
+RDS_CLUSTERS="$(aws_cli rds describe-db-clusters --query 'DBClusters[].DBClusterIdentifier' --output json | jq 'length')"
+DOCDB_INSTANCES="$(aws_cli docdb describe-db-instances --query 'DBInstances[].DBInstanceIdentifier' --output json | jq 'length')"
+DOCDB_CLUSTERS="$(aws_cli docdb describe-db-clusters --query 'DBClusters[].DBClusterIdentifier' --output json | jq 'length')"
 ECS_SERVICES="$(aws_cli ecs list-clusters --query 'clusterArns' --output json \
   | jq -r '.[]' | while read -r c; do aws_cli ecs list-services --cluster "$c" --query 'serviceArns' --output json | jq 'length'; done \
   | awk '{s+=$1} END {print s+0}')"
 EKS="$(aws_cli eks list-clusters --query 'clusters' --output json | jq 'length')"
 LAMBDA="$(aws_cli lambda list-functions --query 'Functions[].FunctionName' --output json | jq 'length')"
-TOTAL=$((EC2 + RDS + ECS_SERVICES + EKS + LAMBDA))
-echo "ec2=${EC2} rds=${RDS} ecs_services=${ECS_SERVICES} eks_clusters=${EKS} lambda=${LAMBDA} scored_objects=${TOTAL}"
+TOTAL=$((EC2 + RDS + RDS_CLUSTERS + DOCDB_INSTANCES + DOCDB_CLUSTERS + ECS_SERVICES + EKS + LAMBDA))
+echo "ec2=${EC2} rds_instances=${RDS} rds_clusters=${RDS_CLUSTERS} docdb_instances=${DOCDB_INSTANCES} docdb_clusters=${DOCDB_CLUSTERS} ecs_services=${ECS_SERVICES} eks_clusters=${EKS} lambda=${LAMBDA} scored_objects=${TOTAL}"
 
 # Guided-walkthrough drift check, per report-standard/README.md#using-topology-and-prior-runs-as-a-guided-walkthrough:
 # compare this count against the target's own history, not a blank slate. This stays in the
@@ -248,7 +251,7 @@ State the `drift` line in the executive summary verbatim (or "first run" on the 
 
 - **Small** (`TOTAL <= SMALL_MAX_OBJECTS`): one pass over everything. No worklist, no batching.
 - **Medium** (`TOTAL <= MEDIUM_MAX_OBJECTS`): per-category passes (alerting, routing, compute, databases, uptime, logs), completed in one run.
-- **Large**: work EC2 instances, RDS instances, ECS services, EKS clusters, and Lambda functions in batches of `BATCH_SIZE` against a durable, run-ID-keyed worklist, per [Large-path worklist: resources in batches](#large-path-worklist-resources-in-batches) below. The same worklist covers both axes: reliability checks and, when `aws.cost_checks` is on, the Cost & Resource Optimization checks that key off the same resource IDs run against the same batches, so a large estate does not need two separate sizing passes.
+- **Large**: work EC2 instances, RDS instances and clusters, DocumentDB instances and clusters, ECS services, EKS clusters, and Lambda functions in batches of `BATCH_SIZE` against a durable, run-ID-keyed worklist, per [Large-path worklist: resources in batches](#large-path-worklist-resources-in-batches) below. The same worklist covers both axes: reliability checks and, when `aws.cost_checks` is on, the Cost & Resource Optimization checks that key off the same resource IDs run against the same batches, so a large estate does not need two separate sizing passes.
 
 Never silently truncate: if the run judged a subset, the report names what was skipped and the coverage denominators reflect it. Record the chosen path and counts in `findings.json` as `estate: {objects, path}`; `audit-all` reads them.
 
@@ -276,15 +279,15 @@ The large-path phases then run against the scoped set; the report names anything
 
 ## Phase 1: Service context
 
-If `./scoutflo-audits/topology.md` exists, load it. Its service list is the critical-service list and its names are canonical in findings, the coverage matrix, and `affected` arrays; map EC2 instances, ECS services, EKS workloads, Lambda functions, and RDS instances to those names by tag (`Name`, `service`, or your team's convention) or resource naming. If it does not exist, infer services from resource names and tags, note the inference in the report, and suggest `/scoutflo:map-topology`. If live discovery contradicts topology.md, record the discrepancy; only the mapping skill and you edit that file.
+If `./scoutflo-audits/topology.md` exists, load it. Its service list is the critical-service list and its names are canonical in findings, the coverage matrix, and `affected` arrays; map EC2 instances, ECS services, EKS workloads, Lambda functions, and RDS/Aurora/DocumentDB instances or clusters to those names by tag (`Name`, `service`, or your team's convention) or resource naming. If it does not exist, infer services from resource names and tags, note the inference in the report, and suggest `/scoutflo:map-topology`. If live discovery contradicts topology.md, record the discrepancy; only the mapping skill and you edit that file.
 
 ## Phase 2: Read-only inventory
 
-Build the raw picture with the commands in [references/aws-checks.md](references/aws-checks.md) section 4: CloudWatch alarms with state and dimensions, SNS topics and subscription confirmation status, EC2 instances and status checks, ASGs, ECS clusters and services, EKS clusters and their logging/Container Insights config, Lambda functions, RDS instances, Route53 health checks, ELBv2 target groups and health, CloudWatch log groups with retention, CloudTrail trails, Config recorders, and VPC flow-log configs. Judgment starts in Phase 3; inventory records what exists.
+Build the raw picture with the commands in [references/aws-checks.md](references/aws-checks.md) section 4: CloudWatch alarms with evaluation state, reason, missing-data policy, and dimensions; SNS topics and subscription confirmation status; EC2, ASG, ECS, EKS, and Lambda compute; engine-tagged RDS instances and clusters; DocumentDB instances and clusters; Route53 authority evidence and health checks; ELBv2 target groups; log groups with retention; CloudTrail; Config; and VPC flow logs. Judgment starts in Phase 3; inventory records what exists.
 
 ## Phase 3: Alerting coverage and configuration (AWS-001 to AWS-007)
 
-Commands in [references/aws-checks.md](references/aws-checks.md) section 5. Every critical RDS instance, ALB/NLB, ASG, and Lambda function has at least one CloudWatch alarm attached, the zero-alarms gap rather than just misconfigured existing ones (`AWS-001`, critical when a critical resource has none). Do not stop at "resource X has no alarm" — that is the free Trusted Advisor line. Join each un-alarmed resource id to `topology-export.json` and name the critical services it backs and how many (e.g. "`db-primary` has zero alarms and backs `checkout` + `orders`, 2 critical services — a saturation event tonight pages nobody for either"); a zero-alarm resource is the head of the flagship silent-page chain, and the exact fix names the specific alarm per resource kind (RDS two-tier CPU/connections/memory, ALB 5xx ratio, Lambda Errors/Throttles), never a bare "add an alarm". Alarms use two named tiers or a composite/anomaly-detection alarm where a static threshold is brittle on a variable-load metric (`AWS-002`); alarm descriptions carry environment, resource, severity, threshold, and a capture list a responder could act on (`AWS-003`); no alarm sits in `INSUFFICIENT_DATA` because its dimension filter never matched a live metric, the can-this-ever-fire check (`AWS-004`); minimum dashboard coverage exists per critical service (`AWS-005`); and composite or anomaly-detection alarms in use are reviewed for a sane trigger, not left as decoration (`AWS-006`, info).
+Commands in [references/aws-checks.md](references/aws-checks.md) section 5. Every critical managed database, ALB/NLB, ASG, and Lambda function has at least one applicable CloudWatch alarm attached, the zero-alarms gap rather than just misconfigured existing ones (`AWS-001`, critical when a critical resource has none). Do not stop at "resource X has no alarm". Join each un-alarmed resource id to `topology-export.json`, name the critical services it backs, and choose metric namespace, dimension, and metric names from the resource's actual engine. Alarms use two named tiers or a composite/anomaly-detection alarm where a static threshold is brittle on a variable-load metric (`AWS-002`); alarm descriptions carry environment, resource, severity, threshold, and a capture list a responder could act on (`AWS-003`); AWS-004 is a failure only after the state reason, resource lifecycle, exact dimensions, missing-data policy, and recent datapoints jointly prove a live alarm cannot evaluate; minimum dashboard coverage exists per critical service (`AWS-005`); and composite or anomaly-detection alarms in use are reviewed for a sane trigger, not left as decoration (`AWS-006`, info).
 
 **AWS-007 (Application Signals SLO without a burn-rate alarm).** Where the account uses CloudWatch Application Signals, `aws application-signals list-service-level-objectives` and `get-service-level-objective` per SLO give each SLO's `Goal` and `BurnRateConfigurations`. An SLO defined but not alerting is decoration: it reports attainment on a dashboard and pages nobody when the budget burns. Two nuances the API forces, both handled in the reference: an SLO with an empty `BurnRateConfigurations` list has no burn-rate metric at all; and even a populated `BurnRateConfigurations` is *not proof of an alarm* — the SLO object carries no alarm reference, so alarm existence must be cross-referenced against `cloudwatch describe-alarms` for an alarm on that SLO's burn-rate or attainment metric. Flag SLOs with no burn-rate config, and SLOs whose burn-rate metric no alarm watches, as `AWS-007` (medium). When Application Signals is not in use, this check is `not-in-scope`, never a fail.
 
@@ -311,9 +314,9 @@ Per-alarm hygiene (AWS-060 to AWS-063, AWS-065) batches with the same resource w
 
 ## Phase 4: Alert routing and delivery (AWS-010 to AWS-014)
 
-Commands in section 6. Judge whether an alarm that fires reaches a human: every alarm names at least one SNS topic in `AlarmActions` (`AWS-010`, critical when none exist anywhere); every SNS topic an alarm points at has at least one subscription whose `SubscriptionArn` is a real ARN, not the literal string `PendingConfirmation` (`AWS-011`, high); routing is severity-tiered, critical and warning topics kept separate rather than one undifferentiated topic for every alarm (`AWS-012`); delivery proven by an observed CloudWatch-generated notification rather than assumed (`AWS-013`, capped at `configured` without one); and EventBridge rule targets, where used for alarm state changes, are enabled and reach a live target (`AWS-014`).
+Commands in section 6. Judge the chain in separate layers: every alarm names an SNS topic in `AlarmActions` (`AWS-010`); the topic has a confirmed subscription (`AWS-011`); routing separates severity where required (`AWS-012`); and destination-side evidence proves the alarm reached its intended human receiver (`AWS-013`). CloudWatch action history, SNS metrics, and a confirmed subscription prove AWS configuration or transport, not human receipt. Without a correlated pager incident, chat message, received email, or downstream delivery record, AWS-013 stays `partial` and the report says receipt is unproven. EventBridge targets, where used, are assessed separately (`AWS-014`).
 
-**Flagship correlation — the silent-page delivery chain.** This is the audit's single highest-value differentiator, the AWS equivalent of Kubernetes's external-to-cluster-secrets path. For each critical resource, chain the links no single AWS tool joins: AWS-001 (does an alarm exist?) → AWS-010 (does it name an SNS topic in `AlarmActions`?) → AWS-011 (is that topic's subscription a real ARN, not the literal `PendingConfirmation`?) → AWS-013 (has it ever actually delivered per `describe-alarm-history`?) → AWS-063 (is it muted with `ActionsEnabled=false`?), overlaid with AWS-062/AWS-060 (is the real page buried among flapping alarms sharing the same topic, or does it self-correct before anyone looks?). Emit one sentence per critical resource, e.g.: *"`checkout`'s ALB has a 5xx alarm (AWS-001 pass) but its `AlarmActions` topic `alerts-legacy` has one subscription still in `PendingConfirmation` (AWS-011) AND 38 flapping alarms route to it (AWS-062) — a real 5xx storm pages nobody, and even with the subscription confirmed the page would be one line among 38 pieces of noise."* No AWS-native product assembles this: Trusted Advisor sees only "an alarm exists", the SNS console only "subscription pending", the CloudWatch console only "ALARM state" — none joins alarm → action → topic → subscription-confirmation → shared-topic noise → the specific critical service resolved from topology-export.json. Score delivery from this chain, never from the presence of the alarm/topic/subscription objects. AWS-035 rides the same SNS-confirmation link (its `SnsTopicArn` is checked against AWS-011).
+**Flagship correlation: the silent-page delivery chain.** For each critical resource, join AWS-001 (alarm exists), AWS-010 (alarm action exists), AWS-011 (subscription confirmed), AWS-013 (destination-side receipt evidence), and AWS-063 (actions enabled), overlaid with AWS-062/AWS-060 noise. `describe-alarm-history` proves a transition or action attempt, not human receipt. Score each link from its own evidence and keep AWS-013 partial when no correlated destination record is available. AWS-035 uses the same confirmation link; its receipt claim still depends on AWS-013 evidence.
 
 ## Phase 5: Compute health and coverage (AWS-020 to AWS-028)
 
@@ -323,20 +326,20 @@ Two checks catch resilience that reads healthy but is switched off, section 7A (
 
 ## Phase 6: Managed databases (AWS-030 to AWS-035)
 
-Commands in sections 8 and 8.1. Per production RDS instance: Multi-AZ enabled (`AWS-030`, high) — reported as a joined blast radius (which critical services depend on the instance, the concrete RPO/RTO), not the bare config flag; automated backup retention window greater than zero days (`AWS-031`, high); storage autoscaling enabled so a disk-full event does not take the database down (`AWS-032`); a replication-lag alarm on every read replica (`AWS-033`); and CPU, connection-count, and freeable-memory alarms present (`AWS-034`).
+Commands in sections 8 and 8.1. First classify each database as standalone RDS, Aurora/RDS cluster, or DocumentDB. Apply only supported controls: standalone RDS uses instance `MultiAZ`, instance backup retention, and `MaxAllocatedStorage`; Aurora and DocumentDB use cluster membership across Availability Zones plus cluster backup retention, while AWS-managed storage growth makes AWS-032 `not-in-scope`. Replication-lag and pressure alarms use the engine's actual CloudWatch namespace, dimensions, and metric names (`AWS-033`/`AWS-034`). Never fail an Aurora or DocumentDB member because an RDS-instance-only field is false or absent.
 
-An RDS event subscription for `failover`/`availability`/`low storage` on a confirmed SNS topic (`AWS-035`, medium; section 8.1, **verify-pending** until a first live run) — RDS Events is a channel separate from CloudWatch metric alarms, so a Multi-AZ instance (AWS-030) with no such subscription completes a real failover with nobody notified, and the subscription's `SnsTopicArn` rides the same AWS-011 confirmation link as the flagship silent-page chain. Multi-AZ, backups, and storage autoscaling are the mechanisms; this subscription is what makes them observable.
+AWS-035 checks an engine-appropriate RDS or DocumentDB event subscription. Resolve supported categories with that service's `describe-event-categories`; do not require an RDS-only category from DocumentDB or a cluster-only category from an instance. A confirmed SNS subscription proves configuration only; destination-side receipt remains AWS-013.
 
 - ❌ `Databases pass: CPU and connection alarms exist for both instances.`
 - ✅ `Databases partial: CPU and connection alarms exist, but db-primary has Multi-AZ disabled and a 0-day backup retention window, so a single AZ failure loses both availability and the last day of recovery point (AWS-030 fail, AWS-031 fail).`
 
 ## Phase 7: Uptime and availability (AWS-040 to AWS-043)
 
-Commands in section 9. Every active public serving endpoint has a Route53 health check that *does something* (`AWS-040`, high) — do not credit a check just for existing; join `list-resource-record-sets` (is it referenced by a failover/latency record?) and `describe-alarms` (does an alarm ride its `HealthCheckStatus`?), and a check referenced by neither on a critical public hostname is inert decoration ("DNS keeps sending traffic to the dead endpoint and no page fires"), chaining with AWS-041 and AWS-001/010. Every ALB/NLB target group has a health check configured and its targets probed live this run (`AWS-041`); CloudWatch Synthetics canaries, where the team runs them, carry an alarm on canary failure rather than existing as an unmonitored dashboard widget (`AWS-042`); and no health check or canary watches a dead, retired, or migrated target (`AWS-043`). Probe every candidate endpoint live and capture the status code as evidence, the same discipline as the DO and GCP uptime checks in this toolkit.
+Commands in section 9. Assess AWS-040 only after proving Route53 is authoritative for the hostname, or after the team explicitly identifies Route53 health checks as its uptime-monitoring control. A hosted zone merely present in the account is not proof of authority. If DNS is external or authority is unknown, mark the Route53-specific check `not-in-scope` or `blocked`, not failed, and assess ALB/NLB or Synthetics coverage separately. For an in-scope Route53 check, prove it either participates in routing or has an alarm; an unreferenced, unalarmed check is decoration. Probe every candidate endpoint live and capture the status code as evidence.
 
 ## Phase 8: Log forwarding, retention, and account-level observability (AWS-050 to AWS-056)
 
-Commands in section 10. CloudWatch Logs subscription filters forward critical log groups to a central sink, or the absence is a recorded decision for the environment (`AWS-050`, high for production) — reported with the incident consequence and the service, distinguishing a null/"Never expire" retention from the opposite failure of a sub-window retention (e.g. `retentionInDays=1` ages a Friday slow-burn incident's logs out by Monday), and correlating with AWS-052 as one "no forensic story after an incident" cascade; log-group retention is set to a finite value rather than left at "Never expire" on critical groups (`AWS-051`); CloudTrail is enabled account-wide with a multi-region trail (`AWS-052`, high, this is an account-level control, not per-service) — on top of the existing `IsLogging=true`/multi-region assertion, also verify `LogFileValidationEnabled=true` (without it delivered logs can be tampered with undetectably) and state the forensic blast radius (after a credential compromise, activity in unlogged regions and everything after any `StopLogging` cannot be reconstructed) rather than reporting a checkbox; AWS Config's recorder is on (`AWS-053`); VPC Flow Logs are enabled for VPCs carrying critical workloads (`AWS-054`); the central-sink and retention decision is complete with an owner, not just a technical setting (`AWS-055`); and no CloudWatch Logs anomaly detector sits in a `FAILED` or `PAUSED` state (`AWS-056`). For AWS-056, `aws logs list-log-anomaly-detectors` returns each detector's `anomalyDetectorStatus` (enum `INITIALIZING | TRAINING | ANALYZING | FAILED | DELETED | PAUSED`); a `FAILED` or `PAUSED` detector on a critical log group is a silent log-signal gap — the detector looks configured but surfaces no anomalies. Absence of any detector is not itself a finding (they are opt-in); a broken one is.
+Commands in section 10. CloudWatch Logs subscription filters and `retentionInDays` provide technical evidence for AWS-050/AWS-051. Any sampled inspection reports `sampled/eligible`, its selection rule, and the uninspected count; it never generalizes a subset to all log groups. AWS-055 is separate: ownership, policy intent, and accepted retention require a cited runbook, policy, repository record, or owner response. AWS metadata and tags cannot prove those decisions; without decision evidence mark AWS-055 `blocked`, not failed. CloudTrail, Config, Flow Logs, and log anomaly detectors remain technical checks AWS-052 to AWS-056 as detailed in section 10.
 
 ## Phase 9: Coverage matrix and topology readiness
 
@@ -354,13 +357,13 @@ Then render the Scoutflo Topology Readiness section per [topology-readiness.md](
 Runs on the large path only (see [Estate sizing](#estate-sizing) above). All state lives under a run-ID-keyed run directory `./scoutflo-audits/aws/[<label>/]runs/<RUN_ID>/` (under the resolved target segment — flat `aws/runs/…` for a single block, `aws/<label>/runs/…` for a labeled target), not the calendar-date directory sections 4 to 10 of the reference write raw captures under, so a run that is still batching when the date rolls over UTC keeps writing into the same place. Full runnable commands (resume scan, run-ID mint, worklist build, lock, batch claim and mark-done, final pending assertion) are in [references/aws-checks.md](references/aws-checks.md) section 13, copied from the proven `do-checks.md` section 13 / `gcp-checks.md` section 16 mechanism rather than reinvented; this section states the workflow they implement. On the large path, `AUDIT_ROOT`/`RUN_DIR` in section 13 resolve under this same target segment (the enumerator resolves `aws` vs `aws/<label>` exactly as the phases above do).
 
 1. **Find a resumable run, or start a new one.** Before minting a new `RUN_ID`, scan `./scoutflo-audits/aws/[<label>/]runs/*/worklist.tsv` for one with pending rows and offer to resume it instead of starting over.
-2. **Build or resume the worklist.** One row per resource from Estate sizing (`kind`: `ec2`, `rds`, `ecs_service`, `eks_cluster`, or `lambda`; `id`; `status`: `pending` or `done`). A resumed run continues from its existing worklist; never rebuild one that already exists.
+2. **Build or resume the worklist.** One row per resource from Estate sizing (`kind`: `ec2`, `rds_instance`, `rds_cluster`, `docdb_instance`, `docdb_cluster`, `ecs_service`, `eks_cluster`, or `lambda`; `id`; `status`: `pending` or `done`). A resumed run continues from its existing worklist; never rebuild one that already exists.
 3. **Lock, then claim one batch.** Acquire `worklist.lock` in the run directory before reading pending rows; a lock older than `LOCK_STALE_MINUTES` (30 minutes; example, tune to your batch size) is abandoned and safe to reclaim. Take the next `BATCH_SIZE` pending rows and run the Phase 3 to Phase 8 checks that key off that resource kind, plus, when `aws.cost_checks` is on, the matching Cost & Resource Optimization checks from Phase 10 against the same batch. A row is marked `done` only after its pulls succeed, so an interrupted batch resumes at the resource that failed. Release the lock once the batch's rows are marked.
 4. **Assert before writing.** After every batch, print `done=X pending=Y`. Repeat from step 3 until the worklist has zero pending rows; assert `pending == 0` before Phase 11 writes `findings.json` or `report.md`. A run that stops mid-batch leaves the worklist as its resume point and never overwrites the previous complete report.
 
 ## Phase 10: Cost and Resource Optimization (not scored)
 
-Full check catalog in [references/aws-cost-checks.md](references/aws-cost-checks.md), finding IDs `AWSOPT-NNN`. This section never appears in `score.categories` or `score.excluded`; it was never a scoring candidate, the same way Scoutflo Topology Readiness is reported and never scored. Its findings still live in the normal `findings[]` array (so history, lifecycle, and exemptions all apply unmodified) and always carry `points_recoverable: 0`.
+Full check catalog in [references/aws-cost-checks.md](references/aws-cost-checks.md), finding IDs `AWSOPT-NNN`. This section never appears in `score.categories`, `score.excluded`, or `checks[]`; it was never a readiness-scoring candidate, the same way Scoutflo Topology Readiness is reported and never scored. Its findings still live in the normal `findings[]` array (so history, lifecycle, and exemptions all apply unmodified) and always carry `scoring_scope: "non-scored"` and `points_recoverable: 0`.
 
 Source discipline, the same "errors are evidence, never invent" principle applied to cost: prefer AWS's own recommendation engines over hand-rolled heuristics.
 
@@ -374,7 +377,7 @@ Source discipline, the same "errors are evidence, never invent" principle applie
 
 ## Phase 11: Score, write, brief
 
-Score per [severity-and-scoring.md](../../report-standard/severity-and-scoring.md): each check yields `pass` (1.0), `partial` (0.5), `fail`/`blocked` (0), `not-in-scope` leaves the denominator. Category score is the credit ratio times 100 rounded down; overall is the weight-normalized sum over included categories. Whole categories that could not be assessed are excluded, renormalized, and stated; blocked checks inside an assessable category score 0. Score conservatively: when unsure between two results, pick the lower and say why. Assign each category a maturity value (`reactive`, `proactive`, `systematic`) per the shared definitions, judged conservatively. Cost & Resource Optimization findings carry `points_recoverable: 0` always and never enter this arithmetic.
+Score per [severity-and-scoring.md](../../report-standard/severity-and-scoring.md): each check yields `pass` (1.0), `partial` (0.5), or `fail` (0). `blocked` is unassessed and leaves the readiness denominator; `not-in-scope` leaves both readiness and assessment-coverage denominators. Category score is the assessed-credit ratio times 100 rounded down; overall is the weight-normalized sum over categories with at least one assessed check. Show assessment coverage separately. A fully blocked run is `unassessed` with `overall: null`, never 0/100. Score conservatively: when unsure between a defect and missing evidence, use `blocked` and state the exact evidence-unlock action. Assign each category a maturity value (`reactive`, `proactive`, `systematic`) per the shared definitions, judged conservatively. Cost & Resource Optimization findings carry `points_recoverable: 0` always and never enter this arithmetic.
 
 | Category | Weight | ID range |
 | --- | ---: | --- |
@@ -387,13 +390,15 @@ Score per [severity-and-scoring.md](../../report-standard/severity-and-scoring.m
 
 Weights are a draft starting point, stated as tune-this, not gospel; adjust them against your team's real priority before treating them as final. The full check catalog and the target profile (what 100 means per category) are at the top of [references/aws-checks.md](references/aws-checks.md). IDs are stable: the same defect gets the same ID every run, one finding per failed check, affected objects enumerated. Compute `points_recoverable` per finding by re-running the scoring model with that check at full credit; `info` findings, excluded categories, and every `AWSOPT-*` finding carry 0. The executive summary states the gap to target and the two or three findings with the highest `points_recoverable` as the biggest levers.
 
-End-to-end gate: claim end-to-end coverage only when the overall score is at or above 85, every critical service passes every applicable coverage row, and no category was excluded. Below the gate, write "good base coverage", never "end to end". The Cost & Resource Optimization section never affects this gate either way.
+End-to-end gate: claim end-to-end coverage only when the overall score is at or above 85, assessment coverage is 100%, every critical service passes every applicable coverage row, and no category was excluded. Below the gate, write "good base coverage", never "end to end". The Cost & Resource Optimization section never affects this gate either way.
 
 Lifecycle, exemptions, and totals, before rendering the report:
 
 1. Load the previous run's `findings.json` when one exists; classify every finding, `AWS-*` and `AWSOPT-*` alike, per the lifecycle table in the [findings schema](../../report-standard/findings-schema.md) (`new`, `unchanged`, `regressed`; resolved IDs go to the delta, and the executive summary names regressions first).
-2. Load `./scoutflo-audits/exemptions.yaml` when present. Entries with `id`, `reason`, and `expires` all set and unexpired suppress their finding into the Suppressed appendix; malformed or expired entries are reported, never honored.
+2. Load `./scoutflo-audits/exemptions.yaml` when present. Entries with `id`, `reason`, and `expires` all set and unexpired suppress their finding into the Suppressed appendix; malformed or expired entries are reported, never honored. For a readiness finding, retain the observed `partial` or `fail` result on the same-ID `checks[]` row and add `suppressed: true` plus `suppression_reason`; set the finding's `points_recoverable` to 0. Suppressed readiness checks remain assessed for coverage but are excluded from readiness scoring. A non-scored `AWSOPT-*` finding has no check row: set only its lifecycle to `suppressed`, preserve `scoring_scope: "non-scored"`, and keep zero readiness points.
 3. Every findings area and coverage cell carries its denominator (`passed/total`).
+4. Emit one `checks[]` row for every stable `AWS-*` readiness catalog check, including passes, partials, failures, blockers, and not-in-scope checks. Derive category counts, readiness, assessment coverage, and `score.check_set` from that complete ledger; never write them independently. `AWSOPT-*` findings stay outside the readiness ledger and explicitly carry `scoring_scope: "non-scored"`.
+5. Every finding declares `scoring_scope` (`readiness` for a same-ID non-pass `AWS-*` check; `non-scored` for `AWSOPT-*`) and `report_lanes`: `general-audit`, `ai-sre-readiness`, or both. Use the AI SRE lane only when the evidence shows impact to telemetry quality, correlation, topology/ownership context, incident routing, RCA trust, or action safety. This classification never changes severity or score.
 
 Emit and verify:
 
@@ -408,10 +413,14 @@ if [ "$AWS_KIND" = seq ]; then AWS_SEG="aws/${AWS_LABEL}"; else AWS_SEG="aws"; f
 RUN_DATE="$(date -u +%Y-%m-%d)"
 OUT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${AWS_SEG}/${RUN_DATE}"
 mkdir -p "$OUT"
-# ... write findings.json, inventory.json, and report.md per the report standard. The findings.json
+# ... write findings.json (scoutflo-findings/v2 with a complete checks[] ledger),
+# inventory.json, and report.md per the report standard. The findings.json
 # ".target" is the per-target slug (equal to $AWS_SEG: "aws" for a single block, "aws/<label>" for a
 # labeled list target), so audit-all/correlation/render disambiguate multiple accounts. Then verify:
-jq -e --arg seg "$AWS_SEG" '.schema == "scoutflo-findings/v1" and .target == $seg and (.findings | type == "array")' \
+jq -e --arg seg "$AWS_SEG" '.schema == "scoutflo-findings/v2" and .target == $seg
+  and (.checks | type == "array" and length > 0)
+  and (.findings | type == "array")
+  and (.findings | all((.scoring_scope | IN("readiness","non-scored")) and (.report_lanes | type == "array" and length > 0)))' \
   "$OUT/findings.json" >/dev/null && echo "findings.json valid"
 grep -q '^# ' "$OUT/report.md" && echo "report.md present"
 # Output conformance: the emitted report.md must match report-standard/report-template.md.
@@ -422,6 +431,8 @@ sh "${CLAUDE_PLUGIN_ROOT}/report-standard/check-findings.sh" "$OUT/findings.json
 # with items; the ## Inventory section of report.md IS this render.
 jq -e '.schema == "scoutflo-inventory/v1" and (.items | type == "array") and (.counts.total == (.items | length))' "$OUT/inventory.json" >/dev/null && echo "inventory.json valid"
 sh "${CLAUDE_PLUGIN_ROOT}/report-standard/render-report-viz.sh" inventory "$OUT/inventory.json" >/dev/null && echo "inventory section renders"
+sh "${CLAUDE_PLUGIN_ROOT}/report-standard/render-report-viz.sh" lanes "$OUT/findings.json" >/dev/null && echo "findings-by-purpose section renders"
+grep -qxF '## Findings by purpose' "$OUT/report.md" && echo "findings-by-purpose section present"
 sh "${CLAUDE_PLUGIN_ROOT}/report-standard/render-report-viz.sh" html "$OUT/findings.json" "$OUT/report.html" "$(dirname "$OUT")/history.jsonl"
 sh "${CLAUDE_PLUGIN_ROOT}/report-standard/check-report.sh" "$OUT/report.md"
 ```
@@ -441,7 +452,9 @@ RUN_DATE="$(date -u +%Y-%m-%d)"
 OUT="${TARGET_DIR}/${RUN_DATE}"
 RESOLVED="0"   # fixed count from this run's delta; 0 on the first run
 LINE="$(jq -c --arg d "$RUN_DATE" --argjson resolved "$RESOLVED" \
-  '{run_date:$d, skill:"audit-aws", overall:.score.overall, gate:.score.gate,
+  '{run_date:$d, skill:"audit-aws", overall:.score.overall, state:.score.state,
+    scoring_model:.score.scoring_model, check_set:.score.check_set,
+    assessment_coverage_percent:.score.assessment.coverage_percent, gate:.score.gate,
     end_to_end:.score.end_to_end, severity_counts:.severity_counts,
     lifecycle_counts:((reduce .findings[].lifecycle as $l ({}; .[$l] = (.[$l] // 0) + 1)) + {resolved:$resolved})}' \
   "$OUT/findings.json")"
@@ -449,7 +462,7 @@ TMP="$(mktemp)"
 [ -f "${TARGET_DIR}/history.jsonl" ] && grep -v "\"run_date\":\"${RUN_DATE}\"" "${TARGET_DIR}/history.jsonl" > "$TMP" || true
 printf '%s\n' "$LINE" >> "$TMP"
 mv "$TMP" "${TARGET_DIR}/history.jsonl"
-tail -1 "${TARGET_DIR}/history.jsonl" | jq -e '.run_date and (.overall >= 0)' >/dev/null && echo "history.jsonl updated"
+tail -1 "${TARGET_DIR}/history.jsonl" | jq -e '.run_date and ((.overall|type)=="number" or .overall==null) and .scoring_model and .check_set' >/dev/null && echo "history.jsonl updated"
 ```
 
 The report's trend line renders the last five history.jsonl entries, oldest first; the ledger is derived and never drives finding lifecycle. Then send the Slack brief: titles only, never evidence values, hostnames, ARNs, or account IDs:
@@ -471,22 +484,36 @@ COST_LINE=""   # optional; set to "Cost: N optimization opportunities found" onl
 if [ -n "${SCOUTFLO_SLACK_WEBHOOK:-}" ]; then
   OUT_ABS="$(cd "$OUT" && pwd)"   # absolute path: the brief must be openable from anywhere
   SCORE="$(jq -r '.score.overall' "$OUT/findings.json")"
+  SCORE_STATE="$(jq -r '.score.state' "$OUT/findings.json")"
+  CUR_MODEL="$(jq -r '.score.scoring_model' "$OUT/findings.json")"
+  CUR_SET="$(jq -r '.score.check_set' "$OUT/findings.json")"
+  ASSESSMENT="$(jq -r '.score.assessment | "\(.assessed_checks)/\(.applicable_checks) (\(.coverage_percent)%) assessed, \(.scored_checks) scored, \(.blocked_checks) blocked, \(.suppressed_checks) suppressed"' "$OUT/findings.json")"
   E2E="$(jq -r 'if .score.end_to_end then "end-to-end" else "not end-to-end" end' "$OUT/findings.json")"
   COUNTS="$(jq -r '.severity_counts | "\(.critical) critical, \(.high) high, \(.medium) medium, \(.low) low"' "$OUT/findings.json")"
   CHECKS="$(jq -r '"\([.score.categories[].checks_passed] | add)/\([.score.categories[].checks_total] | add) checks passed"' "$OUT/findings.json")"
-  TOP="$(jq -r '[.findings[] | select(.area != "cost-optimization") | "\(.id) \(.title)"] | .[0:5] | join("\n")' "$OUT/findings.json")"
+  TOP="$(jq -r '[.findings[] | select((.lifecycle // "new") != "suppressed") | select(.area != "cost-optimization") | "\(.id) \(.title)"] | .[0:5] | join("\n")' "$OUT/findings.json")"
   AWSOPT_COUNT="$(jq -r '[.findings[] | select(.area == "cost-optimization")] | length' "$OUT/findings.json")"
   [ "$AWSOPT_COUNT" -gt 0 ] && COST_LINE="Cost: ${AWSOPT_COUNT} optimization opportunities found"
   PREV="$(find "$TARGET_DIR" -mindepth 1 -maxdepth 1 -type d | grep -v '/runs$' | sort | tail -2 | head -1)"
   MOVE=""; DELTA="first run"
   if [ -n "$PREV" ] && [ "$PREV" != "$OUT" ]; then
+    PREV_MODEL="$(jq -r '.score.scoring_model // ""' "$PREV/findings.json")"
+    PREV_SET="$(jq -r '.score.check_set // ""' "$PREV/findings.json")"
+    PREV_SCORE="$(jq -r 'if (.score.overall|type)=="number" then .score.overall else "" end' "$PREV/findings.json")"
+    if [ "$SCORE_STATE" = "assessed" ] && [ -n "$PREV_SCORE" ] && [ "$PREV_MODEL" = "$CUR_MODEL" ] && [ "$PREV_SET" = "$CUR_SET" ]; then
     MOVE="$(jq -rn --argjson prev "$(jq '.score.overall' "$PREV/findings.json")" --argjson cur "$SCORE" \
       '(($cur - $prev) | if . >= 0 then "(+\(.))" else "(\(.))" end)')"
+    fi
     DELTA="$(jq -rn --slurpfile p "$PREV/findings.json" --slurpfile c "$OUT/findings.json" '
       [$p[0].findings[].id] as $b | [$c[0].findings[].id] as $n |
       "\(($b - $n) | length) fixed, \(($n - $b) | length) new, \(($n - ($n - $b)) | length) unchanged"')"
   fi
-  jq -n --arg head "audit-aws ${RUN_DATE}: ${SCORE}/100${MOVE:+ $MOVE}, ${E2E}. ${COUNTS}. ${CHECKS}." \
+  if [ "$SCORE_STATE" = "unassessed" ]; then
+    HEAD="audit-aws ${RUN_DATE}: readiness unassessed; ${ASSESSMENT}. ${COUNTS}."
+  else
+    HEAD="audit-aws ${RUN_DATE}: ${SCORE}/100${MOVE:+ $MOVE}, ${E2E}; ${ASSESSMENT}. ${COUNTS}. ${CHECKS}."
+  fi
+  jq -n --arg head "$HEAD" \
         --arg top "$TOP" --arg delta "$DELTA" --arg topo "$TOPO_LINE" --arg cost "$COST_LINE" --arg path "$OUT_ABS/report.md" \
         '{text: ($head + "\nTop findings:\n" + $top + "\nDelta: " + $delta + "\n" + $topo + ($cost | if . == "" then "" else "\n" + . end) + "\nReport: " + $path)}' \
     | curl -fsS --max-time 10 -H 'Content-Type: application/json' -d @- "$SCOUTFLO_SLACK_WEBHOOK" \
@@ -564,7 +591,13 @@ All thresholds and windows named in the checks are example values; tune them to 
 
 | Failure | Prevention |
 | --- | --- |
-| `PendingConfirmation` subscription counted as delivery | Read the literal `SubscriptionArn` value; only a real ARN plus an observed CloudWatch-generated notification earns `validated-live` |
+| `PendingConfirmation` subscription counted as delivery | Read the literal `SubscriptionArn`; a real ARN proves confirmation, not receipt |
+| CloudWatch/SNS transport evidence counted as human receipt | Require destination-side evidence correlated to the alarm event; action history and SNS metrics stop at configured or transport-proven |
+| Aurora or DocumentDB evaluated with standalone RDS fields | Classify engine and deployment model first; use cluster HA/backups and engine-native metrics, and mark unsupported controls not-in-scope |
+| Every INSUFFICIENT_DATA alarm called a dead dimension | Require matching state reason, active lifecycle, exact dimensions, missing-data policy, and recent datapoint evidence before failing AWS-004 |
+| Route53 absence called a DNS gap without proving authority | Confirm authoritative nameservers or an explicit Route53 monitoring decision; otherwise mark AWS-040 not-in-scope or blocked |
+| Sampled log groups generalized to the estate | Report `sampled/eligible`, the selection rule, and the uninspected count |
+| Missing owner or retention policy inferred from AWS metadata | Require a cited policy, runbook, repository record, or owner response for AWS-055 |
 | Target-group or Route53 health check counted as alerting | Health checks eject bad targets silently; only a CloudWatch alarm pages a human. Credit each system for its own job |
 | Self-computed savings figure presented as an AWS number | `estimated_monthly_savings_usd` is populated only from Compute Optimizer or Cost Explorer's own response; every other cost finding omits the field |
 | Cost finding folded into `score.categories` | `AWSOPT-*` findings always carry `points_recoverable: 0` and never enter the weighted-score arithmetic; they render in their own report section |

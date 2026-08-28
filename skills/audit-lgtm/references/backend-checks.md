@@ -37,12 +37,12 @@ One permanent ID per check. IDs never change or get reused; retired checks keep 
 | LGTM-010 | Alert routing | Alertmanager reachable, config parses, cluster ready | critical |
 | LGTM-011 | Alert routing | At least one real receiver defined | critical |
 | LGTM-012 | Alert routing | vmalert loads rules and points at a live notifier | critical |
-| LGTM-013 | Alert routing | Notification failure counters flat at zero | high |
+| LGTM-013 | Alert routing | Notification failure counter delta is zero across two reads; counters do not prove human receipt | high |
 | LGTM-014 | Alert routing | Default route receiver is real, not null, loopback, or placeholder | critical |
-| LGTM-015 | Alert routing | Severity-based routes deliver paging alerts to a paging receiver | medium |
+| LGTM-015 | Alert routing | Severity-based routes select a paging receiver | medium |
 | LGTM-016 | Alert routing | Grouping, inhibition, and repeat interval configured | medium |
 | LGTM-017 | Alert routing | No noisy rules: missing `for`, Jobs paging, dev namespaces routed to paging | medium |
-| LGTM-018 | Alert routing | Currently firing alerts have owners and actions | medium |
+| LGTM-018 | Alert routing | Currently firing alerts have owners and action annotations; acknowledgement is checked downstream | medium |
 | LGTM-020 | Logs layer | Log endpoint reachable and ready | high |
 | LGTM-021 | Logs layer | Deployed log backend matches the advertised one (LogQL vs LogsQL) | medium |
 | LGTM-022 | Logs layer | Smoke query returns recent log lines | high |
@@ -74,7 +74,7 @@ One permanent ID per check. IDs never change or get reused; retired checks keep 
 | LGTM-061 | Reliability and security | Retention configured and known per signal store | medium |
 | LGTM-062 | Reliability and security | Backups or snapshots exist for telemetry storage | high |
 | LGTM-063 | Reliability and security | Observability endpoints not publicly reachable without auth | high |
-| LGTM-064 | Reliability and security | NetworkPolicies and PodDisruptionBudgets present in the monitoring namespace | medium |
+| LGTM-064 | Reliability and security | Kubernetes runtime only: NetworkPolicies and PodDisruptionBudgets present in the monitoring namespace | medium |
 | LGTM-065 | Reliability and security | No high-cardinality label values (IDs, users, sessions, URLs) | medium |
 | LGTM-066 | Reliability and security | No secrets in plain ConfigMaps, chart values, or annotations | high |
 | LGTM-070 | Alert routing | Ruler paging rules carry an anti-flap resolve hold (`keep_firing_for`) where they flap; Loki ruler has no such field (not-in-scope) | medium |
@@ -84,6 +84,19 @@ One permanent ID per check. IDs never change or get reused; retired checks keep 
 | LGTM-080 | Service coverage | PostgreSQL series present are covered by alert rules on a seeing evaluator (connections vs max, deadlocks, commit rate) | high |
 | LGTM-081 | Service coverage | Redis/Valkey series present are covered by alert rules on a seeing evaluator (evictions, connected clients) | medium |
 | LGTM-082 | Service coverage | Kafka series present are covered by alert rules on a seeing evaluator (consumer-group lag) | high |
+
+## Runtime applicability matrix
+
+Record one live-evidenced `runtime_mode` before using any platform-specific command: `kubernetes`, `ec2-systemd`, `docker`, or `external`. Backend API checks in sections 1 through 10 and 12 through 14 remain applicable wherever their endpoints are configured. Section 11 is Kubernetes-only.
+
+| Runtime mode | Platform evidence allowed | Section 11 treatment |
+| --- | --- | --- |
+| `kubernetes` | Explicit configured kube context and telemetry workloads from that context | Run section 11 as written |
+| `ec2-systemd` | Named instance identity plus on-target service/process inventory | Do not run `kubectl`; LGTM-064 is `not-in-scope`; LGTM-025/060/061/062/066 need equivalent host or cloud evidence and are `blocked` when that evidence is unavailable |
+| `docker` | Explicit Docker context plus on-target telemetry container inventory | Do not run `kubectl`; LGTM-064 is `not-in-scope`; LGTM-025/060/061/062/066 need equivalent container/host evidence and are `blocked` when unavailable |
+| `external` | Provider identity plus the documented shared-responsibility boundary | Do not run `kubectl`; provider-owned platform controls are `not-in-scope` only when the responsibility boundary proves that ownership, otherwise `blocked` |
+
+Do not infer `kubernetes` from `kube_*` metrics: a Prometheus server on EC2 can scrape Kubernetes workloads. Do not infer `ec2-systemd` from an EC2 inventory row alone: containers may run on that host. If the deployment identity cannot be verified, state that the runtime is unresolved and block platform-specific checks instead of forcing one of the modes.
 
 ## 1. Backend detection (LGTM-002, LGTM-021, LGTM-041)
 
@@ -505,16 +518,22 @@ curl -fsS --max-time 10 -H "$AUTH" "${AM_URL}/api/v2/receivers" | jq -r '.[].nam
 curl -fsS --max-time 10 -H "$AUTH" "${AM_URL}/api/v2/status" | jq -r '.config.original' \
   | grep -nE 'receiver:|routes:|matchers|match(_re)?:|group_by|repeat_interval|inhibit'
 
-# LGTM-018: firing alerts by severity
+# LGTM-018: firing alerts, age, owner, and action metadata
 curl -fsS --max-time 10 -H "$AUTH" "${AM_URL}/api/v2/alerts?active=true" \
-  | jq -r 'group_by(.labels.severity) | .[] | "\(.[0].labels.severity // "none"): \(length)"'
+  | jq -r '.[] | [(.labels.alertname // "unnamed"), (.labels.severity // "none"), (.labels.owner // .annotations.owner // "owner-missing"), (.annotations.runbook_url // .annotations.summary // "action-missing"), .startsAt] | @tsv'
 
-# LGTM-013: delivery failure counters, by integration
+# Silence state is suppression context only. Alertmanager does not expose human acknowledgement.
+curl -fsS --max-time 10 -H "$AUTH" "${AM_URL}/api/v2/silences" \
+  | jq '{active: ([.[] | select(.status.state == "active")] | length), pending: ([.[] | select(.status.state == "pending")] | length)}'
+
+# LGTM-013: notification attempt/failure counter snapshot, by integration.
+# Capture once here and repeat the same read at the end of the audit. Compare each labeled
+# series. A single cumulative value cannot establish whether failures are currently rising.
 curl -fsS --max-time 10 -H "$AUTH" "${AM_URL}/metrics" \
   | grep -E '^alertmanager_notifications_(total|failed_total)'
 ```
 
-What to look for. LGTM-014: the top-level `receiver:` is where unmatched alerts land; a receiver named `null`/`blackhole` with real alerts flowing, or a `webhook_configs` URL pointing at a loopback or placeholder address, is a critical finding (evidence: the receiver name and host class, for example `webhook target is a loopback address`). LGTM-015: no route matching on a severity label means paging and info alerts share one path. LGTM-016: absent `group_by` and `repeat_interval` defaults, no inhibit rules. LGTM-017: cross-check firing alerts against rule definitions from section 2; rules with no `for:` duration and pages sourced from completed Jobs or dev namespaces are noise findings. LGTM-013: `failed_total` above zero and rising between two reads a few minutes apart means delivery is failing now, which usually upgrades LGTM-014 from `configured` to `validated-live`. LGTM-018: alerts firing for days with nobody acting is alarm fatigue; list their names and ages. Grafana-managed alerting has its own equivalents in section 10.
+What to look for. LGTM-014: the top-level `receiver:` is where unmatched alerts land; a receiver named `null`/`blackhole` with real alerts flowing, or a `webhook_configs` URL pointing at a loopback or placeholder address, is a critical finding (evidence: the receiver name and host class, for example `webhook target is a loopback address`). LGTM-015: no route matching on a severity label means paging and info alerts share one configured path. LGTM-016: absent `group_by` and `repeat_interval` defaults, no inhibit rules. LGTM-017: cross-check firing alerts against rule definitions from section 2; rules with no `for:` duration and pages sourced from completed Jobs or dev namespaces are noise findings. LGTM-013: a positive `failed_total` delta between two reads proves that Alertmanager-side notification attempts failed during the sample. A zero or flat delta proves only that Alertmanager recorded no new failures in that interval. `notifications_total` is an attempt counter, not a receipt counter. Neither counter proves that a paging provider accepted the event or that a human received or acknowledged it. LGTM-018: list long-firing alerts, ages, owners, and action annotations for owner review. Alertmanager exposes no acknowledgement state, and zero active silences means only that no Alertmanager suppression is active. Use `/scoutflo:audit-alert-routing` with downstream paging evidence for receipt or acknowledgement claims. Grafana-managed alerting has its own equivalents in section 10.
 
 ## 10. Grafana (LGTM-050, LGTM-051, LGTM-052, LGTM-054, and Grafana-managed alerting)
 
@@ -556,15 +575,24 @@ The contact-points response can include webhook URLs; the `jq` above extracts na
 
 ## 11. Kubernetes-side reliability checks (LGTM-025, LGTM-060 to LGTM-066)
 
-A real observability estate rarely fits one namespace: the metrics family, the LGTM components, and a legacy stack commonly live in two or three separate namespaces, and checking only one silently passes the others. `MONITORING_NAMESPACES` is a space-separated list (from `kubernetes.monitoring_namespace`, which may name several); every check below loops over it, and the evidence names which namespace each result came from.
+Run this section only when the runtime applicability gate recorded `runtime_mode=kubernetes`. For every other mode, use the matrix above; missing StatefulSets, PVCs, NetworkPolicies, or PDBs outside Kubernetes are not findings.
+
+A Kubernetes observability estate rarely fits one namespace: the metrics family, the LGTM components, and a legacy stack commonly live in two or three separate namespaces, and checking only one silently passes the others. `MONITORING_NAMESPACES` is a space-separated list (from `kubernetes.monitoring_namespace`, which may name several); every check below loops over it, and the evidence names which namespace each result came from.
 
 ```bash
 set -eu
+RUNTIME_MODE="required-runtime-mode" # replace with the recorded runtime applicability value
 KUBE_CONTEXT="your-kube-context"    # kubernetes.context
 MONITORING_NAMESPACES="monitoring"  # kubernetes.monitoring_namespace; space-separated when the
                                     # stack spans several namespaces, e.g. "monitoring lgtm victoriametrics"
 COLLECTOR="alloy"                   # your log/metric collector daemonset name, from Phase 2 inventory
 SINCE="15m"                         # log inspection window; example, tune
+
+case "$RUNTIME_MODE" in
+  kubernetes) ;;
+  ec2-systemd|docker|external) echo "section 11 not-in-scope for runtime_mode=${RUNTIME_MODE}"; exit 0 ;;
+  *) echo "set RUNTIME_MODE from the runtime applicability gate"; exit 1 ;;
+esac
 
 for MON_NS in $MONITORING_NAMESPACES; do
   echo "== monitoring namespace: ${MON_NS} =="

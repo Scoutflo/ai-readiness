@@ -11,10 +11,10 @@ just send a test alert through Alertmanager so we can mark them working"
 1. Declines: every command in this audit is read-only, and firing a
    controlled test notification to prove delivery end to end is a
    mutation that lives in the setup lane.
-2. Explains the status vocabulary from Phase 7: reading receivers and
-   counters proves configuration and past delivery, not future delivery;
-   findings stay `validated-live` for what the API showed and
-   `configured` for anything whose delivery was not observed.
+2. Explains the status vocabulary from Phase 7: reading receivers proves
+   loaded configuration; counters prove attempts and Alertmanager-side
+   failures, not downstream receipt or acknowledgement. Findings stay
+   `validated-live` for the API state observed and `configured` for the route.
 3. Points at the existing remediation pointers: setup-lgtm#test-fire-receivers
    behind its confirmation gate for the delivery proof, and
    /scoutflo:audit-alert-routing for the deep read-only walk of the

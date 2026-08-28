@@ -36,6 +36,29 @@ Proxy paths used by this audit (all GET, all read-only):
 
 Anything deeper than label and instant-query reads (ingester health, retention config, compactor state, cardinality explorers) belongs to `audit-lgtm`, not here.
 
+## Evidence-state contract
+
+The bundled inventory script writes `request-status.jsonl`. Judge whether a
+check is assessable from this ledger before interpreting a response file:
+
+| State | Meaning | Audit treatment |
+| --- | --- | --- |
+| `success-empty` | HTTP 2xx, valid expected JSON shape, collection/object is empty | Verified empty only for the requested endpoint and scope |
+| `success-nonempty` | HTTP 2xx, valid expected JSON shape, response is non-empty | Usable evidence; still apply the semantic check |
+| `unauthenticated` | HTTP 401 | Blocked on credential validity |
+| `forbidden` | HTTP 403 | Blocked on read scope; not an empty collection |
+| `unsupported` | HTTP 404, 405, or 501 | Endpoint is unavailable on this deployment/version; use a documented fallback or mark blocked/not applicable |
+| `transport-error` | DNS, TLS, timeout, connection, or other curl failure | Blocked on reachability |
+| `http-error` | Other non-2xx response | Blocked unless a check explicitly defines that status as its result |
+| `invalid-response` | HTTP 2xx but malformed JSON or wrong top-level shape | Blocked; often a proxy/login page or incompatible API |
+| `partial` | One or more pages succeeded but a later required page failed | Object-level evidence only; never a complete-estate denominator |
+
+For paginated dashboard search, `dashboard-index.json` means the pagination
+completed. `dashboard-index.partial.json` means it did not. A failed first page
+creates neither file. Never manufacture `[]` for a failed read, and never use a
+partial index to pass GRAF-080, GRAF-090, GRAF-091, GRAF-092, or any other
+estate-wide coverage claim.
+
 ## Minimum permissions
 
 Build a dedicated read-only service account for auditing. With RBAC (Grafana Cloud, Enterprise, or OSS with RBAC enabled), grant exactly:

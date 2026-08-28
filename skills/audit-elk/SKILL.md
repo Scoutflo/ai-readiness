@@ -7,7 +7,7 @@ description: Read-only scored audit of Kibana Alerting across rule notification 
 
 Scored, read-only audit of the Kibana Alerting rules that watch your Elastic data: whether each rule reaches a live connector, whether the rule itself is executing cleanly, whether its noise controls are tuned, and whether the rule set actually covers your critical services — across every Kibana space you point it at. It answers one question: when a log or metric condition trips in Elastic tonight, does a healthy rule fire to a reachable connector without drowning the responder in repeats?
 
-This skill audits **Kibana Alerting** (Stack Rules and their connectors), not Elasticsearch cluster health, index lifecycle, or the data the rules query. Elastic data rendered in Grafana is `audit-grafana`. Legacy Watcher watches live in Elasticsearch, not Kibana; this audit detects that a split exists (ELK-032) so a Kibana-only view does not silently imply Watcher-covered services are unmonitored, but it does not deeply audit Watcher itself.
+This skill audits **Kibana Alerting** (Stack Rules and their connectors), not Elasticsearch cluster health, shard allocation, index lifecycle/retention, snapshot/restore readiness, ingestion pipelines, or storage pressure. Those Elasticsearch surfaces require a separate read-only evidence pack against `elk.es_url`; never label this Kibana report a full ELK-platform audit. Elastic data rendered in Grafana is `audit-grafana`. Legacy Watcher watches live in Elasticsearch, not Kibana; this audit detects that a split exists (ELK-032) so a Kibana-only view does not silently imply Watcher-covered services are unmonitored, but it does not deeply audit Watcher itself.
 
 Every command is read-only: GET on rules, connectors, rule types, health, and (on 9.2+) maintenance windows, plus a read-by-query on Elasticsearch `_watcher/stats` for the split check. Every mutating verb — enable, disable, mute, snooze, connector execute — is forbidden; the full list is in [references/elk-checks.md](references/elk-checks.md) section 12. There is no `setup-elk` yet, so every finding names its manual fix path in Kibana instead of a setup anchor.
 
@@ -20,6 +20,7 @@ Outputs, per the [report standard](../../report-standard/README.md):
 - `./scoutflo-audits/elk/[<label>/]<YYYY-MM-DD>/findings.json` per the [findings schema](../../report-standard/findings-schema.md), finding IDs `ELK-NNN`
 - `./scoutflo-audits/elk/[<label>/]<YYYY-MM-DD>/report.md` per the [report template](../../report-standard/report-template.md), including the `## Inventory` section (the `render-report-viz.sh inventory` output)
 - `./scoutflo-audits/elk/[<label>/]<YYYY-MM-DD>/inventory.json` per the [inventory schema](../../report-standard/inventory-schema.md) (`scoutflo-inventory/v1`): the complete Phase-1 catalog — one item per Kibana alerting rule and connector (`kind`: `alert_rule`, `connector`), each with `kind`, `covers`, `enabled`, `severity`, and `routes_to` for alerting objects. Built from the raw pull, never invented; redacted at capture, never a secret value.
+- `./scoutflo-audits/elk/[<label>/]<YYYY-MM-DD>/raw/request-status.jsonl` plus complete or explicitly `.partial.json` collection artifacts; failed bodies keep a failure suffix and never masquerade as empty JSON.
 - One appended line in `./scoutflo-audits/elk/[<label>/]history.jsonl`
 - One Slack brief, when `slack.webhook_env` is configured
 
@@ -78,32 +79,56 @@ KIBANA_API_KEY=$(printenv "$ELK_TOKEN_VAR" 2>/dev/null || true)
 [ -n "${KIBANA_API_KEY:-}" ] || { echo "\$${ELK_TOKEN_VAR} (elk.token_env) is not set — add it to ~/.scoutflo/env (echo 'export ${ELK_TOKEN_VAR}=\"<paste>\"' >> ~/.scoutflo/env; chmod 600 ~/.scoutflo/env), or run /scoutflo:connect. The plugin reads that file, not your interactive shell."; exit 1; }
 echo "elk target: ${ELK_LABEL} (${KIBANA_URL}) -> ${ELK_SEG}/"
 # Kibana is browser-facing behind SSO, so a 200 that returns an HTML login/SPA page is a
-# false-green. Judge the body, not the status code alone: capture BOTH the status and the
-# content-type, and pass ONLY on 200 + a JSON content-type + a version-robust body assertion
-# (any JSON object/array from the alerting API — do NOT over-fit a Kibana field). This mirrors
-# skills/doctor/scripts/doctor.sh so doctor and this audit agree.
+# false-green. Use /api/status as the identity/readiness gate; alerting-health is a separate
+# permission-dependent audit surface. Judge the body, not the status alone.
+BODY="$(mktemp)"; RC=0
+META="$(curl -s -o "$BODY" -w '%{http_code} %{content_type}' --max-time 10 \
+  -H "Authorization: ApiKey ${KIBANA_API_KEY}" "${KIBANA_URL}/api/status")" || RC=$?
+CODE="${META%% *}"; CT="${META#* }"
+if [ "$RC" -ne 0 ]; then
+  rm -f "$BODY"; echo "Kibana status probe could not connect (curl exit ${RC}); check elk.kibana_url and network"; exit 1
+elif [ "$CODE" = "200" ] && printf '%s' "$CT" | grep -qi json && jq -e '.version.number | type=="string" and length>0' "$BODY" >/dev/null 2>&1; then
+  echo "Kibana identity: version $(jq -r '.version.number' "$BODY")"
+elif [ "$CODE" = "200" ]; then
+  rm -f "$BODY"; echo "Kibana status returned 200 but Content-Type='${CT}' or version.number was absent; this is not a verified Kibana API response"; exit 1
+elif [ "$CODE" = "401" ]; then
+  rm -f "$BODY"; echo "Kibana status returned 401: the API key was not authenticated"; exit 1
+elif [ "$CODE" = "403" ]; then
+  rm -f "$BODY"; echo "Kibana status returned 403: the key was recognized but target identity cannot be verified with this scope"; exit 1
+elif [ "$CODE" = "404" ]; then
+  rm -f "$BODY"; echo "Kibana status returned 404: elk.kibana_url is not the Kibana base URL, or its base-path prefix is missing"; exit 1
+else
+  rm -f "$BODY"; echo "Kibana status returned ${CODE}"; exit 1
+fi
+rm -f "$BODY"
+
+# Permission-dependent alerting probe. Once /api/status has identified Kibana,
+# a denial here is audit evidence, not a reason to suppress the entire report.
 BODY="$(mktemp)"; RC=0
 META="$(curl -s -o "$BODY" -w '%{http_code} %{content_type}' --max-time 10 \
   -H "Authorization: ApiKey ${KIBANA_API_KEY}" "${KIBANA_URL}/api/alerting/_health")" || RC=$?
 CODE="${META%% *}"; CT="${META#* }"
 if [ "$RC" -ne 0 ]; then
-  rm -f "$BODY"; echo "alerting health probe could not connect (curl exit ${RC}); check elk.kibana_url and network"; exit 1
-elif [ "$CODE" = "200" ] && printf '%s' "$CT" | grep -qi json && jq -e 'type=="object" or type=="array"' "$BODY" >/dev/null 2>&1; then
-  : # real JSON from the alerting API — pass
-elif [ "$CODE" = "200" ]; then
-  rm -f "$BODY"; echo "alerting health probe returned 200 but Content-Type='${CT}' — looks like an HTML login/SPA/proxy page, not the API: Kibana is likely behind an SSO/OAuth reverse proxy returning its login page (or elk.kibana_url is wrong); a 200 HTML page is not proof of API access"; exit 1
+  ALERTING_HEALTH_ACCESS="blocked: transport error (curl exit ${RC})"
+elif [ "$CODE" = "200" ] && printf '%s' "$CT" | grep -qi json && jq -e 'type=="object"' "$BODY" >/dev/null 2>&1; then
+  ALERTING_HEALTH_ACCESS="available"
+elif [ "$CODE" = "401" ]; then
+  ALERTING_HEALTH_ACCESS="blocked: HTTP 401, alerting endpoint did not authenticate the request"
+elif [ "$CODE" = "403" ]; then
+  ALERTING_HEALTH_ACCESS="blocked: HTTP 403, authenticated key lacks Kibana Alerting read privilege"
 elif [ "$CODE" = "404" ]; then
-  rm -f "$BODY"; echo "alerting health probe returned 404: elk.kibana_url points at Elasticsearch not Kibana (or a space/base-path prefix is wrong)"; exit 1
-elif [ "$CODE" = "401" ] || [ "$CODE" = "403" ]; then
-  rm -f "$BODY"; echo "alerting health probe returned ${CODE}: key invalid or role lacks Kibana Read on Stack Rules"; exit 1
+  ALERTING_HEALTH_ACCESS="blocked/unsupported: HTTP 404 on verified Kibana"
+elif [ "$CODE" = "200" ]; then
+  ALERTING_HEALTH_ACCESS="blocked: HTTP 200 returned non-JSON alerting-health content"
 else
-  rm -f "$BODY"; echo "alerting health probe returned ${CODE}"; exit 1
+  ALERTING_HEALTH_ACCESS="blocked: HTTP ${CODE}"
 fi
 rm -f "$BODY"
-echo "doctor gate: pass"
+echo "alerting-health access: ${ALERTING_HEALTH_ACCESS}"
+echo "doctor gate: pass (Kibana identity verified; permission-dependent surfaces may be reported blocked)"
 ```
 
-Never proceed past a failed doctor check and never downgrade one into a finding. `/scoutflo:doctor` runs the same probe standalone. The `/api/alerting/_health` response is also an audit input (ELK-004): its `is_sufficiently_secure` and `has_permanent_encryption_key` fields are read in Phase 3.
+Never proceed when `/api/status` cannot verify the target as Kibana. After identity succeeds, a denied, unsupported, or unreadable `/api/alerting/_health` response becomes blocked ELK-004 evidence and the audit continues across any other readable surfaces. A `401` means that request was unauthenticated; a `403` means the key was authenticated but unauthorized for the surface; a `404` after successful identity means the route is unavailable or version-dependent, not that the base URL is Elasticsearch. `/scoutflo:doctor` follows the same split. When available, the alerting-health response supplies ELK-004's `is_sufficiently_secure` and `has_permanent_encryption_key` fields.
 
 The tier is enforced by Kibana feature privileges on the key's role and cannot be introspected from the key itself; if a broader key is used the audit still runs, but record in the report that the audit credential can do more than read.
 
@@ -126,13 +151,22 @@ ELK_LABEL=$(sh "$TT" "$CFG" elk label "$ELK_IDX")
 KIBANA_URL=$(sh "$TT" "$CFG" elk get "$ELK_IDX" kibana_url); KIBANA_URL="${KIBANA_URL%/}"   # elk.kibana_url
 ELK_TOKEN_VAR=$(sh "$TT" "$CFG" elk get "$ELK_IDX" token_env); [ -n "$ELK_TOKEN_VAR" ] || ELK_TOKEN_VAR="KIBANA_API_KEY"
 KIBANA_API_KEY=$(printenv "$ELK_TOKEN_VAR" 2>/dev/null || true)
-STATUS_JSON="$(curl -fsS --max-time 15 -H "Authorization: ApiKey ${KIBANA_API_KEY}" \
-  "${KIBANA_URL}/api/status" 2>/dev/null || echo '{}')"
-VER="$(printf '%s' "$STATUS_JSON" | jq -r '.version.number // "unknown"')"
-NAME="$(printf '%s' "$STATUS_JSON" | jq -r '.name // "unknown"')"
+STATUS_BODY="$(mktemp)"; STATUS_RC=0
+STATUS_META="$(curl -sS -o "$STATUS_BODY" -w '%{http_code} %{content_type}' --max-time 15 \
+  -H "Authorization: ApiKey ${KIBANA_API_KEY}" "${KIBANA_URL}/api/status")" || STATUS_RC=$?
+STATUS_CODE="${STATUS_META%% *}"; STATUS_CT="${STATUS_META#* }"
+if [ "$STATUS_RC" -ne 0 ]; then
+  rm -f "$STATUS_BODY"; echo "Kibana status transport failure (curl exit ${STATUS_RC}) — stop"; exit 1
+elif [ "$STATUS_CODE" != "200" ]; then
+  rm -f "$STATUS_BODY"; echo "Kibana status returned HTTP ${STATUS_CODE:-000} — stop"; exit 1
+elif ! printf '%s' "$STATUS_CT" | grep -qi json \
+  || ! jq -e '.version.number | type == "string" and length > 0' "$STATUS_BODY" >/dev/null 2>&1; then
+  rm -f "$STATUS_BODY"; echo "Kibana status returned HTTP 200 without the expected JSON identity — stop"; exit 1
+fi
+VER="$(jq -r '.version.number' "$STATUS_BODY")"
+NAME="$(jq -r '.name // "unknown"' "$STATUS_BODY")"
+rm -f "$STATUS_BODY"
 echo "elk target: ${ELK_LABEL}; kibana_url=${KIBANA_URL} name=${NAME} version=${VER}"
-printf '%s' "$STATUS_JSON" | jq -e '.version.number != null' >/dev/null \
-  || { echo "no Kibana version in the status response; this URL is not a Kibana host — stop"; exit 1; }
 echo "live-safety gate: pass — confirm this is the Kibana instance and version you intend to audit; the version drives the maintenance-window (9.2+) and legacy-route (9.0) gates"
 ```
 
@@ -141,7 +175,7 @@ The API key plus the Kibana URL select the target; there is no ambient default. 
 ## Ground rules
 
 - Configuration is metadata; execution state is proof. A rule that exists is `configured`; only a rule whose `last_run.outcome` is `succeeded` and whose actions target a live connector is `validated-live`.
-- API errors are evidence. A `404` on `/api/alerting/*` means `elk.kibana_url` points at Elasticsearch or a space prefix is wrong; a `401`/`403` means the key's role lacks the Kibana Read privilege on Stack Rules or Connectors. Record which, never convert an error into empty success.
+- API errors are evidence. First verify Kibana identity through `/api/status`. After that succeeds, a `404` on `/api/alerting/*` means that route is unavailable/version-dependent or the requested space/path is wrong; it no longer proves the base URL is Elasticsearch. A `401` is unauthenticated; a `403` is authenticated but unauthorized for that surface. Record the exact state, never convert an error into empty success.
 - Rules are space-isolated, and spaces are **discovered** (`GET /api/spaces/space`), never assumed. Coverage denominators name the spaces discovered, audited, and skipped. Zero rules in the audited set never scores as an empty estate — it trips the Phase-1 guardrail (ELK-033), because the rules may live in a space this run did not see.
   - ❌ `Scored coverage 90: forty alerting rules exist.` (which space? one space's forty rules say nothing about another space)
   - ❌ `Score 0/100: no alerting rules.` (only the default space was checked; the rules were in a space the run never enumerated — the exact bug this fix prevents)
@@ -153,7 +187,7 @@ The API key plus the Kibana URL select the target; there is no ambient default. 
 
 ## Estate sizing
 
-Count before judging, and declare the path in the terminal output. The unit here is rules across the audited spaces:
+Count before judging, and declare the path in the terminal output. The unit here is rules across the audited spaces. The bundled collector performs the cheap list reads and follows every required page; use only its complete artifacts for an exact total:
 
 ```bash
 set -eu
@@ -165,32 +199,60 @@ ELK_LABEL=$(sh "$TT" "$CFG" elk label "$ELK_IDX")
 if [ "$ELK_KIND" = seq ]; then ELK_SEG="elk/${ELK_LABEL}"; else ELK_SEG="elk"; fi
 KIBANA_URL=$(sh "$TT" "$CFG" elk get "$ELK_IDX" kibana_url); KIBANA_URL="${KIBANA_URL%/}"   # elk.kibana_url
 ELK_TOKEN_VAR=$(sh "$TT" "$CFG" elk get "$ELK_IDX" token_env); [ -n "$ELK_TOKEN_VAR" ] || ELK_TOKEN_VAR="KIBANA_API_KEY"
+SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.scoutflo/env" ]; then SCOUTFLO_ENV="./.scoutflo/env"; else SCOUTFLO_ENV="$HOME/.scoutflo/env"; fi; }
+[ -f "$SCOUTFLO_ENV" ] && . "$SCOUTFLO_ENV" || true
 KIBANA_API_KEY=$(printenv "$ELK_TOKEN_VAR" 2>/dev/null || true)
+[ -n "$KIBANA_API_KEY" ] || { echo "$ELK_TOKEN_VAR is not set; run /scoutflo:connect"; exit 1; }
+ELK_SPACES=$(sh "$TT" "$CFG" elk get "$ELK_IDX" spaces)   # optional; collector accepts JSON array or comma-separated IDs
 SMALL_MAX_OBJECTS="30"    # example, tune to your environment
 MEDIUM_MAX_OBJECTS="150"  # example, tune to your environment
 BATCH_SIZE="50"           # rules per batch on the large path; example, tune it
-AUTH="Authorization: ApiKey ${KIBANA_API_KEY}"
 RUN_DATE="$(date -u +%Y-%m-%d)"
 RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${ELK_SEG}/${RUN_DATE}/raw"
-# Sum rule totals across the AUDITED spaces (spaces.txt, materialized by elk-checks.md
-# section 4a from live enumeration — NOT a bare default-space call). Per-space breakdown.
-[ -s "${RAW_DIR}/spaces.txt" ] || { echo "run space enumeration (elk-checks.md 4a) before sizing"; exit 1; }
+export KIBANA_URL KIBANA_API_KEY ELK_SPACES
+export OUT_DIR="$RAW_DIR"
+bash "${CLAUDE_PLUGIN_ROOT:-.}/skills/audit-elk/scripts/elk-audit.sh"
+
+# Sum only complete per-space rule aggregates. A partial count is a lower bound,
+# never an estate denominator and never proof of an empty estate.
 TOTAL=0
-while read -r space; do
+COLLECTED=0
+RULES_COLLECTION_COMPLETE=1
+SPACE_COLLECTION_STATE=$(jq -r '.collection_state' "${RAW_DIR}/space-discovery-state.json")
+case "$SPACE_COLLECTION_STATE" in success-empty|success-nonempty) : ;; *) RULES_COLLECTION_COMPLETE=0 ;; esac
+while IFS= read -r space; do
   [ -n "$space" ] || continue
-  if [ "$space" = "default" ]; then base="${KIBANA_URL}"; else base="${KIBANA_URL}/s/${space}"; fi
-  n="$(curl -fsS --max-time 30 -H "$AUTH" "${base}/api/alerting/rules/_find?per_page=1&page=1" | jq -r '.total // 0')"
-  echo "  rules_in_space[${space}]=${n}"
-  TOTAL=$((TOTAL + n))
+  sdir="${RAW_DIR}/spaces/${space}"
+  if [ -f "${sdir}/rules.json" ]; then
+    n=$(jq '.rules | length' "${sdir}/rules.json")
+    echo "  rules_in_space[${space}]=${n} (complete)"
+    TOTAL=$((TOTAL + n)); COLLECTED=$((COLLECTED + n))
+  elif [ -f "${sdir}/rules.partial.json" ]; then
+    n=$(jq '.collected' "${sdir}/rules.partial.json")
+    echo "  rules_in_space[${space}]>=${n} (partial; not a denominator)"
+    COLLECTED=$((COLLECTED + n)); RULES_COLLECTION_COMPLETE=0
+  else
+    state=$(jq -r '.rules.state // "unavailable"' "${sdir}/collection-state.json" 2>/dev/null || echo unavailable)
+    echo "  rules_in_space[${space}]=unavailable (${state})"
+    RULES_COLLECTION_COMPLETE=0
+  fi
 done < "${RAW_DIR}/spaces.txt"
-ZERO_RULES=0; [ "$TOTAL" -eq 0 ] && ZERO_RULES=1
-echo "scored_objects=${TOTAL} (summed across audited spaces) zero_rules=${ZERO_RULES}"
+ZERO_RULES="unknown"
+if [ "$RULES_COLLECTION_COMPLETE" -eq 1 ]; then
+  ZERO_RULES=0; [ "$TOTAL" -eq 0 ] && ZERO_RULES=1
+  echo "scored_objects=${TOTAL} (complete across audited spaces) zero_rules=${ZERO_RULES}"
+else
+  TOTAL="$COLLECTED"
+  echo "scored_objects_lower_bound=${COLLECTED}; exact total unavailable; dependent checks are blocked"
+fi
 
 # Guided-walkthrough drift check, per report-standard/README.md.
 TARGET_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${ELK_SEG}"
 PREV_RUN="$(find "$TARGET_DIR" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort | tail -1)"
 DRIFT="first run"
-if [ -n "$PREV_RUN" ] && [ -f "${PREV_RUN}/findings.json" ]; then
+if [ "$RULES_COLLECTION_COMPLETE" -ne 1 ]; then
+  DRIFT="current rule inventory is partial; exact estate drift is unavailable"
+elif [ -n "$PREV_RUN" ] && [ -f "${PREV_RUN}/findings.json" ]; then
   PREV_TOTAL="$(jq -r '.estate.objects // empty' "${PREV_RUN}/findings.json")"
   if [ -n "$PREV_TOTAL" ]; then
     if [ "$PREV_TOTAL" -eq "$TOTAL" ]; then
@@ -209,7 +271,7 @@ echo "drift: ${DRIFT}"
 - **Medium** (`TOTAL <= MEDIUM_MAX_OBJECTS`): per-category passes (delivery, health, noise, coverage), completed in one run.
 - **Large**: work rules in batches of `BATCH_SIZE` against a durable, run-ID-keyed worklist per the worklist rules in [skill-authoring-conventions.md](../../docs/skill-authoring-conventions.md): scan for a resumable run before minting a new run ID, one row per rule id per space, lock before claiming a batch, mark rows done only after their pulls succeed, assert zero pending before Phase 8 writes.
 
-Never silently truncate: name the spaces audited and any space skipped, and reflect it in the coverage denominators. The rate-limit retry rule in [references/elk-checks.md](references/elk-checks.md) section 9 applies to every call.
+Never silently truncate: `rules.json`, `connectors.json`, and `spaces.json` exist only after complete pagination. A later-page failure produces the corresponding `.partial.json`; a first-page failure produces no aggregate. Name the spaces audited and skipped, keep partial counts out of denominators, and reflect blocked surfaces in assessment coverage. The rate-limit retry rule in [references/elk-checks.md](references/elk-checks.md) section 9 applies to every call.
 
 ### Scope checkpoint
 
@@ -235,7 +297,7 @@ The large-path phases then run against the scoped set; the report names anything
 
 ### Empty / hidden-rules guardrail
 
-The scope checkpoint above narrows a *large* estate. This guardrail catches the opposite and more dangerous case — an estate that looks **empty** because the rules are in a space this run did not (or could not) see. It is the fix for the customer bug where auditing only `default` reported a confident, wrong `0/100`. After sizing sets `ZERO_RULES`:
+The scope checkpoint above narrows a *large* estate. This guardrail catches the opposite and more dangerous case — an estate that looks **empty** because the rules are in a space this run did not (or could not) see. It prevents the known failure where auditing only `default` reported a confident, wrong `0/100`. After sizing sets `ZERO_RULES`:
 
 ```bash
 set -eu
@@ -247,10 +309,14 @@ ELK_LABEL=$(sh "$TT" "$CFG" elk label "$ELK_IDX")
 if [ "$ELK_KIND" = seq ]; then ELK_SEG="elk/${ELK_LABEL}"; else ELK_SEG="elk"; fi
 RUN_DATE="$(date -u +%Y-%m-%d)"
 RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${ELK_SEG}/${RUN_DATE}/raw"
-# Spaces discovered (4a) vs audited (this run). Are there rules-bearing spaces we did NOT audit?
-UNAUDITED="$(comm -23 "${RAW_DIR}/spaces-discovered.txt" "${RAW_DIR}/spaces.txt" 2>/dev/null | tr '\n' ' ')"
+# Spaces discovered (4a) vs audited (this run). Compare only complete discovery;
+# spaces-discovered.partial.txt is evidence, not a complete estate list.
+UNAUDITED=""
+if [ -f "${RAW_DIR}/spaces-discovered.txt" ] && [ -f "${RAW_DIR}/spaces.txt" ]; then
+  UNAUDITED="$(comm -23 "${RAW_DIR}/spaces-discovered.txt" "${RAW_DIR}/spaces.txt" | tr '\n' ' ')"
+fi
 UNAUDITED_TRIM="$(printf '%s' "$UNAUDITED" | tr -d '[:space:]')"
-if [ "${ZERO_RULES:-0}" -eq 1 ]; then
+if [ "${ZERO_RULES:-unknown}" = "1" ]; then
   if [ -n "$UNAUDITED_TRIM" ]; then
     # Case A: zero rules in the audited set, but other spaces exist — the rules are likely there.
     echo "[guard] 0 rules in the audited spaces, but these spaces were discovered and not audited: ${UNAUDITED}"
@@ -263,25 +329,29 @@ if [ "${ZERO_RULES:-0}" -eq 1 ]; then
     echo "[guard] 0 rules visible across every discoverable space — possible key-visibility gap (ELK-033)"
     echo "[guard] widen the key to spaces:[\"*\"] read (see /scoutflo:connect) if rules live elsewhere"
   fi
+elif [ "${ZERO_RULES:-unknown}" = "unknown" ]; then
+  echo "[guard] rule collection was incomplete; zero-rule status is unknown"
+  echo "[guard] preserve partial artifacts and block rule-dependent estate conclusions"
 fi
 ```
 
 Behavior this enforces (Phase 8 honors it):
 
 - **Case A** (zero in audited set, other spaces discovered): in an interactive run, present the discovered spaces (id, name, per-space rule count) as a numbered pick-list, validate the choice against the discovered list, write it into the audit scope (`elk.spaces` / `checkpoint_save_scope`), and re-size against the chosen space(s). In a non-interactive or scheduled run (`audit-all`, `schedule-audits`), take the safe default — audit **all discovered** spaces — so the picker never hangs.
-- **Case B** (zero visible anywhere): exclude the three categories that genuinely need rules — **Rule health, Alert noise, Coverage** — as `blocked`, and renormalize per [severity-and-scoring.md](../../report-standard/severity-and-scoring.md); emit finding **ELK-033** with the visibility-gap reason, and **never** write a confident `0/100`, a vacuously-high score, or an end-to-end claim. Keep **Rule delivery** *included*: ELK-004 (framework health from `/api/alerting/_health`) and the connector checks (ELK-002/003) do not depend on any rule existing, so delivery is still assessable — and keeping it in means at least one scored category remains, which is required (excluding all four leaves nothing to score and `check-findings.sh` rejects an all-excluded scorecard). If space discovery itself was `unavailable` (the 4a 404 fallback), say so as the reason.
+- **Case B** (zero visible anywhere after complete reads): mark the rule-dependent checks in **Rule health, Alert noise, and Coverage** blocked and emit **ELK-033** with the visibility-gap reason. Rule delivery is assessable only from the independent checks whose framework-health and connector reads completed. If those reads are blocked too, the run is `unassessed` with `overall: null`; never force a denominator or turn missing evidence into 0/100.
+- **Incomplete collection** (`ZERO_RULES=unknown`): this is not Case B and does not prove ELK-033. Preserve the request state and any `.partial.json`, block only the checks that need the incomplete surface, and retry the failed page before making estate-wide claims.
 
 ## Phase 1: Service context and space discovery
 
 If `./scoutflo-audits/topology.md` exists, load it; its service list is the critical-service list and its names are canonical. If topology.md does not exist, infer critical services from rule names and tags, note the inference, and suggest `/scoutflo:map-topology`.
 
-**Discover the spaces — never assume `default`.** Run the space-enumeration step in [references/elk-checks.md](references/elk-checks.md#4a-space-enumeration-do-this-first--never-assume-default): call `GET /api/spaces/space` (a global endpoint, no `/s/` prefix, no admin privilege needed) to enumerate the spaces this key can see. Then resolve the audited set: `elk.spaces` when it is set (each entry validated against the discovered list — a configured space the key cannot see is a scope gap, reported `skipped`, never silently dropped), else **every discovered space**. State three distinct sets in the report and in every coverage denominator: **discovered**, **audited**, **skipped**. If `GET /api/spaces/space` returns 404 (Spaces feature or the Security plugin is off, or a Serverless difference), fall back to `elk.spaces`/`default` and **state that discovery was unavailable** — never silently treat the default space as the whole estate.
+**Discover the spaces — never assume `default`.** The Estate sizing collector follows the space pages described in [references/elk-checks.md](references/elk-checks.md#4a-space-enumeration-do-this-first--never-assume-default). Resolve the audited set from a complete `spaces.json`: `elk.spaces` when it is set (each entry validated against the discovered list; an invisible configured space is reported `skipped`), else every discovered space. State three distinct sets in every coverage denominator: **discovered**, **audited**, and **skipped**. If discovery is partial or unavailable, the explicit configured/default fallback remains usable for limited reads, but the report must say discovery was incomplete and block whole-estate claims.
 
 This replaces the old blind `["default"]`-only default: a customer's alerting rules commonly live in a non-default space, and auditing only `default` reports an empty estate — the wrong `0/100` (or a vacuously-high score) that this fix exists to prevent.
 
 ## Phase 2: Read-only inventory
 
-Build the raw picture with the commands in [references/elk-checks.md](references/elk-checks.md): section 4a already enumerated the spaces (`GET /api/spaces/space`) and resolved the audited set; section 4 then captures the Kibana version (drives the version gates), the alerting framework health, and per audited space the rules (with execution state, actions, flapping, alert_delay, snooze), connectors, and rule types. Judgment starts in Phase 3. A 401/403 on any space is a privilege finding naming the missing Kibana Read feature; a 404 on `/api/alerting/*` means the URL is Elasticsearch, not Kibana.
+Use the raw artifacts already written by `scripts/elk-audit.sh` in Estate sizing; do not issue replacement `curl | jq` reads. Section 4 of [references/elk-checks.md](references/elk-checks.md) defines the evidence-state contract. `request-status.jsonl` distinguishes verified empty/nonempty responses from 401, 403, 404/unsupported, transport, HTTP, invalid-JSON, and partial states. Only complete `spaces.json`, `rules.json`, and `connectors.json` may drive totals or passes. Their `.partial.json` siblings support named-object investigation only. Mark dependent checks blocked and continue across readable surfaces; never replace an unavailable or partial response with an empty list.
 
 ## Phase 3: Rule delivery (ELK-001 to ELK-006)
 
@@ -333,9 +403,9 @@ Then render the Scoutflo Topology Readiness section per [topology-readiness.md](
 
 ## Phase 8: Score, write, brief
 
-Score per [severity-and-scoring.md](../../report-standard/severity-and-scoring.md): each check yields `pass` (1.0), `partial` (0.5), `fail`/`blocked` (0), `not-in-scope` leaves the denominator. Category score is the credit ratio times 100 rounded down; overall is the weight-normalized sum over included categories. Whole categories that could not be assessed (a space that 403'd; ELK-025 on a pre-9.2 version leaves that one check not-in-scope, not the whole category) are excluded, renormalized, and stated. Score conservatively. Assign each category a maturity value (`reactive`, `proactive`, `systematic`).
+Score per [severity-and-scoring.md](../../report-standard/severity-and-scoring.md): each check yields `pass` (1.0), `partial` (0.5), or `fail` (0). `blocked` is unassessed and leaves the readiness denominator; `not-in-scope` leaves both readiness and assessment-coverage denominators. Category score is the assessed-credit ratio times 100 rounded down; overall is the weight-normalized sum over categories with at least one assessed check. A space or API surface that returns 401/403/404 is blocked with the exact state, never failed or empty. Show assessment coverage separately. A fully blocked run is `unassessed` with `overall: null`, never 0/100. Assign each category a maturity value (`reactive`, `proactive`, `systematic`).
 
-**Empty / hidden estate (ELK-033, from the Phase-1 guardrail):** when zero rules are visible across every discoverable space, do not emit a confident `0/100` — nor a vacuously-high score from checks that pass on an empty set. Exclude the three rule-dependent categories — **Rule health, Alert noise, Coverage** — by authoring them into `score.excluded` with the reason ("no alerting rules visible to this credential; rules may live in a space this key cannot see — widen to `spaces:[\"*\"]` read", or "space discovery unavailable" on the 4a 404 fallback), and renormalize over what remains. **Keep Rule delivery included** and score it from its rule-independent checks (ELK-004 framework health, ELK-002/003 connectors); do **not** exclude all four categories — an all-excluded scorecard has no denominator and `check-findings.sh` rejects it. Emit ELK-033 (Coverage) with evidence (the discovered-vs-audited space sets) and a remediation pointer. The overall then reconciles as Rule delivery's score over the one remaining weight.
+**Empty / hidden estate (ELK-033, from the Phase-1 guardrail):** when zero rules are visible across every discoverable space, do not emit a confident `0/100` — nor a vacuously-high score from checks that pass on an empty set. Mark the rule-dependent checks in **Rule health, Alert noise, and Coverage** blocked with the visibility reason ("no alerting rules visible to this credential; rules may live in a space this key cannot see — widen to `spaces:[\"*\"]` read", or "space discovery unavailable" on the 4a 404 fallback). **Rule delivery** remains assessable only to the extent its rule-independent framework-health and connector reads succeeded. If those reads are also blocked, the entire run is honestly unassessed. Emit ELK-033 with the discovered/audited/skipped space sets and the evidence-unlock action.
 
 | Category | Weight | ID range |
 | --- | ---: | --- |
@@ -348,13 +418,15 @@ Weights sum to 100. The rebalance (noise 25 → 20, coverage 20 → 25) reflects
 
 The full check catalog and the target profile (what 100 means per category) are at the top of [references/elk-checks.md](references/elk-checks.md). IDs are stable: the same defect gets the same ID every run, one finding per failed check, affected objects and their space enumerated. Compute `points_recoverable` per finding by re-running the scoring model with that check at full credit; `info` findings and excluded categories carry 0. The executive summary states the gap to target and the two or three findings with the highest `points_recoverable` as the biggest levers.
 
-End-to-end gate: claim end-to-end coverage only when the overall score is at or above 85, every critical service passes every applicable coverage row, and no category or space was excluded. Below the gate, write "good base coverage", never "end to end". A run that audited only some spaces cannot claim end-to-end; say which spaces the claim rests on.
+End-to-end gate: claim end-to-end coverage only when the overall score is at or above 85, assessment coverage is 100%, every critical service passes every applicable coverage row, and no category or space was excluded. Below the gate, write "good base coverage", never "end to end". A run that audited only some spaces cannot claim end-to-end; say which spaces the claim rests on.
 
 Lifecycle, exemptions, and totals, before rendering the report:
 
 1. Load the previous run's `findings.json` when one exists; classify every finding per the lifecycle table in the [findings schema](../../report-standard/findings-schema.md) (`new`, `unchanged`, `regressed`; resolved IDs go to the delta, and the executive summary names regressions first).
-2. Load `./scoutflo-audits/exemptions.yaml` when present. Entries with `id`, `reason`, and `expires` all set and unexpired suppress their finding into the Suppressed appendix; malformed or expired entries are reported, never honored.
+2. Load `./scoutflo-audits/exemptions.yaml` when present. Entries with `id`, `reason`, and `expires` all set and unexpired suppress their finding into the Suppressed appendix; malformed or expired entries are reported, never honored. On the same-ID `checks[]` row, retain the observed `partial` or `fail` result and add `suppressed: true` plus `suppression_reason`; set the finding's `points_recoverable` to 0. Suppressed checks remain assessed for coverage but are excluded from readiness scoring.
 3. Every findings area and coverage cell carries its denominator (`passed/total`).
+4. Emit one `checks[]` row for every stable `ELK-*` catalog check, including passes, partials, failures, blockers, and not-in-scope checks. Derive category counts, readiness, assessment coverage, and `score.check_set` from that complete ledger; never write them independently.
+5. Every finding declares `scoring_scope: "readiness"` and `report_lanes`: `general-audit`, `ai-sre-readiness`, or both. Use the AI SRE lane only when the evidence shows impact to telemetry quality, correlation, topology/ownership context, incident routing, RCA trust, or action safety. This classification never changes severity or score.
 
 Emit and verify:
 
@@ -369,10 +441,14 @@ if [ "$ELK_KIND" = seq ]; then ELK_SEG="elk/${ELK_LABEL}"; else ELK_SEG="elk"; f
 RUN_DATE="$(date -u +%Y-%m-%d)"
 OUT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${ELK_SEG}/${RUN_DATE}"
 mkdir -p "$OUT"
-# ... write findings.json, inventory.json, and report.md per the report standard. The findings.json
+# ... write findings.json (scoutflo-findings/v2 with a complete checks[] ledger),
+# inventory.json, and report.md per the report standard. The findings.json
 # ".target" is the per-target slug (equal to $ELK_SEG: "elk" for a single block, "elk/<label>" for a
 # labeled-list target), so audit-all/correlation/render disambiguate multiple Kibana targets. Verify:
-jq -e --arg seg "$ELK_SEG" '.schema == "scoutflo-findings/v1" and .target == $seg and (.findings | type == "array")' \
+jq -e --arg seg "$ELK_SEG" '.schema == "scoutflo-findings/v2" and .target == $seg
+  and (.checks | type == "array" and length > 0)
+  and (.findings | type == "array")
+  and (.findings | all((.scoring_scope == "readiness") and (.report_lanes | type == "array" and length > 0)))' \
   "$OUT/findings.json" >/dev/null && echo "findings.json valid"
 grep -q '^# ' "$OUT/report.md" && echo "report.md present"
 sh "${CLAUDE_PLUGIN_ROOT}/report-standard/check-findings.sh" "$OUT/findings.json"
@@ -384,6 +460,9 @@ jq -e --arg seg "$ELK_SEG" '.schema == "scoutflo-inventory/v1" and .target == $s
   "$OUT/inventory.json" >/dev/null && echo "inventory.json valid"
 sh "${CLAUDE_PLUGIN_ROOT}/report-standard/render-report-viz.sh" inventory "$OUT/inventory.json" >/dev/null \
   && echo "inventory section renders"
+sh "${CLAUDE_PLUGIN_ROOT}/report-standard/render-report-viz.sh" lanes "$OUT/findings.json" >/dev/null \
+  && echo "findings-by-purpose section renders"
+grep -qxF '## Findings by purpose' "$OUT/report.md" && echo "findings-by-purpose section present"
 sh "${CLAUDE_PLUGIN_ROOT}/report-standard/render-report-viz.sh" html "$OUT/findings.json" "$OUT/report.html" "$(dirname "$OUT")/history.jsonl"
 sh "${CLAUDE_PLUGIN_ROOT}/report-standard/check-report.sh" "$OUT/report.md"
 ```
@@ -403,7 +482,9 @@ RUN_DATE="$(date -u +%Y-%m-%d)"
 OUT="${TARGET_DIR}/${RUN_DATE}"
 RESOLVED="0"   # fixed count from this run's delta; 0 on the first run
 LINE="$(jq -c --arg d "$RUN_DATE" --argjson resolved "$RESOLVED" \
-  '{run_date:$d, skill:"audit-elk", overall:.score.overall, gate:.score.gate,
+  '{run_date:$d, skill:"audit-elk", overall:.score.overall, state:.score.state,
+    scoring_model:.score.scoring_model, check_set:.score.check_set,
+    assessment_coverage_percent:.score.assessment.coverage_percent, gate:.score.gate,
     end_to_end:.score.end_to_end, severity_counts:.severity_counts,
     lifecycle_counts:((reduce .findings[].lifecycle as $l ({}; .[$l] = (.[$l] // 0) + 1)) + {resolved:$resolved})}' \
   "$OUT/findings.json")"
@@ -411,7 +492,7 @@ TMP="$(mktemp)"
 [ -f "${TARGET_DIR}/history.jsonl" ] && grep -v "\"run_date\":\"${RUN_DATE}\"" "${TARGET_DIR}/history.jsonl" > "$TMP" || true
 printf '%s\n' "$LINE" >> "$TMP"
 mv "$TMP" "${TARGET_DIR}/history.jsonl"
-tail -1 "${TARGET_DIR}/history.jsonl" | jq -e '.run_date and (.overall >= 0)' >/dev/null && echo "history.jsonl updated"
+tail -1 "${TARGET_DIR}/history.jsonl" | jq -e '.run_date and ((.overall|type)=="number" or .overall==null) and .scoring_model and .check_set' >/dev/null && echo "history.jsonl updated"
 ```
 
 The report's trend line renders the last five history.jsonl entries, oldest first. After the report is written, close with the run-completion message per the report standard ([report-template.md](../../report-standard/report-template.md#run-completion-message-what-the-skill-says-in-chat-when-the-run-finishes)): the one-line score headline, the top fixes by points_recoverable, the **absolute** report path, the OS-specific open command, and the leak-safe share pointer (Slack brief). Then send the Slack brief exactly as [report-template.md](../../report-standard/report-template.md) specifies: score, severity counts, top finding titles, delta line, topology readiness line, report path — titles only, never evidence values. When invoked by `audit-all`, skip the brief; the orchestrator sends exactly one combined message per run. Keep `./scoutflo-audits/` out of public version control; reports describe your alerting setup.
@@ -489,8 +570,10 @@ All thresholds and windows named in the checks are example values; tune them to 
 
 | Failure | Prevention |
 | --- | --- |
-| `elk.kibana_url` set to the Elasticsearch host | Alerting is a Kibana API; a 404 on `/api/alerting/*` means the URL is Elasticsearch (`:9200`), not Kibana (`:5601`) |
-| Only the default space audited, other spaces silently missed (the customer 0/100 bug) | Discover spaces via `GET /api/spaces/space` (Phase 1 / elk-checks.md 4a), audit all visible or the `elk.spaces` subset, and treat a single visible space with 0 rules as the ELK-033 visibility trip-wire — never a confident 0/100 or a vacuous-high score |
+| `elk.kibana_url` set to the Elasticsearch host | Verify `/api/status` first. A failed identity response stops the run; after identity passes, an alerting-path 404 means unsupported/wrong route or space, not proof that the host is Elasticsearch |
+| Only the default space audited, other spaces silently missed | Discover spaces via `GET /api/spaces/space` (Phase 1 / elk-checks.md 4a), audit all visible or the `elk.spaces` subset, and treat a single visible space with 0 rules as the ELK-033 visibility trip-wire — never a confident 0/100 or a vacuous-high score |
+| A failed first page became `[]`, or a later page was published as the whole estate | Require the normal-name complete aggregate; preserve later-page results only as `.partial.json`, use `request-status.jsonl` for the exact failure, and block estate-wide conclusions |
+| Rules, connectors, or spaces stopped at the first 100 objects | Follow `per_page=100&page=N` until the declared total or verified terminal page, reject duplicate/no-progress pages, and derive denominators only from the complete aggregate |
 | Space discovery returns only `default` even though rules exist elsewhere | The key sees only spaces where it holds a privilege; a single-space key enumerates one space. Widen the key to `spaces:["*"]` read (see `/scoutflo:connect`); the report states discovery may be incomplete |
 | `flapping: null` flagged as flapping-disabled | null means "use the space default", which is ON; only an explicit `enabled:false` or a weak window is a finding |
 | Maintenance-window check failed on Kibana 8.x/9.0/9.1 | The public maintenance-window API is 9.2+; version-gate ELK-025 to not-in-scope on older versions |

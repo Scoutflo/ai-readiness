@@ -14,6 +14,9 @@ set -eu
 
 REPORT="${1:?usage: report-conformance.sh path/to/report.md}"
 [ -f "$REPORT" ] || { echo "REPORT-FAIL: no such file: $REPORT"; exit 1; }
+REPORT_DIR="$(dirname "$REPORT")"
+FJ="$REPORT_DIR/findings.json"
+SELF_DIR="$(CDPATH= cd -- "$(dirname "$0")" && pwd)"
 
 FAIL=0
 fail() { echo "REPORT-FAIL: $1"; FAIL=1; }
@@ -30,10 +33,19 @@ for row in 'Target' 'Date' 'Toolkit version' 'Skill'; do
   grep -qE "^\| *${row} *\|" "$REPORT" || fail "header table missing required '| ${row} |' row"
 done
 
-# 3. Canonical Score line: '**Score: <n>/100**' (bold, exact prefix). This is the
-#    exact drift seen in the wild ('Overall score: 42/100' is a violation).
-grep -qE '^\*\*Score: [0-9]+/100\*\*' "$REPORT" \
-  || fail "missing canonical '**Score: <n>/100**' line in the executive summary (a plain 'Overall score:' line does not conform)"
+# 3. Canonical readiness headline. Assessed runs use '**Score: <n>/100**'. A
+#    fully blocked v2 run is unassessed and must say so instead of fabricating a
+#    red 0/100 or green 100/100.
+if [ -f "$FJ" ] && command -v jq >/dev/null 2>&1 \
+   && [ "$(jq -r '.score.state // "assessed"' "$FJ")" = "unassessed" ]; then
+  grep -qE '^\*\*Readiness: unassessed\*\*' "$REPORT" \
+    || fail "v2 unassessed run is missing canonical '**Readiness: unassessed**' line"
+  grep -qE '^\*\*Score: [0-9]+/100\*\*' "$REPORT" \
+    && fail "v2 unassessed run must not render a numeric score"
+else
+  grep -qE '^\*\*Score: [0-9]+/100\*\*' "$REPORT" \
+    || fail "missing canonical '**Score: <n>/100**' line in the executive summary (a plain 'Overall score:' line does not conform)"
+fi
 
 # 4. Required section headers, in order. Optional sections (Suppressed findings,
 #    Coverage matrix, Scoutflo Topology Readiness, Delta) are not required to be
@@ -58,6 +70,25 @@ echo "$REQUIRED" | while IFS= read -r sec; do
   fi
   prev_line="$ln"
 done || FAIL=1
+
+# v2 reports must expose the two audience lanes derived from report_lanes. This
+# is an additional section, not part of the legacy v1 spine.
+if [ -f "$FJ" ] && command -v jq >/dev/null 2>&1 \
+   && [ "$(jq -r '.schema // ""' "$FJ")" = "scoutflo-findings/v2" ]; then
+  grep -qxF '## Findings by purpose' "$REPORT" \
+    || fail "v2 report is missing '## Findings by purpose' (render it from report_lanes)"
+  if grep -qxF '## Findings by purpose' "$REPORT"; then
+    expected_lanes="$(sh "$SELF_DIR/render-report-viz.sh" lanes "$FJ")"
+    actual_lanes="$(awk '
+      /^## Findings by purpose$/ { capture=1 }
+      capture {
+        if ($0 ~ /^## / && $0 != "## Findings by purpose") exit
+        print
+      }' "$REPORT")"
+    [ "$actual_lanes" = "$expected_lanes" ] \
+      || fail "v2 findings-by-purpose section differs from the deterministic report_lanes rendering"
+  fi
+fi
 
 # 5. Findings format: when a finding is rendered, it must use the human-first
 #    What / Where / Why / How / Done-when shape (a demoted 'ref:' ID, not a table row).
@@ -93,7 +124,6 @@ fi
 #    missing so a run that skipped it is nudged, without failing a standalone
 #    report.md validation (the '## At a glance' required section above is the hard
 #    guarantee that the visuals were rendered).
-REPORT_DIR="$(dirname "$REPORT")"
 [ -f "$REPORT_DIR/report.html" ] \
   || echo "REPORT-WARN: no report.html next to $REPORT — run render-report-viz.sh html to emit the standalone dashboard (see report-template.md)"
 
@@ -121,7 +151,6 @@ fi
 #    presented as "end-to-end ready" — a score above the gate with excluded
 #    categories is above the gate, not end-to-end (a real report shipped this
 #    false green light before this check existed).
-FJ="$REPORT_DIR/findings.json"
 if [ -f "$FJ" ] && command -v jq >/dev/null 2>&1; then
   if [ "$(jq -r '.score.end_to_end // false' "$FJ")" != "true" ] \
      && grep -q 'end-to-end ready' "$REPORT"; then

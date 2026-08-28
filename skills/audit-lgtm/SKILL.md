@@ -5,7 +5,7 @@ description: Read-only scored audit of Prometheus, LGTM, and VictoriaMetrics obs
 
 # audit-lgtm
 
-Scored, read-only audit of an LGTM stack (Loki, Grafana, Tempo, Mimir or Prometheus) or a VictoriaMetrics-family stack (VictoriaMetrics, VictoriaLogs, VictoriaTraces, vmalert), plus Alertmanager and the collectors that feed them. It answers one question: when something breaks tonight, can a responder detect it, identify the service, pull its logs and traces, and get paged on a receiver that actually delivers?
+Scored, read-only audit of an LGTM stack (Loki, Grafana, Tempo, Mimir or Prometheus) or a VictoriaMetrics-family stack (VictoriaMetrics, VictoriaLogs, VictoriaTraces, vmalert), plus Alertmanager and the collectors that feed them. It answers one question: when something breaks tonight, can a responder detect it, identify the service, pull its logs and traces, and verify that the alert route is correctly configured without overstating downstream human receipt?
 
 Every command in this audit is read-only: GET requests, read-only query calls, `kubectl get`. Nothing is created, silenced, test-fired, annotated, or modified. Some query endpoints are POST by protocol; they are classified read-only by effect and marked as such in [references/backend-checks.md](references/backend-checks.md). Fixes belong to `/scoutflo:setup-lgtm` and `/scoutflo:setup-grafana`. Firing a controlled test notification to prove delivery end to end is also a mutation; it lives in the setup lane, and `/scoutflo:audit-alert-routing` covers the deep read-only walk of the paging path.
 
@@ -16,6 +16,7 @@ Outputs, per the [report standard](../../report-standard/README.md):
 - `./scoutflo-audits/lgtm/<YYYY-MM-DD>/findings.json` per the [findings schema](../../report-standard/findings-schema.md)
 - `./scoutflo-audits/lgtm/<YYYY-MM-DD>/report.md` per the [report template](../../report-standard/report-template.md), including the `## Inventory` section (the `render-report-viz.sh inventory` output)
 - `./scoutflo-audits/lgtm/<YYYY-MM-DD>/inventory.json` per the [inventory schema](../../report-standard/inventory-schema.md) (`scoutflo-inventory/v1`): the complete Phase-1 catalog — one item per alert rule, Alertmanager/vmalert receiver, and route — each with `kind`, `covers`, `enabled`, `severity`, and `routes_to` for alerting objects. Built from the raw pull, never invented; redacted at capture, never a secret value.
+- One appended line in `./scoutflo-audits/lgtm/history.jsonl`
 - One Slack brief, when `slack.webhook_env` is configured
 
 ## Doctor gate
@@ -29,7 +30,8 @@ Requirements. Configure only the blocks that exist in your environment; delete t
 | Traces | `tempo.url` | `tempo.token_env`, if set | search and trace APIs | read-only |
 | Alerting | `prometheus.alertmanager_url`, `victoriametrics.vmalert_url` | token, if fronted by auth | status, receivers, alerts | read-only |
 | Grafana | `grafana.url` | `grafana.token_env` (`GRAFANA_TOKEN`) | service account: datasources, dashboards, and alert rules read | read-only |
-| Kubernetes | `kubernetes.context`, `kubernetes.monitoring_namespace` (one or more namespaces, space-separated — real stacks often span several) | kubeconfig | get, list | read-only |
+| Runtime identity | `lgtm.runtime_mode`: `kubernetes`, `ec2-systemd`, `docker`, or `external` | none | one live, on-target deployment identity or inventory read | read-only |
+| Kubernetes (only when `lgtm.runtime_mode=kubernetes`) | `kubernetes.context`, `kubernetes.monitoring_namespace` (one or more namespaces, space-separated) | kubeconfig | get, list | read-only |
 | Slack (optional) | `slack.webhook_env` | webhook variable | post to one channel | n/a |
 
 Preflight. A failed check stops the audit with the exact failure and the fix (usually `/scoutflo:connect`). Never downgrade a doctor failure into a finding.
@@ -62,8 +64,21 @@ SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.s
 [ -f "$SCOUTFLO_ENV" ] && . "$SCOUTFLO_ENV" || true
 command -v curl >/dev/null || { echo "curl not installed"; exit 1; }
 command -v jq   >/dev/null || { echo "jq not installed"; exit 1; }
-command -v kubectl >/dev/null || echo "WARN: kubectl missing; cluster-side checks will be blocked"
-
+# runtime_mode is an operator-owned scope decision. Read it from config and fail
+# closed; never infer it from metrics, dashboard labels, or a diagram.
+if command -v yq >/dev/null 2>&1 && yq -r '. | keys | length' "$CFG" >/dev/null 2>&1; then
+  RUNTIME_MODE="$(yq -r '.lgtm.runtime_mode // ""' "$CFG")"
+  KUBE_CONTEXT="$(yq -r '.kubernetes.context // ""' "$CFG")"
+else
+  RUNTIME_MODE="$(sed -n '/^lgtm:/,/^[A-Za-z_]/p' "$CFG" | sed -n 's/^[[:space:]]\{1,\}runtime_mode:[[:space:]]*//p' | head -1 | sed 's/[[:space:]]#.*$//; s/^"//; s/"$//; s/^'\''//; s/'\''$//; s/[[:space:]]*$//')"
+  KUBE_CONTEXT="$(sed -n '/^kubernetes:/,/^[A-Za-z_]/p' "$CFG" | sed -n 's/^[[:space:]]\{1,\}context:[[:space:]]*//p' | head -1 | sed 's/[[:space:]]#.*$//; s/^"//; s/"$//; s/^'\''//; s/'\''$//; s/[[:space:]]*$//')"
+fi
+case "$RUNTIME_MODE" in
+  kubernetes) [ -n "$KUBE_CONTEXT" ] || { echo "lgtm.runtime_mode=kubernetes requires kubernetes.context; fix with /scoutflo:connect"; exit 1; } ;;
+  ec2-systemd|docker|external) : ;;
+  "") echo "missing lgtm.runtime_mode; set kubernetes, ec2-systemd, docker, or external via /scoutflo:connect"; exit 1 ;;
+  *) echo "invalid lgtm.runtime_mode '$RUNTIME_MODE'; use kubernetes, ec2-systemd, docker, or external"; exit 1 ;;
+esac
 # For every configured *_env key: presence only, never the value.
 # Grafana is one of several optional blocks (see the requirements table above);
 # only gate GRAFANA_TOKEN when a grafana block is actually configured in
@@ -80,16 +95,24 @@ fi
 
 Then one cheap live call per configured integration (health or identity endpoint; exact commands in [references/backend-checks.md](references/backend-checks.md)). `/scoutflo:doctor` runs the same checks standalone.
 
-Live-safety gate. Before the first real check, print what you are pointed at and compare it to the config:
+## Runtime applicability and live-safety gate
+
+Before the first platform check, read exactly one `runtime_mode` from `lgtm.runtime_mode`: `kubernetes`, `ec2-systemd`, `docker`, or `external`. This is a required operator-owned config value, not a guess from metric names or a diagram. Back it with an on-target, read-only identity or inventory result: the configured kube context and telemetry workloads for `kubernetes`; the named instance plus running telemetry services for `ec2-systemd`; the explicitly selected Docker context plus telemetry containers for `docker`; or the provider identity and shared-responsibility boundary for `external`. Record the mode and evidence source in the report Inventory. If live evidence does not match the configured mode, stop on the mismatch. If the identity read is blocked, mark platform-specific checks `blocked`; do not switch modes, default to Kubernetes, or treat missing Kubernetes objects as failures.
+
+- ❌ `No StatefulSets or PDBs were found, so the EC2-hosted Prometheus stack fails LGTM-060 and LGTM-064.`
+- ✅ `runtime_mode=ec2-systemd from the named instance service inventory; Kubernetes-only LGTM-064 is not-in-scope, while backend API checks remain applicable and host-level HA/backup checks require EC2/systemd evidence.`
+
+For `runtime_mode=kubernetes`, verify the configured context before using any Kubernetes evidence:
 
 ```bash
 set -eu
 KUBE_CONTEXT="your-kube-context"   # kubernetes.context
+command -v kubectl >/dev/null || { echo "kubectl not installed; Kubernetes runtime checks are blocked"; exit 1; }
 kubectl config current-context
 kubectl --context "$KUBE_CONTEXT" auth whoami 2>/dev/null || kubectl --context "$KUBE_CONTEXT" version
 ```
 
-If the resolved context or API identity differs from what `toolkit.yaml` names, stop and report the mismatch. Never proceed on "probably the right cluster". Every command in this skill names its target explicitly: `kubectl --context "$KUBE_CONTEXT"`, `curl` against a URL resolved from the config.
+If the resolved context or API identity differs from what `toolkit.yaml` names, stop and report the mismatch. Never proceed on "probably the right cluster". For other runtime modes, compare the named instance, Docker context, or provider identity against the target established at the gate before trusting its evidence. Every command names its target explicitly.
 
 ## Ground rules
 
@@ -104,6 +127,9 @@ If the resolved context or API identity differs from what `toolkit.yaml` names, 
 - Alerts are not live until the route reaches a receiver proven to deliver. Configured is `configured`, not working.
   - ❌ `LGTM-014 passed: the default route points at a receiver named "oncall-webhook".`
   - ✅ `LGTM-014 configured, not validated-live: the receiver name and route resolve, but no observed notification has reached it; delivery proof is a controlled test in setup-lgtm#test-fire-receivers, not this audit.`
+- Alertmanager has no human acknowledgement state. Notification counters show attempts and Alertmanager-side failures only. Zero silences means no active Alertmanager suppression, not that alerts are unacknowledged or ignored.
+  - ❌ `Thirty alerts, zero silences, and zero notification failures prove thirty unacknowledged pages reached responders.`
+  - ✅ `Thirty alerts are active; Alertmanager shows no active silences and no failed-attempt delta during the sample. Human receipt and acknowledgement remain unverified without downstream paging evidence.`
 - Never print, log, or write a secret: no tokens, webhook URLs, DSNs, auth headers, or rendered configs containing them, in terminal output or in any output file.
 
 ## Phase 1: Service context
@@ -230,13 +256,26 @@ The large-path phases then run against the scoped set; the report names anything
 
 ## Phase 2: Read-only inventory
 
-Build the raw picture before judging anything.
+Build the raw picture before judging anything. The Kubernetes inventory block applies only when the runtime gate recorded `runtime_mode=kubernetes`. For `ec2-systemd`, `docker`, and `external`, inventory through the configured backend APIs plus the on-target deployment evidence used at the runtime gate; never run these `kubectl` checks against an unrelated application cluster.
 
 ```bash
 set -eu
-KUBE_CONTEXT="your-kube-context"    # kubernetes.context
-MONITORING_NAMESPACES="monitoring"  # kubernetes.monitoring_namespace; space-separated when the stack
-                                    # spans several namespaces, e.g. "monitoring lgtm victoriametrics"
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+if command -v yq >/dev/null 2>&1 && yq -r '. | keys | length' "$CFG" >/dev/null 2>&1; then
+  RUNTIME_MODE="$(yq -r '.lgtm.runtime_mode // ""' "$CFG")"
+  KUBE_CONTEXT="$(yq -r '.kubernetes.context // ""' "$CFG")"
+  MONITORING_NAMESPACES="$(yq -r '.kubernetes.monitoring_namespace // "monitoring"' "$CFG")"
+else
+  RUNTIME_MODE="$(sed -n '/^lgtm:/,/^[A-Za-z_]/p' "$CFG" | sed -n 's/^[[:space:]]\{1,\}runtime_mode:[[:space:]]*//p' | head -1 | sed 's/[[:space:]]#.*$//; s/^"//; s/"$//; s/^'\''//; s/'\''$//; s/[[:space:]]*$//')"
+  KUBE_CONTEXT="$(sed -n '/^kubernetes:/,/^[A-Za-z_]/p' "$CFG" | sed -n 's/^[[:space:]]\{1,\}context:[[:space:]]*//p' | head -1 | sed 's/[[:space:]]#.*$//; s/^"//; s/"$//; s/^'\''//; s/'\''$//; s/[[:space:]]*$//')"
+  MONITORING_NAMESPACES="$(sed -n '/^kubernetes:/,/^[A-Za-z_]/p' "$CFG" | sed -n 's/^[[:space:]]\{1,\}monitoring_namespace:[[:space:]]*//p' | head -1 | sed 's/[[:space:]]#.*$//; s/^"//; s/"$//; s/^'\''//; s/'\''$//; s/[[:space:]]*$//')"
+  [ -n "$MONITORING_NAMESPACES" ] || MONITORING_NAMESPACES="monitoring"
+fi
+case "$RUNTIME_MODE" in
+  kubernetes) [ -n "$KUBE_CONTEXT" ] || { echo "lgtm.runtime_mode=kubernetes requires kubernetes.context"; exit 1; } ;;
+  ec2-systemd|docker|external) echo "Kubernetes inventory not-in-scope for runtime_mode=${RUNTIME_MODE}"; exit 0 ;;
+  *) echo "invalid or missing lgtm.runtime_mode; run /scoutflo:connect"; exit 1 ;;
+esac
 kubectl --context "$KUBE_CONTEXT" get namespaces
 for MON_NS in $MONITORING_NAMESPACES; do
   echo "== monitoring namespace: ${MON_NS} =="
@@ -316,15 +355,15 @@ Prove as much of the paging path as reading allows (commands in [references/back
 
 - Alertmanager reachable, config parses, cluster ready (`LGTM-010`); at least one real receiver defined (`LGTM-011`).
 - vmalert, if present, loads rules and points at a live notifier (`LGTM-012`).
-- Notification failure counters flat at zero; a rising failed counter is delivery breaking right now (`LGTM-013`).
+- Notification attempt and failure counters sampled twice; a rising failed counter proves Alertmanager-side delivery attempts are failing now, while a flat or zero failed counter does not prove human receipt (`LGTM-013`).
 - Default route receiver is real: not a null receiver, not a loopback or placeholder webhook (`LGTM-014`).
 - Severity-based routes exist so paging alerts reach a paging receiver (`LGTM-015`); grouping, inhibition, and repeat intervals are set (`LGTM-016`).
 - Noise sources: rules with no `for` duration, pages on completed Jobs and CronJobs, dev namespaces routed to paging receivers (`LGTM-017`).
-- Currently firing alerts each have an owner and an action; long-firing unacknowledged alerts are alarm fatigue in progress (`LGTM-018`).
+- Currently firing alerts each have an owner and an action annotation; long-firing alerts require owner review, but Alertmanager alone cannot prove whether a human acknowledged them (`LGTM-018`).
 
-Reading receivers and counters proves configuration and past delivery, not future delivery. Findings here are `validated-live` for what the API showed and `configured` for anything whose delivery was not observed. The controlled test notification that upgrades `configured` to proven belongs to `/scoutflo:setup-lgtm`.
+Reading receivers proves loaded routing configuration. Notification counters prove attempts and Alertmanager-side failures, not downstream receipt or acknowledgement. Findings here are `validated-live` only for the API state actually observed and `configured` for the route itself. The controlled test notification that proves end-to-end delivery belongs to `/scoutflo:setup-lgtm`; downstream human acknowledgement evidence belongs to `/scoutflo:audit-alert-routing`.
 
-**Flagship correlation — the per-service paging-path liveness chain.** The single highest-value output of this audit, and the cascade no free scanner assembles: for each critical service, thread the five links live and report them as **one** sentence rather than five isolated findings. Signal exists at real depth (LGTM-032) → a rule evaluator can actually see that service's series, including the split-backend trap where the series live in backend A but the only evaluator watches backend B (LGTM-012, LGTM-080–082) → a severity-labeled rule for it exists, is error-free, on-time, and evaluating fresh data (LGTM-035 + LGTM-004 + the new LGTM-007/LGTM-008) → its route matches a real, non-null, non-loopback receiver (LGTM-014/015) → that receiver's delivery-failure counter is flat, not rising (LGTM-013). Worked line: *"checkout has metrics, a dashboard, and a HighErrorRate{severity=page} rule — but that rule evaluates against a datasource whose ingestion is 8 min behind (LGTM-007), its route falls through to the default receiver at http://127.0.0.1:9095 (LGTM-014), and alertmanager_notifications_failed_total is climbing (LGTM-013): the page for the one service that matters most is silent, late, AND undeliverable, and every green dashboard hides it."* Rank the chain by its weakest link's `points_recoverable`; mark the delivery link `configured`, never `validated-live` (delivery proof is the setup-lane test-fire).
+**Flagship correlation — the per-service paging-path configuration chain.** For each critical service, thread the five links live and report them as **one** sentence rather than five isolated findings. Signal exists at real depth (LGTM-032) → a rule evaluator can see that service's series, including the split-backend trap where the series live in backend A but the only evaluator watches backend B (LGTM-012, LGTM-080–082) → a severity-labeled rule exists, is error-free, on-time, and evaluating fresh data (LGTM-035 + LGTM-004 + LGTM-007/LGTM-008) → its route matches a real, non-null, non-loopback receiver (LGTM-014/015) → Alertmanager has no rising failure delta for the matching receiver integration during the sample (LGTM-013). Join that last link only when the counter labels and receiver type support it; otherwise report the counter separately rather than attributing an integration-wide failure to one service route. State the ceiling explicitly: this proves the route and Alertmanager attempt path, not downstream human receipt. Rank the chain by its weakest link's `points_recoverable`; keep the route `configured`, never `validated-live`, until an end-to-end delivery test or downstream delivery evidence exists.
 
 ## Phase 7b: Alert hygiene (ruler-native noise controls)
 
@@ -367,7 +406,7 @@ Two hard rules, matching the backend-level checks that never batch: Phases 2, 4,
 
 ## Phase 10: Score, write, brief
 
-Score per [severity-and-scoring.md](../../report-standard/severity-and-scoring.md): each check yields `pass` (1.0), `partial` (0.5), `fail`/`blocked` (0), with `not-in-scope` removed from the denominator; category score is the credit ratio times 100, rounded down; overall is the weight-normalized sum over included categories. Whole categories that could not be assessed are excluded, renormalized, and stated; blocked checks inside an assessable category score 0. Score conservatively: when unsure between two results, pick the lower and say why.
+Score per [severity-and-scoring.md](../../report-standard/severity-and-scoring.md): each check yields `pass` (1.0), `partial` (0.5), or `fail` (0). `blocked` is unassessed and leaves the readiness denominator; `not-in-scope` leaves both readiness and assessment-coverage denominators. Category score is the assessed-credit ratio times 100, rounded down; overall is the weight-normalized sum over categories with at least one assessed check. Show assessment coverage separately. A fully blocked run is `unassessed` with `overall: null`, never 0/100. When unsure between a defect and missing evidence, use `blocked` and state the exact evidence-unlock action.
 
 | Category | Weight | ID range |
 | --- | ---: | --- |
@@ -381,7 +420,7 @@ Score per [severity-and-scoring.md](../../report-standard/severity-and-scoring.m
 
 The full check catalog, one permanent ID per check with typical failure severity, is at the top of [references/backend-checks.md](references/backend-checks.md). IDs are stable; the same defect gets the same ID every run, which is what makes deltas exact. One finding per failed check, with every affected service enumerated in `affected`.
 
-End-to-end gate: claim end-to-end coverage only when the overall score is at or above 85, every critical service passes every applicable coverage row, and no category was excluded. Below the gate, write "good base coverage" or "mostly covered", never "end to end".
+End-to-end gate: claim end-to-end coverage only when the overall score is at or above 85, assessment coverage is 100%, every critical service passes every applicable coverage row, and no category was excluded. Below the gate, write "good base coverage" or "mostly covered", never "end to end".
 
 ### Lifecycle, exemptions, and totals
 
@@ -395,8 +434,14 @@ Before writing `findings.json` and `report.md`, since `findings.json` requires t
    finding into the Suppressed appendix; malformed or expired entries are
    reported, never honored.
 3. Every findings area and coverage cell carries its denominator
-   (`passed/total checks`). The score excludes suppressed findings and
-   the scorecard states the suppressed count.
+   (`passed/total checks`). For each active exemption, retain the observed
+   `partial` or `fail` result on the same-ID `checks[]` row, add
+   `suppressed: true` plus `suppression_reason`, and set the suppressed
+   finding's `points_recoverable` to 0. Suppressed checks remain assessed for
+   coverage but are excluded from readiness scoring; the scorecard states the
+   suppressed count.
+4. Emit one `checks[]` row for every stable `LGTM-*` catalog check, including passes, partials, failures, blockers, and not-in-scope checks. Derive category counts, readiness, assessment coverage, and `score.check_set` from that complete ledger; never write them independently.
+5. Every finding declares `scoring_scope: "readiness"` and `report_lanes`: `general-audit`, `ai-sre-readiness`, or both. Use the AI SRE lane only when the evidence shows impact to telemetry quality, correlation, topology/ownership context, incident routing, RCA trust, or action safety. The lane never changes severity or score.
 
 Emit and verify:
 
@@ -405,10 +450,14 @@ set -eu
 RUN_DATE="$(date -u +%Y-%m-%d)"
 OUT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/lgtm/${RUN_DATE}"
 mkdir -p "$OUT"
-# ... write findings.json (with lifecycle set per finding, and the estate
+# ... write findings.json (scoutflo-findings/v2, with one checks[] row per
+# catalog check, lifecycle set per finding, report_lanes, and the estate
 # object from the sizing pre-check), inventory.json, and report.md per the
 # report standard, then verify:
-jq -e '.schema == "scoutflo-findings/v1" and (.findings | type == "array") and (.findings | all(has("lifecycle")))' \
+jq -e '.schema == "scoutflo-findings/v2"
+  and (.checks | type == "array" and length > 0)
+  and (.findings | type == "array")
+  and (.findings | all(has("lifecycle") and (.scoring_scope == "readiness") and (.report_lanes | type == "array" and length > 0)))' \
   "$OUT/findings.json" >/dev/null && echo "findings.json valid"
 grep -q '^# ' "$OUT/report.md" && echo "report.md present"
 # Output conformance: the emitted report.md must match report-standard/report-template.md.
@@ -419,8 +468,27 @@ sh "${CLAUDE_PLUGIN_ROOT}/report-standard/check-findings.sh" "$OUT/findings.json
 # with items; the ## Inventory section of report.md IS this render.
 jq -e '.schema == "scoutflo-inventory/v1" and (.items | type == "array") and (.counts.total == (.items | length))' "$OUT/inventory.json" >/dev/null && echo "inventory.json valid"
 sh "${CLAUDE_PLUGIN_ROOT}/report-standard/render-report-viz.sh" inventory "$OUT/inventory.json" >/dev/null && echo "inventory section renders"
+sh "${CLAUDE_PLUGIN_ROOT}/report-standard/render-report-viz.sh" lanes "$OUT/findings.json" >/dev/null && echo "findings-by-purpose section renders"
+grep -qxF '## Findings by purpose' "$OUT/report.md" && echo "findings-by-purpose section present"
 sh "${CLAUDE_PLUGIN_ROOT}/report-standard/render-report-viz.sh" html "$OUT/findings.json" "$OUT/report.html" "$(dirname "$OUT")/history.jsonl"
 sh "${CLAUDE_PLUGIN_ROOT}/report-standard/check-report.sh" "$OUT/report.md"
+
+# Append the derived history row after findings/report validation. A same-date
+# rerun replaces that date's row instead of duplicating it.
+TARGET_DIR="$(dirname "$OUT")"
+RESOLVED="0"   # fixed count from this run's delta; 0 on the first run
+LINE="$(jq -c --arg d "$RUN_DATE" --argjson resolved "$RESOLVED" \
+  '{run_date:$d, skill:"audit-lgtm", overall:.score.overall, state:.score.state,
+    scoring_model:.score.scoring_model, check_set:.score.check_set,
+    assessment_coverage_percent:.score.assessment.coverage_percent, gate:.score.gate,
+    end_to_end:.score.end_to_end, severity_counts:.severity_counts,
+    lifecycle_counts:((reduce .findings[].lifecycle as $l ({}; .[$l] = (.[$l] // 0) + 1)) + {resolved:$resolved})}' \
+  "$OUT/findings.json")"
+TMP="$(mktemp)"
+[ -f "${TARGET_DIR}/history.jsonl" ] && grep -v "\"run_date\":\"${RUN_DATE}\"" "${TARGET_DIR}/history.jsonl" > "$TMP" || true
+printf '%s\n' "$LINE" >> "$TMP"
+mv "$TMP" "${TARGET_DIR}/history.jsonl"
+tail -1 "${TARGET_DIR}/history.jsonl" | jq -e '.run_date and ((.overall|type)=="number" or .overall==null) and .scoring_model and .check_set' >/dev/null && echo "history.jsonl updated"
 ls -l "$OUT"
 ```
 
@@ -435,22 +503,36 @@ OUT="${TARGET_DIR}/${RUN_DATE}"
 if [ -n "${SCOUTFLO_SLACK_WEBHOOK:-}" ]; then
   OUT_ABS="$(cd "$OUT" && pwd)"   # absolute path: the brief must be openable from anywhere
   SCORE="$(jq -r '.score.overall' "$OUT/findings.json")"
+  SCORE_STATE="$(jq -r '.score.state' "$OUT/findings.json")"
+  CUR_MODEL="$(jq -r '.score.scoring_model' "$OUT/findings.json")"
+  CUR_SET="$(jq -r '.score.check_set' "$OUT/findings.json")"
+  ASSESSMENT="$(jq -r '.score.assessment | "\(.assessed_checks)/\(.applicable_checks) (\(.coverage_percent)%) assessed, \(.scored_checks) scored, \(.blocked_checks) blocked, \(.suppressed_checks) suppressed"' "$OUT/findings.json")"
   E2E="$(jq -r 'if .score.end_to_end then "end-to-end" else "not end-to-end" end' "$OUT/findings.json")"
   COUNTS="$(jq -r '.severity_counts | "\(.critical) critical, \(.high) high, \(.medium) medium, \(.low) low"' "$OUT/findings.json")"
-  TOP="$(jq -r '[.findings[] | "\(.id) \(.title)"] | .[0:5] | join("\n")' "$OUT/findings.json")"
+  TOP="$(jq -r '[.findings[] | select((.lifecycle // "new") != "suppressed") | "\(.id) \(.title)"] | .[0:5] | join("\n")' "$OUT/findings.json")"
   # Date-named run dirs only — exclude the persistent large-path `runs/` sibling, which
   # sorts after the dates and would otherwise be picked as today's OUT's predecessor,
   # falsely tripping "first run"/no-movement in the Slack brief.
   PREV="$(find "$TARGET_DIR" -mindepth 1 -maxdepth 1 -type d -name '[0-9]*-[0-9]*-[0-9]*' | sort | tail -2 | head -1)"
   MOVE=""; DELTA="first run"
   if [ -n "$PREV" ] && [ "$PREV" != "$OUT" ]; then
+    PREV_MODEL="$(jq -r '.score.scoring_model // ""' "$PREV/findings.json")"
+    PREV_SET="$(jq -r '.score.check_set // ""' "$PREV/findings.json")"
+    PREV_SCORE="$(jq -r 'if (.score.overall|type)=="number" then .score.overall else "" end' "$PREV/findings.json")"
+    if [ "$SCORE_STATE" = "assessed" ] && [ -n "$PREV_SCORE" ] && [ "$PREV_MODEL" = "$CUR_MODEL" ] && [ "$PREV_SET" = "$CUR_SET" ]; then
     MOVE="$(jq -rn --argjson prev "$(jq '.score.overall' "$PREV/findings.json")" --argjson cur "$SCORE" \
       '(($cur - $prev) | if . >= 0 then "(+\(.))" else "(\(.))" end)')"
+    fi
     DELTA="$(jq -rn --slurpfile p "$PREV/findings.json" --slurpfile c "$OUT/findings.json" '
       [$p[0].findings[].id] as $b | [$c[0].findings[].id] as $n |
       "\(($b - $n) | length) fixed, \(($n - $b) | length) new, \(($n - ($n - $b)) | length) unchanged"')"
   fi
-  jq -n --arg head "audit-lgtm ${RUN_DATE}: ${SCORE}/100${MOVE:+ $MOVE}, ${E2E}. ${COUNTS}." \
+  if [ "$SCORE_STATE" = "unassessed" ]; then
+    HEAD="audit-lgtm ${RUN_DATE}: readiness unassessed; ${ASSESSMENT}. ${COUNTS}."
+  else
+    HEAD="audit-lgtm ${RUN_DATE}: ${SCORE}/100${MOVE:+ $MOVE}, ${E2E}; ${ASSESSMENT}. ${COUNTS}."
+  fi
+  jq -n --arg head "$HEAD" \
         --arg top "$TOP" --arg delta "$DELTA" --arg path "$OUT_ABS/report.md" \
         '{text: ($head + "\nTop findings:\n" + $top + "\nDelta: " + $delta + "\nReport: " + $path)}' \
     | curl -fsS --max-time 10 -H 'Content-Type: application/json' -d @- "$SCOUTFLO_SLACK_WEBHOOK" \
@@ -535,6 +617,8 @@ All thresholds and time windows named in the checks (`RECENT_WINDOW`, lookbacks,
 | Mimir claimed active while another engine serves the queries | Confirm the live process behind the metrics URL before recommending backend-specific work |
 | Alerts exist but go nowhere | Read receivers, the default route, and notification-failure counters; rule lists prove nothing about delivery |
 | Configured receiver counted as working | Mark it `configured`; only observed delivery upgrades it, and that test lives in the setup lane |
+| Alertmanager counters treated as human receipt | Treat totals as attempts and failures as Alertmanager-side errors; require downstream paging evidence for receipt or acknowledgement |
+| Zero silences treated as zero acknowledgement | State only that no active Alertmanager suppression exists; Alertmanager silences are not human acknowledgement records |
 | Completed Jobs page as pods-not-ready | Check rules exclude Jobs, CronJobs, and expected terminal pods |
 | Single-node storage passes silently | Record replicas, RPO/RTO acceptance, backups, and retention as explicit findings |
 | Imported dashboards show empty panels | Validate panel queries and variables against real label values, not against render success |
@@ -546,6 +630,7 @@ All thresholds and time windows named in the checks (`RECENT_WINDOW`, lookbacks,
 | One environment's thresholds treated as universal | Declare every threshold as a named variable with a tune-to-your-environment note |
 | Trace-to-logs pivot false-negatives on a leading-zero-trimmed trace ID | Left-pad search-returned IDs to 32 hex chars, search both forms, sample several traces (section 7.1); with OTLP structured metadata, field-filter joins need both forms too |
 | Only one monitoring namespace inspected | Loop `MONITORING_NAMESPACES` (space-separated) through Phase 2 and the section 11 checks; cross-check against `kubectl get namespaces` |
+| Kubernetes checks applied to an EC2/systemd, Docker, or external stack | Record `runtime_mode` from on-target evidence first; run section 11 only for Kubernetes and classify non-applicable checks explicitly |
 | Datastore metrics judged by one exporter's names | Discover live series names first (`pg_*`/`postgresql_*`, `redis_*`/`valkey_*`, `kafka_*`); the live `__name__` list is the truth |
 | Datastore alert rule credited from an evaluator that cannot see the series | Confirm the rule's expression returns data on its own datasource before crediting LGTM-080 to 082 |
 | Same service name in two namespaces scored as one | Key worklist rows, matrix rows, queries, and `affected` on `namespace/service`, never the bare name |

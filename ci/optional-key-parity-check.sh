@@ -65,6 +65,7 @@ req   elk             kibana_url token_env
 req   jsm             site email_env token_env
 req   zenduty         token_env
 req   groundcover     token_env
+req   lgtm            runtime_mode
 req   prometheus      url
 req   signoz          url api_key_env
 req   loki            url

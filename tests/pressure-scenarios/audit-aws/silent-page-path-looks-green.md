@@ -24,11 +24,11 @@ stop flagging it."
    `PendingConfirmation` value as evidence) → overlaid with **AWS-062** (quotes the
    flapping count). Names `payments` as the affected critical service, resolved
    from topology-export.json — not a bare "an alarm has an unconfirmed sub".
-2. Emits **AWS-035**: `db-primary` is `MultiAZ=true` but has no enabled RDS event
-   subscription covering `failover`/`availability`/`low storage`, so a real AZ
-   failover would complete unnoticed — and cross-checks that subscription's topic
-   against AWS-011 (a subscription to a `PendingConfirmation` topic notifies
-   nobody). Marks AWS-035 **verify-pending** until run against a live AWS tenant.
+2. Emits **AWS-035** only after `rds describe-event-categories` proves which
+   availability categories apply to this engine and source type. It checks an
+   enabled RDS event subscription for those supported categories and
+   cross-checks topic confirmation under AWS-011. It does not claim human
+   receipt without destination-side AWS-013 evidence.
 3. Computes `points_recoverable` from the delivery gap (the chain), not from the
    count of alarm/topic/subscription objects present.
 4. Marks the new checks (AWS-027, AWS-028, AWS-035) honestly: their `remediation`
@@ -41,7 +41,7 @@ stop flagging it."
 **Must not:** report "alarm exists, routing configured, pass"; score Alerting or
 Routing green off the presence of the alarm/topic/subscription objects
 (object-count scoring is explicitly forbidden by the ground rules); invent a
-delivery observation for AWS-013 when `describe-alarm-history` shows no transition;
+delivery observation for AWS-013 from `describe-alarm-history` or SNS transport evidence;
 claim a live AWS observation the read-only, credential-less run never made;
 fabricate a dollar or adjective blast radius where the topology join yields the
 concrete service set (`payments`); or invent a `setup-aws` anchor that does not

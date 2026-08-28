@@ -5,11 +5,13 @@ Runnable, read-only checks for every surface the [audit-elk](../SKILL.md) workfl
 ## 1. Conventions
 
 - Auth is `Authorization: ApiKey <encoded>` with the encoded Elasticsearch API key from the variable named by `elk.token_env`. Presence-check it only; never echo, log, or write the value. One ES API key works on both the Elasticsearch and Kibana APIs; alerting rules are a **Kibana** API.
-- `KIBANA_URL` is `elk.kibana_url` — the Kibana host, not Elasticsearch. Every block declares it. A 404 on an alerting path usually means the URL points at Elasticsearch, or a space/base-path prefix is wrong.
+- `KIBANA_URL` is `elk.kibana_url` — the Kibana host, not Elasticsearch. Every block declares it. Only the `/api/status` identity gate decides whether the configured base URL is Kibana.
+- Verify target identity with `GET /api/status` before interpreting any alerting-path response. After identity succeeds, distinguish `401` (unauthenticated), `403` (authenticated but unauthorized), and `404` (unsupported or wrong space/API path); none is an empty result.
+- This catalog covers Kibana Alerting. It does not establish Elasticsearch cluster/shard health, ILM/retention, snapshot restore readiness, ingestion-pipeline health, or disk-watermark risk. Those require a separate read-only evidence pack against `elk.es_url` and must not be inferred from this report.
 - **Rules are space-isolated, and spaces are discovered — never assumed.** Every alerting and connector read is scoped to a space: the default space uses `/api/alerting/...`; a named space uses `/s/<space_id>/api/alerting/...`. This skill **enumerates the live spaces** via `GET /api/spaces/space` (section 4a) and audits `elk.spaces` when it is set, else **every discovered space** — a blind `["default"]`-only default is gone, because a customer's rules commonly live in a non-default space and auditing only `default` reports an empty estate (a wrong 0/100 or a vacuously-high score). Every coverage denominator names which spaces were **discovered**, **audited**, and **skipped**.
 - Every command here is read-only: GET on rules, connectors, rule types, health, and maintenance windows (9.2+); `POST /_watcher/_query/watches` is a read-by-query on the Elasticsearch side (it lists watches, changes nothing) used only for the legacy-Watcher split check. The forbidden-command list is section 12.
 - **Version gates matter.** Legacy `/api/alerts/*` was removed in Kibana 9.0 — this skill uses `/api/alerting/rule(s)` only. The maintenance-window list API (`GET /api/maintenance_window/_find`) is public only from 9.2; on 8.x-9.1 it is internal, so that check version-gates itself and reports `not-in-scope` with the detected version rather than failing.
-- `curl -fsS --max-time 30` is the default. Where the status code is the evidence, `-f` is dropped and `-w '%{http_code}'` captures it.
+- The bundled collector uses `curl -sS --max-time ... -w '%{http_code}'` so it can retain and classify every non-2xx body. Standalone success-only reads may use `-fsS`; never pipe an unchecked response straight into `jq`.
 - Thresholds and windows are examples; tune to your workloads. Named defaults live in section 11.
 
 ## 2. Check catalog
@@ -51,133 +53,50 @@ What 100/100 means per category; the checks above are this profile made executab
 
 ## 4a. Space enumeration (do this first — never assume `default`)
 
-Kibana alerting rules are **space-isolated**, and a customer's rules commonly live in a **non-default** space. Auditing only `default` when the rules are elsewhere reports an empty estate — a wrong `0/100`, or (worse) a vacuously-high score from checks that pass on zero rules. So the first inventory step is to **enumerate the spaces that actually exist**, via the global Spaces API, and drive the per-space loop from that — not from a hardcoded default.
+Kibana alerting rules are space-isolated, and rules commonly live outside the default space. The bundled collector calls the global Spaces API with `per_page=100&page=N`, follows every page when the deployment returns a paginated envelope, and also accepts the legacy unpaginated array response. It never promotes a failed or ambiguous read to a discovered-space list.
 
-```bash
-set -eu
-KIBANA_URL="https://kibana.example.com"   # elk.kibana_url
-KIBANA_URL="${KIBANA_URL%/}"
-AUTH="Authorization: ApiKey ${KIBANA_API_KEY}"
-RUN_DATE="$(date -u +%Y-%m-%d)"
-RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/elk/${RUN_DATE}/raw"
-mkdir -p "$RAW_DIR"
+The complete artifact is `spaces.json`; `spaces-discovered.txt` is derived only from that complete aggregate. If one or more pages succeed and a later page fails, the collector writes `spaces.partial.json` and `spaces-discovered.partial.txt` instead. If the first page fails, it writes neither. `space-discovery-state.json` states both the collection state and whether the audit scope came from complete discovery, explicit `elk.spaces`, or the documented default fallback.
 
-# GET /api/spaces/space is a GLOBAL endpoint (no /s/<space> prefix). It needs NO admin /
-# kibana_admin privilege — any authenticated key can call it — but its response is FILTERED
-# to only the spaces where the key holds at least one Kibana feature privilege. So a key
-# scoped to a single space enumerates only that space (this is exactly how the wrong/empty
-# space bug happens). For complete discovery the key's role must grant the three Read
-# feature privileges (Stack Rules, Rules Settings, Actions and Connectors) at spaces:["*"]
-# — still fully read-only, no admin. See /scoutflo:connect (references/providers.md).
-SPACES_CODE="$(curl -s -o "${RAW_DIR}/spaces.json" -w '%{http_code}' --max-time 15 \
-  -H "$AUTH" "${KIBANA_URL}/api/spaces/space")"
-
-DISCOVERY="ok"
-if [ "$SPACES_CODE" = "200" ] && jq -e 'type == "array"' "${RAW_DIR}/spaces.json" >/dev/null 2>&1; then
-  jq -r '.[].id' "${RAW_DIR}/spaces.json" | sort -u > "${RAW_DIR}/spaces-discovered.txt"
-else
-  # 404 = Spaces feature / Security plugin absent (or a Serverless difference). Do NOT
-  # silently assume the default space is the whole estate — record it and fall back.
-  DISCOVERY="unavailable (HTTP ${SPACES_CODE}: Spaces API not reachable — Security plugin or Spaces feature may be off)"
-  printf '%s\n' "default" > "${RAW_DIR}/spaces-discovered.txt"
-fi
-echo "space discovery: ${DISCOVERY}"
-echo "discovered spaces: $(tr '\n' ' ' < "${RAW_DIR}/spaces-discovered.txt")"
-```
-
-Then resolve the **audited set**:
-
-- If `elk.spaces` is set, audit exactly those — but validate each against `spaces-discovered.txt`. A configured space that is **not** in the discovered list is a privilege/scope gap (the key cannot see it): report it as `skipped` with that reason, never silently drop it.
-- If `elk.spaces` is **unset**, audit **every discovered space**.
-- Always record three sets for the report and the coverage denominators: **discovered**, **audited**, **skipped**.
-
-```bash
-# Audited set = elk.spaces ∩ discovered  (when elk.spaces set), else all discovered.
-# ELK_SPACES holds the configured entries one per line, empty when unset.
-: > "${RAW_DIR}/spaces.txt"
-if [ -s "${RAW_DIR}/elk-spaces-config.txt" ]; then
-  while read -r s; do
-    [ -n "$s" ] || continue
-    if grep -qxF "$s" "${RAW_DIR}/spaces-discovered.txt"; then
-      printf '%s\n' "$s" >> "${RAW_DIR}/spaces.txt"
-    else
-      printf '%s\tconfigured-but-not-visible-to-this-key (widen to spaces:["*"] read)\n' "$s" \
-        >> "${RAW_DIR}/spaces-skipped.txt"
-    fi
-  done < "${RAW_DIR}/elk-spaces-config.txt"
-else
-  cp "${RAW_DIR}/spaces-discovered.txt" "${RAW_DIR}/spaces.txt"
-fi
-echo "audited spaces: $(tr '\n' ' ' < "${RAW_DIR}/spaces.txt")"
-[ -f "${RAW_DIR}/spaces-skipped.txt" ] && echo "skipped (not visible): $(cut -f1 "${RAW_DIR}/spaces-skipped.txt" | tr '\n' ' ')"
-```
-
-Edge cases to state, never hide: a **disabled Security plugin** returns all spaces unconditionally (discovery is trivially complete); a **404** means discovery was unavailable and the run fell back to `default` — say so in the report and treat a resulting zero-rule estate as a possible visibility gap (ELK-033), not a confident empty.
+For complete discovery, `elk.spaces` restricts the audited set and is intersected with the discovered IDs. Configured-but-invisible spaces go to `spaces-skipped.txt`; they are never silently dropped. When `elk.spaces` is unset, `spaces.txt` contains every completely discovered space. When discovery is partial or unavailable, `spaces.txt` may contain only explicit configured spaces or `default`, but the state stays partial/blocked and the report cannot claim whole-estate coverage.
 
 ## 4. Per-space inventory (all categories)
 
-The audited set now comes from `spaces.txt`, materialized by section 4a from **live enumeration** (never a hardcoded default). Capture rules, connectors, and rule types per space.
+Run the collector as written. It captures target identity, paginated spaces, alerting health, and paginated rules and connectors plus rule types for each audited space. Successful payloads are projected to the safe fields the checks need; rule params and connector secrets are never written.
 
 ```bash
 set -eu
-KIBANA_URL="https://kibana.example.com"   # elk.kibana_url
+KIBANA_URL="https://kibana.example.com"   # elk.kibana_url for this target
+ELK_SPACES=""                             # optional elk.spaces; JSON array or comma-separated IDs
+: "${KIBANA_API_KEY:?resolve the variable named by elk.token_env; never print it}"
 RUN_DATE="$(date -u +%Y-%m-%d)"
 RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/elk/${RUN_DATE}/raw"
-mkdir -p "$RAW_DIR"
-AUTH="Authorization: ApiKey ${KIBANA_API_KEY}"
-
-# Kibana version drives the version-gated checks (maintenance windows, legacy routes).
-curl -fsS --max-time 15 -H "$AUTH" "${KIBANA_URL}/api/status" \
-  | jq -r '.version.number // "unknown"' > "${RAW_DIR}/kibana-version.txt"
-echo "kibana version: $(cat "${RAW_DIR}/kibana-version.txt")"
-
-# Alerting framework health (ELK-004) — also the doctor probe.
-curl -fsS --max-time 15 -H "$AUTH" "${KIBANA_URL}/api/alerting/_health" \
-  | jq '{is_sufficiently_secure, has_permanent_encryption_key, alerting_framework_health}' \
-  > "${RAW_DIR}/alerting-health.json"
-
-# Spaces to audit come from ${RAW_DIR}/spaces.txt, which section 4a already materialized
-# from live GET /api/spaces/space enumeration (intersected with elk.spaces when set).
-# Do NOT hardcode "default" here — that is the wrong/empty-space bug. If section 4a did not
-# run, run it first; spaces.txt must exist and be non-empty before this loop.
-[ -s "${RAW_DIR}/spaces.txt" ] || { echo "spaces.txt missing/empty — run section 4a (space enumeration) first"; exit 1; }
-
-while read -r space; do
-  [ -n "$space" ] || continue
-  if [ "$space" = "default" ]; then base="${KIBANA_URL}"; else base="${KIBANA_URL}/s/${space}"; fi
-  sdir="${RAW_DIR}/spaces/${space}"; mkdir -p "$sdir"
-
-  # All rules in this space. per_page bounded; paginate via page= when total_count exceeds it.
-  curl -fsS --max-time 60 -H "$AUTH" "${base}/api/alerting/rules/_find?per_page=100&page=1" \
-    | jq '{total: .total, rules: [.data[] | {id, name, rule_type_id, enabled, mute_all,
-        muted_alert_ids, snooze_schedule,
-        execution_status: .execution_status.status,
-        last_execution_date: (.execution_status.last_execution_date // null),
-        schedule_interval: (.schedule.interval // null),
-        last_run_outcome: (.last_run.outcome // null),
-        last_run_warning: (.last_run.warning // null),
-        alerts_count: (.last_run.alerts_count // null),
-        flapping,
-        alert_delay: (.alert_delay // null),
-        actions: [.actions[]? | {connector_type_id, id: .id, group,
-          notify_when: (.frequency.notify_when // null),
-          throttle: (.frequency.throttle // null),
-          summary: (.frequency.summary // null)}]}]}' > "${sdir}/rules.json"
-
-  # Connectors in this space.
-  curl -fsS --max-time 30 -H "$AUTH" "${base}/api/actions/connectors" \
-    | jq '[.[] | {id, name, connector_type_id, is_missing_secrets, is_deprecated,
-        referenced_by_count: (.referenced_by_count // 0)}]' > "${sdir}/connectors.json"
-
-  # Rule types available in this space (coverage denominator).
-  curl -fsS --max-time 30 -H "$AUTH" "${base}/api/alerting/rule_types" \
-    | jq '[.[] | {id, name, producer}]' > "${sdir}/rule-types.json"
-done < "${RAW_DIR}/spaces.txt"
-
-wc -l "${RAW_DIR}"/spaces/*/rules.json 2>/dev/null || echo "no rules captured"
+export KIBANA_URL KIBANA_API_KEY ELK_SPACES
+export OUT_DIR="${RAW_DIR}"
+bash "${CLAUDE_PLUGIN_ROOT:-.}/skills/audit-elk/scripts/elk-audit.sh"
+cat "${RAW_DIR}/summary.txt"
 ```
 
-Expected: per-space `rules.json`, `connectors.json`, `rule-types.json`, plus the version and health files. A 401/403 is an auth/privilege finding (the role lacks Kibana Read on Stack Rules or Actions and Connectors) for the checks that need it; a 404 on `/api/alerting/*` means the URL is Elasticsearch, not Kibana.
+For a multi-target run, pass the current target's resolved nested raw directory as `OUT_DIR`. If you already materialized `elk.spaces` one ID per line, export `ELK_SPACES_FILE` instead of `ELK_SPACES`.
+
+The collector writes `request-status.jsonl` with one normalized row per request:
+
+| State | Meaning | Audit treatment |
+| --- | --- | --- |
+| `success-empty` | HTTP 2xx and valid expected JSON, with a verified empty response or aggregate | Empty only for that endpoint and scope |
+| `success-nonempty` | HTTP 2xx and valid expected JSON | Usable evidence; still apply the semantic check |
+| `unauthenticated` | HTTP 401 | Blocked on credential validity, never empty |
+| `forbidden` | HTTP 403 | Blocked on read privilege, never empty |
+| `unsupported` | HTTP 404, 405, or 501 after Kibana identity passed | Route/version/space unsupported; use only a documented fallback |
+| `transport-error` | DNS, TLS, timeout, connection, or other curl failure | Blocked on reachability |
+| `http-error` | Other non-2xx response | Blocked unless a check explicitly defines that status |
+| `invalid-response` | HTTP 2xx but malformed JSON or the wrong top-level shape | Blocked; often an SSO/proxy page or incompatible API |
+| `partial` | At least one page succeeded but a later page failed or pagination made no progress | Object-level evidence only; never a complete-estate denominator |
+
+Rules and connectors use `per_page=100&page=N` until their declared `total` is reached. Spaces use the same paging contract when the server exposes it. If an older spaces/connectors route rejects those query keys with HTTP 400, the collector retries its documented unpaginated array form once and retains the whole array. A paged array that repeats page 1 is marked partial rather than guessed complete. Duplicate IDs, a changing `total`, a short page before `total`, or a later request failure also produce a partial aggregate.
+
+Complete per-space artifacts are `rules.json`, `connectors.json`, and `rule-types.json`. Later-page failures produce `rules.partial.json` or `connectors.partial.json`, while failed first pages produce neither. Failed bodies remain next to the page as `.http-<status>`, `.invalid-response`, or `.curl-failed`. Every space also has `collection-state.json`.
+
+Only normal-name complete artifacts may drive estate totals, coverage denominators, or pass results. A partial artifact can support a named object finding but cannot prove that no other failing object exists. A 401/403/404, transport error, malformed 200, or pagination failure blocks the checks that depend on that surface while the audit continues across readable surfaces and still writes its report.
 
 ## 5. Rule delivery (ELK-001 to ELK-006)
 
@@ -435,13 +354,39 @@ set -eu
 RUN_DATE="$(date -u +%Y-%m-%d)"
 RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/elk/${RUN_DATE}/raw"
 KIBANA_URL="https://kibana.example.com"   # elk.kibana_url
+SPACE="default"                           # current audited space
+if [ "$SPACE" = "default" ]; then SPACE_PREFIX=""; else SPACE_PREFIX="/s/${SPACE}"; fi
+sdir="${RAW_DIR}/spaces/${SPACE}"
+mkdir -p "$sdir"
 VER="$(cat "${RAW_DIR}/kibana-version.txt")"
 MAJOR="${VER%%.*}"; MINOR="$(printf '%s' "$VER" | cut -d. -f2)"
 # Public maintenance-window API is 9.2+. On anything lower, report ELK-025 not-in-scope.
 if [ "$MAJOR" -gt 9 ] || { [ "$MAJOR" -eq 9 ] && [ "${MINOR:-0}" -ge 2 ]; }; then
-  curl -fsS --max-time 30 -H "Authorization: ApiKey ${KIBANA_API_KEY}" \
-    "${KIBANA_URL}/api/maintenance_window/_find" \
-    | jq '[.data[]? | {id, title, enabled, r_rule: .r_rule, status, scoped_query, category_ids}]'
+  MW_BODY="${sdir}/maintenance-windows.body"; MW_RC=0
+  MW_META="$(curl -sS -o "$MW_BODY" -w '%{http_code} %{content_type}' --max-time 30 \
+    -H "Authorization: ApiKey ${KIBANA_API_KEY}" \
+    "${KIBANA_URL}${SPACE_PREFIX}/api/maintenance_window/_find")" || MW_RC=$?
+  MW_CODE="${MW_META%% *}"; MW_CT="${MW_META#* }"
+  if [ "$MW_RC" -ne 0 ]; then
+    MW_STATE="transport-error"; mv "$MW_BODY" "${MW_BODY}.curl-failed" 2>/dev/null || true
+  elif [ "$MW_CODE" = "200" ] && printf '%s' "$MW_CT" | grep -qi json \
+    && jq -e 'type == "object" and ((.data | type) == "array")' "$MW_BODY" >/dev/null 2>&1; then
+    MW_STATE="success"
+    jq '[.data[] | {id,title,enabled,r_rule:.r_rule,status,scoped_query,category_ids}]' \
+      "$MW_BODY" > "${sdir}/maintenance-windows.json"
+    rm -f "$MW_BODY"
+  elif [ "$MW_CODE" = "401" ]; then MW_STATE="unauthenticated"; mv "$MW_BODY" "${MW_BODY}.http-401" 2>/dev/null || true
+  elif [ "$MW_CODE" = "403" ]; then MW_STATE="forbidden"; mv "$MW_BODY" "${MW_BODY}.http-403" 2>/dev/null || true
+  elif [ "$MW_CODE" = "404" ] || [ "$MW_CODE" = "405" ] || [ "$MW_CODE" = "501" ]; then
+    MW_STATE="unsupported"; mv "$MW_BODY" "${MW_BODY}.http-${MW_CODE}" 2>/dev/null || true
+  elif [ "$MW_CODE" = "200" ]; then MW_STATE="invalid-response"; mv "$MW_BODY" "${MW_BODY}.invalid-response" 2>/dev/null || true
+  else MW_STATE="http-error"; mv "$MW_BODY" "${MW_BODY}.http-${MW_CODE}" 2>/dev/null || true
+  fi
+  jq -n --arg state "$MW_STATE" --arg code "${MW_CODE:-000}" \
+    '{state:$state,http_code:$code}' > "${sdir}/maintenance-windows-state.json"
+  echo "maintenance-window evidence: ${MW_STATE} (HTTP ${MW_CODE:-000})"
+  # Only maintenance-windows.json is complete evidence. Every other state blocks
+  # ELK-025 for this space; a missing file is never interpreted as zero windows.
   # A maintenance window with no end / an unbounded recurrence is a permanent alerting
   # blackout (ELK-025). A bounded recurring window is healthy.
   # Blast radius — an ESTATE-WIDE amplifier, higher radius than a single muted rule (ELK-024):
@@ -495,9 +440,29 @@ jq -r '[.[].id]' "${sdir}/rule-types.json"
 # invisible to a Kibana-Alerting-only view.
 # Requires ES_URL (elk.es_url if configured) — Watcher is NOT a Kibana API.
 ES_URL="https://elasticsearch.example.com"   # elk.es_url; skip this check if not configured
-curl -fsS --max-time 30 -H "Authorization: ApiKey ${KIBANA_API_KEY}" \
-  "${ES_URL}/_watcher/stats" | jq '{watcher_state: .stats[0].watcher_state, watch_count: (.stats[0].watch_count // 0)}' \
-  2>/dev/null || echo "watcher stats unavailable (no es_url configured, or monitor_watcher privilege missing) — ELK-032 blocked with that reason"
+WATCH_BODY="${RAW_DIR}/watcher-stats.body"; WATCH_RC=0
+WATCH_META="$(curl -sS -o "$WATCH_BODY" -w '%{http_code} %{content_type}' --max-time 30 \
+  -H "Authorization: ApiKey ${KIBANA_API_KEY}" "${ES_URL}/_watcher/stats")" || WATCH_RC=$?
+WATCH_CODE="${WATCH_META%% *}"; WATCH_CT="${WATCH_META#* }"
+if [ "$WATCH_RC" -ne 0 ]; then
+  WATCH_STATE="transport-error"; mv "$WATCH_BODY" "${WATCH_BODY}.curl-failed" 2>/dev/null || true
+elif [ "$WATCH_CODE" = "200" ] && printf '%s' "$WATCH_CT" | grep -qi json \
+  && jq -e 'type == "object" and ((.stats | type) == "array")' "$WATCH_BODY" >/dev/null 2>&1; then
+  WATCH_STATE="success"
+  jq '{watcher_state:(.stats[0].watcher_state // null),watch_count:(.stats[0].watch_count // 0)}' \
+    "$WATCH_BODY" > "${RAW_DIR}/watcher-stats.json"
+  rm -f "$WATCH_BODY"
+elif [ "$WATCH_CODE" = "401" ]; then WATCH_STATE="unauthenticated"; mv "$WATCH_BODY" "${WATCH_BODY}.http-401" 2>/dev/null || true
+elif [ "$WATCH_CODE" = "403" ]; then WATCH_STATE="forbidden"; mv "$WATCH_BODY" "${WATCH_BODY}.http-403" 2>/dev/null || true
+elif [ "$WATCH_CODE" = "404" ]; then WATCH_STATE="unsupported"; mv "$WATCH_BODY" "${WATCH_BODY}.http-404" 2>/dev/null || true
+elif [ "$WATCH_CODE" = "200" ]; then WATCH_STATE="invalid-response"; mv "$WATCH_BODY" "${WATCH_BODY}.invalid-response" 2>/dev/null || true
+else WATCH_STATE="http-error"; mv "$WATCH_BODY" "${WATCH_BODY}.http-${WATCH_CODE}" 2>/dev/null || true
+fi
+jq -n --arg state "$WATCH_STATE" --arg code "${WATCH_CODE:-000}" \
+  '{state:$state,http_code:$code}' > "${RAW_DIR}/watcher-stats-state.json"
+echo "watcher evidence: ${WATCH_STATE} (HTTP ${WATCH_CODE:-000})"
+# When state != success, ELK-032 is blocked with this exact reason. Do not turn
+# the missing watcher-stats.json into watch_count=0.
 # watch_count > 0 means legacy Watcher coverage exists alongside Kibana Alerting; name it
 # so a Kibana-only audit does not imply the Watcher-covered services are unmonitored.
 ```
