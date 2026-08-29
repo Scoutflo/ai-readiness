@@ -80,6 +80,10 @@ mkdir -p "${OUT_DIR}"
 # follow-up batches deliberately keep the first batch's objects.
 if [ "${SKIP_NON_DASHBOARD:-0}" != "1" ]; then
   rm -rf "${OUT_DIR}/datasource-health" "${OUT_DIR}/dashboards"
+  # alert-rules.ruler.json is the provisioning-403 fallback export; a normal rerun
+  # must not inherit a prior run's stale fallback file (else summary.txt keeps
+  # printing alert_rules_ruler_fallback=yes after provisioning has recovered).
+  rm -f "${OUT_DIR}/alert-rules.ruler.json"
 fi
 mkdir -p "${OUT_DIR}/datasource-health" "${OUT_DIR}/dashboards"
 ERRORS="${OUT_DIR}/errors.log"

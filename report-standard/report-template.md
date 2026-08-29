@@ -64,7 +64,7 @@ This provides two reader paths over the same canonical findings: General audit
 for reliability, security, capacity, backup, alerting, and operational hygiene;
 AI SRE readiness for telemetry quality, service identity, topology, ownership,
 change context, routing evidence, and safe RCA/automation. A finding can appear
-in both lists, but its detailed evidence is rendered only once below. This split
+in both lists, but its detailed evidence is rendered only once below — in the Findings table, or in the relevant non-scored section (e.g. Cost & Resource Optimization, Scoutflo Topology Readiness) for a non-scored finding. This split
 does not create a second score or change severity.>
 
 ## Findings

@@ -196,7 +196,7 @@ EOF
     F="${1:?findings.json}"; [ -f "$F" ] || { echo "no such file: $F" >&2; exit 1; }
     echo "## Findings by purpose"
     echo
-    echo "This view separates foundational operations work from the evidence needed for trustworthy AI-assisted diagnosis. A finding can appear in both lists; its detailed evidence appears once in the Findings section."
+    echo "This view separates foundational operations work from the evidence needed for trustworthy AI-assisted diagnosis. A finding can appear in both lists; its detailed evidence appears once in its own detailed section below — the Findings table for readiness findings, or the relevant non-scored section (e.g. Cost & Resource Optimization, Scoutflo Topology Readiness) for a non-scored finding."
     for lane in general-audit ai-sre-readiness; do
       case "$lane" in
         general-audit) heading="General audit" ;;
@@ -465,39 +465,52 @@ HTMLFOOT
     # Glob BOTH the one-level `<target>/<date>/` and two-level
     # `<integration>/<label>/<date>/` layouts (multi-target labels, and single-block
     # signoz/kubernetes which always nest), mirroring audit-all's Phase-3 loops.
+    # A stack is "end-to-end" only when it clears the score gate AND was fully
+    # assessed (v2 coverage 100%). A high score over a mostly-blocked estate is NOT
+    # end-to-end and must not be counted or rendered as if it were (else partial
+    # collection reads as a clean bill of health at the leader-facing headline).
+    # cov is the v2 assessment coverage percent, or "na" for a v1 stack that has none.
     ROWS=""; total=0; passing=0
     for f in "$D"/*/"$RD"/findings.json "$D"/*/*/"$RD"/findings.json; do
       [ -f "$f" ] || continue
       tgt="$(jq -r '.target // "?"' "$f" 2>/dev/null)"
       case "$tgt" in all|cost|cost-analysis|doctor|"?") continue;; esac
       sc="$(jq -r 'if .score.overall == null then "unassessed" else .score.overall end' "$f" 2>/dev/null)"
+      cov="$(jq -r '.score.assessment.coverage_percent // "na"' "$f" 2>/dev/null)"
       total=$((total + 1))
       if [ "$sc" = "unassessed" ]; then
         sort_key=-1
       else
         case "$sc" in *[!0-9]*) sc="unassessed"; sort_key=-1;;
-          *) sort_key="$sc"; [ "$sc" -ge "$GATE" ] && passing=$((passing + 1));;
+          *) sort_key="$sc"
+             # full coverage: v1 (na) or unparseable is not penalized; v2 must be 100
+             full=1; case "$cov" in ''|na|*[!0-9]*) full=1;; *) [ "$cov" -eq 100 ] || full=0;; esac
+             [ "$sc" -ge "$GATE" ] && [ "$full" -eq 1 ] && passing=$((passing + 1));;
         esac
       fi
-      ROWS="${ROWS}${sort_key}	${sc}	${tgt}
+      ROWS="${ROWS}${sort_key}	${sc}	${cov}	${tgt}
 "
     done
     if [ "$total" -eq 0 ]; then echo "_No completed audits for ${RD}._"; exit 0; fi
-    echo "**Stacks passing the ${GATE} gate: ${passing}/${total}**  \`$(viz_bar "$passing" "$total" 12)\`"
+    echo "**Stacks end-to-end (>= ${GATE} gate and fully assessed): ${passing}/${total}**  \`$(viz_bar "$passing" "$total" 12)\`"
     echo
     echo "| Stack | Score | | |"
     echo "| --- | ---: | --- | --- |"
-    printf '%s' "$ROWS" | sort -t"$(printf '\t')" -k1,1n | while IFS="$(printf '\t')" read -r sort_key sc tgt; do
+    printf '%s' "$ROWS" | sort -t"$(printf '\t')" -k1,1n | while IFS="$(printf '\t')" read -r sort_key sc cov tgt; do
       [ -n "$tgt" ] || continue
       if [ "$sc" = "unassessed" ]; then
         echo "| \`${tgt}\` | unassessed | \`░░░░░░░░░░░░\` | ← no readiness score |"
       else
-        [ "$sc" -ge "$GATE" ] && flag="" || flag="← below gate"
+        full=1; case "$cov" in ''|na|*[!0-9]*) full=1;; *) [ "$cov" -eq 100 ] || full=0;; esac
+        if [ "$sc" -lt "$GATE" ]; then flag="← below gate"
+        elif [ "$full" -eq 0 ]; then flag="← only ${cov}% assessed — not end-to-end"
+        else flag=""
+        fi
         echo "| \`${tgt}\` | ${sc}/100 | \`$(viz_bar "$sc" 100 12)\` | ${flag} |"
       fi
     done
     echo
-    echo "_Worst-first — send the team to the top row. Never a combined average: one score line per stack._"
+    echo "_Worst-first — send the team to the top row. A high score over a partly-assessed estate is flagged, not counted as end-to-end. Never a combined average: one score line per stack._"
     ;;
 
   inventory)

@@ -160,7 +160,7 @@ done
 mkdir -p "$WORK/roll/kubernetes/ctx-a/2026-08-16"
 printf '{"schema":"scoutflo-findings/v1","skill":"audit-kubernetes","target":"kubernetes/ctx-a","run_date":"2026-08-16","generated_at":"x","score":{"overall":90,"categories":[],"excluded":[]},"severity_counts":{"critical":0,"high":0,"medium":0,"low":0,"info":0},"findings":[]}' > "$WORK/roll/kubernetes/ctx-a/2026-08-16/findings.json"
 RU="$(sh "$VIZ" rollup "$WORK/roll" 2026-08-16)"
-printf '%s' "$RU" | grep -q 'Stacks passing the 85 gate: 2/4' || fail "gate count wrong (want 2/4 incl. the two-level kubernetes/ctx-a stack)"
+printf '%s' "$RU" | grep -q 'Stacks end-to-end (>= 85 gate and fully assessed): 2/4' || fail "gate count wrong (want 2/4 incl. the two-level kubernetes/ctx-a stack)"
 printf '%s' "$RU" | grep -q '`kubernetes/ctx-a` | 90/100' || fail "two-level kubernetes/ctx-a score row missing from rollup"
 printf '%s' "$RU" | grep -qi 'never a combined average' || fail "missing no-average note"
 # worst-first: aws (20) must appear before sentry (91)
@@ -173,7 +173,16 @@ printf '{"schema":"scoutflo-findings/v2","skill":"audit-elk","target":"elk","run
 RU2="$(sh "$VIZ" rollup "$WORK/roll" 2026-08-16)"
 printf '%s' "$RU2" | grep -q '`elk` | unassessed' || fail "unassessed stack missing from rollup"
 printf '%s' "$RU2" | grep -q '`elk` | 0/100' && fail "unassessed stack rendered as zero readiness"
-printf '%s' "$RU2" | grep -q 'Stacks passing the 85 gate: 2/5' || fail "unassessed stack not counted in the rollup denominator"
+printf '%s' "$RU2" | grep -q 'Stacks end-to-end (>= 85 gate and fully assessed): 2/5' || fail "unassessed stack not counted in the rollup denominator"
+echo "PASS"
+
+echo "Test 10c: a high-score low-coverage v2 stack is flagged and NOT counted as end-to-end"
+mkdir -p "$WORK/roll/datadog/2026-08-16"
+printf '{"schema":"scoutflo-findings/v2","skill":"audit-datadog","target":"datadog","run_date":"2026-08-16","generated_at":"x","score":{"overall":90,"state":"assessed","assessment":{"coverage_percent":40},"categories":[],"excluded":[]},"severity_counts":{"critical":0,"high":0,"medium":0,"low":0,"info":0},"findings":[]}' > "$WORK/roll/datadog/2026-08-16/findings.json"
+RU3="$(sh "$VIZ" rollup "$WORK/roll" 2026-08-16)"
+printf '%s' "$RU3" | grep -q 'Stacks end-to-end (>= 85 gate and fully assessed): 2/6' || fail "low-coverage v2 stack (90/100, 40% assessed) wrongly counted as end-to-end"
+printf '%s' "$RU3" | grep -q '`datadog` | 90/100' || fail "datadog row missing from rollup"
+printf '%s' "$RU3" | grep -q 'only 40% assessed' || fail "low-coverage v2 stack not flagged as not-end-to-end in its rollup row"
 echo "PASS"
 
 echo "Test 11: inventory-rollup includes BOTH the one-level and the two-level (kubernetes/ctx-a) stacks"

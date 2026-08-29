@@ -27,7 +27,7 @@ Version 2 adds a normalized `checks[]` ledger. The score is verified against tha
     "gate": 85,
     "end_to_end": false,
     "scoring_model": "assessed-only-v1",
-    "check_set": "cksum-v1:375363344:131",
+    "check_set": "cksum-v2:375363344:131",
     "assessment": {
       "applicable_checks": 4,
       "assessed_checks": 3,
@@ -145,7 +145,7 @@ Version 2 adds a normalized `checks[]` ledger. The score is verified against tha
 | `gate` | integer | The end-to-end gate, `85` (toolkit convention) |
 | `end_to_end` | boolean | True only when the gate rules in [severity-and-scoring.md](severity-and-scoring.md) all pass |
 | `scoring_model` | string | v2: always `assessed-only-v1` |
-| `check_set` | string | v2: deterministic fingerprint of the sorted check IDs and category names. Raw score movement is comparable only when this and `scoring_model` match |
+| `check_set` | string | v2: deterministic fingerprint of the sorted check IDs + category names **and the category weights + gate**. Raw score movement is comparable only when this and `scoring_model` match — a category re-weighting changes the fingerprint, so a re-weighted run is correctly treated as incomparable rather than plotted as a real delta |
 | `assessment` | object | v2: `applicable_checks`, `assessed_checks`, `scored_checks`, `blocked_checks`, `suppressed_checks`, `not_in_scope_checks`, and `coverage_percent`; all are recomputed by `check-findings.sh`. Suppressed checks were assessed but are excluded from readiness scoring by an active exemption |
 | `categories` | array | Per category: `name`, `weight`, `score` (0-100), `maturity`, `checks_passed`, `checks_partial`, `checks_failed`, `checks_blocked`, `checks_suppressed`, `checks_not_in_scope`, and `checks_total`. In v2, `checks_total` is the unsuppressed readiness denominator; blocked and suppressed checks are shown separately |
 | `excluded` | array | Categories excluded from scoring, each with `name`, `weight`, `reason`. Empty array when nothing was excluded |
@@ -176,12 +176,19 @@ finding lifecycle and never affects readiness arithmetic.
 
 Every v2 finding also declares `report_lanes`. This is a presentation and ownership split, not a second severity model and not a second invented score. List both lanes when an operational defect also blocks trustworthy AI-assisted diagnosis. Do not classify a generic optimization as AI SRE readiness unless the evidence shows that it affects telemetry quality, correlation, incident context, or action safety.
 
-The `check_set` value is generated from the complete sorted set of `<id><TAB><category>` rows:
+The `check_set` value is a fingerprint over the check ledger **and** the scoring model
+(each check's id + category, plus every category's name + weight, plus the gate), so a
+pure re-weighting is correctly treated as incomparable instead of yielding a fabricated
+trend delta:
 
 ```bash
-jq -r '.checks | sort_by(.id)[] | [.id,.category] | @tsv' findings.json \
+jq -r '
+  ( [ .checks[] | "chk\t" + .id + "\t" + .category ]
+    + [ .score.categories[] | "cat\t" + .name + "\t" + (.weight|tostring) ]
+    + [ "gate\t" + ((.score.gate // 85)|tostring) ]
+  ) | sort | .[]' findings.json \
   | LC_ALL=C cksum \
-  | awk '{print "cksum-v1:" $1 ":" $2}'
+  | awk '{print "cksum-v2:" $1 ":" $2}'
 ```
 
 ## Finding object fields

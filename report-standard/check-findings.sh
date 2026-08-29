@@ -336,7 +336,16 @@ EOF
     [ "$overall" != "null" ] && [ "$overall" != "invalid" ] || fail "v2 assessed run requires an integer score.overall"
   fi
 
-  expected_check_set="$(jq -r '.checks | sort_by(.id)[] | [.id,.category] | @tsv' "$F" | LC_ALL=C cksum | awk '{print "cksum-v1:" $1 ":" $2}')"
+  # The fingerprint folds category weights + the gate in, not just check id/category.
+  # A pure re-weighting changes the scoring model, so a prior run is NOT score-comparable
+  # and MUST produce a different check_set — otherwise the trend consumer renders a
+  # fabricated score delta for an estate that did not change. (cksum-v2 bumps the format
+  # so old id/category-only fingerprints never collide with a weighted one.)
+  expected_check_set="$(jq -r '
+    ( [ .checks[] | "chk\t" + .id + "\t" + .category ]
+      + [ .score.categories[] | "cat\t" + .name + "\t" + (.weight|tostring) ]
+      + [ "gate\t" + ((.score.gate // 85)|tostring) ]
+    ) | sort | .[]' "$F" | LC_ALL=C cksum | awk '{print "cksum-v2:" $1 ":" $2}')"
   got_check_set="$(jq -r '.score.check_set // ""' "$F")"
   [ "$got_check_set" = "$expected_check_set" ] || fail "v2 score.check_set '$got_check_set' does not match ledger fingerprint '$expected_check_set'"
 

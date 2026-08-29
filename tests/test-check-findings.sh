@@ -86,9 +86,17 @@ good_v2() {
 }
 JSON
 }
+# Mirror check-findings.sh's check_set fingerprint (checks + category weights + gate).
+fp_of() {
+  jq -r '
+    ( [ .checks[] | "chk\t" + .id + "\t" + .category ]
+      + [ .score.categories[] | "cat\t" + .name + "\t" + (.weight|tostring) ]
+      + [ "gate\t" + ((.score.gate // 85)|tostring) ]
+    ) | sort | .[]' "$1" | LC_ALL=C cksum | awk '{print "cksum-v2:" $1 ":" $2}'
+}
 write_v2() {
   good_v2 > "$WORK/f.json"
-  fp="$(jq -r '.checks | sort_by(.id)[] | [.id,.category] | @tsv' "$WORK/f.json" | LC_ALL=C cksum | awk '{print "cksum-v1:" $1 ":" $2}')"
+  fp="$(fp_of "$WORK/f.json")"
   jq --arg fp "$fp" '.score.check_set=$fp' "$WORK/f.json" > "$WORK/f.tmp" && mv "$WORK/f.tmp" "$WORK/f.json"
 }
 mutate_v2() { write_v2; jq "$1" "$WORK/f.json" > "$WORK/f.tmp" && mv "$WORK/f.tmp" "$WORK/f.json"; }
@@ -144,7 +152,7 @@ jq '
   | .findings=[.findings[] | select(.id=="FX-004")]
   | .severity_counts={"critical":0,"high":0,"medium":0,"low":1,"info":0}
 ' "$WORK/f.json" > "$WORK/f.tmp" && mv "$WORK/f.tmp" "$WORK/f.json"
-fp="$(jq -r '.checks | sort_by(.id)[] | [.id,.category] | @tsv' "$WORK/f.json" | LC_ALL=C cksum | awk '{print "cksum-v1:" $1 ":" $2}')"
+fp="$(fp_of "$WORK/f.json")"
 jq --arg fp "$fp" '.score.check_set=$fp' "$WORK/f.json" > "$WORK/f.tmp" && mv "$WORK/f.tmp" "$WORK/f.json"
 expect_ok "checker rejected a valid fully blocked unassessed v2 run"
 echo "PASS"
@@ -212,6 +220,30 @@ echo "PASS"
 echo "Test 28: a non-scored finding cannot share a readiness check row"
 mutate_v2 '(.findings[] | select(.id=="FX-002") | .scoring_scope)="non-scored" | (.findings[] | select(.id=="FX-002") | .points_recoverable)=0'
 expect_fail "checker accepted a non-scored finding linked to a readiness check"
+echo "PASS"
+
+echo "Test 29: end_to_end=true with <100% assessment coverage is REJECTED (coverage completeness gate)"
+write_v2
+jq '
+  .checks=[{"id":"FX-001","category":"Signals","result":"pass"},{"id":"FX-004","category":"Signals","result":"blocked","reason":"HTTP 403"}]
+  | .score.overall=100 | .score.state="assessed" | .score.end_to_end=true
+  | .score.assessment={"applicable_checks":2,"assessed_checks":1,"scored_checks":1,"blocked_checks":1,"suppressed_checks":0,"not_in_scope_checks":0,"coverage_percent":50}
+  | .score.categories=[{"name":"Signals","weight":100,"score":100,"maturity":"proactive","checks_passed":1,"checks_partial":0,"checks_failed":0,"checks_blocked":1,"checks_suppressed":0,"checks_not_in_scope":0,"checks_total":1}]
+  | .score.excluded=[]
+  | .findings=[{"id":"FX-004","title":"signal check could not be read","severity":"low","area":"signals","status":"blocked","lifecycle":"new","scoring_scope":"readiness","report_lanes":["ai-sre-readiness"],"points_recoverable":0,"affected":["scope-a"],"evidence":[{"check":"signal read","command":"query","observed":"HTTP 403"}],"recommendation":"grant the missing read scope","remediation":"doc#access"}]
+  | .severity_counts={"critical":0,"high":0,"medium":0,"low":1,"info":0}
+' "$WORK/f.json" > "$WORK/f.tmp" && mv "$WORK/f.tmp" "$WORK/f.json"
+fp="$(fp_of "$WORK/f.json")"; jq --arg fp "$fp" '.score.check_set=$fp' "$WORK/f.json" > "$WORK/f.tmp" && mv "$WORK/f.tmp" "$WORK/f.json"
+expect_fail "checker accepted end_to_end=true with 50% assessment coverage (coverage completeness gate missing)"
+echo "PASS"
+
+echo "Test 30: a category re-weighting changes the check_set fingerprint (re-weighted runs are not score-comparable)"
+write_v2
+set_a="$(jq -r '.score.check_set' "$WORK/f.json")"
+# Same checks and same per-category scores, only the weights (and the reconciling overall) change.
+jq '.score.categories[0].weight=90 | .score.categories[1].weight=10 | .score.overall=67' "$WORK/f.json" > "$WORK/f.tmp" && mv "$WORK/f.tmp" "$WORK/f.json"
+set_b="$(fp_of "$WORK/f.json")"
+[ "$set_a" != "$set_b" ] || fail "re-weighting did not change the check_set fingerprint — a re-weighted run would render a fabricated trend delta"
 echo "PASS"
 
 echo "Test 2: real repo fleet — the 4 known-clean latest runs PASS"
