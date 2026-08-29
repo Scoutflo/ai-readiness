@@ -19,11 +19,11 @@ One permanent ID per check. IDs never change or get reused; retired checks keep 
 
 | ID | Category | Check | Typical fail severity |
 | --- | --- | --- | --- |
-| JSM-001 | Delivery/escalation | Every audited team has an escalation; no production team is a single step with no repeat | critical |
-| JSM-002 | Delivery/escalation | Escalation `repeat` and an `if-not-acked` rule present where re-notification is relied on | high |
-| JSM-003 | Delivery/escalation | Every routing rule resolves to an enabled, staffed schedule (no empty-schedule join) | high |
-| JSM-004 | Delivery/escalation | Schedules referenced are enabled, with a rotation and someone on call now | high |
-| JSM-005 | Delivery/escalation | No integration on a live ingestion path is `enabled: false` | critical |
+| JSM-001 | Alert delivery and escalation | Every audited team has an escalation; no production team is a single step with no repeat | critical |
+| JSM-002 | Alert delivery and escalation | Escalation `repeat` and an `if-not-acked` rule present where re-notification is relied on | high |
+| JSM-003 | Alert delivery and escalation | Every routing rule resolves to an enabled, staffed schedule (no empty-schedule join) | high |
+| JSM-004 | Alert delivery and escalation | Schedules referenced are enabled, with a rotation and someone on call now | high |
+| JSM-005 | Alert delivery and escalation | No integration on a live ingestion path is `enabled: false` | critical |
 | JSM-010 | Alert noise | Notification-policy dedup (`deduplicationAction`) present where sources are chatty | medium |
 | JSM-011 | Alert noise | `delayAction` used deliberately, not as blanket suppression | medium |
 | JSM-012 | Alert noise | No permanently-`suppress: true` policy with a broad filter masking real alerts | high |
@@ -33,11 +33,11 @@ One permanent ID per check. IDs never change or get reused; retired checks keep 
 | JSM-016 | Alert noise | Global/team alert policies present and enabled for normalization and priority | medium |
 | JSM-017 | Alert noise | No active maintenance window that is a permanent blackout of a live integration/policy | high |
 | JSM-018 | Alert noise | Operator-snoozed alerts are a human-driven suppression blackout, distinct from policy suppress (JSM-012) | medium |
-| JSM-020 | Coverage/health | Heartbeats responsive; no live source in `Unresponsive`/unintended `Off` | critical |
-| JSM-021 | Coverage/health | Critical services from topology each covered by a team and a routing path | high |
-| JSM-022 | Coverage/health | Teams audited named; teams not audited named as uncovered, not silently dropped | medium |
-| JSM-023 | Coverage/health | Stale or disabled integrations identified as drift | low |
-| JSM-024 | Coverage/health | Teams are visible in the account (zero teams visible to this key is `blocked`, not a plain fail — a likely token role/visibility gap: the paging config lives in teams the key cannot see; widen the token to a read/observer JSM Operations role on the teams) | high |
+| JSM-020 | Coverage and health | Heartbeats responsive; no live source in `Unresponsive`/unintended `Off` | critical |
+| JSM-021 | Coverage and health | Critical services from topology each covered by a team and a routing path | high |
+| JSM-022 | Coverage and health | Teams audited named; teams not audited named as uncovered, not silently dropped | medium |
+| JSM-023 | Coverage and health | Stale or disabled integrations identified as drift | low |
+| JSM-024 | Coverage and health | Teams are visible in the account (zero teams visible to this key is `blocked`, not a plain fail — a likely token role/visibility gap: the paging config lives in teams the key cannot see; widen the token to a read/observer JSM Operations role on the teams) | high |
 | JSM-030 | Actionability | Open alerts unacknowledged past the aging threshold | high |
 | JSM-031 | Actionability | MTTA (createdAt to ackTime) against target where humans acked | medium |
 | JSM-032 | Actionability | Share of alerts closed with no acknowledgement (auto-close-heavy = noise proxy) | medium |

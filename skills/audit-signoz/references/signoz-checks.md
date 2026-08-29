@@ -154,7 +154,7 @@ One permanent ID per check. IDs never change or get reused; retired checks keep 
 
 | ID | Category | Check | Typical fail severity |
 | --- | --- | --- | --- |
-| SIG-007 | Scope guardrail | Reachable SigNoz with **zero telemetry across logs/traces/metrics**, or **zero alert rules**, is a visibility/ingestion gap — blocks the coverage/alerting-dependent categories, never a confident 0 | info |
+| SIG-007 | Telemetry coverage | Reachable SigNoz with **zero telemetry across logs/traces/metrics**, or **zero alert rules**, is a visibility/ingestion gap — blocks the coverage/alerting-dependent categories, never a confident 0 | info |
 | SIG-001 | Query API health | The authenticated read path answers with the Service Account token (`GET /api/v1/rules` → 200; the query API `POST /api/v3/query_range` resolves) — proves the surface the whole audit depends on works | high |
 | SIG-010 | Telemetry coverage | Logs, traces, and metrics carry recent data for the critical services (via `/api/v3/query_range` or the `signoz_*` tables) | high |
 | SIG-011 | Ingestion freshness | `max(<ts_col>)` lag on logs/traces/metrics within threshold (stale = broken pipeline) | high |
@@ -163,8 +163,8 @@ One permanent ID per check. IDs never change or get reused; retired checks keep 
 | SIG-040 | Alerting | Alert rules exist **and** evaluate **and** route to a live channel; a rule wired to no channel, a dead channel, or a placeholder destination is the core failure | critical |
 | SIG-041 | Dashboards | Dashboards exist and their panel queries resolve for the critical services | medium |
 | SIG-050 | Security posture | SigNoz endpoint requires auth (not publicly readable); ClickHouse `default` user requires a password; service users off `plaintext_password`; TLS on the wire; least-privilege read-only CH user + read-role service-account token for audits | high |
-| SIG-060 | Capacity headroom | Disk headroom vs telemetry growth — days-to-read-only before the disk fills and every INSERT is rejected (243 `NOT_ENOUGH_SPACE`) | high |
-| SIG-061 | Write-path failures | Collector writes rejected by ClickHouse (`query_log` Insert exceptions; 243 `NOT_ENOUGH_SPACE`, 252 `TOO_MANY_PARTS`, 164 `READONLY`, 201 `QUOTA_EXCEEDED`) | high |
+| SIG-060 | ClickHouse health | Disk headroom vs telemetry growth — days-to-read-only before the disk fills and every INSERT is rejected (243 `NOT_ENOUGH_SPACE`) | high |
+| SIG-061 | ClickHouse health | Collector writes rejected by ClickHouse (`query_log` Insert exceptions; 243 `NOT_ENOUGH_SPACE`, 252 `TOO_MANY_PARTS`, 164 `READONLY`, 201 `QUOTA_EXCEEDED`) | high |
 
 ## 3. SIG-007 — empty / hidden-scope guardrail (run first)
 

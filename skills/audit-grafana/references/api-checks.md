@@ -253,43 +253,43 @@ Permanent IDs. Never renumber, never reuse a retired ID; deltas depend on stabil
 
 | ID | Area | Default severity | Check |
 | --- | --- | --- | --- |
-| GRAF-001 | datasources | high | At least one datasource exists, and every datasource passes its health check (or a minimal query when the plugin has no health endpoint). Zero datasources on a healthy instance is itself a `GRAF-001` fail, not a vacuous pass — a per-datasource loop over an empty list trivially "passes" with nothing actually checked, which is a real, previously-observed failure shape: `/api/health` reporting `ok` while the instance has zero datasources and zero dashboards configured, telling a customer nothing about whether the instance is actually usable for correlation |
-| GRAF-002 | datasources | critical | No datasource stores credentials in plaintext `jsonData` or URL userinfo; secrets live in secure fields |
-| GRAF-003 | datasources | low | Panels name their datasource explicitly instead of inheriting the implicit org default |
-| GRAF-004 | datasources | medium | Each datasource returns usable data for a minimal domain query, not just a passing health probe |
-| GRAF-005 | datasources | low | No duplicate datasources point at the same backend with diverging configs |
-| GRAF-006 | datasources | low | The audit token is least-privilege; it cannot administer the org |
-| GRAF-007 | datasources | high | No enabled public dashboard exposes internal queries and data to the internet without auth (`/api/dashboards/public-dashboards`) |
-| GRAF-020 | dashboard-semantics | high | Every panel target succeeds when replayed live through `/api/ds/query` |
-| GRAF-021 | dashboard-semantics | high | No panel silently queries org-wide, account-wide, or all-environment scope while its title claims one service |
-| GRAF-022 | dashboard-semantics | medium | External-system panels filter by stable IDs, not text or slug matching |
-| GRAF-023 | dashboard-semantics | medium | No capped or paginated list is presented as a total |
-| GRAF-024 | dashboard-semantics | medium | Every stat reducer matches the source shape; row counts only over rows that are the intended unit |
-| GRAF-025 | dashboard-semantics | medium | Every template variable resolves to at least one real value |
-| GRAF-026 | dashboard-semantics | low | Panel links and inspect links preserve the panel's scope |
-| GRAF-027 | dashboard-semantics | high | Key stat values agree with the provider-native source of truth |
-| GRAF-028 | dashboard-semantics | high | No panel references a datasource UID that does not exist |
-| GRAF-050 | alerting | critical | No alert rule routes to an empty, missing, or placeholder receiver |
-| GRAF-051 | alerting | high | Every active rule's query succeeds when replayed live |
-| GRAF-052 | alerting | medium | `noDataState` and `execErrState` are set deliberately per rule, not left at defaults unexamined |
-| GRAF-053 | alerting | medium | Every rule carries severity and service labels |
-| GRAF-054 | alerting | low | Every paging rule has summary and runbook annotations |
-| GRAF-055 | alerting | medium | Each severity route has been proven live at least once; unproven routes are `configured`, not working |
-| GRAF-056 | alerting | low | Grouping, group wait, and repeat interval are tuned on high-volume routes |
-| GRAF-057 | alerting | high | No `isPaused==true` alert rule on a covered service silently monitors nothing (the rule exists so coverage counts it, but its evaluator is administratively off) |
-| GRAF-070 | query-hygiene | medium | Counter metrics are queried with `rate` or `increase`, never raw |
-| GRAF-071 | query-hygiene | low | Expensive expressions repeated across panels or rules are backed by recording rules |
-| GRAF-072 | query-hygiene | medium | Log stream labels are low-cardinality; IDs, users, and URLs stay in fields, not labels |
-| GRAF-080 | usage-and-cost | medium | An ingestion and usage health dashboard exists and returns data |
-| GRAF-081 | usage-and-cost | medium | Alerts exist on ingestion volume or spend movement |
-| GRAF-082 | usage-and-cost | low | Retention is a documented decision, not an inherited default |
-| GRAF-090 | service-coverage | medium | Every critical service has at least one dashboard |
-| GRAF-091 | service-coverage | high | Every critical service has at least one severity-labeled alert rule |
-| GRAF-092 | service-coverage | high | Recent ingestion is visible for every critical service label |
-| GRAF-100 | alerting | medium | Every paging-severity rule sets a pending period (`for` > 0) so a single transient breach does not page; `for: 0s` on a volatile signal is flap-prone |
-| GRAF-101 | alerting | medium | Flap-prone paging rules carry resolve damping: a `keep_firing_for` hold (Recovering state) and/or a distinct recovery-threshold (hysteresis) bound, not a single threshold with `keep_firing_for: 0s` |
-| GRAF-102 | alerting | low | Muting hygiene: every route-referenced mute timing resolves to a definition, and no active Grafana silence has a far-future or perpetually-renewed `endsAt` hiding real alerts |
-| GRAF-103 | alerting | low | Paging contact points set `disableResolveMessage` deliberately; always-on resolved-message traffic roughly doubles a paging integration's notification volume |
+| GRAF-001 | Datasources and access | high | At least one datasource exists, and every datasource passes its health check (or a minimal query when the plugin has no health endpoint). Zero datasources on a healthy instance is itself a `GRAF-001` fail, not a vacuous pass — a per-datasource loop over an empty list trivially "passes" with nothing actually checked, which is a real, previously-observed failure shape: `/api/health` reporting `ok` while the instance has zero datasources and zero dashboards configured, telling a customer nothing about whether the instance is actually usable for correlation |
+| GRAF-002 | Datasources and access | critical | No datasource stores credentials in plaintext `jsonData` or URL userinfo; secrets live in secure fields |
+| GRAF-003 | Datasources and access | low | Panels name their datasource explicitly instead of inheriting the implicit org default |
+| GRAF-004 | Datasources and access | medium | Each datasource returns usable data for a minimal domain query, not just a passing health probe |
+| GRAF-005 | Datasources and access | low | No duplicate datasources point at the same backend with diverging configs |
+| GRAF-006 | Datasources and access | low | The audit token is least-privilege; it cannot administer the org |
+| GRAF-007 | Datasources and access | high | No enabled public dashboard exposes internal queries and data to the internet without auth (`/api/dashboards/public-dashboards`) |
+| GRAF-020 | Dashboard semantics | high | Every panel target succeeds when replayed live through `/api/ds/query` |
+| GRAF-021 | Dashboard semantics | high | No panel silently queries org-wide, account-wide, or all-environment scope while its title claims one service |
+| GRAF-022 | Dashboard semantics | medium | External-system panels filter by stable IDs, not text or slug matching |
+| GRAF-023 | Dashboard semantics | medium | No capped or paginated list is presented as a total |
+| GRAF-024 | Dashboard semantics | medium | Every stat reducer matches the source shape; row counts only over rows that are the intended unit |
+| GRAF-025 | Dashboard semantics | medium | Every template variable resolves to at least one real value |
+| GRAF-026 | Dashboard semantics | low | Panel links and inspect links preserve the panel's scope |
+| GRAF-027 | Dashboard semantics | high | Key stat values agree with the provider-native source of truth |
+| GRAF-028 | Dashboard semantics | high | No panel references a datasource UID that does not exist |
+| GRAF-050 | Alerting | critical | No alert rule routes to an empty, missing, or placeholder receiver |
+| GRAF-051 | Alerting | high | Every active rule's query succeeds when replayed live |
+| GRAF-052 | Alerting | medium | `noDataState` and `execErrState` are set deliberately per rule, not left at defaults unexamined |
+| GRAF-053 | Alerting | medium | Every rule carries severity and service labels |
+| GRAF-054 | Alerting | low | Every paging rule has summary and runbook annotations |
+| GRAF-055 | Alerting | medium | Each severity route has been proven live at least once; unproven routes are `configured`, not working |
+| GRAF-056 | Alerting | low | Grouping, group wait, and repeat interval are tuned on high-volume routes |
+| GRAF-057 | Alerting | high | No `isPaused==true` alert rule on a covered service silently monitors nothing (the rule exists so coverage counts it, but its evaluator is administratively off) |
+| GRAF-070 | Query hygiene | medium | Counter metrics are queried with `rate` or `increase`, never raw |
+| GRAF-071 | Query hygiene | low | Expensive expressions repeated across panels or rules are backed by recording rules |
+| GRAF-072 | Query hygiene | medium | Log stream labels are low-cardinality; IDs, users, and URLs stay in fields, not labels |
+| GRAF-080 | Usage and cost | medium | An ingestion and usage health dashboard exists and returns data |
+| GRAF-081 | Usage and cost | medium | Alerts exist on ingestion volume or spend movement |
+| GRAF-082 | Usage and cost | low | Retention is a documented decision, not an inherited default |
+| GRAF-090 | Service coverage | medium | Every critical service has at least one dashboard |
+| GRAF-091 | Service coverage | high | Every critical service has at least one severity-labeled alert rule |
+| GRAF-092 | Service coverage | high | Recent ingestion is visible for every critical service label |
+| GRAF-100 | Alerting | medium | Every paging-severity rule sets a pending period (`for` > 0) so a single transient breach does not page; `for: 0s` on a volatile signal is flap-prone |
+| GRAF-101 | Alerting | medium | Flap-prone paging rules carry resolve damping: a `keep_firing_for` hold (Recovering state) and/or a distinct recovery-threshold (hysteresis) bound, not a single threshold with `keep_firing_for: 0s` |
+| GRAF-102 | Alerting | low | Muting hygiene: every route-referenced mute timing resolves to a definition, and no active Grafana silence has a far-future or perpetually-renewed `endsAt` hiding real alerts |
+| GRAF-103 | Alerting | low | Paging contact points set `disableResolveMessage` deliberately; always-on resolved-message traffic roughly doubles a paging integration's notification volume |
 
 Remediation pointers: every GRAF finding points at `setup-grafana`, anchored to the section that fixes that class of defect (for example `setup-grafana#contact-points` for GRAF-050). GRAF-055 may alternatively point at `audit-alertmanager`, which proves delivery paths end to end.
 

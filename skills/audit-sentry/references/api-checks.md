@@ -733,28 +733,28 @@ Permanent IDs. Never renumber, never reuse a retired ID; deltas depend on stabil
 
 | ID | Area | Default severity | Check |
 | --- | --- | --- | --- |
-| SNTRY-001 | alert-rules-and-routing | high | No project carries the auto-created, unowned "high priority" default rule |
-| SNTRY-002 | privacy-and-data-protection | high | Every production project has data scrubbing, default scrubbers, and a non-empty sensitive-fields list |
-| SNTRY-003 | project-configuration | medium | Every active client key on every project has a rate limit |
-| SNTRY-004 | project-configuration | medium | Every active project has the environment your production traffic runs under |
-| SNTRY-005 | alert-rules-and-routing | high | Every non-email rule action references a live, active integration; email-only routing is recorded as temporary |
-| SNTRY-006 | releases-and-source-context | high | Recent releases exist, carry commit data, and minified frames resolve to readable source on a sampled recent event |
-| SNTRY-007 | monitors | medium | Every active cron or uptime monitor has an observed check-in; no silently unproven active monitor |
-| SNTRY-008 | volume-and-quota | medium | Dropped-event share (rate-limited, cardinality-limited, abuse) stays under your declared threshold |
-| SNTRY-009 | releases-and-source-context | low | The VCS chain resolves end to end: integration active, code mapping present, default branch matches the deployed branch, commit data present |
-| SNTRY-010 | privacy-and-data-protection | high | Replay, profiling, or log ingestion volume that is live has a recorded masking, consent, and retention decision |
-| SNTRY-011 | alert-rules-and-routing | medium | No duplicate alerting path: identical condition sets, issue-rule and metric-alert overlap, or Sentry uptime duplicating an external synthetic tool |
-| SNTRY-012 | service-coverage | medium | Every critical service maps to a project with recent accepted events, or the mapping is explicitly `not-in-scope` by decision |
-| SNTRY-013 | alert-rules-and-routing | high | Every production project has at least one immediate-tier and one review-tier rule, correctly environment-scoped by the rule's own `environment` field |
-| SNTRY-014 | alert-rules-and-routing | medium | No rule pages on unfiltered every-event conditions or re-pages below your frequency floor |
-| SNTRY-015 | alert-rules-and-routing | high | Workflow-engine orgs (capability-gated): no detector with an empty `workflowIds` array — a detector connected to no automation notifies nobody; `not-in-scope` on classic-model orgs where the endpoint 404s |
-| SNTRY-016 | alert-rules-and-routing | high | *(verify-pending)* No disabled or muted alert rule is silently crediting tier coverage: a `status != active` issue rule still satisfies SNTRY-013 today, so a service reads covered while its immediate-tier rule fires nothing |
-| SNTRY-017 | alert-rules-and-routing | medium | *(verify-pending)* Rules that route to issue owners (`targetType: IssueOwners`) have real ownership rules behind them; empty ownership with fallthrough off notifies nobody, fallthrough on pages everyone |
-| SNTRY-101 | alert-rules-and-routing | medium | Every notifying issue rule gates with a non-empty `filters` set; a broad trigger with an empty `filters` array fires un-tuned (every-event/frequency subset stays owned by SNTRY-014) |
-| SNTRY-102 | alert-rules-and-routing | medium | On a multi-environment project, every notifying issue rule sets its own `environment`; a null `environment` runs the rule across all environments and pages on dev/staging noise |
-| SNTRY-103 | alert-rules-and-routing | medium | Every metric alert sets `resolveThreshold`, pairs a `warning` trigger with `critical`, and uses a `timeWindow` (or `comparisonDelta`/`detectionType`) wide enough not to flap on transients |
-| SNTRY-104 | alert-rules-and-routing | low | Spike Protection is live per production project; readable only indirectly from a `spike_protection` drop reason in stats outcomes, and OFF by default per project on new orgs |
-| SNTRY-105 | alert-rules-and-routing | low | Inbound Data Filters are active on production projects, discarding known-junk events (bots, extensions, localhost) at ingest before they create issues |
+| SNTRY-001 | Alert rules and routing | high | No project carries the auto-created, unowned "high priority" default rule |
+| SNTRY-002 | Privacy and data protection | high | Every production project has data scrubbing, default scrubbers, and a non-empty sensitive-fields list |
+| SNTRY-003 | Project configuration | medium | Every active client key on every project has a rate limit |
+| SNTRY-004 | Project configuration | medium | Every active project has the environment your production traffic runs under |
+| SNTRY-005 | Alert rules and routing | high | Every non-email rule action references a live, active integration; email-only routing is recorded as temporary |
+| SNTRY-006 | Releases and source context | high | Recent releases exist, carry commit data, and minified frames resolve to readable source on a sampled recent event |
+| SNTRY-007 | Monitors | medium | Every active cron or uptime monitor has an observed check-in; no silently unproven active monitor |
+| SNTRY-008 | Volume and quota | medium | Dropped-event share (rate-limited, cardinality-limited, abuse) stays under your declared threshold |
+| SNTRY-009 | Releases and source context | low | The VCS chain resolves end to end: integration active, code mapping present, default branch matches the deployed branch, commit data present |
+| SNTRY-010 | Privacy and data protection | high | Replay, profiling, or log ingestion volume that is live has a recorded masking, consent, and retention decision |
+| SNTRY-011 | Alert rules and routing | medium | No duplicate alerting path: identical condition sets, issue-rule and metric-alert overlap, or Sentry uptime duplicating an external synthetic tool |
+| SNTRY-012 | Service coverage | medium | Every critical service maps to a project with recent accepted events, or the mapping is explicitly `not-in-scope` by decision |
+| SNTRY-013 | Alert rules and routing | high | Every production project has at least one immediate-tier and one review-tier rule, correctly environment-scoped by the rule's own `environment` field |
+| SNTRY-014 | Alert rules and routing | medium | No rule pages on unfiltered every-event conditions or re-pages below your frequency floor |
+| SNTRY-015 | Alert rules and routing | high | Workflow-engine orgs (capability-gated): no detector with an empty `workflowIds` array — a detector connected to no automation notifies nobody; `not-in-scope` on classic-model orgs where the endpoint 404s |
+| SNTRY-016 | Alert rules and routing | high | *(verify-pending)* No disabled or muted alert rule is silently crediting tier coverage: a `status != active` issue rule still satisfies SNTRY-013 today, so a service reads covered while its immediate-tier rule fires nothing |
+| SNTRY-017 | Alert rules and routing | medium | *(verify-pending)* Rules that route to issue owners (`targetType: IssueOwners`) have real ownership rules behind them; empty ownership with fallthrough off notifies nobody, fallthrough on pages everyone |
+| SNTRY-101 | Alert rules and routing | medium | Every notifying issue rule gates with a non-empty `filters` set; a broad trigger with an empty `filters` array fires un-tuned (every-event/frequency subset stays owned by SNTRY-014) |
+| SNTRY-102 | Alert rules and routing | medium | On a multi-environment project, every notifying issue rule sets its own `environment`; a null `environment` runs the rule across all environments and pages on dev/staging noise |
+| SNTRY-103 | Alert rules and routing | medium | Every metric alert sets `resolveThreshold`, pairs a `warning` trigger with `critical`, and uses a `timeWindow` (or `comparisonDelta`/`detectionType`) wide enough not to flap on transients |
+| SNTRY-104 | Alert rules and routing | low | Spike Protection is live per production project; readable only indirectly from a `spike_protection` drop reason in stats outcomes, and OFF by default per project on new orgs |
+| SNTRY-105 | Alert rules and routing | low | Inbound Data Filters are active on production projects, discarding known-junk events (bots, extensions, localhost) at ingest before they create issues |
 
 Remediation pointers: every SNTRY finding points at `setup-sentry`, anchored to the section that fixes that class of defect (for example `setup-sentry#alert-rule-taxonomy` for SNTRY-001, SNTRY-013, SNTRY-014; `setup-sentry#privacy-gates` for SNTRY-002 and SNTRY-010). SNTRY-005 may alternatively point at `audit-alertmanager` when the receiver in question is Alertmanager-routed rather than a Sentry-native integration.
 

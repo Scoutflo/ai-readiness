@@ -18,7 +18,7 @@ Run this standalone, from `/scoutflo:audit-all`, or on a schedule via `/scoutflo
 Outputs, per the [report standard](../../report-standard/README.md):
 
 - `./scoutflo-audits/digitalocean/[<label>/]<YYYY-MM-DD>/findings.json` per the [findings schema](../../report-standard/findings-schema.md), finding IDs `DO-NNN`
-- `./scoutflo-audits/digitalocean/[<label>/]<YYYY-MM-DD>/report.md` per the [report template](../../report-standard/report-template.md), including the `## Inventory` section (the `render-report-viz.sh inventory` output)
+- `./scoutflo-audits/digitalocean/[<label>/]<YYYY-MM-DD>/report.md` per the [report template](../../report-standard/report-template.md), including the `## Inventory` section (the `render-report-viz.sh inventory` output) and the `## Findings by purpose` section (the `render-report-viz.sh lanes` output)
 - `./scoutflo-audits/digitalocean/[<label>/]<YYYY-MM-DD>/inventory.json` per the [inventory schema](../../report-standard/inventory-schema.md) (`scoutflo-inventory/v1`): the complete Phase-2 catalog — one item per App Platform app (`app`), managed database (`database`), uptime check (`uptime_check`), and DO Monitoring alert policy (`alert_policy`), each with `kind`, `covers`, `enabled`, `severity`, and `routes_to` for alerting objects. Built from the raw pull, never invented; redacted at capture, never a secret value.
 - One appended line in `./scoutflo-audits/digitalocean/[<label>/]history.jsonl`
 - One Slack brief, when `slack.webhook_env` is configured
@@ -290,7 +290,7 @@ DigitalOcean's differentiator — the analog of the kubernetes external→cluste
 
 > **Verify-pending.** `DORT-001`/`DORT-002` are drafted against DigitalOcean's documented App Platform deployment-phase API and adversarially reviewed, but have **not** been run against a live DO tenant — status is unproven until a first live run with a read-only token against an account carrying App Platform apps. The reads are ordinary read-only `doctl apps list`/`get`/`list-deployments` calls; treat the observations as unconfirmed until that first live run.
 
-A parallel non-scored lane, the DigitalOcean analog of the kubernetes `K8SRT-` snapshot: `area: live-runtime`, always severity `info` and `points_recoverable: 0`, never present in `score.categories` or `score.excluded`, so it adds live evidence without moving the score. Commands in [references/do-checks.md](references/do-checks.md) section 16. `DORT-001` names any app whose `active_deployment.phase` is `ERROR`/`CANCELED` (serving old code or down NOW) — when it coincides with DO-032 it turns the silent-outage cascade from hypothetical into validated-live this run. `DORT-002` surfaces a deployment wedged in `BUILDING`/`DEPLOYING`/`PENDING_BUILD`. A probe that returns nothing, times out, or is `401`/`403`-blocked is recorded `skipped` with the exact reason — never a fabricated phase.
+A parallel non-scored lane, the DigitalOcean analog of the kubernetes `K8SRT-` snapshot: `area: live-runtime`, always severity `info`, `scoring_scope: "non-scored"`, `points_recoverable: 0`, and **no `checks[]` ledger row**, never present in `score.categories` or `score.excluded`, so it adds live evidence without moving the score. Like every finding it still carries `report_lanes` (a `DORT` deployment-phase snapshot is `ai-sre-readiness` and `general-audit` — it bears on action safety and RCA trust). Commands in [references/do-checks.md](references/do-checks.md) section 16. `DORT-001` names any app whose `active_deployment.phase` is `ERROR`/`CANCELED` (serving old code or down NOW) — when it coincides with DO-032 it turns the silent-outage cascade from hypothetical into validated-live this run. `DORT-002` surfaces a deployment wedged in `BUILDING`/`DEPLOYING`/`PENDING_BUILD`. A probe that returns nothing, times out, or is `401`/`403`-blocked is recorded `skipped` with the exact reason — never a fabricated phase.
 
 ## Phase 6: Managed databases (DO-040 to DO-048)
 
@@ -333,7 +333,7 @@ Runs on the large path only (see [Estate sizing](#estate-sizing) above). All sta
 
 ## Phase 10: Score, write, brief
 
-Score per [severity-and-scoring.md](../../report-standard/severity-and-scoring.md): each check yields `pass` (1.0), `partial` (0.5), `fail`/`blocked` (0), `not-in-scope` leaves the denominator. Category score is the credit ratio times 100 rounded down; overall is the weight-normalized sum over included categories. Whole categories that could not be assessed are excluded, renormalized, and stated; blocked checks inside an assessable category score 0. Score conservatively: when unsure between two results, pick the lower and say why. Assign each category a maturity value (`reactive`, `proactive`, `systematic`) per the shared definitions, judged conservatively.
+Score per [severity-and-scoring.md](../../report-standard/severity-and-scoring.md): each check yields `pass` (1.0), `partial` (0.5), or `fail` (0). `blocked` is unassessed and leaves the readiness denominator; `not-in-scope` leaves both the readiness and the assessment-coverage denominators. Category score is `floor(((passed*2)+partial)*50/assessed)` where `assessed = pass + partial + fail` (0 when a category has no assessed checks); overall is the weight-normalized sum over categories with at least one assessed check, rounded down. A whole category with zero assessed checks is moved to `excluded[]`, renormalized out, and stated. Show assessment coverage separately. A fully blocked run is `unassessed` with `overall: null`, never 0/100. Score conservatively: when unsure between a defect and missing evidence, use `blocked` and state the exact evidence-unlock action. Assign each category a maturity value (`reactive`, `proactive`, `systematic`) per the shared definitions, judged conservatively.
 
 | Category | Weight | ID range |
 | --- | ---: | --- |
@@ -347,13 +347,15 @@ Score per [severity-and-scoring.md](../../report-standard/severity-and-scoring.m
 
 The full check catalog and the target profile (what 100 means per category) are at the top of [references/do-checks.md](references/do-checks.md). IDs are stable: the same defect gets the same ID every run, one finding per failed check, affected objects enumerated. Compute `points_recoverable` per finding by re-running the scoring model with that check at full credit; `info` findings and excluded categories carry 0. The executive summary states the gap to target and the two or three findings with the highest `points_recoverable` as the biggest levers.
 
-End-to-end gate: claim end-to-end coverage only when the overall score is at or above 85, every critical service passes every applicable coverage row, and no category was excluded. Below the gate, write "good base coverage", never "end to end".
+End-to-end gate: claim end-to-end coverage only when the overall score is at or above 85, assessment coverage is 100%, every critical service passes every applicable coverage row, and no category was excluded. Below the gate, write "good base coverage", never "end to end".
 
-Lifecycle, exemptions, and totals, before rendering the report:
+Lifecycle, exemptions, and totals, before rendering the report, since `findings.json` requires the `lifecycle` field on every finding:
 
-1. Load the previous run's `findings.json` when one exists; classify every finding per the lifecycle table in the [findings schema](../../report-standard/findings-schema.md) (`new`, `unchanged`, `regressed`; resolved IDs go to the delta, and the executive summary names regressions first).
-2. Load `./scoutflo-audits/exemptions.yaml` when present. Entries with `id`, `reason`, and `expires` all set and unexpired suppress their finding into the Suppressed appendix; malformed or expired entries are reported, never honored. Suppressed findings leave the score and severity counts; the scorecard states the suppressed count.
+1. Load the previous run's `findings.json` when one exists; classify every finding, `DO-*` and `DORT-*` alike, per the lifecycle table in the [findings schema](../../report-standard/findings-schema.md) (`new`, `unchanged`, `regressed`; resolved IDs go to the delta, and the executive summary names regressions first).
+2. Load `./scoutflo-audits/exemptions.yaml` when present. Entries with `id`, `reason`, and `expires` all set and unexpired suppress their finding into the Suppressed appendix; malformed or expired entries are reported, never honored. For a readiness finding, retain the observed `partial` or `fail` result on the same-ID `checks[]` row and add `suppressed: true` plus `suppression_reason`; set the finding's `points_recoverable` to 0. Suppressed readiness checks remain assessed for coverage but are excluded from readiness scoring. A non-scored `DORT-*` finding has no check row: set only its lifecycle to `suppressed`, preserve `scoring_scope: "non-scored"`, and keep zero readiness points.
 3. Every findings area and coverage cell carries its denominator (`passed/total`).
+4. Emit one `checks[]` row for every stable `DO-*` readiness catalog check (`DO-001` to `DO-005`, `DO-010` to `DO-016`, `DO-020` to `DO-025`, `DO-030` to `DO-033`, `DO-040` to `DO-048`, `DO-050` to `DO-052`, `DO-060` to `DO-062`, `DO-070` to `DO-072` — 40 checks), including passes, partials, failures, blockers, and not-in-scope checks. Each row is `{id, category, result}`; `partial`/`blocked`/`not-in-scope` rows carry a non-empty `reason`. Derive category counts, readiness, assessment coverage, and `score.check_set` from that complete ledger; never write them independently. `check_set` is the `cksum-v2:N:M` fingerprint that [check-findings.sh](../../report-standard/check-findings.sh) recomputes by folding each check's id+category, each category's name+weight, and the gate — a value the emitted `findings.json` must match exactly. `DORT-*` findings stay outside the readiness ledger and explicitly carry `scoring_scope: "non-scored"`.
+5. Every finding declares `scoring_scope` (`readiness` for a same-ID non-pass `DO-*` check; `non-scored` for `DORT-*` and any `TOPO-` readiness-gap row) and `report_lanes`: a unique, non-empty subset of `["general-audit", "ai-sre-readiness"]`. Referential integrity: every `partial`/`fail`/`blocked` check has a same-ID readiness finding, and every readiness finding has a same-ID `checks[]` row that is `partial`/`fail`/`blocked` (never `pass`/`not-in-scope`); a `blocked` check's finding has `status: "blocked"` and `points_recoverable: 0`. **`report_lanes` classification (never changes severity or score):** default to `general-audit` (operational reliability). Add — or also use — `ai-sre-readiness` only when the finding bears on telemetry quality, service identity/naming, topology/ownership context, incident-routing evidence, RCA trust, or action safety, i.e. what trustworthy AI-assisted diagnosis needs. A coverage/naming/routing-evidence finding (DO-001 to DO-005 alert routing and delivery, DO-010 uptime detection, DO-020/DO-021 lifecycle alerts, DO-060 DNS/runtime ownership) is typically both; a pure reliability/cost/security-posture finding (DO-045 HA/standby, DO-046 firewall, DO-062 secret-typed env vars) is `general-audit` only.
 
 Emit and verify:
 
@@ -370,11 +372,15 @@ if [ "$DO_KIND" = seq ]; then DO_SEG="digitalocean/${DO_LABEL}"; else DO_SEG="di
 RUN_DATE="$(date -u +%Y-%m-%d)"
 OUT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${DO_SEG}/${RUN_DATE}"
 mkdir -p "$OUT"
-# ... write findings.json, inventory.json, and report.md per the report standard. The findings.json and
-# inventory.json ".target" is the per-target slug $DO_SEG ("digitalocean" for a single block,
-# "digitalocean/<label>" for a labeled list target), so audit-all/correlation/render disambiguate
-# multiple accounts. Then verify:
-jq -e --arg seg "$DO_SEG" '.schema == "scoutflo-findings/v1" and .target == $seg and (.findings | type == "array")' \
+# ... write findings.json (scoutflo-findings/v2 with a complete checks[] ledger — one row per DO-* catalog
+# check, lifecycle set per finding, report_lanes, and the estate object from sizing), inventory.json, and
+# report.md per the report standard. The findings.json and inventory.json ".target" is the per-target slug
+# $DO_SEG ("digitalocean" for a single block, "digitalocean/<label>" for a labeled list target), so
+# audit-all/correlation/render disambiguate multiple accounts. Then verify:
+jq -e --arg seg "$DO_SEG" '.schema == "scoutflo-findings/v2" and .target == $seg
+  and (.checks | type == "array" and length > 0)
+  and (.findings | type == "array")
+  and (.findings | all(has("lifecycle") and (.scoring_scope | IN("readiness","non-scored")) and (.report_lanes | type == "array" and length > 0)))' \
   "$OUT/findings.json" >/dev/null && echo "findings.json valid"
 grep -q '^# ' "$OUT/report.md" && echo "report.md present"
 # Output conformance: the emitted report.md must match report-standard/report-template.md.
@@ -388,6 +394,8 @@ jq -e --arg seg "$DO_SEG" '.schema == "scoutflo-inventory/v1" and .target == $se
   "$OUT/inventory.json" >/dev/null && echo "inventory.json valid"
 sh "${CLAUDE_PLUGIN_ROOT}/report-standard/render-report-viz.sh" inventory "$OUT/inventory.json" >/dev/null \
   && echo "inventory section renders"
+sh "${CLAUDE_PLUGIN_ROOT}/report-standard/render-report-viz.sh" lanes "$OUT/findings.json" >/dev/null && echo "findings-by-purpose section renders"
+grep -qxF '## Findings by purpose' "$OUT/report.md" && echo "findings-by-purpose section present"
 sh "${CLAUDE_PLUGIN_ROOT}/report-standard/render-report-viz.sh" html "$OUT/findings.json" "$OUT/report.html" "$(dirname "$OUT")/history.jsonl"
 sh "${CLAUDE_PLUGIN_ROOT}/report-standard/check-report.sh" "$OUT/report.md"
 ```
@@ -407,7 +415,9 @@ RUN_DATE="$(date -u +%Y-%m-%d)"
 OUT="${TARGET_DIR}/${RUN_DATE}"
 RESOLVED="0"   # fixed count from this run's delta; 0 on the first run
 LINE="$(jq -c --arg d "$RUN_DATE" --argjson resolved "$RESOLVED" \
-  '{run_date:$d, skill:"audit-digitalocean", overall:.score.overall, gate:.score.gate,
+  '{run_date:$d, skill:"audit-digitalocean", overall:.score.overall, state:.score.state,
+    scoring_model:.score.scoring_model, check_set:.score.check_set,
+    assessment_coverage_percent:.score.assessment.coverage_percent, gate:.score.gate,
     end_to_end:.score.end_to_end, severity_counts:.severity_counts,
     lifecycle_counts:((reduce .findings[].lifecycle as $l ({}; .[$l] = (.[$l] // 0) + 1)) + {resolved:$resolved})}' \
   "$OUT/findings.json")"
@@ -415,7 +425,7 @@ TMP="$(mktemp)"
 [ -f "${TARGET_DIR}/history.jsonl" ] && grep -v "\"run_date\":\"${RUN_DATE}\"" "${TARGET_DIR}/history.jsonl" > "$TMP" || true
 printf '%s\n' "$LINE" >> "$TMP"
 mv "$TMP" "${TARGET_DIR}/history.jsonl"
-tail -1 "${TARGET_DIR}/history.jsonl" | jq -e '.run_date and (.overall >= 0)' >/dev/null && echo "history.jsonl updated"
+tail -1 "${TARGET_DIR}/history.jsonl" | jq -e '.run_date and ((.overall|type)=="number" or .overall==null) and .scoring_model and .check_set' >/dev/null && echo "history.jsonl updated"
 ```
 
 The report's trend line renders the last five history.jsonl entries, oldest first; the ledger is derived and never drives finding lifecycle. Then send the Slack brief: titles only, never evidence values, hostnames, or endpoints:
@@ -436,20 +446,34 @@ TOPO_LINE="Topology readiness: readiness not recorded"  # replace with "r/n serv
 if [ -n "${SCOUTFLO_SLACK_WEBHOOK:-}" ]; then
   OUT_ABS="$(cd "$OUT" && pwd)"   # absolute path: the brief must be openable from anywhere
   SCORE="$(jq -r '.score.overall' "$OUT/findings.json")"
+  SCORE_STATE="$(jq -r '.score.state' "$OUT/findings.json")"
+  CUR_MODEL="$(jq -r '.score.scoring_model' "$OUT/findings.json")"
+  CUR_SET="$(jq -r '.score.check_set' "$OUT/findings.json")"
+  ASSESSMENT="$(jq -r '.score.assessment | "\(.assessed_checks)/\(.applicable_checks) (\(.coverage_percent)%) assessed, \(.scored_checks) scored, \(.blocked_checks) blocked, \(.suppressed_checks) suppressed"' "$OUT/findings.json")"
   E2E="$(jq -r 'if .score.end_to_end then "end-to-end" else "not end-to-end" end' "$OUT/findings.json")"
   COUNTS="$(jq -r '.severity_counts | "\(.critical) critical, \(.high) high, \(.medium) medium, \(.low) low"' "$OUT/findings.json")"
   CHECKS="$(jq -r '"\([.score.categories[].checks_passed] | add)/\([.score.categories[].checks_total] | add) checks passed"' "$OUT/findings.json")"
-  TOP="$(jq -r '[.findings[] | "\(.id) \(.title)"] | .[0:5] | join("\n")' "$OUT/findings.json")"
+  TOP="$(jq -r '[.findings[] | select((.lifecycle // "new") != "suppressed") | select(.area != "live-runtime") | "\(.id) \(.title)"] | .[0:5] | join("\n")' "$OUT/findings.json")"
   PREV="$(find "$TARGET_DIR" -mindepth 1 -maxdepth 1 -type d | grep -v '/runs$' | sort | tail -2 | head -1)"
   MOVE=""; DELTA="first run"
   if [ -n "$PREV" ] && [ "$PREV" != "$OUT" ]; then
+    PREV_MODEL="$(jq -r '.score.scoring_model // ""' "$PREV/findings.json")"
+    PREV_SET="$(jq -r '.score.check_set // ""' "$PREV/findings.json")"
+    PREV_SCORE="$(jq -r 'if (.score.overall|type)=="number" then .score.overall else "" end' "$PREV/findings.json")"
+    if [ "$SCORE_STATE" = "assessed" ] && [ -n "$PREV_SCORE" ] && [ "$PREV_MODEL" = "$CUR_MODEL" ] && [ "$PREV_SET" = "$CUR_SET" ]; then
     MOVE="$(jq -rn --argjson prev "$(jq '.score.overall' "$PREV/findings.json")" --argjson cur "$SCORE" \
       '(($cur - $prev) | if . >= 0 then "(+\(.))" else "(\(.))" end)')"
+    fi
     DELTA="$(jq -rn --slurpfile p "$PREV/findings.json" --slurpfile c "$OUT/findings.json" '
       [$p[0].findings[].id] as $b | [$c[0].findings[].id] as $n |
       "\(($b - $n) | length) fixed, \(($n - $b) | length) new, \(($n - ($n - $b)) | length) unchanged"')"
   fi
-  jq -n --arg head "audit-digitalocean ${RUN_DATE}: ${SCORE}/100${MOVE:+ $MOVE}, ${E2E}. ${COUNTS}. ${CHECKS}." \
+  if [ "$SCORE_STATE" = "unassessed" ]; then
+    HEAD="audit-digitalocean ${RUN_DATE}: readiness unassessed; ${ASSESSMENT}. ${COUNTS}."
+  else
+    HEAD="audit-digitalocean ${RUN_DATE}: ${SCORE}/100${MOVE:+ $MOVE}, ${E2E}; ${ASSESSMENT}. ${COUNTS}. ${CHECKS}."
+  fi
+  jq -n --arg head "$HEAD" \
         --arg top "$TOP" --arg delta "$DELTA" --arg topo "$TOPO_LINE" --arg path "$OUT_ABS/report.md" \
         '{text: ($head + "\nTop findings:\n" + $top + "\nDelta: " + $delta + "\n" + $topo + "\nReport: " + $path)}' \
     | curl -fsS --max-time 10 -H 'Content-Type: application/json' -d @- "$SCOUTFLO_SLACK_WEBHOOK" \

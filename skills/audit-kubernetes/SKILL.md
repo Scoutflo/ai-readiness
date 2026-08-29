@@ -20,7 +20,7 @@ Run this standalone, from `/scoutflo:audit-all`, or on a schedule via `/scoutflo
 Outputs, per the [report standard](../../report-standard/README.md):
 
 - `./scoutflo-audits/kubernetes/<label>/<YYYY-MM-DD>/findings.json` per the [findings schema](../../report-standard/findings-schema.md), scored posture finding IDs `K8S-NNN`, plus `K8SRT-NNN` for the parallel non-scored live-runtime snapshot section (Phase 8; `area: live-runtime`, always severity `info` and `points_recoverable: 0`, never in `score.categories` or `score.excluded`). The `<label>` directory segment is the target's `label` for a labeled list, or the cluster's own `context` for a single block — either way one machine's kubeconfig routinely reaches several clusters, so each gets its own directory and history. `.target` is the per-target slug `kubernetes/<label>` (equal to `kubernetes/<context>` for a single block).
-- `./scoutflo-audits/kubernetes/<label>/<YYYY-MM-DD>/report.md` per the [report template](../../report-standard/report-template.md), including the `## Inventory` section (the `render-report-viz.sh inventory` output)
+- `./scoutflo-audits/kubernetes/<label>/<YYYY-MM-DD>/report.md` per the [report template](../../report-standard/report-template.md), including the `## Inventory` section (the `render-report-viz.sh inventory` output) and the `## Findings by purpose` section (the `render-report-viz.sh lanes` output, splitting findings by `report_lanes` into the general-audit and AI-SRE-readiness lanes)
 - `./scoutflo-audits/kubernetes/<label>/<YYYY-MM-DD>/inventory.json` per the [inventory schema](../../report-standard/inventory-schema.md) (`scoutflo-inventory/v1`): the complete Phase-1 catalog — one item per namespace, workload (Deployment/StatefulSet/DaemonSet), NetworkPolicy, RBAC binding, and PodDisruptionBudget — each with `kind`, `covers`, `enabled`, `severity`, and `routes_to` for alerting objects. Built from the raw pull, never invented; redacted at capture, never a secret value.
 - One appended line in `./scoutflo-audits/kubernetes/<label>/history.jsonl`
 - One Slack brief, when `slack.webhook_env` is configured
@@ -308,7 +308,7 @@ Per the report standard, render the per-service coverage matrix and the Scoutflo
 
 ## Phase 10: Score, write, brief
 
-Score per [severity-and-scoring.md](../../report-standard/severity-and-scoring.md): each check yields `pass` (1.0), `partial` (0.5), `fail`/`blocked` (0); `not-in-scope` (e.g. the PSP branch on a 1.25+ server) leaves the denominator. Category score is the credit ratio × 100 floored; overall is the weight-normalized sum over included categories, conservatively.
+Score per [severity-and-scoring.md](../../report-standard/severity-and-scoring.md): each check yields `pass` (1.0), `partial` (0.5), or `fail` (0). `blocked` is unassessed and leaves the readiness denominator; `not-in-scope` (e.g. the PSP branch on a 1.25+ server) leaves both the readiness and the assessment-coverage denominators. Category score is the assessed-credit ratio times 100, rounded down; overall is the weight-normalized sum over categories with at least one assessed check. Show assessment coverage separately. A category with no assessed checks is excluded, renormalized, and stated. A fully blocked run is `unassessed` with `overall: null`, never 0/100. When unsure between a defect and missing evidence, use `blocked` and state the exact evidence-unlock action.
 
 | Category | Weight | Checks |
 | --- | --- | --- |
@@ -318,11 +318,19 @@ Score per [severity-and-scoring.md](../../report-standard/severity-and-scoring.m
 | Reliability & resilience | 20 | K8S-005 (PDB/replicas), K8S-012 (health probes), K8S-013 (replica spread) |
 | Resource governance | 15 | K8S-004 (requests + limits), K8S-014 (namespace quota/LimitRange) |
 
-Full check catalog and target profile at the top of [references/kubernetes-checks.md](references/kubernetes-checks.md). IDs are stable: the same defect gets the same ID every run, one finding per failed check, affected objects (namespace/kind/name) enumerated in `affected`. Compute `points_recoverable` per finding by re-running the scoring model with that check at full credit; `info` findings carry 0. Live-runtime (`K8SRT-*`) findings are always `info` with `points_recoverable: 0` and never enter this arithmetic — the snapshot can corroborate a posture finding's evidence (and upgrade its `status` to `validated-live`), but it never moves the score in either direction. The executive summary states the gap to target and the two or three highest-`points_recoverable` findings as the biggest levers.
+Full check catalog and target profile at the top of [references/kubernetes-checks.md](references/kubernetes-checks.md). IDs are stable: the same defect gets the same ID every run, one finding per failed check, affected objects (namespace/kind/name) enumerated in `affected`. Compute `points_recoverable` per finding by re-running the scoring model with that check at full credit; `info` findings carry 0. Live-runtime (`K8SRT-*`) findings are always `info` with `points_recoverable: 0`, stay outside the readiness `checks[]` ledger, explicitly carry `scoring_scope: "non-scored"`, and never enter this arithmetic — the snapshot can corroborate a posture finding's evidence (and upgrade its `status` to `validated-live`), but it never moves the score in either direction. The executive summary states the gap to target and the two or three highest-`points_recoverable` findings as the biggest levers.
 
-End-to-end gate: claim end-to-end coverage only when the overall score is at or above 85, every critical service passes every applicable coverage row, and no category was excluded. Below the gate, write "good base posture", never "end to end".
+End-to-end gate: claim end-to-end coverage only when the overall score is at or above 85, assessment coverage is 100%, every critical service passes every applicable coverage row, and no category was excluded. Below the gate, write "good base posture", never "end to end".
 
-Write `findings.json` first (canonical), then regenerate `report.md`, the history line, and the Slack brief from it. Then run the report-standard self-validation, exactly as every other audit does — `check-findings.sh` (score reconciles with the scorecard, schema invariants hold) before `check-report.sh` (shape):
+Write `findings.json` first (canonical), then regenerate `report.md`, the history line, and the Slack brief from it. Since `findings.json` uses `scoutflo-findings/v2`, resolve lifecycle, exemptions, and the check ledger before rendering the report:
+
+1. Load the previous run's `findings.json` when one exists; classify every finding, `K8S-*` and `K8SRT-*` alike, per the lifecycle table in the [findings schema](../../report-standard/findings-schema.md) (`new`, `unchanged`, `regressed`; resolved IDs go to the delta, and the executive summary names regressions first).
+2. Load `./scoutflo-audits/exemptions.yaml` when present. Entries with `id`, `reason`, and `expires` all set and unexpired suppress their finding into the Suppressed appendix; malformed or expired entries are reported, never honored. For a readiness finding, retain the observed `partial` or `fail` result on the same-ID `checks[]` row and add `suppressed: true` plus `suppression_reason`; set the finding's `points_recoverable` to 0. Suppressed readiness checks remain assessed for coverage but are excluded from readiness scoring. A non-scored `K8SRT-*` finding has no check row: set only its lifecycle to `suppressed`, preserve `scoring_scope: "non-scored"`, and keep zero readiness points.
+3. Every findings area and coverage cell carries its denominator (`passed/total`).
+4. Emit one `checks[]` row for every stable `K8S-*` readiness catalog check (`{id, category, result}` with `result ∈ pass|partial|fail|blocked|not-in-scope`, and a non-empty `reason` on any partial/blocked/not-in-scope row), including passes, partials, failures, blockers, and not-in-scope checks. Derive category counts, readiness, assessment coverage, and `score.check_set` (the `cksum-v2:N:M` fingerprint over each check's id + category, every category's name + weight, and the gate, per the pipeline in [findings-schema.md](../../report-standard/findings-schema.md#check-ledger-v2)) from that complete ledger; never write them independently. A category with zero assessed checks goes in `score.excluded[]` and out of `overall`. `K8SRT-*` findings stay outside the readiness ledger and explicitly carry `scoring_scope: "non-scored"`.
+5. Every finding declares `scoring_scope` (`readiness` for a same-ID non-pass `K8S-*` check; `non-scored` for every `K8SRT-*`) and `report_lanes`: a unique, non-empty subset of `general-audit` and `ai-sre-readiness`. Default to `general-audit` (operational reliability and security posture); add/also use `ai-sre-readiness` only when the finding bears on telemetry quality, service identity/naming, topology/ownership context, incident routing evidence, RCA trust, or action safety — what trustworthy AI-assisted diagnosis needs. The flagship external-exposure blast-radius path (K8S-010) and the RBAC-power findings (K8S-002/006/009) inform the blast-radius and action-safety reasoning an AI SRE relies on, so those are typically both lanes; a pure hardening, network-segmentation, resource-limit, or resilience gap (K8S-001/007/008, K8S-003/011, K8S-004/014, K8S-005/012/013) is `general-audit` only. This classification never changes severity or score. Referential-integrity rules the gate enforces: every `partial`/`fail`/`blocked` check has a same-ID readiness finding, every readiness finding has a same-ID non-pass check row (never `pass`/`not-in-scope`), a blocked check's finding carries `status: "blocked"` and `points_recoverable: 0`, and a `non-scored` finding has `points_recoverable: 0` and no check row.
+
+Then run the report-standard self-validation, exactly as every other audit does — `check-findings.sh` (score reconciles with the scorecard, the v2 checks[] ledger and schema invariants hold) before `check-report.sh` (shape):
 
 ```bash
 set -eu
@@ -336,10 +344,16 @@ K8S_LABEL=$(sh "$TT" "$CFG" kubernetes label "$K8S_IDX"); KUBE_CONTEXT=$(sh "$TT
 if [ "$K8S_KIND" = seq ]; then K8S_SEG="kubernetes/${K8S_LABEL}"; else K8S_SEG="kubernetes/${KUBE_CONTEXT}"; fi
 RUN_DATE="$(date -u +%Y-%m-%d)"
 OUT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${K8S_SEG}/${RUN_DATE}"   # per-target segment, matching the declared outputs
+mkdir -p "$OUT"
 # The findings.json/inventory.json ".target" is the per-target slug $K8S_SEG ("kubernetes/<context>" for a
 # single block, "kubernetes/<label>" for a labeled list target), so audit-all/correlation/render disambiguate
-# multiple clusters. Verify it first, then reconcile score + shape.
-jq -e --arg seg "$K8S_SEG" '.schema == "scoutflo-findings/v1" and .target == $seg and (.findings | type == "array") and (.estate.path != null)' \
+# multiple clusters. Verify the v2 envelope first (schema, target, a non-empty checks[] ledger, and every
+# finding carrying lifecycle + scoring_scope + non-empty report_lanes), then reconcile score + shape.
+jq -e --arg seg "$K8S_SEG" '.schema == "scoutflo-findings/v2" and .target == $seg
+  and (.checks | type == "array" and length > 0)
+  and (.findings | type == "array")
+  and (.estate.path != null)
+  and (.findings | all(has("lifecycle") and (.scoring_scope | IN("readiness","non-scored")) and (.report_lanes | type == "array" and length > 0)))' \
   "$OUT/findings.json" >/dev/null && echo "findings.json valid"
 sh "${CLAUDE_PLUGIN_ROOT}/report-standard/check-findings.sh" "$OUT/findings.json"
 # Inventory (scoutflo-inventory/v1): the complete Phase-1 catalog of what exists,
@@ -347,8 +361,27 @@ sh "${CLAUDE_PLUGIN_ROOT}/report-standard/check-findings.sh" "$OUT/findings.json
 # with items; the ## Inventory section of report.md IS this render.
 jq -e '.schema == "scoutflo-inventory/v1" and (.items | type == "array") and (.counts.total == (.items | length))' "$OUT/inventory.json" >/dev/null && echo "inventory.json valid"
 sh "${CLAUDE_PLUGIN_ROOT}/report-standard/render-report-viz.sh" inventory "$OUT/inventory.json" >/dev/null && echo "inventory section renders"
+sh "${CLAUDE_PLUGIN_ROOT}/report-standard/render-report-viz.sh" lanes "$OUT/findings.json" >/dev/null && echo "findings-by-purpose section renders"
+grep -qxF '## Findings by purpose' "$OUT/report.md" && echo "findings-by-purpose section present"
 sh "${CLAUDE_PLUGIN_ROOT}/report-standard/render-report-viz.sh" html "$OUT/findings.json" "$OUT/report.html" "$(dirname "$OUT")/history.jsonl"
 sh "${CLAUDE_PLUGIN_ROOT}/report-standard/check-report.sh" "$OUT/report.md"
+
+# Append the derived v2 history row after findings/report validation. A same-date
+# rerun replaces that date's row instead of duplicating it.
+TARGET_DIR="$(dirname "$OUT")"
+RESOLVED="0"   # fixed count from this run's delta; 0 on the first run
+LINE="$(jq -c --arg d "$RUN_DATE" --argjson resolved "$RESOLVED" \
+  '{run_date:$d, skill:"audit-kubernetes", overall:.score.overall, state:.score.state,
+    scoring_model:.score.scoring_model, check_set:.score.check_set,
+    assessment_coverage_percent:.score.assessment.coverage_percent, gate:.score.gate,
+    end_to_end:.score.end_to_end, severity_counts:.severity_counts,
+    lifecycle_counts:((reduce .findings[].lifecycle as $l ({}; .[$l] = (.[$l] // 0) + 1)) + {resolved:$resolved})}' \
+  "$OUT/findings.json")"
+TMP="$(mktemp)"
+[ -f "${TARGET_DIR}/history.jsonl" ] && grep -v "\"run_date\":\"${RUN_DATE}\"" "${TARGET_DIR}/history.jsonl" > "$TMP" || true
+printf '%s\n' "$LINE" >> "$TMP"
+mv "$TMP" "${TARGET_DIR}/history.jsonl"
+tail -1 "${TARGET_DIR}/history.jsonl" | jq -e '.run_date and ((.overall|type)=="number" or .overall==null) and .scoring_model and .check_set' >/dev/null && echo "history.jsonl updated"
 ```
 
 Compute the delta against the previous run date per the [report standard](../../report-standard/README.md); on the first run state "first run, no delta". After the report is written, close with the run-completion message per the report standard ([report-template.md](../../report-standard/report-template.md#run-completion-message-what-the-skill-says-in-chat-when-the-run-finishes)): the one-line score headline (with movement and the "good base posture" / not-end-to-end label), the top fixes by `points_recoverable`, the **absolute** `report.md` path, the OS-specific open command, and the leak-safe share pointer (the Slack brief). Then send the Slack brief — titles only, never evidence values, no namespaces or object names:
@@ -370,23 +403,39 @@ RT_LINE=""   # optional; set only when live-runtime (K8SRT) observations exist t
 if [ -n "${SCOUTFLO_SLACK_WEBHOOK:-}" ]; then
   OUT_ABS="$(cd "$OUT" && pwd)"   # absolute path: the brief must be openable from anywhere
   SCORE="$(jq -r '.score.overall' "$OUT/findings.json")"
+  SCORE_STATE="$(jq -r '.score.state' "$OUT/findings.json")"
+  CUR_MODEL="$(jq -r '.score.scoring_model' "$OUT/findings.json")"
+  CUR_SET="$(jq -r '.score.check_set' "$OUT/findings.json")"
+  ASSESSMENT="$(jq -r '.score.assessment | "\(.assessed_checks)/\(.applicable_checks) (\(.coverage_percent)%) assessed, \(.scored_checks) scored, \(.blocked_checks) blocked, \(.suppressed_checks) suppressed"' "$OUT/findings.json")"
   E2E="$(jq -r 'if .score.end_to_end then "end-to-end" else "not end-to-end" end' "$OUT/findings.json")"
   COUNTS="$(jq -r '.severity_counts | "\(.critical) critical, \(.high) high, \(.medium) medium, \(.low) low"' "$OUT/findings.json")"
   # Top findings are the scored posture levers; the non-scored live-runtime snapshot gets its own count line.
-  TOP="$(jq -r '[.findings[] | select(.area != "live-runtime") | "\(.id) \(.title)"] | .[0:5] | join("\n")' "$OUT/findings.json")"
+  TOP="$(jq -r '[.findings[] | select((.lifecycle // "new") != "suppressed") | select(.area != "live-runtime") | "\(.id) \(.title)"] | .[0:5] | join("\n")' "$OUT/findings.json")"
   RT_COUNT="$(jq -r '[.findings[] | select(.area == "live-runtime")] | length' "$OUT/findings.json")"
   [ "$RT_COUNT" -gt 0 ] && RT_LINE="Live-runtime: ${RT_COUNT} runtime observations (snapshot, not scored)"
   # Date-named run dirs only (the previous run's baseline for movement + delta).
   PREV="$(find "$TARGET_DIR" -mindepth 1 -maxdepth 1 -type d -name '[0-9]*-[0-9]*-[0-9]*' | sort | tail -2 | head -1)"
   MOVE=""; DELTA="first run"
   if [ -n "$PREV" ] && [ "$PREV" != "$OUT" ]; then
+    PREV_MODEL="$(jq -r '.score.scoring_model // ""' "$PREV/findings.json")"
+    PREV_SET="$(jq -r '.score.check_set // ""' "$PREV/findings.json")"
+    PREV_SCORE="$(jq -r 'if (.score.overall|type)=="number" then .score.overall else "" end' "$PREV/findings.json")"
+    # Only show movement when both runs are assessed under the SAME scoring model and check_set;
+    # a re-weight or catalog change makes the prior score not comparable (would fabricate a delta).
+    if [ "$SCORE_STATE" = "assessed" ] && [ -n "$PREV_SCORE" ] && [ "$PREV_MODEL" = "$CUR_MODEL" ] && [ "$PREV_SET" = "$CUR_SET" ]; then
     MOVE="$(jq -rn --argjson prev "$(jq '.score.overall' "$PREV/findings.json")" --argjson cur "$SCORE" \
       '(($cur - $prev) | if . >= 0 then "(+\(.))" else "(\(.))" end)')"
+    fi
     DELTA="$(jq -rn --slurpfile p "$PREV/findings.json" --slurpfile c "$OUT/findings.json" '
       [$p[0].findings[].id] as $b | [$c[0].findings[].id] as $n |
       "\(($b - $n) | length) fixed, \(($n - $b) | length) new, \(($n - ($n - $b)) | length) unchanged"')"
   fi
-  jq -n --arg head "audit-kubernetes ${RUN_DATE}: ${SCORE}/100${MOVE:+ $MOVE}, ${E2E}. ${COUNTS}." \
+  if [ "$SCORE_STATE" = "unassessed" ]; then
+    HEAD="audit-kubernetes ${RUN_DATE}: readiness unassessed; ${ASSESSMENT}. ${COUNTS}."
+  else
+    HEAD="audit-kubernetes ${RUN_DATE}: ${SCORE}/100${MOVE:+ $MOVE}, ${E2E}; ${ASSESSMENT}. ${COUNTS}."
+  fi
+  jq -n --arg head "$HEAD" \
         --arg top "$TOP" --arg delta "$DELTA" --arg rt "$RT_LINE" --arg path "$OUT_ABS/report.md" \
         '{text: ($head + "\nTop findings:\n" + $top + "\nDelta: " + $delta + ($rt | if . == "" then "" else "\n" + . end) + "\nReport: " + $path)}' \
     | curl -fsS --max-time 10 -H 'Content-Type: application/json' -d @- "$SCOUTFLO_SLACK_WEBHOOK" \

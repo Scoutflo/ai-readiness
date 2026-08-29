@@ -19,12 +19,12 @@ One permanent ID per check. IDs never change or get reused; retired checks keep 
 
 | ID | Category | Check | Typical fail severity |
 | --- | --- | --- | --- |
-| ZD-001 | Escalation/on-call | Every audited team has an escalation; no production team is one rule, one target, `repeat_policy: 0` | critical |
-| ZD-002 | Escalation/on-call | Escalation levels and repeat deliberate, not a one-shot | high |
-| ZD-003 | Escalation/on-call | Every escalation policy's on-call resolves to a staffed rotation now (no empty `oncalls`) | high |
-| ZD-004 | Escalation/on-call | Schedules referenced are non-empty and cover the window | high |
-| ZD-005 | Escalation/on-call | No integration on a live ingestion path is `is_enabled: false` | critical |
-| ZD-006 | Escalation/on-call | No escalation level targets a named individual instead of a schedule/rotation (single-human dependency) — **verify-pending** | high |
+| ZD-001 | Escalation and on-call | Every audited team has an escalation; no production team is one rule, one target, `repeat_policy: 0` | critical |
+| ZD-002 | Escalation and on-call | Escalation levels and repeat deliberate, not a one-shot | high |
+| ZD-003 | Escalation and on-call | Every escalation policy's on-call resolves to a staffed rotation now (no empty `oncalls`) | high |
+| ZD-004 | Escalation and on-call | Schedules referenced are non-empty and cover the window | high |
+| ZD-005 | Escalation and on-call | No integration on a live ingestion path is `is_enabled: false` | critical |
+| ZD-006 | Escalation and on-call | No escalation level targets a named individual instead of a schedule/rotation (single-human dependency) — **verify-pending** | high |
 | ZD-010 | Alert noise | Per-service `collation` on where a service is chatty (time-based dedup) | medium |
 | ZD-011 | Alert noise | Suppress alert rules present and not over-broad (no always-true drop-all) | high |
 | ZD-012 | Alert noise | "Seconds Since Last Similar Incident" flapping guard where a source re-fires | medium |
@@ -33,11 +33,11 @@ One permanent ID per check. IDs never change or get reused; retired checks keep 
 | ZD-015 | Alert noise | Auto-ack/auto-resolve working (sources emit resolve `alert_type`s) | medium |
 | ZD-016 | Alert noise | No open-ended recurring maintenance window (`repeat_interval` set, `repeat_until: null`) | high |
 | ZD-017 | Alert noise | No alert rule downgrades a critical-service incident's urgency to non-paging (silent urgency-downgrade) — **verify-pending** | high |
-| ZD-020 | Coverage/hygiene | Global routing has no overlapping/duplicate routes and has a default route | medium |
-| ZD-021 | Coverage/hygiene | Critical services from topology each covered by a team, service, and escalation path | high |
-| ZD-022 | Coverage/hygiene | Teams audited named; teams not audited named as uncovered, not silently dropped | medium |
-| ZD-023 | Coverage/hygiene | No integration on the deprecated "API-Integration" ingestion type (stopped 2025-05-15) | medium |
-| ZD-024 | Coverage/hygiene | Teams are visible in the account (zero teams visible to this key is `blocked`, not a plain fail — a likely token permission/visibility gap: the paging config lives in teams the key cannot see; widen the token to a Bot Token with view-only team access) | high |
+| ZD-020 | Coverage and hygiene | Global routing has no overlapping/duplicate routes and has a default route | medium |
+| ZD-021 | Coverage and hygiene | Critical services from topology each covered by a team, service, and escalation path | high |
+| ZD-022 | Coverage and hygiene | Teams audited named; teams not audited named as uncovered, not silently dropped | medium |
+| ZD-023 | Coverage and hygiene | No integration on the deprecated "API-Integration" ingestion type (stopped 2025-05-15) | medium |
+| ZD-024 | Coverage and hygiene | Teams are visible in the account (zero teams visible to this key is `blocked`, not a plain fail — a likely token permission/visibility gap: the paging config lives in teams the key cannot see; widen the token to a Bot Token with view-only team access) | high |
 | ZD-030 | Actionability | Unacknowledged incidents older than the aging threshold | high |
 | ZD-031 | Actionability | MTTA against target from analytics `mtta_seconds` where humans acked | medium |
 | ZD-032 | Actionability | MTTR against target from `mttr_seconds`, with the acked/resolved share | medium |
@@ -118,7 +118,7 @@ Per-service integrations and their alert rules are pulled in section 6 (they are
 - `services.json` keeps `escalation_policy` (the EP `unique_id` each service routes through), so **ZD-001/ZD-002/ZD-006/ZD-030** can join a service to the escalation policy that pages for it.
 - The incident-filter capture (section 8) keeps per-incident `service`/`service_ids` and `sla_object`, so **ZD-030** can join each aging incident to its service's escalation policy and **ZD-031** can read the service's own acknowledge SLA. The old shape (unacked count + oldest only) discarded both and could not compute the per-service cause — section 8 now retains them.
 
-## 5. Escalation and on-call (ZD-001 to ZD-005)
+## 5. Escalation and on-call (ZD-001 to ZD-006)
 
 ```bash
 set -eu
@@ -204,7 +204,7 @@ jq -s --arg ep "$EP_ID" 'add | map(select(.escalation_policy == $ep)) | {ep:$ep,
 # GET .../escalation_policies/ and confirm each level names a schedule target, not a lone user.
 ```
 
-## 6. Alert noise (ZD-010 to ZD-016)
+## 6. Alert noise (ZD-010 to ZD-017)
 
 Per-service integrations and alert rules are the tightest-paced reads. Pull them here, pacing hard.
 
@@ -320,7 +320,7 @@ jq --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '[.[]
 # the previously-covered critical services.
 ```
 
-## 7. Coverage and hygiene (ZD-020 to ZD-023)
+## 7. Coverage and hygiene (ZD-020 to ZD-024)
 
 ```bash
 set -eu

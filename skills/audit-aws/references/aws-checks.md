@@ -49,13 +49,13 @@ One permanent ID per check. IDs never change or get reused; retired checks keep 
 | AWS-041 | Uptime and availability | ALB/NLB target-group health check configured and probed live | high |
 | AWS-042 | Uptime and availability | Synthetics canaries, where used, carry a failure alarm | medium |
 | AWS-043 | Uptime and availability | No health check or canary watches a dead or migrated target | medium |
-| AWS-050 | Log forwarding and account-level observability | Central log forwarding for critical log groups, or absence recorded | high |
-| AWS-051 | Log forwarding and account-level observability | Finite retention set on critical log groups | medium |
-| AWS-052 | Log forwarding and account-level observability | CloudTrail enabled account-wide, multi-region trail | high |
-| AWS-053 | Log forwarding and account-level observability | AWS Config recorder on | medium |
-| AWS-054 | Log forwarding and account-level observability | VPC Flow Logs enabled for VPCs carrying critical workloads | medium |
-| AWS-055 | Log forwarding and account-level observability | Central-sink and retention decision evidenced by an authoritative record and named owner | low |
-| AWS-056 | Log forwarding and account-level observability | No CloudWatch Logs anomaly detector stuck in FAILED or PAUSED | medium |
+| AWS-050 | Log forwarding, retention, and account-level observability | Central log forwarding for critical log groups, or absence recorded | high |
+| AWS-051 | Log forwarding, retention, and account-level observability | Finite retention set on critical log groups | medium |
+| AWS-052 | Log forwarding, retention, and account-level observability | CloudTrail enabled account-wide, multi-region trail | high |
+| AWS-053 | Log forwarding, retention, and account-level observability | AWS Config recorder on | medium |
+| AWS-054 | Log forwarding, retention, and account-level observability | VPC Flow Logs enabled for VPCs carrying critical workloads | medium |
+| AWS-055 | Log forwarding, retention, and account-level observability | Central-sink and retention decision evidenced by an authoritative record and named owner | low |
+| AWS-056 | Log forwarding, retention, and account-level observability | No CloudWatch Logs anomaly detector stuck in FAILED or PAUSED | medium |
 | AWS-060 | Alerting coverage and configuration | Paging alarms debounce single datapoints via M-of-N (DatapointsToAlarm < EvaluationPeriods) or an adequate Period | medium |
 | AWS-061 | Alerting coverage and configuration | No paging alarm pages on data gaps or thin percentile samples (TreatMissingData not breaching, InsufficientDataActions not on a paging topic, EvaluateLowSampleCountPercentile=ignore) | medium |
 | AWS-062 | Alerting coverage and configuration | No paging alarm flaps across the 30-day StateUpdate history | medium |

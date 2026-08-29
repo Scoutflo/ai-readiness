@@ -18,23 +18,23 @@ One permanent ID per check. IDs never change or get reused; retired checks keep 
 
 | ID | Category | Check | Typical fail severity |
 | --- | --- | --- | --- |
-| GC-001 | Firing hygiene | `evaluationInterval.pendingFor` set (not `0s`/empty) so a monitor does not fire on a transient blip | high |
-| GC-002 | Firing hygiene | `model.thresholds.customResolveThreshold` present where a monitor sits near a boundary (hysteresis) | medium |
-| GC-003 | Firing hygiene | `autoResolve` true where the condition can clear, so issues self-close | medium |
-| GC-004 | Firing hygiene | `noDataState` deliberate; not `Alerting` on no-data where empty results are normal | medium |
-| GC-005 | Firing hygiene | `executionErrorState` deliberate; not `Alerting` on a flaky query, not masking broken queries at scale | medium |
+| GC-001 | Monitor firing hygiene | `evaluationInterval.pendingFor` set (not `0s`/empty) so a monitor does not fire on a transient blip | high |
+| GC-002 | Monitor firing hygiene | `model.thresholds.customResolveThreshold` present where a monitor sits near a boundary (hysteresis) | medium |
+| GC-003 | Monitor firing hygiene | `autoResolve` true where the condition can clear, so issues self-close | medium |
+| GC-004 | Monitor firing hygiene | `noDataState` deliberate; not `Alerting` on no-data where empty results are normal | medium |
+| GC-005 | Monitor firing hygiene | `executionErrorState` deliberate; not `Alerting` on a flaky query, not masking broken queries at scale | medium |
 | GC-010 | Notification noise | `renotificationInterval` sane or `disableRenotification` true, so a firing issue does not repeat-page every cycle | medium |
 | GC-011 | Notification noise | `statusFilters` deliberate; `Resolved` on high-churn monitors is resolve-noise | low |
 | GC-012 | Notification noise | `method` not `noNotifications` where it should page, and `connectedApps` route-bypass not used at scale | medium |
 | GC-013 | Notification noise | Every paging monitor resolves to a destination (not detect-but-page-nobody) | high |
 | GC-014 | Notification noise | No duplicate/overlapping monitors on the same target routing to the same destination (groundcover has no native dedup, so each duplicate is a separate page) — **verify-pending** | medium |
-| GC-020 | Health/silences | `isPaused` monitors judged against intent (a paused live-SLO monitor is a coverage gap) | medium |
-| GC-021 | Health/silences | No open-ended or blanket recurring silence (a broad permanent matcher is a standing blackout) | high |
-| GC-022 | Health/silences | No monitor stuck permanently firing or in evaluation error (runtime-state-gated) | high |
-| GC-023 | Health/silences | No monitor fully silenced with no end (runtime-state-gated) | medium |
-| GC-030 | Coverage/liveness | Workflow-backed destinations live (no `invalid`, error status, or `installed:false`) | high |
-| GC-031 | Coverage/liveness | `severity` set and used, not every monitor at one level | low |
-| GC-032 | Coverage/liveness | Critical services from topology each covered by at least one evaluating monitor | high |
+| GC-020 | Monitor health and silences | `isPaused` monitors judged against intent (a paused live-SLO monitor is a coverage gap) | medium |
+| GC-021 | Monitor health and silences | No open-ended or blanket recurring silence (a broad permanent matcher is a standing blackout) | high |
+| GC-022 | Monitor health and silences | No monitor stuck permanently firing or in evaluation error (runtime-state-gated) | high |
+| GC-023 | Monitor health and silences | No monitor fully silenced with no end (runtime-state-gated) | medium |
+| GC-030 | Coverage and destination liveness | Workflow-backed destinations live (no `invalid`, error status, or `installed:false`) | high |
+| GC-031 | Coverage and destination liveness | `severity` set and used, not every monitor at one level | low |
+| GC-032 | Coverage and destination liveness | Critical services from topology each covered by at least one evaluating monitor | high |
 
 ## 3. Target profile
 
