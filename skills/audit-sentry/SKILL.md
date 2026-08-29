@@ -1,6 +1,6 @@
 ---
 name: audit-sentry
-description: 'Read-only scored audit of your Sentry org: project privacy scrubbing, alert rule tiers and receiver liveness, integrations, releases and source maps, and cron/uptime monitors; writes findings.json and report.md, changes nothing. Use when the user mentions auditing or scoring Sentry, Sentry alert rules or receivers, privacy scrubbing or PII, source maps, release health, or cron/uptime monitors, or asks whether Sentry paging actually works. Do not use for Sentry data in Grafana dashboards (use audit-grafana), for metrics/logs/traces backends (use audit-lgtm), for the Alertmanager paging path (use audit-alert-routing), or to change anything (use setup-sentry).'
+description: 'Read-only scored audit of your Sentry org: project privacy scrubbing, alert rule tiers and receiver liveness, integrations, releases and source maps, and cron/uptime monitors; writes findings.json and report.md, changes nothing. Use when the user mentions auditing or scoring Sentry, Sentry alert rules or receivers, privacy scrubbing or PII, source maps, release health, or cron/uptime monitors, or asks whether Sentry paging actually works. Do not use for Sentry data in Grafana dashboards (use audit-grafana), for metrics/logs/traces backends (use audit-lgtm), for the Alertmanager paging path (use audit-alertmanager), or to change anything (use setup-sentry).'
 ---
 
 # Audit Sentry
@@ -16,7 +16,7 @@ This audit owns the Sentry account layer: org and team structure, project invent
 - **Multiple Sentry targets, one run:** `sentry` may be a single block (one `host`/`org`/`token_env`) or a **list of labeled targets**, each with its own `host`, `org`, and `token_env`. The audit **iterates every target** — enumerate them with `sh "${CLAUDE_PLUGIN_ROOT}/report-standard/toolkit-targets.sh" <cfg> sentry labels` and run the full sequence below once per target with `SCOUTFLO_TARGET=<label>` set. Output goes to `sentry/<label>/<date>/` for a list, or the flat `sentry/<date>/` for a single block. Every API call resolves and uses the target's own `host`, `org`, and token (`token_env` names the variable holding the secret); the ambient values are never assumed.
 - Grafana dashboards that display Sentry data belong to `audit-grafana`.
 - Metrics, logs, and traces backends belong to `audit-lgtm`. A backend service absent from Sentry is not automatically a gap when your metrics and logs stack owns backend incidents by decision; record the boundary and score against the owning tool.
-- The Alertmanager paging path belongs to `audit-alert-routing`. Here you judge Sentry's own alert wiring and flag unproven routes.
+- The Alertmanager paging path belongs to `audit-alertmanager`. Here you judge Sentry's own alert wiring and flag unproven routes.
 - Every fix points at `setup-sentry`, which also holds SDK instrumentation guidance.
 
 **Read-only, absolutely.** Every call in this audit is a GET; verb and effect align, there are no read-only POSTs in this surface. No test events, no envelope seeding, no test notifications, no rule edits, no state creation of any kind. Even one "test" event mutates the org: it can create issues, seed environments, and page people. Event seeding and delivery tests live in `setup-sentry` behind its confirmation gate.

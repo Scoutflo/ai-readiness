@@ -1,6 +1,6 @@
 ---
 name: audit-signoz
-description: Read-only scored audit of a SigNoz observability deployment (OpenTelemetry-native metrics/traces/logs on ClickHouse): telemetry coverage for critical services, ingestion freshness, per-signal retention TTL, ClickHouse backend health, alert rules that evaluate and route to a live channel, dashboards, and security posture; writes findings.json and report.md and changes nothing. Use when the user mentions auditing or scoring SigNoz, SigNoz alert rules or channels, the signoz_traces/signoz_logs/signoz_metrics ClickHouse databases, OTel telemetry ingestion freshness, SigNoz retention/TTL, or whether a SigNoz alert reaches a human. Do not use for HyperDX-fronted ClickStack (use audit-clickstack), for Grafana-fronted LGTM/VictoriaMetrics (use audit-lgtm), to prove an Alertmanager page reaches a human (use audit-alert-routing), or to change SigNoz.
+description: Read-only scored audit of a SigNoz observability deployment (OpenTelemetry-native metrics/traces/logs on ClickHouse): telemetry coverage for critical services, ingestion freshness, per-signal retention TTL, ClickHouse backend health, alert rules that evaluate and route to a live channel, dashboards, and security posture; writes findings.json and report.md and changes nothing. Use when the user mentions auditing or scoring SigNoz, SigNoz alert rules or channels, the signoz_traces/signoz_logs/signoz_metrics ClickHouse databases, OTel telemetry ingestion freshness, SigNoz retention/TTL, or whether a SigNoz alert reaches a human. Do not use for HyperDX-fronted ClickStack (use audit-clickstack), for Grafana-fronted LGTM/VictoriaMetrics (use audit-lgtm), to prove an Alertmanager page reaches a human (use audit-alertmanager), or to change SigNoz.
 ---
 
 # audit-signoz
@@ -299,7 +299,7 @@ Record what exists (rules, channels, dashboards, tables, row/byte counts, users)
 
 ## Phase 3: Tool ownership boundary
 
-SigNoz owns backend telemetry (logs, metrics, traces) and its own alerting via its bundled Alertmanager and channels. It does **not** own frontend error tracking (that is `/scoutflo:audit-sentry`) or an external paging tree fronted by PagerDuty routing depth (`/scoutflo:audit-pagerduty`), or a separate Prometheus/Alertmanager stack's routing tree (`/scoutflo:audit-alert-routing`). A signal absent from SigNoz because another tool owns it is a boundary decision, not a gap; record the boundary and audit the owning stack.
+SigNoz owns backend telemetry (logs, metrics, traces) and its own alerting via its bundled Alertmanager and channels. It does **not** own frontend error tracking (that is `/scoutflo:audit-sentry`) or an external paging tree fronted by PagerDuty routing depth (`/scoutflo:audit-pagerduty`), or a separate Prometheus/Alertmanager stack's routing tree (`/scoutflo:audit-alertmanager`). A signal absent from SigNoz because another tool owns it is a boundary decision, not a gap; record the boundary and audit the owning stack.
 
 ## Phase 4: Telemetry coverage (SIG-010) and ingestion freshness (SIG-011)
 
@@ -471,7 +471,7 @@ Every row traces to a raw object read this run; an empty estate is `items: []` w
 | Finding area | Fix location today |
 | --- | --- |
 | Unbounded or too-short retention on a signal (SIG-020) | SigNoz UI: Settings → General (Retention Period) per signal, or the settings TTL API — set a deliberate TTL per traces/metrics/logs |
-| Alert rule missing, or wired to no live channel (SIG-040) | SigNoz UI: Alerts → the rule → Notification Channels; Settings → Alert Channels to create/repair a channel; deep paging-path proof lives in `/scoutflo:audit-alert-routing` |
+| Alert rule missing, or wired to no live channel (SIG-040) | SigNoz UI: Alerts → the rule → Notification Channels; Settings → Alert Channels to create/repair a channel; deep paging-path proof lives in `/scoutflo:audit-alertmanager` |
 | No notification channel configured at all (SIG-040) | SigNoz UI: Settings → Alert Channels — add a Slack/webhook/PagerDuty/email channel and bind it to the rules |
 | Missing telemetry / stalled ingestion for a critical service (SIG-010, SIG-011) | Fix the OTel collector target and pipeline (the SigNoz collector config / the app's OTLP exporter endpoint on 4317/4318); instrumentation gaps get a named owner |
 | Missing dashboard for a critical service (SIG-041) | SigNoz UI: Dashboards → New Dashboard (or import a service dashboard) for the uncovered service |

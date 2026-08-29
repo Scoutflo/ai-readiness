@@ -1,6 +1,6 @@
 ---
 name: audit-aws
-description: Read-only scored audit of AWS observability (CloudWatch alarms, SNS routing, EC2/ECS/EKS/Lambda compute health, RDS/Aurora/DocumentDB, Route53/ELB uptime, log forwarding) that also reports a separate non-scored Cost & Resource Optimization section from Compute Optimizer, Cost Explorer, and Trusted Advisor; writes findings.json and report.md and changes nothing. Use when the user mentions auditing or scoring AWS observability, CloudWatch alarms, SNS alert delivery, managed-database resilience or backups, or AWS cost/rightsizing findings. Do not use for Alertmanager routing proof on a self-hosted stack (use audit-alert-routing), for in-cluster LGTM or Grafana on EKS (use audit-lgtm or audit-grafana), or to change AWS resources (use setup-aws).
+description: Read-only scored audit of AWS observability (CloudWatch alarms, SNS routing, EC2/ECS/EKS/Lambda compute health, RDS/Aurora/DocumentDB, Route53/ELB uptime, log forwarding) that also reports a separate non-scored Cost & Resource Optimization section from Compute Optimizer, Cost Explorer, and Trusted Advisor; writes findings.json and report.md and changes nothing. Use when the user mentions auditing or scoring AWS observability, CloudWatch alarms, SNS alert delivery, managed-database resilience or backups, or AWS cost/rightsizing findings. Do not use for Alertmanager routing proof on a self-hosted stack (use audit-alertmanager), for in-cluster LGTM or Grafana on EKS (use audit-lgtm or audit-grafana), or to change AWS resources (use setup-aws).
 ---
 
 # audit-aws
@@ -13,7 +13,7 @@ Two axes, scored differently on purpose: reliability and readiness (the six cate
 
 **Multiple accounts, one run:** `aws` may be a single block (one account, with an optional `profile`/`region`) or a **list of labeled targets**, each with its own optional `profile`, optional `account_id`, and `region`. The audit **iterates every target** — enumerate them with `sh "${CLAUDE_PLUGIN_ROOT}/report-standard/toolkit-targets.sh" <cfg> aws labels` and run the full sequence below once per target with `SCOUTFLO_TARGET=<label>` set. Output goes to `aws/<label>/<date>/` for a list, or the flat `aws/<date>/` for a single block. Every `aws` call names its target's own `--profile`/`--region` explicitly (resolved from that target, never a hand-typed value); the ambient `AWS_PROFILE`/`AWS_DEFAULT_REGION` is never read, and `aws configure` is never run.
 
-Out of scope: Alertmanager-style routing proof for a self-hosted stack belongs to `/scoutflo:audit-alert-routing`; if your workloads run on EKS with an in-cluster LGTM or Grafana stack, that layer belongs to `/scoutflo:audit-lgtm` and `/scoutflo:audit-grafana`. This audit covers the AWS-managed plane and states the split so a green AWS score never implies in-cluster coverage.
+Out of scope: Alertmanager-style routing proof for a self-hosted stack belongs to `/scoutflo:audit-alertmanager`; if your workloads run on EKS with an in-cluster LGTM or Grafana stack, that layer belongs to `/scoutflo:audit-lgtm` and `/scoutflo:audit-grafana`. This audit covers the AWS-managed plane and states the split so a green AWS score never implies in-cluster coverage.
 
 Run this standalone, from `/scoutflo:audit-all`, or on a schedule via `/scoutflo:schedule-audits`.
 

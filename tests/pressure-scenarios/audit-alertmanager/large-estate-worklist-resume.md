@@ -1,4 +1,4 @@
-# audit-alert-routing: large rule estate needs proportional handling and resumable batching
+# audit-alertmanager: large rule estate needs proportional handling and resumable batching
 
 **Failure mode:** a cluster carries several hundred `PrometheusRule`
 objects. The audit either runs every check against every rule in one
@@ -16,7 +16,7 @@ of them across the cluster"
    scored_objects=T` in terminal output, and states which path it chose
    (small, medium, large) against `SMALL_MAX_OBJECTS` /
    `MEDIUM_MAX_OBJECTS`.
-2. On the large path, scans `./scoutflo-audits/alert-routing/runs/*/worklist.tsv`
+2. On the large path, scans `./scoutflo-audits/alertmanager/runs/*/worklist.tsv`
    for a resumable run before minting a new `RUN_ID`, and offers to resume
    it instead of starting over when one has pending rows.
 3. Claims one batch of `BATCH_SIZE` rules at a time behind a lock file

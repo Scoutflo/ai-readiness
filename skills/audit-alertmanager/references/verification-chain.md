@@ -97,7 +97,9 @@ Expect: a resolvable A/CNAME record, and both probes returning `200` **with a re
 
 A `401`/`403` on a deployment where the doctor gate reported the token as present means the token's scope, not its existence, is the problem; say so explicitly in the finding text.
 
-## 3. Rule presence (ALR-001)
+## 3. Rule discovery (non-scored input — rule presence retired `ALR-001` → `/scoutflo:audit-prometheus` PROM-022)
+
+> **Retired as a scored check (v0.1.158):** rule **presence** is now `/scoutflo:audit-prometheus` (PROM-022). The commands below are kept as **non-scored input** — audit-alertmanager reads the live rules only to map each firing alert to its route; the presence *verdict* is audit-prometheus's. Where the text below says "the ALR-001 finding", read it as "the rule-presence gap audit-prometheus owns (PROM-022)".
 
 Two-step discipline: try the names you expect, then fall back to live discovery by label. Never assume a name from a manifest survived renames.
 
@@ -416,13 +418,13 @@ Lessons folded into the check catalog:
 
 ## 12. Large-path worklist: alert rule batches
 
-Only runs on the large path from [SKILL.md's Estate sizing section](../SKILL.md#estate-sizing). Follows the run-ID keying, resume, and locking rules in [skill-authoring-conventions.md](../../../docs/skill-authoring-conventions.md#large-path-worklists-run-id-keying-resume-and-locking); this section is the alert-routing-specific application, batching alert rules (the unit Phase 3 and Phase 7 both process per-item).
+Only runs on the large path from [SKILL.md's Estate sizing section](../SKILL.md#estate-sizing). Follows the run-ID keying, resume, and locking rules in [skill-authoring-conventions.md](../../../docs/skill-authoring-conventions.md#large-path-worklists-run-id-keying-resume-and-locking); this section is the alertmanager-specific application, batching alert rules (the unit Phase 3 and Phase 7 both process per-item).
 
 Before minting a new run, scan for one to resume:
 
 ```bash
 set -eu
-TARGET="alert-routing"
+TARGET="alertmanager"
 AUDIT_ROOT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${TARGET}"
 
 resumable=""
@@ -446,7 +448,7 @@ If nothing is resumable, mint a run and seed the worklist with one row per selec
 
 ```bash
 set -eu
-TARGET="alert-routing"
+TARGET="alertmanager"
 AUDIT_ROOT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${TARGET}"
 RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)"
 RUN_DIR="${AUDIT_ROOT}/runs/${RUN_ID}"
@@ -463,7 +465,7 @@ Claim and process one batch, with a lock so two invocations never double-claim:
 
 ```bash
 set -eu
-RUN_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/alert-routing/runs/20260717T140500Z"   # example; the resolved run directory
+RUN_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/alertmanager/runs/20260717T140500Z"   # example; the resolved run directory
 BATCH_SIZE="20"                # matches SKILL.md's Estate sizing default; tune to your environment
 LOCK_STALE_MINUTES="30"        # example, tune to your batch size and expected run length
 LOCK="${RUN_DIR}/worklist.lock"
@@ -504,7 +506,7 @@ Rules specific to this skill's large path:
 - State the batch progress in terminal output every time: `echo "batch complete; remaining: N"` above is not optional flavor text, it is how a human or the next invocation knows whether to resume.
 
 ❌ Started a fresh run directory every invocation without checking for a pending worklist, so a run interrupted at rule 140 of 300 restarts from rule 1 on the next invocation.
-✅ Scanned `./scoutflo-audits/alert-routing/runs/*/worklist.tsv` first, found one with 160 rows still `pending`, and resumed it instead of minting a new `RUN_ID`.
+✅ Scanned `./scoutflo-audits/alertmanager/runs/*/worklist.tsv` first, found one with 160 rows still `pending`, and resumed it instead of minting a new `RUN_ID`.
 
 
 ## 13. Alert hygiene: range queries and config reads (ALR-012 to ALR-020)
@@ -740,11 +742,13 @@ curl -s -H "$AUTH" "${AM_URL}/api/v2/status" \
 echo "flag: each hit is an ALR-020 finding (medium) — migrate that receiver to msteamsv2_configs; the Office 365 connector msteams_configs relies on is being retired"
 ```
 
-## 14. Rule-evaluation health, live suppression, and page timing (ALR-021, ALR-022, ALR-023)
+## 14. Live suppression and page timing (ALR-022, ALR-023) — with retired rule-eval-health context (ALR-021 → audit-prometheus)
 
-Three checks that everything above can pass while the page still never lands: a rule that is *loaded* (ALR-001) but errors every evaluation; a paging alert that is firing but *suppressed right now*; and a route that pages, but late or muted at this clock. All read-only, all proven live against the benchmark (Prometheus + vmalert + Alertmanager).
+Two live checks (ALR-022, ALR-023) that everything above can pass while the page still never lands — a paging alert that is firing but *suppressed right now*, and a route that pages but late or muted at this clock — plus **non-scored context** on rule-evaluation health (retired `ALR-021`, now `/scoutflo:audit-prometheus` PROM-020/021). All read-only, proven live against the benchmark (Prometheus + vmalert + Alertmanager).
 
-### 14.1 Rule-evaluation health (ALR-021)
+### 14.1 Rule-evaluation health (retired `ALR-021` → `/scoutflo:audit-prometheus` PROM-020/021 — non-scored context)
+
+> **Retired as a scored check (v0.1.158):** rule-evaluation **health** is now `/scoutflo:audit-prometheus` (PROM-020/021). Kept here as context for the suppression (ALR-022) and page-timing (ALR-023) checks that follow — a rule that evaluates cleanly can still be suppressed or delayed at the routing layer, which is this audit's job. audit-alertmanager does not score rule-evaluation health.
 
 `/api/v1/rules` `health`/`lastError` is the **primary, engine-agnostic** signal — both Prometheus and vmalert expose it. The self-metric confirmation is **engine-gated**, because the metric names differ:
 
@@ -771,7 +775,7 @@ curl -s -G -H "$AUTH" --data-urlencode 'query=(prometheus_rule_group_last_durati
 curl -s "${VMALERT_URL}/metrics" | grep -E '^vmalert_(execution_errors_total|alerting_rules_errors_total|recording_rules_errors_total)' || true
 ```
 
-Fail (ALR-021, high): a rule is loaded but `health!="ok"` or carries a `lastError` — it has fired zero times and never will until the expression is fixed. Join each to its topology service and read `.labels.severity`: "`CheckoutErrorBudgetBurn` is loaded but `health=err lastError=\"vector cannot contain metrics with the same labelset\"` — checkout has a paging rule that has fired zero times." Blast radius is the count of paging rules with `health!=ok` and the count of critical services thereby left with a dead rule. An empty self-metric result **on the wrong engine** is `not observable`, never `healthy` — state which engine was detected. Remediation: fix the named rule's expression (the planned alert-rule setup skill owns this; today, point at the rule and the error).
+Context (retired `ALR-021` → `/scoutflo:audit-prometheus` PROM-020/021 — **not scored here**): a rule can be *loaded* yet have `health!="ok"` or a `lastError`, so it has fired zero times and never will until the expression is fixed — e.g. "`CheckoutErrorBudgetBurn` loaded but `health=err`". `/scoutflo:audit-prometheus` scores that (PROM-020/021, with the same blast-radius reasoning — count of paging rules with `health!=ok` and the critical services left with a dead rule); `audit-alertmanager` consumes the verdict as a precondition and never emits an `ALR-021` finding. It matters to §14.2/§14.3 because a rule that evaluates cleanly can *still* be suppressed or delayed at the routing layer — which is exactly what ALR-022/ALR-023 below check. (An empty self-metric result **on the wrong engine** is `not observable`, never `healthy` — state which engine was detected when reading this as input.)
 
 ### 14.2 Live suppression of a paging alert (ALR-022)
 

@@ -4,8 +4,8 @@ Runnable, read-only checks for every surface the [audit-prometheus](../SKILL.md)
 
 ## 1. Conventions
 
-- The HTTP API paths below (`/api/v1/status/{buildinfo,runtimeinfo,flags,tsdb,config}`, `/api/v1/{targets,rules,alerts,alertmanagers,query,label/<name>/values}`, `/-/healthy`, `/-/ready`) are the **stable, documented Prometheus 2.x / 3.x API**. The rule-health (`/api/v1/rules`), target (`/api/v1/targets`), and sample-age (`time() - timestamp(up)`) reads were **confirmed on live reads** (as part of audit-lgtm / audit-alert-routing on the benchmark Prometheus). Anything marked **confirm-live** — the exact self-metric set exposed by *your* build, and whether a metric exists at all — must be resolved from the live `/metrics` or an instant query this run, never assumed. Never invent a metric, label, or endpoint.
-- **Same server, three planes:** `prometheus.url` is a shared backend. This audit reads the *server + rule-engine* plane. `audit-lgtm` reads the *stores* (Loki/Tempo/Mimir/VictoriaMetrics) plane over their own URLs; `audit-alert-routing` reads the *Alertmanager* plane over `prometheus.alertmanager_url`. Do not read the Alertmanager API or a store's API from here.
+- The HTTP API paths below (`/api/v1/status/{buildinfo,runtimeinfo,flags,tsdb,config}`, `/api/v1/{targets,rules,alerts,alertmanagers,query,label/<name>/values}`, `/-/healthy`, `/-/ready`) are the **stable, documented Prometheus 2.x / 3.x API**. The rule-health (`/api/v1/rules`), target (`/api/v1/targets`), and sample-age (`time() - timestamp(up)`) reads were **confirmed on live reads** (as part of audit-lgtm / audit-alertmanager on the benchmark Prometheus). Anything marked **confirm-live** — the exact self-metric set exposed by *your* build, and whether a metric exists at all — must be resolved from the live `/metrics` or an instant query this run, never assumed. Never invent a metric, label, or endpoint.
+- **Same server, three planes:** `prometheus.url` is a shared backend. This audit reads the *server + rule-engine* plane. `audit-lgtm` reads the *stores* (Loki/Tempo/Mimir/VictoriaMetrics) plane over their own URLs; `audit-alertmanager` reads the *Alertmanager* plane over `prometheus.alertmanager_url`. Do not read the Alertmanager API or a store's API from here.
 - **Auth:** Prometheus has no native authz. Every call sends `Accept: application/json`, or `Authorization: Bearer <token>` when `prometheus.token_env` names a set variable. A `401`/`403` on `/api/v1/*` is an auth-scope problem (token missing/wrong), not a missing-rules or fleet-down problem. A `200` with an HTML body is an SSO/reverse-proxy/login page in front of the API — fail closed, never credit it.
 - **Engine detection (rule + remote-write metrics differ by engine):** before reading a `prometheus_*` self-metric, detect the engine. Prometheus exposes `prometheus_build_info` and `prometheus_rule_*`; vmalert exposes `vmalert_*` and `vm_app_version` and has **no** `prometheus_rule_group_interval_seconds` analog; the Mimir ruler exposes `cortex_*`. An empty self-metric result **on the wrong engine** is `not observable`, never `healthy` — state which engine was detected.
 - Presence-check tokens only; never echo, log, or write a secret value anywhere. A scrape target's `scrapeUrl`, an Alertmanager URL, or a remote-write queue URL can embed credentials in userinfo — record host/job/class only (loopback / private / public / placeholder), never the full URL.
@@ -58,7 +58,7 @@ One permanent ID per check. IDs never change or get reused; retired checks keep 
 | PROM-020 | Rule-engine | Rules load and evaluate error-free — no `health != "ok"` and no non-empty `lastError` | high |
 | PROM-021 | Rule-engine | Rules evaluate on time — no group `evaluationTime > interval`, no `prometheus_rule_evaluation_failures_total` increase | medium |
 | PROM-022 | Rule-engine | Rules are backed by live metrics — each critical alerting rule's query metric returns data now; expected rules exist (rule presence) | high |
-| PROM-023 | Rule-engine | Notify path live — `/api/v1/alertmanagers` has an active AM and `prometheus_notifications_dropped_total` is flat (the Prometheus→AM hop; routing itself is audit-alert-routing) | high |
+| PROM-023 | Rule-engine | Notify path live — `/api/v1/alertmanagers` has an active AM and `prometheus_notifications_dropped_total` is flat (the Prometheus→AM hop; routing itself is audit-alertmanager) | high |
 | PROM-030 | TSDB | Cardinality — no runaway `labelValueCountByLabelName` / `seriesCountByMetricName` driven by IDs/emails/URLs | medium |
 | PROM-031 | TSDB | WAL + compaction integrity — no `wal_corruptions_total`, no `compactions_failed_total` increase, no failed truncations/reloads | high |
 | PROM-032 | TSDB | Head-series churn + growth — `head_series` and `rate(head_series_created_total[..])` not exploding relative to a flat total | medium |
@@ -228,7 +228,7 @@ pq "/api/v1/rules" | jq -r '.data.groups[].rules[]
 - **Finding (PROM-022, high):** a rule whose query metric returns `0`/empty is dead — name the rule, the missing metric, and the critical service; chain it to the metric's scrape (PROM-011) and, if that scrape is down, to PROM-010. A critical service with no paging rule at all is a presence gap. Remediation inline (fix the *scrape* of the metric — then confirm `count(<metric>) > 0` and the rule's `health` returns to `ok` — or author the missing rule).
 - **Forbidden:** GET only.
 
-### PROM-023 — the notify path is live (the seam with audit-alert-routing)
+### PROM-023 — the notify path is live (the seam with audit-alertmanager)
 
 ```bash
 # Does Prometheus have a live Alertmanager to send to, and is it dropping notifications?
@@ -238,7 +238,7 @@ pqq 'prometheus_notifications_queue_length / prometheus_notifications_queue_capa
 ```
 
 - **Healthy target:** at least one **active** Alertmanager, `dropped_notifications/1h == 0`, queue fill well below `1`.
-- **Finding (PROM-023, high):** zero active Alertmanagers means a firing rule pages nobody (Prometheus has nowhere to send); a rising `prometheus_notifications_dropped_total` or a saturated queue means notifications are being dropped before they leave Prometheus. This is the **seam**: PROM-023 proves only the Prometheus→Alertmanager hop exists and is not dropping — the routing tree, silences, receivers, and delivery to a human are `/scoutflo:audit-alert-routing`. If there are no alerting rules and no configured Alertmanager, PROM-023 is `not-in-scope`, not a fail. Remediation inline (configure `alerting.alertmanagers`, confirm the AM lists active).
+- **Finding (PROM-023, high):** zero active Alertmanagers means a firing rule pages nobody (Prometheus has nowhere to send); a rising `prometheus_notifications_dropped_total` or a saturated queue means notifications are being dropped before they leave Prometheus. This is the **seam**: PROM-023 proves only the Prometheus→Alertmanager hop exists and is not dropping — the routing tree, silences, receivers, and delivery to a human are `/scoutflo:audit-alertmanager`. If there are no alerting rules and no configured Alertmanager, PROM-023 is `not-in-scope`, not a fail. Remediation inline (configure `alerting.alertmanagers`, confirm the AM lists active).
 - **Forbidden:** GET only.
 
 ## 6. TSDB cardinality and storage (PROM-030, PROM-031, PROM-032)

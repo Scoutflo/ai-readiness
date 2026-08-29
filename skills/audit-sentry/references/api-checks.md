@@ -756,7 +756,7 @@ Permanent IDs. Never renumber, never reuse a retired ID; deltas depend on stabil
 | SNTRY-104 | alert-rules-and-routing | low | Spike Protection is live per production project; readable only indirectly from a `spike_protection` drop reason in stats outcomes, and OFF by default per project on new orgs |
 | SNTRY-105 | alert-rules-and-routing | low | Inbound Data Filters are active on production projects, discarding known-junk events (bots, extensions, localhost) at ingest before they create issues |
 
-Remediation pointers: every SNTRY finding points at `setup-sentry`, anchored to the section that fixes that class of defect (for example `setup-sentry#alert-rule-taxonomy` for SNTRY-001, SNTRY-013, SNTRY-014; `setup-sentry#privacy-gates` for SNTRY-002 and SNTRY-010). SNTRY-005 may alternatively point at `audit-alert-routing` when the receiver in question is Alertmanager-routed rather than a Sentry-native integration.
+Remediation pointers: every SNTRY finding points at `setup-sentry`, anchored to the section that fixes that class of defect (for example `setup-sentry#alert-rule-taxonomy` for SNTRY-001, SNTRY-013, SNTRY-014; `setup-sentry#privacy-gates` for SNTRY-002 and SNTRY-010). SNTRY-005 may alternatively point at `audit-alertmanager` when the receiver in question is Alertmanager-routed rather than a Sentry-native integration.
 
 ## Alert hygiene noise-control checks
 

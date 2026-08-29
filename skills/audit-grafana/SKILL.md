@@ -1,6 +1,6 @@
 ---
 name: audit-grafana
-description: 'Read-only scored audit of the Grafana application layer: datasource health and credentials, dashboard panel semantics (scope-leak and stale-datasource checks), alert rule wiring and receiver delivery, query hygiene, usage and cost visibility; writes findings.json and report.md and changes nothing. Use when the user mentions auditing or scoring Grafana, Grafana dashboards, Grafana alert rules, contact points, notification policies, or panel queries. Do not use for Loki, Tempo, Mimir, or VictoriaMetrics backend health (use audit-lgtm), for proving a page reaches a human (use audit-alert-routing), for Sentry (use audit-sentry), for DigitalOcean (use audit-digitalocean), or for Google Cloud (use audit-gcp).'
+description: 'Read-only scored audit of the Grafana application layer: datasource health and credentials, dashboard panel semantics (scope-leak and stale-datasource checks), alert rule wiring and receiver delivery, query hygiene, usage and cost visibility; writes findings.json and report.md and changes nothing. Use when the user mentions auditing or scoring Grafana, Grafana dashboards, Grafana alert rules, contact points, notification policies, or panel queries. Do not use for Loki, Tempo, Mimir, or VictoriaMetrics backend health (use audit-lgtm), for proving a page reaches a human (use audit-alertmanager), for Sentry (use audit-sentry), for DigitalOcean (use audit-digitalocean), or for Google Cloud (use audit-gcp).'
 ---
 
 # Audit Grafana
@@ -13,7 +13,7 @@ This audit owns the Grafana application layer: datasources, dashboards, Grafana-
 
 - **Multiple Grafana instances, one run:** `grafana` may be a single block (one `url` + `token_env`) or a **list of labeled targets**, each with its own `url` and `token_env`. The audit **iterates every target** — enumerate them with `sh "${CLAUDE_PLUGIN_ROOT}/report-standard/toolkit-targets.sh" <cfg> grafana labels` and run the full sequence below once per target with `SCOUTFLO_TARGET=<label>` set. Output goes to `grafana/<label>/<date>/` for a list, or the flat `grafana/<date>/` for a single block (byte-identical to today). Every network call uses that target's own resolved `url` and token; no ambient default is read.
 - Backend store internals (Loki, Tempo, Mimir, VictoriaMetrics ingestion health, retention config, HA) belong to `audit-lgtm`. This audit reads backends only through Grafana datasources.
-- Proving that a page actually reaches a human end to end belongs to `audit-alert-routing`. Here you inspect wiring and flag unproven routes.
+- Proving that a page actually reaches a human end to end belongs to `audit-alertmanager`. Here you inspect wiring and flag unproven routes.
 - Error-tracker health belongs to `audit-sentry`.
 - Every fix points at `setup-grafana`.
 
@@ -465,7 +465,7 @@ Judge only live JSON. `dashboards/<uid>.json` came from the API this run; if you
 
 ## Phase 4: Alert configuration checks
 
-Inspection only. Do not send test notifications, create silences, or touch state; a routed live test pages real humans and belongs in `setup-grafana` behind its confirmation gate, or in `audit-alert-routing`.
+Inspection only. Do not send test notifications, create silences, or touch state; a routed live test pages real humans and belongs in `setup-grafana` behind its confirmation gate, or in `audit-alertmanager`.
 
 Checks GRAF-050 to GRAF-056, against `alert-rules.json`, `contact-points.json`, and `notification-policies.json` from the raw dump.
 
@@ -520,7 +520,7 @@ The checks:
    ```
 
 5. **Annotations (GRAF-054).** Paging rules need `summary` and `runbook_url` annotations; a page without a runbook link slows the responder at the worst moment.
-6. **Delivery proof (GRAF-055).** A route with no evidence of a live delivery is `configured`, never working. Flag it and point at `audit-alert-routing` for end-to-end proof or `setup-grafana` for a confirmed routed test.
+6. **Delivery proof (GRAF-055).** A route with no evidence of a live delivery is `configured`, never working. Flag it and point at `audit-alertmanager` for end-to-end proof or `setup-grafana` for a confirmed routed test.
 7. **Noise controls (GRAF-056).** Grouping, group wait, and repeat interval left at defaults on high-volume routes predict alert fatigue.
 
 ## Phase 4b: Alert hygiene (noise signals)
@@ -815,7 +815,7 @@ When context is available, apply it per [BUSINESS-CONTEXT-INTEGRATION-v0168.md](
 | Stat presents a capped list's length as a total | Check targets for `limit`/`per_page` parameters; require a native count endpoint or a server-side aggregation |
 | Dashboard for one service silently queries the whole org | Compare every selector and generated URL against the scope the panel title claims |
 | Alerts exist but route nowhere | Walk the policy tree to a real, non-placeholder receiver; missing or fake receivers are critical findings |
-| Audit "tests" a route and pages the on-call | Audits never send notifications; delivery tests live in `setup-grafana` behind confirmation, proof in `audit-alert-routing` |
+| Audit "tests" a route and pages the on-call | Audits never send notifications; delivery tests live in `setup-grafana` behind confirmation, proof in `audit-alertmanager` |
 | Score inflated by object counts | Forty dashboards prove nothing; credit only meaningful queries returning data a responder could act on |
 | Judging a stale export instead of the live object | Re-fetch dashboard JSON by UID this run and judge only that |
 | Blocked reads silently skipped or scored as pass | Record the 403 or timeout as `blocked` evidence; exclude and state whole-category blockage |

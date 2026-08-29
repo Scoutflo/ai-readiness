@@ -356,9 +356,9 @@ Three pairs, written to the formula:
 
 **audit-lgtm**
 
-- Good: `Read-only scored audit of LGTM and VictoriaMetrics observability stacks; writes findings.json and report.md. Use when the user mentions auditing or scoring Loki, Tempo, Mimir, VictoriaMetrics, VictoriaLogs, vmalert, or Alertmanager, or asks whether metrics, logs, traces, or alerting are healthy or production-ready. Do not use for the Grafana application layer (use audit-grafana), for proving alerts reach a human (use audit-alert-routing), or to change anything (use setup-lgtm).`
+- Good: `Read-only scored audit of LGTM and VictoriaMetrics observability stacks; writes findings.json and report.md. Use when the user mentions auditing or scoring Loki, Tempo, Mimir, VictoriaMetrics, VictoriaLogs, vmalert, or Alertmanager, or asks whether metrics, logs, traces, or alerting are healthy or production-ready. Do not use for the Grafana application layer (use audit-grafana), for proving alerts reach a human (use audit-alertmanager), or to change anything (use setup-lgtm).`
 - Bad: `Read-only scored audit of LGTM and VictoriaMetrics observability stacks. Verifies metrics, logs, traces, alert routing, and dashboards per service, then writes findings.json and report.md.`
-- Why: the bad one is accurate but routes poorly. It has no "use when" phrases a user would type and no boundary against audit-grafana or audit-alert-routing, so the router guesses between three siblings that all mention alerting.
+- Why: the bad one is accurate but routes poorly. It has no "use when" phrases a user would type and no boundary against audit-grafana or audit-alertmanager, so the router guesses between three siblings that all mention alerting.
 
 **setup-grafana**
 
@@ -366,7 +366,7 @@ Three pairs, written to the formula:
 - Bad: `Helps with Grafana.`
 - Why: the bad one has no action, no trigger words, no lane, no outputs, no boundaries; the router cannot tell when to fire it and the user cannot tell what it will do to their Grafana.
 
-**audit-alert-routing**
+**audit-alertmanager**
 
 - Good: `Read-only proof that the paging path works and is not drowning in noise: follows each alert rule through Alertmanager routes to a live receiver, scores delivery gaps, and scores alert-hygiene gaps (flapping, permanently-firing rules, missing debounce, missing grouping or inhibition) as findings. Use when the user asks whether alerts actually reach a human, or mentions silent alerts, missed pages, dead receivers, alert noise, alert fatigue, or flapping alerts. Do not use to change routing (use setup-lgtm or setup-grafana) or for a full stack audit (use audit-lgtm).`
 - Bad: `Assess the customer's alerting posture and prepare a remediation proposal with timeline and access requirements.`

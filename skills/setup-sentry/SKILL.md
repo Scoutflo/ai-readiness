@@ -1,6 +1,6 @@
 ---
 name: setup-sentry
-description: Guided hardening of a Sentry org from audit findings. Creates projects, seeds environments, applies privacy scrubbing, wires two-tier alert routing, and configures monitors. States each change, waits for your confirmation, then verifies live. Use when the user asks to fix a SNTRY-NNN finding, wire up Sentry alert routing or integrations (Slack, PagerDuty, GitHub), apply privacy scrubbing or rate-limit hardening, set up releases and source maps, or harden monitor/cron and uptime check-ins. Do not use for Grafana dashboards that display Sentry data (use setup-lgtm or setup-grafana), for proving the Alertmanager paging path reaches a human (use audit-alert-routing), or for read-only assessment (use audit-sentry).
+description: Guided hardening of a Sentry org from audit findings. Creates projects, seeds environments, applies privacy scrubbing, wires two-tier alert routing, and configures monitors. States each change, waits for your confirmation, then verifies live. Use when the user asks to fix a SNTRY-NNN finding, wire up Sentry alert routing or integrations (Slack, PagerDuty, GitHub), apply privacy scrubbing or rate-limit hardening, set up releases and source maps, or harden monitor/cron and uptime check-ins. Do not use for Grafana dashboards that display Sentry data (use setup-lgtm or setup-grafana), for proving the Alertmanager paging path reaches a human (use audit-alertmanager), or for read-only assessment (use audit-sentry).
 disable-model-invocation: true
 ---
 
@@ -28,7 +28,7 @@ Fixes findings from an `audit-sentry` run. Input is one or more finding IDs from
 In scope: the Sentry account layer. Projects, environments, privacy and rate-limit hardening, issue alert rules and their routing, integrations (Slack, PagerDuty, GitHub), releases and source maps, cron and uptime monitors, and the SDK instrumentation notes for your app team. Boundaries:
 
 - Grafana dashboards that display Sentry data belong to `setup-grafana`.
-- The Alertmanager paging path belongs to `audit-alert-routing`; here you judge and fix only Sentry's own alert wiring.
+- The Alertmanager paging path belongs to `audit-alertmanager`; here you judge and fix only Sentry's own alert wiring.
 - Application code changes (installing an SDK, adding an init snippet) happen in your app repo. This skill produces the exact snippet and env vars in `references/sdk-instrumentation.md`; it never touches app code itself.
 
 ## The change protocol

@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.158
+
+`audit-alert-routing` renamed to **`audit-alertmanager`** — release ③ of the metrics/alerting decomposition. The command is now **`/scoutflo:audit-alertmanager`**; it is the standalone deep audit of the **Alertmanager paging path + alert hygiene** (config integrity, routing tree, receivers, grouping/inhibition/silence/mute, the live "does a page reach a human" dispatch proof, and the noise/fatigue checks).
+
+- **Rule-engine plane removed (no double-scoring).** The old **Rule presence** category — `ALR-001` (rule presence) and `ALR-021` (rule-evaluation health) — is **retired**; that plane is now owned by `/scoutflo:audit-prometheus` (`PROM-022` presence, `PROM-020/021` health). This ends the former triple-scoring of rule quality across lgtm / alert-routing / prometheus. The IDs are retired (never reused or renumbered); their freed **weight 15** was redistributed across the six remaining categories (Config integrity 22, Dispatch proof 25, Route matching 18, Alert hygiene 17, Triage metadata 12, Reachability 6 — sum 100). Phase 3 now reads the live rules only as **non-scored input** (to map each firing alert to its route); the presence/health verdict is audit-prometheus's, consumed as a precondition.
+- **`ALR` prefix kept.** No prefix churn — `findings-schema.md` updates only the parenthetical (`ALR (alertmanager)`). All the routing/delivery/hygiene IDs (`ALR-002..020`, `ALR-022/023`) are unchanged.
+- **Rename touchpoints.** The skill dir, its pressure-scenario dir, the command in `start`/`README`/`connect`/`audit-all`/every cross-referencing skill, the two gate exemption lists (`multi-target-parity`, `audit-all-map`), `docs/CONTRACTS.md`, and `AGENTS.md` all move `audit-alert-routing` → `audit-alertmanager`. Output now writes to `scoutflo-audits/alertmanager/<date>/` (was `alert-routing/`), matching the report-standard "target slug = skill name minus prefix" rule; `audit-all`/correlation/render glob target dirs generically, so nothing downstream breaks. `audit-alertmanager` remains the shared-backend exemption it was (reads `prometheus.alertmanager_url` / `victoriametrics.vmalert_url`; no `toolkit.yaml` change).
+- **Verified:** all four repo gates + self-test green; live-verified the paging path against the benchmark Alertmanager + vmalert; an adversarial review confirmed no dangling retired-ID references, no double-scoring seam, and weight reconciliation.
+
 ## 0.1.157
 
 `audit-lgtm` narrowed to the **stores** — release ② of the metrics/alerting decomposition, the follow-through to v0.1.156's `audit-prometheus`. The Prometheus **server + rule-engine plane** now has one owner (`audit-prometheus`); `audit-lgtm` keeps the **metrics stores** (Mimir/VictoriaMetrics) plus logs, traces, per-service coverage, alert routing, dashboards, and reliability.

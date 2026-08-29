@@ -29,7 +29,7 @@ instead of false-greening; a deliberately status-only probe carries a
 resolves its targets through the shared `report-standard/toolkit-targets.sh`
 enumerator and nests output by a resolved `<PREFIX>_SEG` segment, so multiple
 targets of one integration in one environment — 3 HyperDX instances, N Azure
-subscriptions — never collide; shared-backend audits `audit-lgtm`/`audit-alert-routing`/`audit-prometheus`
+subscriptions — never collide; shared-backend audits `audit-lgtm`/`audit-alertmanager`/`audit-prometheus`
 are the documented exemptions), **multi-target-consumer** (the three shared
 aggregators — `correlation-engine`, `cost-analysis`, and the report renderer's
 rollups — must glob the two-level `<integration>/<label>/<date>/` layout as well as

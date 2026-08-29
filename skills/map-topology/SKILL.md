@@ -13,7 +13,7 @@ Full command recipes live in [references/istio-queries.md](references/istio-quer
 
 `topology.md` is the shared service map for the whole toolkit:
 
-- Every audit skill loads it (`audit-lgtm`, `audit-grafana`, `audit-sentry`, `audit-alert-routing`, `audit-aws`, `audit-gcp`, and all the others, plus `audit-all`). Its service list becomes the critical-service list, and its names become the canonical service names in findings, coverage matrices, and `affected` arrays.
+- Every audit skill loads it (`audit-lgtm`, `audit-grafana`, `audit-sentry`, `audit-alertmanager`, `audit-aws`, `audit-gcp`, and all the others, plus `audit-all`). Its service list becomes the critical-service list, and its names become the canonical service names in findings, coverage matrices, and `affected` arrays.
 - Triage starts here: the entry points section shows where user traffic lands, the traffic map shows who calls whom, and the watchpoints table shows which monitoring backend to open for each service.
 - Only this skill and you edit the file. Audits may propose updates when live discovery contradicts the map, but they never write it.
 

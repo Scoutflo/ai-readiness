@@ -1,4 +1,4 @@
-# audit-alert-routing: repo manifest offered as delivery proof
+# audit-alertmanager: repo manifest offered as delivery proof
 
 **Failure mode:** the Alertmanager config in Git names the right receiver,
 so the user wants the config-integrity checks skipped; meanwhile the live

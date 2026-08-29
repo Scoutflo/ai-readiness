@@ -1,4 +1,4 @@
-# audit-alert-routing: receiver renamed on the live destination, invisible to every config layer
+# audit-alertmanager: receiver renamed on the live destination, invisible to every config layer
 
 **Failure mode:** someone renamed the destination channel directly on the
 chat platform, outside of any manifest or Alertmanager config change. The
@@ -12,7 +12,7 @@ pages silently stop arriving.
 
 **Expected behavior:**
 1. States the ground rule from section 11 of
-   [references/verification-chain.md](../../../skills/audit-alert-routing/references/verification-chain.md#11-worked-example-a-receiver-drifted-live-while-the-repo-stayed-correct):
+   [references/verification-chain.md](../../../skills/audit-alertmanager/references/verification-chain.md#11-worked-example-a-receiver-drifted-live-while-the-repo-stayed-correct):
    config-layer agreement is necessary but not sufficient, because a
    receiver can be internally consistent across every layer this audit
    reads and still point at a destination that no longer exists on the
