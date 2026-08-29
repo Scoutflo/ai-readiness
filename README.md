@@ -25,7 +25,7 @@ flowchart TD
     end
 
     subgraph AUDIT["② Audit — read-only, scored 0–100, changes nothing"]
-        aud["18 audit skills: prometheus · lgtm · grafana · sentry · pagerduty · datadog<br/>elk · jsm · zenduty · groundcover · alert-routing<br/>kubernetes · digitalocean · gcp · aws · azure · clickstack · signoz"]
+        aud["18 audit skills: prometheus · lgtm · grafana · sentry · pagerduty · datadog<br/>elk · jsm · zenduty · groundcover · alertmanager<br/>kubernetes · digitalocean · gcp · aws · azure · clickstack · signoz"]
         cost["/scoutflo:audit-cost<br/>deep per-resource cost, ranked savings"]
     end
 
@@ -156,7 +156,7 @@ Then **fully restart** Claude Code / Claude.app so the new skills load — or, i
 1. **`/scoutflo:connect`** — tell it which integrations you use (Grafana, Sentry, PagerDuty, Datadog, ELK/Kibana, JSM Operations, Zenduty, groundcover, Prometheus, DigitalOcean, GCP, AWS, whatever applies). For each one it shows you the exact click-path to create a minimal-scope, read-only credential in that provider's own UI, and the exact command to export it in your own shell. It never asks you to paste a token into the chat, and never runs that command for you.
 2. **`/scoutflo:doctor`** — validates every credential you just set up with one cheap, read-only call per integration. Tells you exactly what's broken and how to fix it if anything is.
 3. **`/scoutflo:map-topology`** (recommended, one time) — builds a real map of your services from Kubernetes/Istio. Once this exists, every audit report uses your actual service names instead of generic ones.
-4. **Run your first audit** — pick whichever matches what you connected: `/scoutflo:audit-prometheus` (the deep **Prometheus** server + rule-engine plane — scrape/`up` coverage, TSDB cardinality, WAL/compaction, remote-write, config reload, rule health), `/scoutflo:audit-lgtm` (the LGTM/VictoriaMetrics stores; pair with `/scoutflo:audit-alert-routing` for the Prometheus→Alertmanager paging path), `/scoutflo:audit-grafana`, `/scoutflo:audit-sentry`, `/scoutflo:audit-pagerduty`, `/scoutflo:audit-datadog`, `/scoutflo:audit-elk`, `/scoutflo:audit-jsm`, `/scoutflo:audit-zenduty`, `/scoutflo:audit-groundcover`, `/scoutflo:audit-alert-routing`, `/scoutflo:audit-digitalocean`, `/scoutflo:audit-gcp`, `/scoutflo:audit-azure`, or `/scoutflo:audit-aws`. Or run everything you've configured at once with `/scoutflo:audit-all`.
+4. **Run your first audit** — pick whichever matches what you connected: `/scoutflo:audit-prometheus` (the deep **Prometheus** server + rule-engine plane — scrape/`up` coverage, TSDB cardinality, WAL/compaction, remote-write, config reload, rule health), `/scoutflo:audit-lgtm` (the LGTM/VictoriaMetrics stores; pair with `/scoutflo:audit-alertmanager` for the Prometheus→Alertmanager paging path), `/scoutflo:audit-grafana`, `/scoutflo:audit-sentry`, `/scoutflo:audit-pagerduty`, `/scoutflo:audit-datadog`, `/scoutflo:audit-elk`, `/scoutflo:audit-jsm`, `/scoutflo:audit-zenduty`, `/scoutflo:audit-groundcover`, `/scoutflo:audit-alertmanager`, `/scoutflo:audit-digitalocean`, `/scoutflo:audit-gcp`, `/scoutflo:audit-azure`, or `/scoutflo:audit-aws`. Or run everything you've configured at once with `/scoutflo:audit-all`.
 5. **Read the report** in `./scoutflo-audits/<target>/<date>/report.md` — a scored, evidence-backed breakdown of what's healthy and what isn't, with a direct pointer to the fix for each finding.
 
 That's it — nothing else is required to get real value out of this.
@@ -195,7 +195,7 @@ Secrets live only in environment variables you export yourself. `~/.scoutflo/too
 | Skill | What it covers |
 | --- | --- |
 | `/scoutflo:audit-prometheus` | **Prometheus** — the deep server + rule-engine plane: scrape targets & `up` coverage/freshness, TSDB cardinality/churn, WAL + compaction integrity, remote-write backlog, config-reload state, and rule health (loaded, on-time, **backed by a live metric**) plus the Prometheus→Alertmanager notify path |
-| `/scoutflo:audit-lgtm` | **Loki, Tempo, Mimir, VictoriaMetrics** store health + per-service telemetry coverage — logs/traces reachability & queryability, the Mimir/VM metrics **stores** (query, multi-tenancy, ingestion freshness, ruler health), retention, and Alertmanager/vmalert routing (the deep **Prometheus** server + rule-engine plane is `audit-prometheus`; the paging-path proof is `audit-alert-routing`) |
+| `/scoutflo:audit-lgtm` | **Loki, Tempo, Mimir, VictoriaMetrics** store health + per-service telemetry coverage — logs/traces reachability & queryability, the Mimir/VM metrics **stores** (query, multi-tenancy, ingestion freshness, ruler health), retention, and Alertmanager/vmalert routing (the deep **Prometheus** server + rule-engine plane is `audit-prometheus`; the paging-path proof is `audit-alertmanager`) |
 | `/scoutflo:audit-clickstack` | **ClickStack** (ClickHouse + HyperDX + OpenTelemetry) — telemetry coverage, ingestion freshness, retention TTL, ClickHouse DB/parts/replica health, HyperDX alerting + dashboards, security posture |
 | `/scoutflo:audit-signoz` | **SigNoz** (ClickHouse-backed, OpenTelemetry-native) — query-API health, telemetry coverage, ingestion freshness, retention TTL, ClickHouse health/capacity, alert-rule→channel delivery, dashboards, security posture |
 | `/scoutflo:audit-grafana` | Dashboard truthfulness, alert-rule wiring, query hygiene, datasource health |
@@ -207,7 +207,7 @@ Secrets live only in environment variables you export yourself. `~/.scoutflo/too
 | `/scoutflo:audit-zenduty` | Zenduty (Xurrent IMR) paging: single-point-of-failure escalations, empty on-call rotations, disabled or deprecated (API-Integration) ingestion, alert-rule and `collation` noise controls (suppress drop-alls, flapping guards, entity_id dedup), open-ended recurring maintenance windows, and unacked aging — with MTTA/MTTR from Zenduty's own analytics, paced against tight per-endpoint rate limits |
 | `/scoutflo:audit-groundcover` | groundcover monitors: per-monitor firing hygiene (`pendingFor` debounce, hysteresis resolve threshold, auto-resolve, no-data and execution-error state), notification noise (re-notification storms, resolve-churn, route-bypass, detect-but-page-nobody), paused monitors and open-ended recurring silences, and dead workflow destinations — honest about groundcover's no-grouping/no-inhibition/no-dedup ceiling |
 | `/scoutflo:audit-kubernetes` | Kubernetes security and configuration: pod security policies, RBAC rules, network policies, resource limits, cluster exposure |
-| `/scoutflo:audit-alert-routing` | Proves an alert actually reaches a human — rule → Alertmanager → receiver, live — and scores **alert noise / alert fatigue**: flapping, permanently-firing rules, missing `for` debounce, missing grouping or inhibition, duplicate delivery, resolve noise |
+| `/scoutflo:audit-alertmanager` | Proves an alert actually reaches a human — rule → Alertmanager → receiver, live — and scores **alert noise / alert fatigue**: flapping, permanently-firing rules, missing `for` debounce, missing grouping or inhibition, duplicate delivery, resolve noise |
 | `/scoutflo:audit-digitalocean` | App Platform, managed databases, uptime checks, alert routing |
 | `/scoutflo:audit-gcp` | Cloud Monitoring, uptime checks, GKE telemetry, logging, load-balancer health |
 | `/scoutflo:audit-azure` | Azure Monitor alerts + action groups, AKS (Container Insights, managed Prometheus), Log Analytics, VM/VMSS, App Gateway/LB; non-scored Azure cost |
@@ -228,7 +228,7 @@ Secrets live only in environment variables you export yourself. `~/.scoutflo/too
 | `/scoutflo:setup-aws` | CloudWatch alarms, SNS routing, log forwarding, account-level observability. Never automates a cost-driven change (resize/delete) — Cost & Resource Optimization findings are always plan-only, a decision for you to make deliberately |
 | `/scoutflo:setup-kubernetes` | Pod Security Admission labels, RBAC tightening, network policies, resource limits, and PodDisruptionBudgets — each announced and confirmed before it's applied |
 
-(No `setup-alert-routing` yet — that's coming; today alert-routing findings point at `setup-lgtm` or `setup-grafana`.)
+(No `setup-alertmanager` yet — that's coming; today alertmanager findings point at `setup-lgtm` or `setup-grafana`.)
 
 ## Reading a report
 

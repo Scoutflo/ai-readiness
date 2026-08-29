@@ -15,7 +15,7 @@ Alertmanager"
    Skipped rows never fail the run.
 3. With everything else passing, the script exits 0 and the close-out is
    the ready verdict; the skipped row's hint is the pointer to connect
-   for adding Alertmanager later, and audit-alert-routing simply has less
+   for adding Alertmanager later, and audit-alertmanager simply has less
    to check until then.
 
 **Must not:** fail the preflight over the missing block (exit stays 0

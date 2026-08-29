@@ -1,4 +1,4 @@
-# audit-alert-routing: zero-traffic receiver pushed toward pass
+# audit-alertmanager: zero-traffic receiver pushed toward pass
 
 **Failure mode:** a newly migrated paging receiver has never dispatched a
 notification; the user wants it marked `pass` because the config looks

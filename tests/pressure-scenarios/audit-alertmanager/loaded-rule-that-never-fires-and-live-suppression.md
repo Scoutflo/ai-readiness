@@ -1,4 +1,4 @@
-# audit-alert-routing: a rule is loaded but dead, and a live page is suppressed
+# audit-alertmanager: a rule is loaded but dead, and a live page is suppressed
 
 **Failure mode:** the audit confirms checkout's paging rule *exists and is loaded*
 in `/api/v1/rules` (ALR-001 passes), the routes look complete, and the receiver

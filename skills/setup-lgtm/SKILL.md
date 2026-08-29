@@ -1,6 +1,6 @@
 ---
 name: setup-lgtm
-description: Guided hardening of LGTM and VictoriaMetrics-family stacks from audit-lgtm findings; fixes alert receivers and routing, retention, HA, ingress exposure, NetworkPolicies, PodDisruptionBudgets, and service-label alignment, announcing each change, waiting for confirmation, then verifying live. Use when the user asks to fix an LGTM-NNN finding, wire or repair Alertmanager or vmalert routing, quiet noisy rules, harden retention or HA, lock down exposed monitoring endpoints, or standardize service labels across metrics, logs, and traces. Do not use for the Grafana application layer such as dashboards or contact points (use setup-grafana), for proving alerts reach a human (use audit-alert-routing), or for read-only assessment (use audit-lgtm).
+description: Guided hardening of LGTM and VictoriaMetrics-family stacks from audit-lgtm findings; fixes alert receivers and routing, retention, HA, ingress exposure, NetworkPolicies, PodDisruptionBudgets, and service-label alignment, announcing each change, waiting for confirmation, then verifying live. Use when the user asks to fix an LGTM-NNN finding, wire or repair Alertmanager or vmalert routing, quiet noisy rules, harden retention or HA, lock down exposed monitoring endpoints, or standardize service labels across metrics, logs, and traces. Do not use for the Grafana application layer such as dashboards or contact points (use setup-grafana), for proving alerts reach a human (use audit-alertmanager), or for read-only assessment (use audit-lgtm).
 disable-model-invocation: true
 ---
 
@@ -355,7 +355,7 @@ End the run with:
 
 1. A summary table: finding ID, change, verification result, remaining risk.
 2. The pending list for items outside this skill's reach (application instrumentation, SDK `service.name`, Git-owned config awaiting merge), each with a named owner.
-3. A fresh `/scoutflo:audit-lgtm` run to re-score; its delta shows which findings moved to fixed. If routing changed, `audit-alert-routing` proves the paging path end to end.
+3. A fresh `/scoutflo:audit-lgtm` run to re-score; its delta shows which findings moved to fixed. If routing changed, `audit-alertmanager` proves the paging path end to end.
 
 ## Common Failure Modes
 

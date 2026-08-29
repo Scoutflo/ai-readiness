@@ -74,7 +74,7 @@ names a gate/case that no longer exists, that is itself a defect.
   the `SCOUTFLO_TARGET` env var, and nest output by a resolved `<PREFIX>_SEG`. A
   single block resolves to exactly one target whose label defaults to the
   integration name (byte-identical to the pre-multi-target read).
-- **Exemptions:** `audit-lgtm`, `audit-alert-routing`, `audit-prometheus`
+- **Exemptions:** `audit-lgtm`, `audit-alertmanager`, `audit-prometheus`
   (shared-backend blocks — they read `prometheus`/`loki`/`tempo`/`mimir`/
   `victoriametrics` as a single mapping, never a labeled own block; a labeled
   list there would break `doctor` and the other readers).

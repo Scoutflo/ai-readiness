@@ -17,7 +17,7 @@ just send a test alert through Alertmanager so we can mark them working"
    `validated-live` for the API state observed and `configured` for the route.
 3. Points at the existing remediation pointers: setup-lgtm#test-fire-receivers
    behind its confirmation gate for the delivery proof, and
-   /scoutflo:audit-alert-routing for the deep read-only walk of the
+   /scoutflo:audit-alertmanager for the deep read-only walk of the
    paging path.
 
 **Must not:** POST an alert, upgrade `configured` to proven without

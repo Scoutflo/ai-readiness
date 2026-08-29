@@ -1,15 +1,15 @@
 ---
-name: audit-alert-routing
-description: Read-only proof that the paging path works and is not drowning in noise; follows each alert rule through Alertmanager routes to a live receiver, scores delivery gaps, and scores alert-hygiene gaps (flapping, permanently-firing rules, missing `for` debounce, missing grouping or inhibition, duplicate delivery, resolve-noise) as findings. Use when the user asks whether alerts reach a human, or mentions the Prometheus/Alertmanager paging path, silent alerts, missed pages, dead receivers, routing trees, mute timings, notification delivery, alert noise, alert fatigue, flapping alerts, or noisy paging. Do not use for a full metrics/logs/traces audit (use audit-lgtm), Grafana-managed alerting (use audit-grafana), error-tracker depth (use audit-sentry), or to change routing (use setup-lgtm or setup-grafana).
+name: audit-alertmanager
+description: Read-only proof that the paging path works and is not drowning in noise; follows each alert rule through Alertmanager routes to a live receiver, scores delivery gaps, and scores alert-hygiene gaps (flapping, permanently-firing rules, missing `for` debounce, missing grouping or inhibition, duplicate delivery, resolve-noise) as findings. Use when the user asks whether alerts reach a human, or mentions the Prometheus/Alertmanager paging path, silent alerts, missed pages, dead receivers, routing trees, mute timings, notification delivery, alert noise, alert fatigue, flapping alerts, or noisy paging. Do not use for a full metrics/logs/traces audit (use audit-lgtm), for rule presence, rule-evaluation health, or the Prometheus server plane (use audit-prometheus), Grafana-managed alerting (use audit-grafana), error-tracker depth (use audit-sentry), or to change routing (use setup-lgtm or setup-grafana).
 ---
 
-# audit-alert-routing
+# audit-alertmanager
 
 Deep, read-only audit of the Prometheus-to-Alertmanager paging path. It answers one question: when a rule fires tonight, does a notification actually leave Alertmanager toward a receiver your team watches? A rule that fires into a dead or drifted receiver is silence with extra steps, and nothing on a dashboard tells you it happened.
 
 The audit walks a fixed verification chain. Each link converts one assumption into evidence:
 
-1. The alert rules you rely on exist live and are loaded by Prometheus.
+1. The alert rules you rely on exist and evaluate — a precondition proven by `/scoutflo:audit-prometheus` (rule presence + health, `PROM-022` / `PROM-020/021`), consumed here as input, not re-scored.
 2. The Alertmanager config you declared is the config that is live, rendered on disk, and running in memory.
 3. Alerts are actually firing, with the labels you think they have.
 4. The route tree resolves those alerts to the intended receiver.
@@ -27,9 +27,9 @@ Run standalone, from `/scoutflo:audit-all`, or on a schedule via `/scoutflo:sche
 
 Outputs, per the [report standard](../../report-standard/README.md):
 
-- `./scoutflo-audits/alert-routing/<YYYY-MM-DD>/findings.json` per the [findings schema](../../report-standard/findings-schema.md)
-- `./scoutflo-audits/alert-routing/<YYYY-MM-DD>/report.md` per the [report template](../../report-standard/report-template.md), including the `## Inventory` section (the `render-report-viz.sh inventory` output)
-- `./scoutflo-audits/alert-routing/<YYYY-MM-DD>/inventory.json` per the [inventory schema](../../report-standard/inventory-schema.md) (`scoutflo-inventory/v1`): the complete Phase-1 catalog — one item per alert rule, Alertmanager receiver, route, and silence — each with its `kind` (`alert_rule`, `receiver`, `route`, `silence`), `covers` (the topology service the alert maps to), `enabled`, `severity` (the object's own, or null), and `routes_to` for alerting objects. Built from the raw pull, never invented; redacted at capture, never a secret value.
+- `./scoutflo-audits/alertmanager/<YYYY-MM-DD>/findings.json` per the [findings schema](../../report-standard/findings-schema.md)
+- `./scoutflo-audits/alertmanager/<YYYY-MM-DD>/report.md` per the [report template](../../report-standard/report-template.md), including the `## Inventory` section (the `render-report-viz.sh inventory` output)
+- `./scoutflo-audits/alertmanager/<YYYY-MM-DD>/inventory.json` per the [inventory schema](../../report-standard/inventory-schema.md) (`scoutflo-inventory/v1`): the complete Phase-1 catalog — one item per alert rule, Alertmanager receiver, route, and silence — each with its `kind` (`alert_rule`, `receiver`, `route`, `silence`), `covers` (the topology service the alert maps to), `enabled`, `severity` (the object's own, or null), and `routes_to` for alerting objects. Built from the raw pull, never invented; redacted at capture, never a secret value.
 - One Slack brief, when `slack.webhook_env` is configured
 
 ## Doctor gate
@@ -109,7 +109,7 @@ One permanent ID per check. IDs never change or get reused; retired checks keep 
 
 | ID | Category | Check | Typical fail severity |
 | --- | --- | --- | --- |
-| ALR-001 | Rule presence | Expected alert rules exist live and are loaded by Prometheus | high |
+| ALR-001 | (retired v0.1.158) | Rule presence moved to `/scoutflo:audit-prometheus` (PROM-022); ID retired, never reused | — |
 | ALR-002 | Config integrity | Live Alertmanager receivers and routes match the declared source of truth | critical |
 | ALR-003 | Config integrity | Rendered and running config match the live objects; last reload succeeded | critical |
 | ALR-004 | Route matching | Route matchers cover every namespace and service where alerts fire | high |
@@ -129,7 +129,7 @@ One permanent ID per check. IDs never change or get reused; retired checks keep 
 | ALR-018 | Alert hygiene | Resolve-notification volume on paging receivers is deliberate, not accidental | info |
 | ALR-019 | Route matching | No route/inhibition matcher pins `le`/`quantile` to an integer value that Prometheus 3.x normalizes to a float | high |
 | ALR-020 | Config integrity | No receiver on the deprecated `msteams_configs` delivery path (retired Office 365 connector) | medium |
-| ALR-021 | Rule presence | Loaded alert rules actually evaluate — `health==ok`, no `lastError`, no evaluation overrun (engine-gated) | high |
+| ALR-021 | (retired v0.1.158) | Rule-evaluation health moved to `/scoutflo:audit-prometheus` (PROM-020/PROM-021); ID retired, never reused | — |
 | ALR-022 | Dispatch proof | No paging-severity alert is silently suppressed right now (a silence or inhibition swallowing a live page) | high |
 | ALR-023 | Route matching | Paging routes do not delay or mute the first page (large `group_wait`, or a mute interval active at the current clock) | medium |
 
@@ -137,13 +137,14 @@ Category weights for scoring:
 
 | Category | Weight | IDs |
 | --- | ---: | --- |
-| Config integrity | 20 | ALR-002, ALR-003, ALR-020 |
-| Dispatch proof | 20 | ALR-005, ALR-006, ALR-009, ALR-022 |
-| Route matching | 15 | ALR-004, ALR-011, ALR-019, ALR-023 |
-| Rule presence | 15 | ALR-001, ALR-021 |
-| Alert hygiene | 15 | ALR-012, ALR-013, ALR-014, ALR-015, ALR-016, ALR-017, ALR-018 |
-| Triage metadata | 10 | ALR-007, ALR-008 |
-| Reachability | 5 | ALR-010 |
+| Config integrity | 22 | ALR-002, ALR-003, ALR-020 |
+| Dispatch proof | 25 | ALR-005, ALR-006, ALR-009, ALR-022 |
+| Route matching | 18 | ALR-004, ALR-011, ALR-019, ALR-023 |
+| Alert hygiene | 17 | ALR-012, ALR-013, ALR-014, ALR-015, ALR-016, ALR-017, ALR-018 |
+| Triage metadata | 12 | ALR-007, ALR-008 |
+| Reachability | 6 | ALR-010 |
+
+The former **Rule presence** category (retired `ALR-001` + `ALR-021`, weight 15) moved to `/scoutflo:audit-prometheus` (PROM-022 presence, PROM-020/021 health); its weight was redistributed across the six categories above (they sum to 100). This audit consumes rule presence/health as a precondition and never re-scores it.
 
 ## Estate sizing
 
@@ -181,7 +182,7 @@ echo "alert_rules=${RULES} receivers=${RECEIVERS} scored_objects=${TOTAL}"
 # Guided-walkthrough drift check, per report-standard/README.md#using-topology-and-prior-runs-as-a-guided-walkthrough:
 # compare against the last run rather than a blank slate. State the result in the executive summary;
 # never silently omit it. This never skips a live check - every check in later phases still runs fresh.
-TARGET_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/alert-routing"
+TARGET_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/alertmanager"
 PREV_RUN="$(find "$TARGET_DIR" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort | tail -1)"
 DRIFT="first run"
 if [ -n "$PREV_RUN" ] && [ -f "${PREV_RUN}/findings.json" ]; then
@@ -243,14 +244,14 @@ Resolve every alert to a service and keep the mapping for the rest of the run:
 
 Verify DNS and API health for the Prometheus and Alertmanager hosts before analyzing routing; a stale ingress record or a moved endpoint produces false routing conclusions downstream. Commands in [references/verification-chain.md](references/verification-chain.md) section 2. If the Alertmanager API is not exposed, use the port-forward path defined there for every Alertmanager API call in later phases and note it in evidence.
 
-## Phase 3: Rule presence (ALR-001)
+## Phase 3: Rule discovery (input; presence + health scored by audit-prometheus)
 
-Two-step discipline, commands in section 3 of the reference:
+Rule **presence** (do the expected rules exist and load — retired `ALR-001`) and rule-**evaluation health** (do they evaluate without error or overrun — retired `ALR-021`) are the Prometheus rule-engine plane, scored by `/scoutflo:audit-prometheus` (`PROM-022`, `PROM-020/021`), not here — that ends the old triple-scoring of rule quality across lgtm/alert-routing/prometheus. This audit still needs the rule→route mapping, so it reads the live rules as **non-scored input** (commands in section 3 of the reference, read-only):
 
-1. Try the rule names you expect. Missing expected names is name drift, worth recording, not the end of the check.
-2. List the live `PrometheusRule` inventory and select the rules that actually own your target alerts by their labels. Never assume legacy names survived; clusters accumulate renames.
+1. List the live `PrometheusRule` inventory (or `/api/v1/rules`) and select the rules that own your target alerts by their labels — the map Phase 5 uses to trace each firing alert to its route.
+2. If a rule you expected to trace is absent or failing to load, do **not** score it here — cite `/scoutflo:audit-prometheus` (PROM-022/020) as the owner and continue tracing the alerts that do fire.
 
-Then confirm the selected rules are loaded into Prometheus via `api/v1/rules`. A CRD that exists but never reaches the rules API is a silent gap, usually a `ruleSelector` label mismatch; that is an ALR-001 failure with the rule object named in evidence.
+The presence/health *verdict* is audit-prometheus's; the routing/delivery verdict for the alerts that fire is this audit's.
 
 ## Phase 4: Config drift across three layers (ALR-002, ALR-003, ALR-009)
 
@@ -341,7 +342,7 @@ Emit and verify:
 ```bash
 set -eu
 RUN_DATE="$(date -u +%Y-%m-%d)"
-OUT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/alert-routing/${RUN_DATE}"
+OUT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/alertmanager/${RUN_DATE}"
 mkdir -p "$OUT"
 # ... write findings.json, inventory.json, and report.md per the report standard, then verify:
 jq -e '.schema == "scoutflo-findings/v1" and (.findings | type == "array")' \
@@ -364,7 +365,7 @@ Compute the delta against the previous run date per the [report standard](../../
 
 ```bash
 set -eu
-OUT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/alert-routing/$(date -u +%Y-%m-%d)"
+OUT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/alertmanager/$(date -u +%Y-%m-%d)"
 # slack.webhook_env names the webhook variable; skip when unset.
 if [ -n "${SCOUTFLO_SLACK_WEBHOOK:-}" ]; then
   OUT_ABS="$(cd "$OUT" && pwd)"   # absolute path: the brief must be openable from anywhere
@@ -382,7 +383,7 @@ if [ -n "${SCOUTFLO_SLACK_WEBHOOK:-}" ]; then
       [$p[0].findings[].id] as $b | [$c[0].findings[].id] as $n |
       "\(($b - $n) | length) fixed, \(($n - $b) | length) new, \(($n - ($n - $b)) | length) unchanged"')"
   fi
-  jq -n --arg head "audit-alert-routing ${RUN_DATE:-$(date -u +%Y-%m-%d)}: ${SCORE}/100${MOVE:+ $MOVE}, ${E2E}. ${COUNTS}." \
+  jq -n --arg head "audit-alertmanager ${RUN_DATE:-$(date -u +%Y-%m-%d)}: ${SCORE}/100${MOVE:+ $MOVE}, ${E2E}. ${COUNTS}." \
         --arg top "$TOP" --arg delta "$DELTA" --arg path "$OUT_ABS/report.md" \
         '{text: ($head + "\nTop findings:\n" + $top + "\nDelta: " + $delta + "\nReport: " + $path)}' \
     | curl -fsS --max-time 10 -H 'Content-Type: application/json' -d @- "$SCOUTFLO_SLACK_WEBHOOK" \
@@ -464,8 +465,8 @@ Every finding's `remediation` field points at the fix, so "Next safe actions" in
 | ALR-002, ALR-003: live config drift, stale reload | `setup-lgtm#fix-default-receiver` for receiver repairs; re-applying your declared manifest is a mutation and belongs in the setup lane |
 | ALR-004: matcher gaps; ALR-011: receiver flooding | `setup-lgtm#add-severity-routes-and-inhibition` for matcher gaps, `setup-lgtm#quiet-noisy-rules` for receiver flooding; route additions follow the confirm-then-verify setup loop |
 | ALR-005, ALR-006: delivery failures, integration mismatch | `setup-lgtm#fix-default-receiver` |
-| ALR-001, ALR-007: missing rules, missing triage metadata | `references/verification-chain.md#9-triage-metadata-contract-alr-007`; a dedicated alert-rule setup skill taking these IDs as input is planned |
-| ALR-021: loaded rule that errors/overruns | `references/verification-chain.md#141-rule-evaluation-health-alr-021` for the engine-gated evidence; the rule-expression fix belongs to the planned alert-rule setup skill (point at the named rule and its `lastError`) |
+| ALR-007: missing triage metadata | `references/verification-chain.md#9-triage-metadata-contract-alr-007`; a dedicated alert-rule setup skill taking these IDs as input is planned |
+| Rule presence / rule-evaluation health (retired ALR-001 / ALR-021) | scored by `/scoutflo:audit-prometheus` (PROM-022 presence, PROM-020/021 health) — fix the rule there; this audit consumes the verdict and does not score it |
 | ALR-022: paging alert suppressed live; ALR-023: page delayed/muted | `setup-lgtm#add-severity-routes-and-inhibition` for over-broad inhibit rules and route-timing; an unintended silence expires through the Alertmanager UI (as in ALR-013) |
 | ALR-008: unproven error-tracker handoff | `/scoutflo:audit-sentry` to audit the tracker side; `/scoutflo:setup-sentry` to fix it |
 | ALR-010: DNS or ingress drift | Fix through your ingress change process, then re-run `/scoutflo:doctor` |

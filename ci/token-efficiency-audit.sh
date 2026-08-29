@@ -79,7 +79,7 @@ audit_skill "audit-elk"
 audit_skill "audit-jsm"
 audit_skill "audit-zenduty"
 audit_skill "audit-groundcover"
-audit_skill "audit-alert-routing"
+audit_skill "audit-alertmanager"
 audit_skill "audit-digitalocean"
 audit_skill "audit-kubernetes"
 

@@ -11,7 +11,7 @@ Fixes findings from an `audit-grafana` run. Input is one or more finding IDs fro
 In scope: the Grafana application layer. Datasources, folders, dashboards, Grafana-managed alert rules, contact points, notification policies, mute timings, usage and cost surfaces, and confirmed delivery test-fires. Boundaries:
 
 - Backend store internals (Loki, Tempo, Mimir, VictoriaMetrics retention, HA, ingestion health, collector relabeling) belong to `setup-lgtm`. This skill touches backends only through Grafana datasources.
-- Read-only proof that the paging path is live belongs to `audit-alert-routing`. The test-fires here are its mutating counterpart: they send real notifications, behind confirmation.
+- Read-only proof that the paging path is live belongs to `audit-alertmanager`. The test-fires here are its mutating counterpart: they send real notifications, behind confirmation.
 - Error-tracker fixes belong to `setup-sentry`.
 - Missing application telemetry is a change inside your application code. Record those items as pending with a named owner instead of touching app repos.
 
@@ -220,7 +220,7 @@ Two levels, weakest to strongest (commands in [references/payloads.md](reference
 1. **Receiver test.** Post to the receiver-test endpoint using the stored contact point. Proves the receiver delivers, but bypasses the routing tree.
 2. **Routed canary.** Create a temporary always-firing rule carrying the labels of the route under test, wait one evaluation cycle plus group wait, and confirm the notification arrived where that severity is supposed to land. This proves the full path: rule, labels, policy tree, receiver.
 
-Delivery is proven by receipt, not by an HTTP 200: a named person confirms the message arrived, and you record who, where, and when in the change log. That evidence is what lets the next `audit-grafana` run move GRAF-055 from `configured` to validated, and what `audit-alert-routing` builds on. Always clean up: delete the canary rule and verify the read returns 404.
+Delivery is proven by receipt, not by an HTTP 200: a named person confirms the message arrived, and you record who, where, and when in the change log. That evidence is what lets the next `audit-grafana` run move GRAF-055 from `configured` to validated, and what `audit-alertmanager` builds on. Always clean up: delete the canary rule and verify the read returns 404.
 
 ### Query hygiene
 
@@ -261,7 +261,7 @@ End the run with:
 
 1. A summary table: finding ID, change, verification result, remaining risk.
 2. The pending list for items outside this skill's reach (application instrumentation, collector changes, IaC-owned objects awaiting merge), each with a named owner.
-3. A fresh `/scoutflo:audit-grafana` run to re-score; its delta shows which findings moved to fixed. If routing changed, `audit-alert-routing` proves the paging path end to end.
+3. A fresh `/scoutflo:audit-grafana` run to re-score; its delta shows which findings moved to fixed. If routing changed, `audit-alertmanager` proves the paging path end to end.
 
 ## Common Failure Modes
 

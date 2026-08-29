@@ -163,7 +163,7 @@ Instead of `/scoutflo:audit-all`, run only the audits you need:
 # Run only the audits you care about:
 /scoutflo:audit-grafana
 /scoutflo:audit-lgtm            # your Prometheus/LGTM metrics-backend audit
-/scoutflo:audit-alert-routing  # the Prometheus -> Alertmanager paging path
+/scoutflo:audit-alertmanager  # the Prometheus -> Alertmanager paging path
 /scoutflo:audit-sentry
 ```
 
@@ -260,7 +260,7 @@ the fixed floor before any of your live data is read. Regenerate these anytime w
 | audit-lgtm | 112,484 | ~28,100 |
 | audit-gcp | 98,499 | ~24,600 |
 | audit-sentry | 93,503 | ~23,400 |
-| audit-alert-routing | 92,805 | ~23,200 |
+| audit-alertmanager | 92,805 | ~23,200 |
 | audit-digitalocean | 83,922 | ~21,000 |
 | audit-grafana | 76,695 | ~19,200 |
 | audit-pagerduty | 61,148 | ~15,300 |

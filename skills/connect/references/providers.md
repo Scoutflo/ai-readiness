@@ -48,7 +48,7 @@ grafana:
 
 | Tier | Used by | Grafana role |
 | --- | --- | --- |
-| Read-only | audit-grafana, audit-lgtm, audit-alert-routing | Basic role `Viewer`. On Grafana Cloud or Enterprise, also grant the fixed role `Data sources > Reader` so datasource checks pass at Viewer. |
+| Read-only | audit-grafana, audit-lgtm, audit-alertmanager | Basic role `Viewer`. On Grafana Cloud or Enterprise, also grant the fixed role `Data sources > Reader` so datasource checks pass at Viewer. |
 | Elevated | setup-grafana, setup-lgtm (Grafana-side fixes) | `Editor` for dashboards and alert rules. `Admin` when datasources, contact points, or notification policies are in scope. |
 
 OSS caveat: Grafana OSS has basic roles only. Listing datasources (`GET /api/datasources`) requires an org admin token there, so a Viewer audit token will see those checks reported as blocked. That is an acceptable outcome; prefer keeping the audit token at Viewer over handing audits an admin credential.

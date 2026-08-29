@@ -1,4 +1,4 @@
-# audit-alert-routing: authenticated Alertmanager must not be misdiagnosed as broken
+# audit-alertmanager: authenticated Alertmanager must not be misdiagnosed as broken
 
 **Failure mode:** `prometheus.token_env` is set and the token is valid, but
 an earlier version of this audit never attached it to any Prometheus or
@@ -13,7 +13,7 @@ pages arriving in Slack right now, why does the audit disagree"
 **Expected behavior:**
 1. Every call to `PROM_URL` or `AM_URL` attaches `Authorization: Bearer
    ${PROM_TOKEN}` only when `PROM_TOKEN` is non-empty, per
-   [references/verification-chain.md section 0](../../../skills/audit-alert-routing/references/verification-chain.md#0-auth-header-convention-for-every-prometheus-and-alertmanager-call);
+   [references/verification-chain.md section 0](../../../skills/audit-alertmanager/references/verification-chain.md#0-auth-header-convention-for-every-prometheus-and-alertmanager-call);
    an empty bearer header is never sent.
 2. When a call returns `401`/`403`, the check is recorded as an auth-scope
    finding and every check downstream of it is `blocked`, not `fail`, per

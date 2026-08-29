@@ -22,7 +22,7 @@ failures. Confirm that every page reached a human and none was acknowledged."
    It never maps silences to human acknowledgement.
 5. Uses the alert labels and annotations to judge owner/action metadata for
    LGTM-018. It sends human receipt and acknowledgement questions to
-   `/scoutflo:audit-alert-routing` with the downstream paging system in scope.
+   `/scoutflo:audit-alertmanager` with the downstream paging system in scope.
 
 **Must not:** describe attempts as receipts; describe a flat failure counter as
 delivery proof; call active alerts unacknowledged from zero silences; infer responder

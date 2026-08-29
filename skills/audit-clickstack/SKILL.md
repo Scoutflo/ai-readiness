@@ -1,6 +1,6 @@
 ---
 name: audit-clickstack
-description: Read-only scored audit of a ClickStack observability deployment (ClickHouse + HyperDX + OpenTelemetry): telemetry-table coverage, ingestion freshness, per-table retention TTL, ClickHouse database health, HyperDX alerting and dashboards/sources, and security posture; writes findings.json and report.md and changes nothing. Use when the user mentions auditing or scoring ClickStack, ClickHouse observability, HyperDX alerts or dashboards, otel_logs/otel_traces/otel_metrics tables, telemetry ingestion freshness, or ClickHouse retention/TTL. Do not use for Grafana-fronted LGTM/VictoriaMetrics stacks (use audit-lgtm), for Elasticsearch/Kibana (use audit-elk), to prove an Alertmanager page reaches a human (use audit-alert-routing), or to change ClickHouse/HyperDX (use setup-clickstack).
+description: Read-only scored audit of a ClickStack observability deployment (ClickHouse + HyperDX + OpenTelemetry): telemetry-table coverage, ingestion freshness, per-table retention TTL, ClickHouse database health, HyperDX alerting and dashboards/sources, and security posture; writes findings.json and report.md and changes nothing. Use when the user mentions auditing or scoring ClickStack, ClickHouse observability, HyperDX alerts or dashboards, otel_logs/otel_traces/otel_metrics tables, telemetry ingestion freshness, or ClickHouse retention/TTL. Do not use for Grafana-fronted LGTM/VictoriaMetrics stacks (use audit-lgtm), for Elasticsearch/Kibana (use audit-elk), to prove an Alertmanager page reaches a human (use audit-alertmanager), or to change ClickHouse/HyperDX (use setup-clickstack).
 ---
 
 # audit-clickstack
@@ -339,7 +339,7 @@ Record what exists (tables, row/byte counts, users, alerts, dashboards, sources)
 
 ## Phase 3: Tool ownership boundary
 
-ClickStack owns backend telemetry (logs, metrics, traces) and its own alerting via HyperDX. It does **not** own frontend error tracking (that is `/scoutflo:audit-sentry`) or an external paging tree fronted by Alertmanager/PagerDuty routing depth (`/scoutflo:audit-alert-routing`, `/scoutflo:audit-pagerduty`). A signal absent from ClickStack because another tool owns it is a boundary decision, not a gap; record the boundary and audit the owning stack.
+ClickStack owns backend telemetry (logs, metrics, traces) and its own alerting via HyperDX. It does **not** own frontend error tracking (that is `/scoutflo:audit-sentry`) or an external paging tree fronted by Alertmanager/PagerDuty routing depth (`/scoutflo:audit-alertmanager`, `/scoutflo:audit-pagerduty`). A signal absent from ClickStack because another tool owns it is a boundary decision, not a gap; record the boundary and audit the owning stack.
 
 ## Phase 4: Telemetry coverage (CS-010) and ingestion freshness (CS-011)
 
@@ -505,7 +505,7 @@ Every finding's `remediation` field points at the fix, so "Next safe actions" in
 | Finding area | Pointer |
 | --- | --- |
 | Unbounded or too-short retention on an `otel_*` table (CS-020) | `setup-clickstack#set-retention-ttl` |
-| HyperDX alert missing, or wired to no receiver (CS-040) | `setup-clickstack#create-hyperdx-alert`; deep paging-path proof lives in `/scoutflo:audit-alert-routing` |
+| HyperDX alert missing, or wired to no receiver (CS-040) | `setup-clickstack#create-hyperdx-alert`; deep paging-path proof lives in `/scoutflo:audit-alertmanager` |
 | No scoped read-only ClickHouse user for audits (CS-050) | `setup-clickstack#create-read-only-user` |
 | Plaintext-password user, open default user, or non-TLS endpoint (CS-050) | `setup-clickstack#harden-clickhouse-auth` |
 | Missing telemetry / stalled ingestion for a critical service (CS-010, CS-011) | `setup-clickstack` (OTel collector target and pipeline fixes; instrumentation gaps get a named owner) |

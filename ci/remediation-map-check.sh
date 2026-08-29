@@ -38,7 +38,7 @@ audit_for_prefix() {
     DO) echo audit-digitalocean ;;
     DD) echo audit-datadog ;;
     ELK) echo audit-elk ;;
-    ALR) echo audit-alert-routing ;;
+    ALR) echo audit-alertmanager ;;
     PD) echo audit-pagerduty ;;
     ZD) echo audit-zenduty ;;
     K8S) echo audit-kubernetes ;;

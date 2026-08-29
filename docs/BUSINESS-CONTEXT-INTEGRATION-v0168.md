@@ -49,7 +49,7 @@ the per-resource cache never replaces the workspace rules, it only adds detail.
 
 This is the **canonical block** every own-block `audit-*` embeds verbatim (the
 `business-context-parity` gate asserts it is present and names an apply behavior;
-`audit-lgtm` / `audit-alert-routing` are the shared-backend exemptions). It loads
+`audit-lgtm` / `audit-alertmanager` are the shared-backend exemptions). It loads
 the workspace layer and the per-resource layer **together**:
 
 ```bash

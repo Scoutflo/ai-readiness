@@ -44,7 +44,7 @@ Expected output: one key per line, for example `grafana`, `sentry`, `prometheus`
 | `jsm` | `audit-jsm` |
 | `zenduty` | `audit-zenduty` |
 | `groundcover` | `audit-groundcover` |
-| `prometheus.alertmanager_url` or `victoriametrics.vmalert_url` | `audit-alert-routing` |
+| `prometheus.alertmanager_url` or `victoriametrics.vmalert_url` | `audit-alertmanager` |
 | `digitalocean` | `audit-digitalocean` |
 | `gcp` | `audit-gcp` |
 | `aws` | `audit-aws` |
