@@ -78,6 +78,18 @@ names a gate/case that no longer exists, that is itself a defect.
   (shared-backend blocks — they read `prometheus`/`loki`/`tempo`/`mimir`/
   `victoriametrics` as a single mapping, never a labeled own block; a labeled
   list there would break `doctor` and the other readers).
+- **Metrics-plane ownership boundary (v0.1.156/157, fixed):** within the shared
+  metrics blocks, the **Prometheus server + rule-engine plane** (`prometheus.url`
+  — scrape targets, `up`, TSDB, WAL/compaction, remote-write, config reload, rule
+  health) is `audit-prometheus` (`PROM-*`); the **Mimir/VictoriaMetrics stores**
+  (`mimir.url` / `victoriametrics.url` / `vmalert_url` — store reachability,
+  queryability, multi-tenancy, ingestion freshness, ruler health, store
+  cardinality) are `audit-lgtm` (`LGTM-001..004/006..008`, category "Metrics
+  stores"). `LGTM-005` (scrape targets) is retired → `PROM-010/012`; the
+  metrics-half of `LGTM-065` (Prometheus TSDB cardinality) → `PROM-030`. The two
+  audits never double-score the same series. Guard: the maintainer review + the
+  `layer_depth` selftest lock asserting `audit-lgtm` keeps `LGTM-006` and the
+  "Metrics stores" category.
 - **Reference implementation:** `audit-azure` (`AZ_KIND`/`AZ_N`/`AZ_IDX`/
   `AZ_LABEL`/`AZ_SEG`).
 - **Guards:** `ci/multi-target-parity-check.sh`. Selftest: `layer_targets`

@@ -47,7 +47,7 @@ Each audit skill defines a category table: named categories with integer weights
 | Category | Weight | What it measures |
 | --- | ---: | --- |
 | Service coverage | 20 | Required signals present per critical service |
-| Metrics layer | 15 | Queryable metrics, rules, labels, target health |
+| Metrics stores | 15 | Mimir/VictoriaMetrics store reachability, queryability, ruler, tenancy, freshness |
 | Logs layer | 15 | Searchable logs, fields, ingestion health |
 | Traces layer | 15 | Trace search, correlation, sampling policy |
 | Alert routing | 15 | Working receivers, severity routes, noise control |

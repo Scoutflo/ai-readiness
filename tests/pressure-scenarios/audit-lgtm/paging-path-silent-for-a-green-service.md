@@ -18,9 +18,12 @@ to a loopback webhook, and a rising `alertmanager_notifications_failed_total`.)
    evaluator can actually see that service's series, including the split-backend
    trap where the series live in backend A but the only evaluator watches backend B
    (LGTM-012, LGTM-080–082) → a severity-labeled rule exists, is error-free, AND is
-   on-time (LGTM-035 + LGTM-004 + the new **LGTM-008** eval-lag, and the new
-   **LGTM-007** freshness so the rule isn't evaluating stale data) → its route
-   route is evaluated (LGTM-014/015) → the observed Alertmanager failure-counter
+   on-time (LGTM-035 + LGTM-004 + the **LGTM-008** eval-lag, and **LGTM-007**
+   freshness so the rule isn't evaluating stale data — these rule-health links
+   are audit-lgtm's when the evaluator is the Mimir ruler or vmalert it reads via
+   `mimir.url`/`vmalert_url`; a **vanilla-Prometheus** evaluator's rule health is
+   `/scoutflo:audit-prometheus`'s PROM-020/021/022, cross-referenced here) → its route
+   is evaluated (LGTM-014/015) → the observed Alertmanager failure-counter
    delta is evaluated (LGTM-013). In this scenario, the loopback route and rising
    failure delta are both findings. The counter is attributed to the route only if
    its integration labels support that join, and human receipt remains unproven.

@@ -26,14 +26,14 @@ One permanent ID per check. IDs never change or get reused; retired checks keep 
 
 | ID | Category | Check | Typical fail severity |
 | --- | --- | --- | --- |
-| LGTM-001 | Metrics layer | Metrics endpoint reachable and healthy | critical |
-| LGTM-002 | Metrics layer | Deployed metrics backend matches the advertised one | medium |
-| LGTM-003 | Metrics layer | Smallest useful query (`up`) returns recent samples | high |
-| LGTM-004 | Metrics layer | Rule groups load and evaluate without errors | high |
-| LGTM-005 | Metrics layer | Scrape or ingestion targets healthy | medium |
-| LGTM-006 | Metrics layer | Multi-tenant path or header verified (single-tenant: not-in-scope) | high |
-| LGTM-007 | Metrics layer | Ingestion freshness: newest queryable sample is recent, write-path not lagging | high |
-| LGTM-008 | Metrics layer | Rule-evaluation lag: no rule group evaluates slower than its own interval | medium |
+| LGTM-001 | Metrics stores | Metrics **store** reachable and healthy (Mimir/VictoriaMetrics via `mimir.url`/`victoriametrics.url`; a vanilla Prometheus server → `/scoutflo:audit-prometheus`) | critical |
+| LGTM-002 | Metrics stores | Deployed metrics backend matches the advertised one | medium |
+| LGTM-003 | Metrics stores | Smallest useful query (`up`) returns recent samples from the store | high |
+| LGTM-004 | Metrics stores | Store ruler (Mimir ruler / vmalert) rule groups load and evaluate without errors | high |
+| LGTM-005 | (retired v0.1.157) | Scrape-target health moved to `/scoutflo:audit-prometheus` (PROM-010/PROM-012); ID retired, never reused | — |
+| LGTM-006 | Metrics stores | Multi-tenant path or header verified — Mimir `X-Scope-OrgID` / VM `/select/<tenant>/` (single-tenant: not-in-scope) | high |
+| LGTM-007 | Metrics stores | Store-side ingestion freshness: newest queryable sample from the store is recent | high |
+| LGTM-008 | Metrics stores | Store ruler rule-evaluation lag: no rule group evaluates slower than its own interval | medium |
 | LGTM-010 | Alert routing | Alertmanager reachable, config parses, cluster ready | critical |
 | LGTM-011 | Alert routing | At least one real receiver defined | critical |
 | LGTM-012 | Alert routing | vmalert loads rules and points at a live notifier | critical |
@@ -153,9 +153,9 @@ curl -sS -o /dev/null -w 'jaeger api: %{http_code}\n' --max-time 10 -H "$AUTH" "
 
 Record for each signal: advertised backend, detected backend, query language. Mismatch: emit the finding and use the detected backend's section below for the rest of the audit.
 
-## 2. Prometheus-compatible metrics API (LGTM-001, LGTM-003, LGTM-004, LGTM-005)
+## 2. Prometheus-compatible metrics API (LGTM-001, LGTM-003, LGTM-004 — applied to the Mimir/VictoriaMetrics stores)
 
-Applies to Prometheus directly, and to Mimir and VictoriaMetrics through their prefixes (sections 3 and 4).
+The query/rule template below is the Prometheus HTTP API shape. `audit-lgtm` scores it against the **metrics stores** — Mimir (section 3) and VictoriaMetrics/vmalert (section 4) — so set `METRICS_URL` to `mimir.url` / `victoriametrics.url` when scoring these IDs. When your metrics backend is a **vanilla Prometheus** reached at `prometheus.url`, its whole server + rule-engine plane — these same reads *plus* scrape targets, TSDB, remote-write, and config reload — is scored by `/scoutflo:audit-prometheus` (PROM-*), not here. **LGTM-005 (scrape-target health) is retired — `audit-prometheus` owns it (PROM-010/PROM-012).**
 
 ```bash
 set -eu
@@ -172,23 +172,19 @@ curl -fsS --max-time 10 -H "$AUTH" "${METRICS_URL}/api/v1/status/buildinfo" | jq
 curl -fsS --max-time 10 -H "$AUTH" --get --data-urlencode 'query=up' \
   "${METRICS_URL}/api/v1/query" | jq '.data.result | length'
 
-# LGTM-005: unhealthy scrape targets, by job
-curl -fsS --max-time 10 -H "$AUTH" "${METRICS_URL}/api/v1/targets?state=active" \
-  | jq -r '[.data.activeTargets[] | select(.health != "up")] | group_by(.labels.job) | .[] | "\(.[0].labels.job): \(length) down"'
-
-# LGTM-004: rule groups and evaluation errors
+# LGTM-004: rule groups and evaluation errors (the store ruler — Mimir ruler / vmalert)
 curl -fsS --max-time 10 -H "$AUTH" "${METRICS_URL}/api/v1/rules" \
   | jq -r '.data.groups | length as $g | [.[].rules[]] | "\($g) groups, \(length) rules"'
 curl -fsS --max-time 10 -H "$AUTH" "${METRICS_URL}/api/v1/rules" \
   | jq -r '.data.groups[].rules[] | select((.lastError // "") != "") | "\(.name): \(.lastError)"'
 ```
 
-Expected: `/-/ready` returns ready text; `up` returns more than zero series; the down-targets list is empty; the evaluation-error list is empty. Failure shapes: `up` returning `0` series means nothing is being scraped (LGTM-003 fail, and every coverage check downstream will fail with it); persistent down targets for namespaces you monitor is LGTM-005; any `lastError` line is LGTM-004 with the line as evidence. Connection refused or 404 on `/api/v1/query` means wrong backend or wrong path prefix; go back to section 1.
+Expected: `/-/ready` returns ready text; `up` returns more than zero series from the store; the evaluation-error list is empty. Failure shapes: `up` returning `0` series means the store holds nothing queryable (LGTM-003 fail, and every coverage check downstream will fail with it); any `lastError` line is LGTM-004 with the line as evidence. Connection refused or 404 on `/api/v1/query` means wrong backend or wrong path prefix; go back to section 1. (Scrape-target health — the old LGTM-005 — is `/scoutflo:audit-prometheus`'s job now, PROM-010/PROM-012.)
 
 **Depth (per the [depth doctrine](../../report-standard/depth-doctrine.md)) — do not stop at the binary.** These three checks are the ones most likely to read like a free health banner, so each carries a computed blast radius and a correlation, not a status line:
 - **LGTM-001 (down/unreachable)** is the root of a cascade, not a yes/no: when the metrics store is down, pull `/api/v1/rules` first and state what goes dark — "this store is the sole datasource for the N alerting rules LGTM-004 inventoried, M at `severity=page`; while it is unreachable every one evaluates to no-data and pages nothing, and the K critical services whose rule lives here are unmonitored." Chains to LGTM-004 → LGTM-035 (per-service alerts silent) → LGTM-032/030 (coverage queries return empty and must be read as backend-down, never a false LGTM-030). Remediation: this is an availability incident (restore/scale the store), then close the HA gap that let one instance take the alert plane down (`setup-lgtm#enable-ha`).
 - **LGTM-004 (rule `lastError`)** never stops at the raw line: for each rule with a non-empty `lastError`, resolve `.name`/`.labels`/`.query` to a topology critical service and read `.labels.severity`, and use `.lastEvaluation` to say how long it has been broken — "`HighErrorRate{service=checkout}` severity=page has carried a PromQL parse error for 3 days; checkout's only error-rate page has not evaluated once — a spike tonight fires nothing." Chains to LGTM-035 and, when it is the service's only alerting path, LGTM-030. Fix the specific error the string names on the named rule (remediation `setup-lgtm`).
-- **LGTM-005 (down targets)** — the sharp edge is *staleness, not absence*: map each down target's `job`/`namespace`/`pod` to the critical set and state "these targets are now stale, so dashboards and rules read the last-scraped value and look alive while the pods may be dead; a saturation or error there is invisible until scrape resumes." Chains to LGTM-032 (depth queries return stale-but-covered-looking data), LGTM-030, and LGTM-007 (staleness is the shared root); if the pod is crash-looping, cross-reference audit-kubernetes K8SRT-001. Fix the scrape for the named job (ServiceMonitor/PodMonitor selector, target port, or a relabel drop rule) — remediation `setup-lgtm`.
+- **Scrape-target health (retired LGTM-005 → `/scoutflo:audit-prometheus` PROM-010/PROM-012)** — scrape targets are a Prometheus-scraper concern, not a metrics-store one (Mimir/VM ingest via remote-write, they do not scrape). The down-target staleness cascade — a target `up` but reading the last-scraped value while the pod may be dead — is now audited there. When `audit-prometheus` reports a down target for a critical service, this audit's store-side coverage (LGTM-032/030) inherits it as the "backend-stale, not a false LGTM-030" guard.
 
 ## 2b. Ingestion freshness and rule-evaluation lag (LGTM-007, LGTM-008)
 
@@ -198,7 +194,7 @@ Two failure modes a green `up` and an error-free rule list both hide: data that 
 # LGTM-007: age of the newest queryable sample per target. time()-timestamp(up) returns the real
 # scrape age (verified 0.4s..100s across 44 targets on the benchmark — it does NOT collapse to 0).
 # DETECTION CEILING = the staleness horizon: once a target is silent past the lookback window, up
-# goes stale/absent and this stops returning it — that regime is LGTM-005, not this check. The
+# goes stale/absent and this stops returning it — that regime is scrape-target health (the retired LGTM-005, now /scoutflo:audit-prometheus PROM-010/PROM-012), not this check. The
 # subquery widens the detection window to a target last seen up to 15m ago.
 curl -fsS --max-time 10 -H "$AUTH" --get --data-urlencode 'query=time() - timestamp(up)' \
   "${METRICS_URL}/api/v1/query" | jq -r '[.data.result[].value[1]|tonumber] | "max_sample_age_s=\(max) targets=\(length)"'
@@ -220,7 +216,7 @@ curl -fsS --max-time 10 -H "$AUTH" --get \
   "${METRICS_URL}/api/v1/query" | jq -r '.data.result[]? | "\(.metric.rule_group) over-interval"'
 ```
 
-Healthy: newest sample under one scrape interval old for every target; no group over its interval (benchmark: max age ~100s, both storefront groups eval in ~0.002s vs a 60s interval). Fail (**LGTM-007**, high): a target's newest sample is minutes old while `up` still reads 1 — every rule with `for: Nm` on it pages ~N+lag late; name the critical services (topology) in the lagging set and state the computed delay, which *is* the blast radius. Distinct from LGTM-005: a target can be `up` while ingestion lags in a remote-write/Mimir/VM topology. Fail (**LGTM-008**, medium): a group's `evaluationTime` exceeds its `interval` — every rule in it, including an SLO burn-rate page, evaluates late and can skip windows; a rule with no `lastError` (LGTM-004 passes) can still be silently late here. Both chain to LGTM-005 (up-but-stale from the read side), LGTM-001 (the extreme of lag is unreachability), and LGTM-035 (the service's page is delayed). Remediation: `setup-lgtm#enable-ha`.
+Healthy: newest sample under one scrape interval old for every target; no group over its interval (benchmark: max age ~100s, both storefront groups eval in ~0.002s vs a 60s interval). Fail (**LGTM-007**, high): a target's newest sample is minutes old while `up` still reads 1 — every rule with `for: Nm` on it pages ~N+lag late; name the critical services (topology) in the lagging set and state the computed delay, which *is* the blast radius. Distinct from scrape-target health (the retired LGTM-005, now /scoutflo:audit-prometheus PROM-010/PROM-012): a target can be `up` while ingestion lags in a remote-write/Mimir/VM topology. Fail (**LGTM-008**, medium): a group's `evaluationTime` exceeds its `interval` — every rule in it, including an SLO burn-rate page, evaluates late and can skip windows; a rule with no `lastError` (LGTM-004 passes) can still be silently late here. Both chain to /scoutflo:audit-prometheus PROM-010/PROM-012 (scrape-target up-but-stale from the read side, the retired LGTM-005), LGTM-001 (the extreme of lag is unreachability), and LGTM-035 (the service's page is delayed). Remediation: `setup-lgtm#enable-ha`.
 
 ## 3. Mimir specifics (LGTM-001, LGTM-003, LGTM-004, LGTM-006)
 
@@ -242,7 +238,7 @@ curl -fsS --max-time 10 -H "$AUTH" -H "X-Scope-OrgID: ${MIMIR_TENANT}" \
   "${MIMIR_URL}/prometheus/api/v1/rules" | jq '.data.groups | length'
 ```
 
-Failure shapes: `401` with a body mentioning `no org id` means the tenant header is missing or wrong (LGTM-006); a valid response with zero series for a tenant that should have data usually means the wrong tenant value, which is also LGTM-006, not an empty metrics layer. Run the section 2 target and rule-error checks through the same prefix and header.
+Failure shapes: `401` with a body mentioning `no org id` means the tenant header is missing or wrong (LGTM-006); a valid response with zero series for a tenant that should have data usually means the wrong tenant value, which is also LGTM-006, not an empty metrics layer. Run the section 2 rule-error check (LGTM-004) **and the section 2b freshness / rule-eval-lag checks (LGTM-007/008)** through the same `/prometheus` prefix and `X-Scope-OrgID` header — e.g. `${MIMIR_URL}/prometheus/api/v1/query?query=time()-timestamp(up)` and `${MIMIR_URL}/prometheus/api/v1/rules` — so the store checks hit the Mimir path, not the bare root (scrape-target health is `/scoutflo:audit-prometheus`'s, not re-run here).
 
 If `mimir.tenant_id` is unset or its placeholder value was never replaced, try `anonymous` before concluding the metrics layer is broken: confirmed live that a real deployment's actual tenant was `anonymous`, the value Mimir defaults to when multi-tenancy auth was never configured, not `your-tenant` or any other guessable string. The failure without the right header is not always a clean `401`; it can come back as a plain-text `no org id` body with no `Content-Type: application/json`, which `jq` fails to parse. Wrap the `jq` calls with a body-shape check first (`curl ... | { read -r first_line; case "$first_line" in '{'*) ... ;; *) echo "non-JSON response, likely a tenant-header failure: $first_line" ;; esac; }`, or simply capture the raw body and inspect it before piping to `jq`) so a wrong tenant produces a clear diagnostic instead of a `jq` parse-error stack trace.
 
@@ -267,6 +263,8 @@ curl -fsS --max-time 10 -H "$AUTH" --get --data-urlencode 'query=up' \
 curl -fsS --max-time 10 -H "$AUTH" --get --data-urlencode 'query=up' \
   "${VM_URL}/select/${VM_TENANT}/prometheus/api/v1/query" | jq '.data.result | length'
 ```
+
+The section 2b freshness / rule-eval-lag checks (LGTM-007/008) route the same way as the `up` query above: root `/api/v1/query` (and `/api/v1/rules` on vmalert) on single-node VM, and the `/select/<tenant>/prometheus/api/v1/query` prefix on cluster VM (vmselect).
 
 VictoriaMetrics evaluates no alerting rules itself; that is vmalert's job. If `victoriametrics.vmalert_url` is unset while alert rules are supposed to exist, that is LGTM-012 fail, not not-in-scope: metrics with no evaluator means no alerts fire.
 
@@ -637,7 +635,7 @@ EXPOSED_HOST="grafana.example.com"          # each host from the lists above
 curl -sS -o /dev/null -w '%{http_code}\n' --max-time 10 "https://${EXPOSED_HOST}/"
 ```
 
-Reading the results. LGTM-060: any single-replica statefulset holding metrics, logs, or traces is a finding unless an accepted RPO/RTO with proven backups is on record. LGTM-061: PVC size alone is not retention; read the store's retention flag or chart values (`helm --kube-context "$KUBE_CONTEXT" -n "$MON_NS" get values <release>` is read-only) and record the period per store. LGTM-063: an unauthenticated `200` from a metrics store, Alertmanager, or a raw Grafana render is exposure; `401`, `403`, or a `302` to a login is the healthy shape. LGTM-064: `No resources found` on both queries means one bad node drain can take monitoring down silently. LGTM-066: the jq filter is a heuristic for where to look, not proof; open the named ConfigMaps and confirm before filing, and never copy the matched values into evidence. For LGTM-065, sample label cardinality from the metrics store (Prometheus: `/api/v1/status/tsdb` top label pairs) and look for IDs, emails, session tokens, or full URLs used as label values.
+Reading the results. LGTM-060: any single-replica statefulset holding metrics, logs, or traces is a finding unless an accepted RPO/RTO with proven backups is on record. LGTM-061: PVC size alone is not retention; read the store's retention flag or chart values (`helm --kube-context "$KUBE_CONTEXT" -n "$MON_NS" get values <release>` is read-only) and record the period per store. LGTM-063: an unauthenticated `200` from a metrics store, Alertmanager, or a raw Grafana render is exposure; `401`, `403`, or a `302` to a login is the healthy shape. LGTM-064: `No resources found` on both queries means one bad node drain can take monitoring down silently. LGTM-066: the jq filter is a heuristic for where to look, not proof; open the named ConfigMaps and confirm before filing, and never copy the matched values into evidence. For LGTM-065, sample label cardinality from the metrics **store** — Mimir per-tenant `/prometheus/api/v1/status/tsdb` (with `X-Scope-OrgID`) or VictoriaMetrics `/api/v1/status/tsdb` — and look for IDs, emails, session tokens, or full URLs used as label values. (The vanilla-Prometheus TSDB cardinality — `prometheus.url` `/api/v1/status/tsdb` — is `/scoutflo:audit-prometheus`'s PROM-030, not scored here, so the two audits never double-count the same series.)
 
 ## 12. Per-service coverage queries (LGTM-030 to LGTM-035, gated by LGTM-039)
 
