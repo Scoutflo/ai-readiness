@@ -196,7 +196,7 @@ EOF
     F="${1:?findings.json}"; [ -f "$F" ] || { echo "no such file: $F" >&2; exit 1; }
     echo "## Findings by purpose"
     echo
-    echo "This view separates foundational operations work from the evidence needed for trustworthy AI-assisted diagnosis. A finding can appear in both lists; its detailed evidence appears once in its own detailed section below — the Findings table for readiness findings, or the relevant non-scored section (e.g. Cost & Resource Optimization, Scoutflo Topology Readiness) for a non-scored finding."
+    echo "Two standalone reads over the same audit: General audit (operational reliability) and AI SRE readiness (trustworthy AI-assisted diagnosis). Each lists its findings with what's wrong, why it matters, and the recommended action; a finding relevant to both appears in both. Full evidence for each finding lives in the Findings section below (and, for a non-scored finding, its own section) — it is not repeated here."
     for lane in general-audit ai-sre-readiness; do
       case "$lane" in
         general-audit) heading="General audit" ;;
@@ -210,17 +210,18 @@ EOF
         echo "_No findings classified in this lane._"
         continue
       fi
-      echo "| Ref | Severity | Finding |"
-      echo "| --- | --- | --- |"
+      # Readable per-view analysis: severity + what's wrong, then why-it-matters and
+      # the recommended action when the finding carries them. Ordered worst-first.
+      # Detailed evidence (commands/observed) stays in the Findings section — not here.
       jq -r --arg lane "$lane" '
-        .findings[]?
-        | select((.lifecycle // "new") != "suppressed")
-        | select((.report_lanes // []) | index($lane))
-        | [(.id|gsub("\\|";"\\|")), (.severity|gsub("\\|";"\\|")), (.title|gsub("\\|";"\\|"))]
-        | @tsv' "$F" \
-      | while IFS="$(printf '\t')" read -r id severity title; do
-          echo "| ${id} | ${severity} | ${title} |"
-        done
+        def rank: {"critical":0,"high":1,"medium":2,"low":3,"info":4}[.] // 5;
+        [ .findings[]? | select((.lifecycle // "new") != "suppressed") | select((.report_lanes // []) | index($lane)) ]
+        | sort_by(.severity | rank)
+        | .[]
+        | "- **[" + ((.severity // "info") | ascii_upcase) + "] " + (.title // "(untitled)") + "** (ref: `" + (.id // "?") + "`)\n"
+          + (if (.impact // "") != "" then "  - Why it matters: " + .impact + "\n" else "" end)
+          + (if (.recommendation // "") != "" then "  - Recommended action: " + .recommendation + "\n" else "" end)
+      ' "$F"
     done
     ;;
 
