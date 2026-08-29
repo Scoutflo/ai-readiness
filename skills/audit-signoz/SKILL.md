@@ -354,7 +354,7 @@ Render the Scoutflo Topology Readiness section per [topology-readiness.md](../..
 
 ## Phase 8: Score, write, brief
 
-Score per [severity-and-scoring.md](../../report-standard/severity-and-scoring.md): each check yields `pass` (1.0), `partial` (0.5), `fail`/`blocked` (0), with `not-in-scope` removed from the denominator; category score is the credit ratio times 100, rounded down; overall is the weight-normalized sum over included categories. Whole categories that could not be assessed are excluded, renormalized, and stated (this is exactly the SIG-007 path, and the ClickHouse-lane-not-configured path for SIG-030/060/061); blocked checks inside an assessable category score 0. Assign each category a maturity value (`reactive`, `proactive`, `systematic`). Score conservatively: when unsure between two results, pick the lower and say why.
+Score per [severity-and-scoring.md](../../report-standard/severity-and-scoring.md): each check yields `pass` (1.0), `partial` (0.5), or `fail` (0). `blocked` is unassessed and leaves the readiness denominator; `not-in-scope` leaves both readiness and assessment-coverage denominators. Category score is `floor(((checks_passed*2)+checks_partial)*50/assessed)` where `assessed = passed+partial+failed` (0 when a category has no assessed check); overall is the weight-normalized sum over categories with at least one assessed check, rounded down. Show assessment coverage separately. A category with zero assessed checks is excluded, renormalized, and stated (this is exactly the SIG-007 path, and the ClickHouse-lane-not-configured path for SIG-030/060/061). A fully blocked run is `unassessed` with `overall: null`, never 0/100. Assign each category a maturity value (`reactive`, `proactive`, `systematic`). Score conservatively: when unsure between a defect and missing evidence, use `blocked` and state the exact evidence-unlock action.
 
 | Category | Weight | ID range |
 | --- | ---: | --- |
@@ -371,7 +371,13 @@ Weights sum to 100. The full check catalog, one permanent ID per check with typi
 
 End-to-end gate: claim end-to-end coverage only when the overall score is at or above 85, every critical service has fresh logs/traces/metrics, alert rules route to a live channel, and no category was excluded. Below the gate, write "good base coverage", never "end to end".
 
-Before writing, since `findings.json` requires the `lifecycle` field on every finding: load the previous run's `findings.json` when one exists and classify every finding (`new`, `unchanged`, `regressed`; resolved IDs go to the delta); load `./scoutflo-audits/exemptions.yaml` when present (entries with `id`, `reason`, and `expires` unexpired suppress into the Suppressed appendix; malformed/expired entries are reported, never honored).
+Lifecycle, exemptions, and totals, before rendering the report:
+
+1. Load the previous run's `findings.json` when one exists; classify every finding per the lifecycle table in the [findings schema](../../report-standard/findings-schema.md) (`new`, `unchanged`, `regressed`; resolved IDs go to the delta).
+2. Load `./scoutflo-audits/exemptions.yaml` when present. Entries with `id`, `reason`, and `expires` all set and unexpired suppress their finding into the Suppressed appendix; malformed or expired entries are reported, never honored. For a readiness finding, retain the observed `partial` or `fail` result on the same-ID `checks[]` row and add `suppressed: true` plus `suppression_reason`; set the finding's `points_recoverable` to 0. Suppressed checks remain assessed for coverage but are excluded from readiness scoring; the scorecard states the suppressed count.
+3. Every findings area and coverage cell carries its denominator (`passed/total`).
+4. Emit one `checks[]` row for every stable `SIG-*` catalog check (SIG-001, SIG-007, SIG-010, SIG-011, SIG-020, SIG-030, SIG-040, SIG-041, SIG-050, SIG-060, SIG-061), including passes, partials, failures, blockers, and not-in-scope checks. Derive category counts, readiness, assessment coverage, and `score.check_set` from that complete ledger; never write them independently. A `blocked` or `not-in-scope` row requires a non-empty `reason`; the SIG-007 guardrail path marks SIG-010/SIG-011 (and, without the ClickHouse lane, SIG-030/060/061) `blocked` with the visibility/lane reason, and the ClickHouse-lane-off path marks SIG-030/060/061 `not-in-scope`.
+5. Every finding declares `scoring_scope: "readiness"` and `report_lanes`: `general-audit`, `ai-sre-readiness`, or both. Referential integrity: every `partial`/`fail`/`blocked` check has exactly one same-ID readiness finding, and every readiness finding points back to a same-ID `partial`/`fail`/`blocked` row (never a `pass` or `not-in-scope` row); a `blocked` finding carries `status: "blocked"` and `points_recoverable: 0`. Use the AI SRE lane only when the evidence shows impact to telemetry quality, service identity/naming, topology/ownership context, incident routing evidence, RCA trust, or action safety — a coverage/freshness/naming/routing-evidence finding (SIG-007, SIG-010, SIG-011, SIG-040, SIG-041) is typically **both**, while a pure reliability/cost/security-posture finding (SIG-020, SIG-030, SIG-050, SIG-060, SIG-061) is `general-audit` only. This classification never changes severity or score.
 
 Emit and verify:
 
@@ -388,12 +394,16 @@ if [ "$SIG_KIND" = seq ]; then SIG_SEG="signoz/${SIG_LABEL}"; else SIG_SEG="sign
 RUN_DATE="$(date -u +%Y-%m-%d)"
 OUT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${SIG_SEG}/${RUN_DATE}"
 mkdir -p "$OUT"
-# ... write findings.json (lifecycle set per finding, estate object from sizing; ".target" is the
-# per-target slug $SIG_SEG — "signoz/<url-host>" for a single block, "signoz/<label>" for a labeled
-# list, so audit-all/correlation/render disambiguate multiple instances), inventory.json (kinds:
-# alert_rule, contact_point, dashboard, table, user; ".target" also $SIG_SEG), and report.md per the
-# report standard, then verify:
-jq -e --arg seg "$SIG_SEG" '.schema == "scoutflo-findings/v1" and .target == $seg and (.findings | type == "array") and (.findings | all(has("lifecycle")))' \
+# ... write findings.json (scoutflo-findings/v2 with a complete checks[] ledger — one row per
+# SIG-* catalog check — lifecycle + scoring_scope + report_lanes set per finding, estate object
+# from sizing; ".target" is the per-target slug $SIG_SEG — "signoz/<url-host>" for a single block,
+# "signoz/<label>" for a labeled list, so audit-all/correlation/render disambiguate multiple
+# instances), inventory.json (kinds: alert_rule, contact_point, dashboard, table, user; ".target"
+# also $SIG_SEG), and report.md per the report standard, then verify:
+jq -e --arg seg "$SIG_SEG" '.schema == "scoutflo-findings/v2" and .target == $seg
+  and (.checks | type == "array" and length > 0)
+  and (.findings | type == "array")
+  and (.findings | all(has("lifecycle") and (.scoring_scope == "readiness") and (.report_lanes | type == "array" and length > 0)))' \
   "$OUT/findings.json" >/dev/null && echo "findings.json valid"
 grep -q '^# ' "$OUT/report.md" && echo "report.md present"
 sh "${CLAUDE_PLUGIN_ROOT}/report-standard/check-findings.sh" "$OUT/findings.json"
@@ -401,6 +411,8 @@ sh "${CLAUDE_PLUGIN_ROOT}/report-standard/check-findings.sh" "$OUT/findings.json
 # pull, redacted. counts.total must reconcile with items; the ## Inventory section IS this render.
 jq -e --arg seg "$SIG_SEG" '.schema == "scoutflo-inventory/v1" and .target == $seg and (.items | type == "array") and (.counts.total == (.items | length))' "$OUT/inventory.json" >/dev/null && echo "inventory.json valid"
 sh "${CLAUDE_PLUGIN_ROOT}/report-standard/render-report-viz.sh" inventory "$OUT/inventory.json" >/dev/null && echo "inventory section renders"
+sh "${CLAUDE_PLUGIN_ROOT}/report-standard/render-report-viz.sh" lanes "$OUT/findings.json" >/dev/null && echo "findings-by-purpose section renders"
+grep -qxF '## Findings by purpose' "$OUT/report.md" && echo "findings-by-purpose section present"
 sh "${CLAUDE_PLUGIN_ROOT}/report-standard/render-report-viz.sh" html "$OUT/findings.json" "$OUT/report.html" "$(dirname "$OUT")/history.jsonl"
 sh "${CLAUDE_PLUGIN_ROOT}/report-standard/check-report.sh" "$OUT/report.md"
 # Defense-in-depth: mask any secret that slipped capture before the report is shared.
@@ -410,7 +422,37 @@ has_secrets "$OUT/report.md" && echo "[redaction] WARNING: residual secret patte
 ls -l "$OUT"
 ```
 
-Compute the delta against the previous run date per the [report standard](../../report-standard/README.md); on the first run state "first run, no delta". After the report is written, close with the run-completion message per the report standard ([report-template.md](../../report-standard/report-template.md#run-completion-message-what-the-skill-says-in-chat-when-the-run-finishes)): the one-line score headline, the top fixes by `points_recoverable`, the **absolute** report path, the OS-specific open command, and the leak-safe share pointer. Then send the Slack brief, titles only, never evidence values:
+Compute the delta against the previous run date per the [report standard](../../report-standard/README.md); on the first run state "first run, no delta". After the report is written, close with the run-completion message per the report standard ([report-template.md](../../report-standard/report-template.md#run-completion-message-what-the-skill-says-in-chat-when-the-run-finishes)): the one-line score headline, the top fixes by `points_recoverable`, the **absolute** report path, the OS-specific open command, and the leak-safe share pointer. Then append the derived history row after findings/report validation; a same-date rerun replaces that date's row instead of duplicating it, and the row carries `state`, `check_set`, and `assessment.coverage_percent` so a re-weighted run is treated as incomparable rather than plotted as a real delta:
+
+```bash
+set -eu
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+SIG_KIND=$(sh "$TT" "$CFG" signoz kind); SIG_N=$(sh "$TT" "$CFG" signoz count)
+SIG_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "${SIG_N:-0}" ]; do [ "$(sh "$TT" "$CFG" signoz label "$_i")" = "$SCOUTFLO_TARGET" ] && { SIG_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+SIG_LABEL=$(sh "$TT" "$CFG" signoz label "$SIG_IDX")
+SIG_URL=$(sh "$TT" "$CFG" signoz get "$SIG_IDX" url); SIG_URL="${SIG_URL%/}"
+SIG_HOST="$(printf '%s' "${SIG_URL:-}" | sed -e 's#^[a-zA-Z][a-zA-Z0-9+.-]*://##' -e 's#[:/].*$##' -e 's#[^A-Za-z0-9._-]#-#g')"; [ -n "$SIG_HOST" ] || SIG_HOST="signoz-host"
+if [ "$SIG_KIND" = seq ]; then SIG_SEG="signoz/${SIG_LABEL}"; else SIG_SEG="signoz/${SIG_HOST}"; fi
+TARGET_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${SIG_SEG}"
+RUN_DATE="$(date -u +%Y-%m-%d)"
+OUT="${TARGET_DIR}/${RUN_DATE}"
+RESOLVED="0"   # fixed count from this run's delta; 0 on the first run
+LINE="$(jq -c --arg d "$RUN_DATE" --argjson resolved "$RESOLVED" \
+  '{run_date:$d, skill:"audit-signoz", overall:.score.overall, state:.score.state,
+    scoring_model:.score.scoring_model, check_set:.score.check_set,
+    assessment_coverage_percent:.score.assessment.coverage_percent, gate:.score.gate,
+    end_to_end:.score.end_to_end, severity_counts:.severity_counts,
+    lifecycle_counts:((reduce .findings[].lifecycle as $l ({}; .[$l] = (.[$l] // 0) + 1)) + {resolved:$resolved})}' \
+  "$OUT/findings.json")"
+TMP="$(mktemp)"
+[ -f "${TARGET_DIR}/history.jsonl" ] && grep -v "\"run_date\":\"${RUN_DATE}\"" "${TARGET_DIR}/history.jsonl" > "$TMP" || true
+printf '%s\n' "$LINE" >> "$TMP"
+mv "$TMP" "${TARGET_DIR}/history.jsonl"
+tail -1 "${TARGET_DIR}/history.jsonl" | jq -e '.run_date and ((.overall|type)=="number" or .overall==null) and .scoring_model and .check_set' >/dev/null && echo "history.jsonl updated"
+```
+
+Then send the Slack brief, titles only, never evidence values:
 
 ```bash
 set -eu
@@ -428,19 +470,33 @@ OUT="${TARGET_DIR}/${RUN_DATE}"
 if [ -n "${SCOUTFLO_SLACK_WEBHOOK:-}" ]; then
   OUT_ABS="$(cd "$OUT" && pwd)"
   SCORE="$(jq -r '.score.overall' "$OUT/findings.json")"
+  SCORE_STATE="$(jq -r '.score.state' "$OUT/findings.json")"
+  CUR_MODEL="$(jq -r '.score.scoring_model' "$OUT/findings.json")"
+  CUR_SET="$(jq -r '.score.check_set' "$OUT/findings.json")"
+  ASSESSMENT="$(jq -r '.score.assessment | "\(.assessed_checks)/\(.applicable_checks) (\(.coverage_percent)%) assessed, \(.scored_checks) scored, \(.blocked_checks) blocked, \(.suppressed_checks) suppressed"' "$OUT/findings.json")"
   E2E="$(jq -r 'if .score.end_to_end then "end-to-end" else "not end-to-end" end' "$OUT/findings.json")"
   COUNTS="$(jq -r '.severity_counts | "\(.critical) critical, \(.high) high, \(.medium) medium, \(.low) low"' "$OUT/findings.json")"
-  TOP="$(jq -r '[.findings[] | "\(.id) \(.title)"] | .[0:5] | join("\n")' "$OUT/findings.json")"
+  TOP="$(jq -r '[.findings[] | select((.lifecycle // "new") != "suppressed") | "\(.id) \(.title)"] | .[0:5] | join("\n")' "$OUT/findings.json")"
   PREV="$(find "$TARGET_DIR" -mindepth 1 -maxdepth 1 -type d -name '[0-9]*-[0-9]*-[0-9]*' | sort | tail -2 | head -1)"
   MOVE=""; DELTA="first run"
   if [ -n "$PREV" ] && [ "$PREV" != "$OUT" ]; then
+    PREV_MODEL="$(jq -r '.score.scoring_model // ""' "$PREV/findings.json")"
+    PREV_SET="$(jq -r '.score.check_set // ""' "$PREV/findings.json")"
+    PREV_SCORE="$(jq -r 'if (.score.overall|type)=="number" then .score.overall else "" end' "$PREV/findings.json")"
+    if [ "$SCORE_STATE" = "assessed" ] && [ -n "$PREV_SCORE" ] && [ "$PREV_MODEL" = "$CUR_MODEL" ] && [ "$PREV_SET" = "$CUR_SET" ]; then
     MOVE="$(jq -rn --argjson prev "$(jq '.score.overall' "$PREV/findings.json")" --argjson cur "$SCORE" \
       '(($cur - $prev) | if . >= 0 then "(+\(.))" else "(\(.))" end)')"
+    fi
     DELTA="$(jq -rn --slurpfile p "$PREV/findings.json" --slurpfile c "$OUT/findings.json" '
       [$p[0].findings[].id] as $b | [$c[0].findings[].id] as $n |
       "\(($b - $n) | length) fixed, \(($n - $b) | length) new, \(($n - ($n - $b)) | length) unchanged"')"
   fi
-  jq -n --arg head "audit-signoz ${RUN_DATE}: ${SCORE}/100${MOVE:+ $MOVE}, ${E2E}. ${COUNTS}." \
+  if [ "$SCORE_STATE" = "unassessed" ]; then
+    HEAD="audit-signoz ${RUN_DATE}: readiness unassessed; ${ASSESSMENT}. ${COUNTS}."
+  else
+    HEAD="audit-signoz ${RUN_DATE}: ${SCORE}/100${MOVE:+ $MOVE}, ${E2E}; ${ASSESSMENT}. ${COUNTS}."
+  fi
+  jq -n --arg head "$HEAD" \
         --arg top "$TOP" --arg delta "$DELTA" --arg path "$OUT_ABS/report.md" \
         '{text: ($head + "\nTop findings:\n" + $top + "\nDelta: " + $delta + "\nReport: " + $path)}' \
     | curl -fsS --max-time 10 -H 'Content-Type: application/json' -d @- "$SCOUTFLO_SLACK_WEBHOOK" \
@@ -463,6 +519,10 @@ When invoked by `audit-all`, skip the Slack brief; the orchestrator sends exactl
 | `user` | `system.users` | `auth_type`, `host_scope` (never `auth_params` values) |
 
 Every row traces to a raw object read this run; an empty estate is `items: []` with `total: 0`, reported honestly and paired with the SIG-007 guardrail. Redaction applies (`secret-redaction.md`): capture by key/name only — never a secret value, webhook URL, phone number, or email.
+
+## Findings by purpose
+
+`report.md`'s `## Findings by purpose` section is the `render-report-viz.sh lanes` render of `findings.json` — never hand-write it, regenerate it. It splits every finding by its `report_lanes` so a reader sees the two audiences separately: **general audit** (operational reliability, retention/cost, ClickHouse health, security posture) and **AI SRE readiness** (whether telemetry quality, service identity/naming, topology/ownership context, incident routing evidence, RCA trust, and action safety are sufficient for trustworthy AI-assisted diagnosis). A finding that bears on both — most SIG-007/SIG-010/SIG-011 coverage-and-freshness findings and every SIG-040/SIG-041 routing/dashboard finding — appears in both lanes; a pure reliability/cost/security-posture finding (SIG-020/SIG-030/SIG-050/SIG-060/SIG-061) appears only under general audit. The lane split is presentation and ownership, never a second severity or score. The Phase-8 emit block asserts this section renders and is present.
 
 ## Remediation pointers
 

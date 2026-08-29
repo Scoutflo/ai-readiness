@@ -18,7 +18,7 @@ Run this standalone, from `/scoutflo:audit-all`, or on a schedule via `/scoutflo
 Outputs, per the [report standard](../../report-standard/README.md):
 
 - `./scoutflo-audits/pagerduty/[<label>/]<YYYY-MM-DD>/findings.json` per the [findings schema](../../report-standard/findings-schema.md), finding IDs `PD-NNN`
-- `./scoutflo-audits/pagerduty/[<label>/]<YYYY-MM-DD>/report.md` per the [report template](../../report-standard/report-template.md), including the `## Inventory` section (the `render-report-viz.sh inventory` output)
+- `./scoutflo-audits/pagerduty/[<label>/]<YYYY-MM-DD>/report.md` per the [report template](../../report-standard/report-template.md), including the `## Inventory` section (the `render-report-viz.sh inventory` output) and the `## Findings by purpose` section (the `render-report-viz.sh lanes` output, splitting findings by `report_lanes` into the general-audit and AI-SRE-readiness lanes)
 - `./scoutflo-audits/pagerduty/[<label>/]<YYYY-MM-DD>/inventory.json` per the [inventory schema](../../report-standard/inventory-schema.md) (`scoutflo-inventory/v1`): the complete Phase-2 catalog — one item per service, escalation policy, schedule, integration, and user (`kind` `service`, `escalation_policy`, `schedule`, `integration`, `user`), each with `covers` (the topology service it pages for), `enabled`, `severity` (the object's own, or null), and `routes_to` for alerting objects (a service's escalation policy). Built from the raw pull, never invented; redacted at capture, never a secret value.
 - One appended line in `./scoutflo-audits/pagerduty/[<label>/]history.jsonl`
 - One Slack brief, when `slack.webhook_env` is configured
@@ -283,7 +283,7 @@ Then render the Scoutflo Topology Readiness section per [topology-readiness.md](
 
 ## Phase 9: Score, write, brief
 
-Score per [severity-and-scoring.md](../../report-standard/severity-and-scoring.md): each check yields `pass` (1.0), `partial` (0.5), `fail`/`blocked` (0), `not-in-scope` leaves the denominator. Category score is the credit ratio times 100 rounded down; overall is the weight-normalized sum over included categories. Whole categories that could not be assessed (Actionability without the analytics probe; grouping checks without AIOps) are excluded, renormalized, and stated; blocked checks inside an assessable category score 0. Score conservatively: when unsure between two results, pick the lower and say why. Assign each category a maturity value (`reactive`, `proactive`, `systematic`) per the shared definitions.
+Score per [severity-and-scoring.md](../../report-standard/severity-and-scoring.md): each check yields `pass` (1.0), `partial` (0.5), or `fail` (0). `blocked` is unassessed and leaves the readiness denominator; `not-in-scope` leaves both readiness and assessment-coverage denominators. Category score is the assessed-credit ratio times 100 rounded down — `floor(((passed*2)+partial)*50/assessed)` where `assessed = pass+partial+fail` (0 when a category has no assessed checks); overall is the weight-normalized sum over categories with at least one assessed check. Show assessment coverage separately. Whole categories that could not be assessed (Actionability without the analytics probe; grouping checks without AIOps) go to `score.excluded[]` with their weight and reason, renormalized out of the overall, and stated. A fully unassessed run is `unassessed` with `overall: null`, never 0/100. Score conservatively: when unsure between a defect and missing evidence, use `blocked` and state the exact evidence-unlock action. Assign each category a maturity value (`reactive`, `proactive`, `systematic`) per the shared definitions.
 
 | Category | Weight | ID range |
 | --- | ---: | --- |
@@ -295,13 +295,15 @@ Score per [severity-and-scoring.md](../../report-standard/severity-and-scoring.m
 
 The full check catalog and the target profile (what 100 means per category) are at the top of [references/pagerduty-checks.md](references/pagerduty-checks.md). IDs are stable: the same defect gets the same ID every run, one finding per failed check, affected objects enumerated. Compute `points_recoverable` per finding by re-running the scoring model with that check at full credit; `info` findings and excluded categories carry 0. The executive summary states the gap to target and the two or three findings with the highest `points_recoverable` as the biggest levers.
 
-End-to-end gate: claim end-to-end coverage only when the overall score is at or above 85, every critical service passes every applicable coverage row, and no category was excluded. Below the gate, write "good base coverage", never "end to end". An account whose Actionability category was plan-excluded cannot claim end-to-end paging health; say which categories the claim rests on.
+End-to-end gate: claim end-to-end coverage only when the overall score is at or above 85, assessment coverage is 100%, every critical service passes every applicable coverage row, and no category was excluded. Below the gate, write "good base coverage", never "end to end". An account whose Actionability category was plan-excluded cannot claim end-to-end paging health; say which categories the claim rests on.
 
 Lifecycle, exemptions, and totals, before rendering the report:
 
 1. Load the previous run's `findings.json` when one exists; classify every finding per the lifecycle table in the [findings schema](../../report-standard/findings-schema.md) (`new`, `unchanged`, `regressed`; resolved IDs go to the delta, and the executive summary names regressions first).
-2. Load `./scoutflo-audits/exemptions.yaml` when present. Entries with `id`, `reason`, and `expires` all set and unexpired suppress their finding into the Suppressed appendix; malformed or expired entries are reported, never honored.
+2. Load `./scoutflo-audits/exemptions.yaml` when present. Entries with `id`, `reason`, and `expires` all set and unexpired suppress their finding into the Suppressed appendix; malformed or expired entries are reported, never honored. For a readiness finding, retain the observed `partial` or `fail` result on the same-ID `checks[]` row and add `suppressed: true` plus `suppression_reason`; set the finding's `points_recoverable` to 0. Suppressed readiness checks remain assessed for coverage but are excluded from readiness scoring; the scorecard states the suppressed count.
 3. Every findings area and coverage cell carries its denominator (`passed/total`).
+4. Emit one `checks[]` row for every stable `PD-*` catalog check, including passes, partials, failures, blockers, and not-in-scope checks; `partial`/`blocked`/`not-in-scope` rows carry a non-empty `reason`, and an active exemption sets `suppressed: true` + `suppression_reason` on a `partial`/`fail` row. Derive category counts, readiness, assessment coverage, and `score.check_set` (the `cksum-v2:N:M` fingerprint over each check's id + category, every category's name + weight, and the gate, per the pipeline in [findings-schema.md](../../report-standard/findings-schema.md#check-ledger-v2)) from that complete ledger; never write them independently.
+5. Every finding declares `scoring_scope` (`readiness` for a same-ID non-pass `PD-*` check; `non-scored` for a topology-readiness `TOPO-*` gap that carries no `PD-*` check row) and `report_lanes`: `general-audit`, `ai-sre-readiness`, or both. Use the AI SRE lane only when the evidence shows impact to telemetry quality, service identity/naming, correlation, topology/ownership context, incident routing, RCA trust, or action safety — an escalation/on-call coverage or responder-identity gap (PD-001/004/005/006/007/009), a service-mapping gap (PD-013), or the actionability/routing-evidence findings (PD-040 to PD-042) are typically both lanes; a pure incident-hygiene, plan-posture, or migration-debt gap (PD-011/012/014, PD-030 to PD-032) is `general-audit` only. The lane never changes severity or score. A referential-integrity rule the gate enforces: every `partial`/`fail`/`blocked` check has a same-ID readiness finding, every readiness finding has a same-ID non-pass check row (never `pass`/`not-in-scope`), a blocked check's finding carries `status: "blocked"` and `points_recoverable: 0`, and a `non-scored` finding has `points_recoverable: 0` and no check row.
 
 Emit and verify:
 
@@ -316,19 +318,27 @@ if [ "$PD_KIND" = seq ]; then PD_SEG="pagerduty/${PD_LABEL}"; else PD_SEG="pager
 RUN_DATE="$(date -u +%Y-%m-%d)"
 OUT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${PD_SEG}/${RUN_DATE}"
 mkdir -p "$OUT"
-# ... write findings.json, inventory.json, and report.md per the report standard. The findings.json
-# ".target" is the per-target slug (equal to $PD_SEG: "pagerduty" for a single block, "pagerduty/<label>"
-# for a labeled list target), so audit-all/correlation/render disambiguate multiple PagerDuty accounts. Verify:
-jq -e --arg seg "$PD_SEG" '.schema == "scoutflo-findings/v1" and .target == $seg and (.findings | type == "array")' \
+# ... write findings.json (scoutflo-findings/v2, with one checks[] row per catalog check, the full
+# score{} object, lifecycle + scoring_scope + report_lanes per finding, and the estate object from
+# sizing), inventory.json, and report.md per the report standard. The findings.json ".target" is the
+# per-target slug (equal to $PD_SEG: "pagerduty" for a single block, "pagerduty/<label>" for a labeled
+# list target), so audit-all/correlation/render disambiguate multiple PagerDuty accounts. Then verify:
+jq -e --arg seg "$PD_SEG" '.schema == "scoutflo-findings/v2" and .target == $seg
+  and (.checks | type == "array" and length > 0)
+  and (.findings | type == "array")
+  and (.findings | all(has("lifecycle") and (.scoring_scope | IN("readiness","non-scored")) and (.report_lanes | type == "array" and length > 0)))' \
   "$OUT/findings.json" >/dev/null && echo "findings.json valid"
 grep -q '^# ' "$OUT/report.md" && echo "report.md present"
-# Output conformance: the emitted report.md must match report-standard/report-template.md.
+# Output conformance: the emitted findings.json score must reconcile with its checks[] ledger and the
+# report.md must match report-standard/report-template.md. Catches score/section drift before done.
 sh "${CLAUDE_PLUGIN_ROOT}/report-standard/check-findings.sh" "$OUT/findings.json"
 # Inventory (scoutflo-inventory/v1): the complete Phase-2 catalog of what exists,
 # built from the raw pull (never invented, redacted). counts.total must reconcile
 # with items; the ## Inventory section of report.md IS this render.
 jq -e '.schema == "scoutflo-inventory/v1" and (.items | type == "array") and (.counts.total == (.items | length))' "$OUT/inventory.json" >/dev/null && echo "inventory.json valid"
 sh "${CLAUDE_PLUGIN_ROOT}/report-standard/render-report-viz.sh" inventory "$OUT/inventory.json" >/dev/null && echo "inventory section renders"
+sh "${CLAUDE_PLUGIN_ROOT}/report-standard/render-report-viz.sh" lanes "$OUT/findings.json" >/dev/null && echo "findings-by-purpose section renders"
+grep -qxF '## Findings by purpose' "$OUT/report.md" && echo "findings-by-purpose section present"
 sh "${CLAUDE_PLUGIN_ROOT}/report-standard/render-report-viz.sh" html "$OUT/findings.json" "$OUT/report.html" "$(dirname "$OUT")/history.jsonl"
 sh "${CLAUDE_PLUGIN_ROOT}/report-standard/check-report.sh" "$OUT/report.md"
 ```
@@ -348,7 +358,9 @@ RUN_DATE="$(date -u +%Y-%m-%d)"
 OUT="${TARGET_DIR}/${RUN_DATE}"
 RESOLVED="0"   # fixed count from this run's delta; 0 on the first run
 LINE="$(jq -c --arg d "$RUN_DATE" --argjson resolved "$RESOLVED" \
-  '{run_date:$d, skill:"audit-pagerduty", overall:.score.overall, gate:.score.gate,
+  '{run_date:$d, skill:"audit-pagerduty", overall:.score.overall, state:.score.state,
+    scoring_model:.score.scoring_model, check_set:.score.check_set,
+    assessment_coverage_percent:.score.assessment.coverage_percent, gate:.score.gate,
     end_to_end:.score.end_to_end, severity_counts:.severity_counts,
     lifecycle_counts:((reduce .findings[].lifecycle as $l ({}; .[$l] = (.[$l] // 0) + 1)) + {resolved:$resolved})}' \
   "$OUT/findings.json")"
@@ -356,7 +368,7 @@ TMP="$(mktemp)"
 [ -f "${TARGET_DIR}/history.jsonl" ] && grep -v "\"run_date\":\"${RUN_DATE}\"" "${TARGET_DIR}/history.jsonl" > "$TMP" || true
 printf '%s\n' "$LINE" >> "$TMP"
 mv "$TMP" "${TARGET_DIR}/history.jsonl"
-tail -1 "${TARGET_DIR}/history.jsonl" | jq -e '.run_date and (.overall >= 0)' >/dev/null && echo "history.jsonl updated"
+tail -1 "${TARGET_DIR}/history.jsonl" | jq -e '.run_date and ((.overall|type)=="number" or .overall==null) and .scoring_model and .check_set' >/dev/null && echo "history.jsonl updated"
 ```
 
 The report's trend line renders the last five history.jsonl entries, oldest first. After the report is written, close with the run-completion message per the report standard ([report-template.md](../../report-standard/report-template.md#run-completion-message-what-the-skill-says-in-chat-when-the-run-finishes)): the one-line score headline, the top fixes by points_recoverable, the **absolute** report path, the OS-specific open command, and the leak-safe share pointer (Slack brief). Then send the Slack brief exactly as [report-template.md](../../report-standard/report-template.md) specifies: score, severity counts, top finding titles, delta line, topology readiness line, report path — titles only, never evidence values, service names allowed. When invoked by `audit-all`, skip the brief; the orchestrator sends exactly one combined message per run. Keep `./scoutflo-audits/` out of public version control; reports describe your paging setup.

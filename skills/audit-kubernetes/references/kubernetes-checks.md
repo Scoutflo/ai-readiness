@@ -23,14 +23,14 @@ One permanent ID per check. IDs never change or get reused; retired checks keep 
 | K8S-002 | Identity & access | No workload ServiceAccount holds cluster-wide wildcard (`*/*/*`) or cluster-admin RBAC | high (critical if publicly exposed) |
 | K8S-006 | Identity & access | No ServiceAccount has cluster-wide `secrets get/list` beyond what it needs | high |
 | K8S-009 | Identity & access | Workloads that never call the API server disable `automountServiceAccountToken` (a mounted token is only as safe as its SA's RBAC) | medium (high when the SA can read secrets or the pod is exposed) |
-| K8S-003 | Network | Application namespaces have at least one NetworkPolicy selecting their pods (not a flat open network) | high |
-| K8S-011 | Network | Application namespaces have a **default-deny** ingress baseline, not just some policies (a pod no policy selects is still open) | medium |
-| K8S-010 | Network | Internet-facing Services/Ingress are inventoried and their reachable blast radius is bounded (exposure + RBAC + no netpol is an external→cluster path) | high (critical when the exposed pod's SA is privileged) |
+| K8S-003 | Network segmentation | Application namespaces have at least one NetworkPolicy selecting their pods (not a flat open network) | high |
+| K8S-011 | Network segmentation | Application namespaces have a **default-deny** ingress baseline, not just some policies (a pod no policy selects is still open) | medium |
+| K8S-010 | Network segmentation | Internet-facing Services/Ingress are inventoried and their reachable blast radius is bounded (exposure + RBAC + no netpol is an external→cluster path) | high (critical when the exposed pod's SA is privileged) |
 | K8S-004 | Resource governance | Deployments/StatefulSets/DaemonSets set container resource requests and limits | medium |
 | K8S-014 | Resource governance | Application namespaces have a ResourceQuota and a LimitRange (no namespace can starve the cluster) | medium |
-| K8S-005 | Reliability | Critical single-replica workloads have a PodDisruptionBudget | medium (high for critical services) |
-| K8S-012 | Reliability | Workloads define readiness and liveness probes (rollout sends traffic only to ready pods; wedged pods self-heal) | medium |
-| K8S-013 | Reliability | Multi-replica critical workloads spread across nodes (`topologySpreadConstraints` or pod anti-affinity) — replicas that co-locate are not actually HA | medium (high for critical services) |
+| K8S-005 | Reliability & resilience | Critical single-replica workloads have a PodDisruptionBudget | medium (high for critical services) |
+| K8S-012 | Reliability & resilience | Workloads define readiness and liveness probes (rollout sends traffic only to ready pods; wedged pods self-heal) | medium |
+| K8S-013 | Reliability & resilience | Multi-replica critical workloads spread across nodes (`topologySpreadConstraints` or pod anti-affinity) — replicas that co-locate are not actually HA | medium (high for critical services) |
 
 ## 3. Workload hardening (K8S-001, K8S-007, K8S-008)
 

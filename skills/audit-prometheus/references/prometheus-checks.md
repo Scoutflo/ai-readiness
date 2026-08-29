@@ -48,21 +48,21 @@ One permanent ID per check. IDs never change or get reused; retired checks keep 
 
 | ID | Category | Check | Typical fail severity |
 | --- | --- | --- | --- |
-| PROM-001 | Server reachability | API reachable and healthy — `/-/healthy` 200, `vector(1)` status=success, buildinfo returns a version | critical |
-| PROM-002 | Server reachability | Last config reload succeeded — `prometheus_config_last_reload_successful == 1` (a `0` means changes since are not applied) | high |
-| PROM-003 | Server reachability | Runtime + retention posture — `runtimeinfo` corruption count, `flags` retention window | medium |
-| PROM-007 | Scope guardrail | Reachable Prometheus with **zero active targets and zero `up` series** (blocks coverage), or **zero loaded rules** (rules not-in-scope) — a visibility/config gap, never a confident 0 | info |
-| PROM-010 | Scrape coverage | Scrape targets healthy — no `health != "up"` target for a critical-service job (a down target reads stale, not absent) | high |
-| PROM-011 | Scrape coverage | Per-service `up == 1` **and** fresh — `time() - timestamp(up)` within threshold (up-but-stale = ingestion lag) | high |
-| PROM-012 | Scrape coverage | Scrape-config limits not breached — no `..._exceeded_sample_limit_total` / target-limit increase (series silently dropped while `up==1`) | medium |
-| PROM-020 | Rule-engine | Rules load and evaluate error-free — no `health != "ok"` and no non-empty `lastError` | high |
-| PROM-021 | Rule-engine | Rules evaluate on time — no group `evaluationTime > interval`, no `prometheus_rule_evaluation_failures_total` increase | medium |
-| PROM-022 | Rule-engine | Rules are backed by live metrics — each critical alerting rule's query metric returns data now; expected rules exist (rule presence) | high |
-| PROM-023 | Rule-engine | Notify path live — `/api/v1/alertmanagers` has an active AM and `prometheus_notifications_dropped_total` is flat (the Prometheus→AM hop; routing itself is audit-alertmanager) | high |
-| PROM-030 | TSDB | Cardinality — no runaway `labelValueCountByLabelName` / `seriesCountByMetricName` driven by IDs/emails/URLs | medium |
-| PROM-031 | TSDB | WAL + compaction integrity — no `wal_corruptions_total`, no `compactions_failed_total` increase, no failed truncations/reloads | high |
-| PROM-032 | TSDB | Head-series churn + growth — `head_series` and `rate(head_series_created_total[..])` not exploding relative to a flat total | medium |
-| PROM-040 | Remote-write | Remote-write health — `samples_pending` draining, shards below max, no `samples_failed/dropped_total` increase, write lag bounded (not-in-scope if no remote_write) | high |
+| PROM-001 | Server reachability and config | API reachable and healthy — `/-/healthy` 200, `vector(1)` status=success, buildinfo returns a version | critical |
+| PROM-002 | Server reachability and config | Last config reload succeeded — `prometheus_config_last_reload_successful == 1` (a `0` means changes since are not applied) | high |
+| PROM-003 | Server reachability and config | Runtime + retention posture — `runtimeinfo` corruption count, `flags` retention window | medium |
+| PROM-007 | Scrape targets and coverage | Reachable Prometheus with **zero active targets and zero `up` series** (blocks coverage), or **zero loaded rules** (rules not-in-scope) — a visibility/config gap, never a confident 0 | info |
+| PROM-010 | Scrape targets and coverage | Scrape targets healthy — no `health != "up"` target for a critical-service job (a down target reads stale, not absent) | high |
+| PROM-011 | Scrape targets and coverage | Per-service `up == 1` **and** fresh — `time() - timestamp(up)` within threshold (up-but-stale = ingestion lag) | high |
+| PROM-012 | Scrape targets and coverage | Scrape-config limits not breached — no `..._exceeded_sample_limit_total` / target-limit increase (series silently dropped while `up==1`) | medium |
+| PROM-020 | Rule-engine health | Rules load and evaluate error-free — no `health != "ok"` and no non-empty `lastError` | high |
+| PROM-021 | Rule-engine health | Rules evaluate on time — no group `evaluationTime > interval`, no `prometheus_rule_evaluation_failures_total` increase | medium |
+| PROM-022 | Rule-engine health | Rules are backed by live metrics — each critical alerting rule's query metric returns data now; expected rules exist (rule presence) | high |
+| PROM-023 | Rule-engine health | Notify path live — `/api/v1/alertmanagers` has an active AM and `prometheus_notifications_dropped_total` is flat (the Prometheus→AM hop; routing itself is audit-alertmanager) | high |
+| PROM-030 | TSDB cardinality and storage | Cardinality — no runaway `labelValueCountByLabelName` / `seriesCountByMetricName` driven by IDs/emails/URLs | medium |
+| PROM-031 | TSDB cardinality and storage | WAL + compaction integrity — no `wal_corruptions_total`, no `compactions_failed_total` increase, no failed truncations/reloads | high |
+| PROM-032 | TSDB cardinality and storage | Head-series churn + growth — `head_series` and `rate(head_series_created_total[..])` not exploding relative to a flat total | medium |
+| PROM-040 | Remote-write and federation | Remote-write health — `samples_pending` draining, shards below max, no `samples_failed/dropped_total` increase, write lag bounded (not-in-scope if no remote_write) | high |
 | PROM-050 | Security posture | Destructive-API exposure — `--web.enable-admin-api` / `--web.enable-lifecycle` (delete_series / reload / quit reachable); enabled + unauth = critical | high |
 | PROM-051 | Security posture | Transport + auth exposure — TLS on the wire; not reachable unauthenticated on a public host | high |
 

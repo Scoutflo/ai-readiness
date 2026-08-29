@@ -270,9 +270,9 @@ fi
 
 Behavior this enforces (Phase 11 honors it):
 
-- **Alerting-object-dependent categories excluded** — **Alert routing and delivery, Alert coverage, and Alert quality** are marked `blocked` with the visibility-gap reason and renormalized per [severity-and-scoring.md](../../report-standard/severity-and-scoring.md); emit finding **AZR-007** naming the gap and the fix (confirm the identity holds `Reader`/`Monitoring Reader` at subscription scope, and check the resource groups that hold the alerting objects — recipe in `/scoutflo:connect`). **Never** write a confident `0/100`, a vacuously-high score, or an end-to-end claim.
+- **Alerting-object-dependent categories excluded** — every check in **Alert routing and delivery, Alert coverage, and Alert quality** records `blocked` with the visibility-gap reason; each fully-unassessed category (assessed==0) then moves to `score.excluded[]` and renormalizes out per [severity-and-scoring.md](../../report-standard/severity-and-scoring.md). Emit finding **AZR-007** (`scoring_scope: "non-scored"`, points_recoverable 0, no check-ledger row) naming the gap and the fix (confirm the identity holds `Reader`/`Monitoring Reader` at subscription scope, and check the resource groups that hold the alerting objects — recipe in `/scoutflo:connect`). **Never** write a confident `0/100`, a vacuously-high score, or an end-to-end claim.
 - **Keep the resource-signal categories included** — **Compute VM/VMSS coverage, AKS coverage, Log Analytics coverage, and Load balancer coverage** assess the estate's own posture (AMA/DCR presence, `addonProfiles.omsagent.enabled`, `azureMonitorProfile.metrics.enabled`, diagnostic settings, retention, health-probe attachment) from resource inventory that does not depend on the alerting objects, so at least one scored category remains (excluding all leaves nothing to score and `check-findings.sh` rejects an all-excluded scorecard).
-- If those resource categories are **also** empty — a pure subscription with no resources of its own, or an identity that can see nothing — emit **no confident score at all** and report AZR-007 as the outcome. A `401`/`403` from Phase 2 is a *privilege* finding, not this trip-wire.
+- If those resource categories are **also** empty — a pure subscription with no resources of its own, or an identity that can see nothing — every check is `blocked`, the run is `state: "unassessed"` with `overall: null` (never a confident score at all), and AZR-007 is the reported outcome. A `401`/`403` from Phase 2 is a *privilege* finding, not this trip-wire.
 
 ## Phase 1: Service context
 
@@ -340,7 +340,7 @@ Then render the Scoutflo Topology Readiness section per [topology-readiness.md](
 
 ## Phase 11: Score, write, brief
 
-Score per [severity-and-scoring.md](../../report-standard/severity-and-scoring.md): each check yields `pass` (1.0), `partial` (0.5), `fail`/`blocked` (0); `not-in-scope` leaves the denominator. Category score is the credit ratio times 100 rounded down; overall is the weight-normalized sum over included categories. Whole categories that could not be assessed are excluded, renormalized, and stated; blocked checks inside an assessable category score 0. Score conservatively: when unsure between two results, pick the lower and say why. Assign each category a maturity value (`reactive`, `proactive`, `systematic`) per the shared definitions, judged conservatively.
+Score per [severity-and-scoring.md](../../report-standard/severity-and-scoring.md): each check yields `pass` (1.0), `partial` (0.5), or `fail` (0). `blocked` is unassessed and leaves the readiness denominator; `not-in-scope` leaves both readiness and assessment-coverage denominators. Category score is the assessed-credit ratio times 100 rounded down; overall is the weight-normalized sum over categories with at least one assessed check. Show assessment coverage separately. A fully blocked run is `unassessed` with `overall: null`, never 0/100. Score conservatively: when unsure between a defect and missing evidence, use `blocked` and state the exact evidence-unlock action. Assign each category a maturity value (`reactive`, `proactive`, `systematic`) per the shared definitions, judged conservatively.
 
 **Assemble the flagship detection-blindness chain.** Before scoring, join the findings into the one silent-degradation path no scanner assembles: for a named critical service, `alert-EXISTS × route-LIVE × signal-MEASURED × evidence-RETAINED`. Emit it as a single sentence naming the specific service — e.g. *"`checkout-vm-1` (critical, per topology) HAS a CPU metric alert (AZR-002 pass) → but its only action group has 0 enabled receivers (AZR-001) AND an enabled `RemoveAllActionGroups` rule scopes `rg-prod` (AZR-005) → the VM has no AMA/DCR so memory is never even measured (AZR-010) → and its platform logs route to `la-prod` whose newest Heartbeat is 6 days old (AZR-041) at `retentionInDays=30` (AZR-040): when checkout saturates tonight, no page fires, the signal is never collected, and the logs to reconstruct it are stale."* Five individually-green-looking objects that a free scanner reports as "covered", chained into one proof the service is undetectable end-to-end. This is the Azure differentiator: Azure Monitor exposes no fired-notification API, so the only way to know a service is blind is to compute this chain from config + data-plane recency — which Advisor and the Portal banners do not. Where a link is verify-pending or blocked, say so in the chain rather than asserting it.
 
@@ -354,17 +354,19 @@ Score per [severity-and-scoring.md](../../report-standard/severity-and-scoring.m
 | Load balancer / App Gateway coverage | 5 | AZR-050 |
 | Alert quality | 5 | AZR-060 |
 
-Weights are unchanged from the prior release (they still sum to 100); the four new checks (AZR-005, AZR-033, AZR-041, AZR-042) fold into their home categories rather than triggering a reweight. All four are **verify-pending** (`live_verifiable=false`): drafted against Azure's documented API and adversarially reviewed, but never run against a live tenant — no Azure estate exists in the benchmark. Until a first live run with a read-only token confirms each one's api-version (AZR-005 `actionRules` 2021-08-08; AZR-033 `prometheusRuleGroups` 2023-03-01) and read path, they score `blocked` (which renormalizes their category, never a confident pass or a fabricated observation), exactly as any unreachable check does.
+Weights are unchanged from the prior release (they still sum to 100); the four new checks (AZR-005, AZR-033, AZR-041, AZR-042) fold into their home categories rather than triggering a reweight. All four are **verify-pending** (`live_verifiable=false`): drafted against Azure's documented API and adversarially reviewed, but never run against a live tenant — no Azure estate exists in the benchmark. Until a first live run with a read-only token confirms each one's api-version (AZR-005 `actionRules` 2021-08-08; AZR-033 `prometheusRuleGroups` 2023-03-01) and read path, they score `blocked` (unassessed — the check leaves the readiness denominator, never a confident pass or a fabricated observation, and a category whose every check is blocked is fully unassessed, moves to `score.excluded[]`, and renormalizes out), exactly as any unreachable check does.
 
 The full check catalog and the target profile (what 100 means per category) are in [references/azure-checks.md](references/azure-checks.md). IDs are stable: the same defect gets the same ID every run, one finding per failed check, affected objects enumerated. Compute `points_recoverable` per finding by re-running the scoring model with that check at full credit; `info` findings and excluded categories carry 0. The executive summary states the gap to target and the two or three findings with the highest `points_recoverable` as the biggest levers. `AZR-007`, when it fires, excludes the alerting-dependent categories rather than scoring them zero (see the guardrail section).
 
-End-to-end gate: claim end-to-end coverage only when the overall score is at or above 85, every critical service passes every applicable coverage row, and no category was excluded. Below the gate, write "good base coverage", never "end to end".
+End-to-end gate: claim end-to-end coverage only when the overall score is at or above 85, assessment coverage is 100%, every critical service passes every applicable coverage row, and no category was excluded. Below the gate, write "good base coverage", never "end to end".
 
 Lifecycle, exemptions, and totals, before rendering the report:
 
-1. Load the previous run's `findings.json` when one exists; classify every finding per the lifecycle table in the [findings schema](../../report-standard/findings-schema.md) (`new`, `unchanged`, `regressed`; resolved IDs go to the delta, and the executive summary names regressions first).
-2. Load `./scoutflo-audits/exemptions.yaml` when present. Entries with `id`, `reason`, and `expires` all set and unexpired suppress their finding into the Suppressed appendix; malformed or expired entries are reported, never honored. Suppressed findings leave the score and severity counts.
+1. Load the previous run's `findings.json` when one exists; classify every finding, `AZR-*` and `AZROPT-*` alike, per the lifecycle table in the [findings schema](../../report-standard/findings-schema.md) (`new`, `unchanged`, `regressed`; resolved IDs go to the delta, and the executive summary names regressions first).
+2. Load `./scoutflo-audits/exemptions.yaml` when present. Entries with `id`, `reason`, and `expires` all set and unexpired suppress their finding into the Suppressed appendix; malformed or expired entries are reported, never honored. For a readiness finding, retain the observed `partial` or `fail` result on the same-ID `checks[]` row and add `suppressed: true` plus `suppression_reason`; set the finding's `points_recoverable` to 0. Suppressed readiness checks remain assessed for coverage but are excluded from readiness scoring. A non-scored `AZROPT-*` finding has no check row: set only its lifecycle to `suppressed`, preserve `scoring_scope: "non-scored"`, and keep zero readiness points.
 3. Every findings area and coverage cell carries its denominator (`passed/total`).
+4. Emit one `checks[]` row for every stable `AZR-*` readiness catalog check, including passes, partials, failures, blockers, and not-in-scope checks. Derive category counts, readiness, assessment coverage, and `score.check_set` from that complete ledger; never write them independently. `AZROPT-*` findings stay outside the readiness ledger and explicitly carry `scoring_scope: "non-scored"`. The AZR-007 guardrail is not a standing catalog check: when it fires it is emitted as a `scoring_scope: "non-scored"` finding (points_recoverable 0, no check-ledger row); its score impact is that the alerting-dependent categories' own checks record `blocked` and, being fully unassessed, move to `score.excluded[]`.
+5. Every finding declares `scoring_scope` (`readiness` for a same-ID non-pass `AZR-*` check; `non-scored` for `AZROPT-*` and the AZR-007 guardrail) and `report_lanes`: `general-audit`, `ai-sre-readiness`, or both. Use the AI SRE lane only when the evidence shows impact to telemetry quality, service identity/naming, topology/ownership context, incident routing evidence, RCA trust, or action safety. This classification never changes severity or score.
 
 Emit and verify:
 
@@ -379,10 +381,14 @@ if [ "$AZ_KIND" = seq ]; then AZ_SEG="azure/${AZ_LABEL}"; else AZ_SEG="azure"; f
 RUN_DATE="$(date -u +%Y-%m-%d)"
 OUT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${AZ_SEG}/${RUN_DATE}"
 mkdir -p "$OUT"
-# ... write findings.json, inventory.json, and report.md per the report standard. The findings.json
+# ... write findings.json (scoutflo-findings/v2 with a complete checks[] ledger),
+# inventory.json, and report.md per the report standard. The findings.json
 # ".target" is the per-target slug (equal to $AZ_SEG: "azure" for a single block, "azure/<label>" for
 # a labeled list target), so audit-all/correlation/render disambiguate multiple subscriptions. Verify:
-jq -e --arg seg "$AZ_SEG" '.schema == "scoutflo-findings/v1" and .target == $seg and (.findings | type == "array") and (.estate.path != null)' \
+jq -e --arg seg "$AZ_SEG" '.schema == "scoutflo-findings/v2" and .target == $seg
+  and (.checks | type == "array" and length > 0)
+  and (.findings | type == "array")
+  and (.findings | all((.scoring_scope | IN("readiness","non-scored")) and (.report_lanes | type == "array" and length > 0)))' \
   "$OUT/findings.json" >/dev/null && echo "findings.json valid"
 grep -q '^# ' "$OUT/report.md" && echo "report.md present"
 # Output conformance + score reconciliation, then the viz, then template conformance.
@@ -392,6 +398,8 @@ sh "${CLAUDE_PLUGIN_ROOT}/report-standard/check-findings.sh" "$OUT/findings.json
 # with items; the ## Inventory section of report.md IS this render.
 jq -e '.schema == "scoutflo-inventory/v1" and (.items | type == "array") and (.counts.total == (.items | length))' "$OUT/inventory.json" >/dev/null && echo "inventory.json valid"
 sh "${CLAUDE_PLUGIN_ROOT}/report-standard/render-report-viz.sh" inventory "$OUT/inventory.json" >/dev/null && echo "inventory section renders"
+sh "${CLAUDE_PLUGIN_ROOT}/report-standard/render-report-viz.sh" lanes "$OUT/findings.json" >/dev/null && echo "findings-by-purpose section renders"
+grep -qxF '## Findings by purpose' "$OUT/report.md" && echo "findings-by-purpose section present"
 sh "${CLAUDE_PLUGIN_ROOT}/report-standard/render-report-viz.sh" html "$OUT/findings.json" "$OUT/report.html" "$(dirname "$OUT")/history.jsonl"
 sh "${CLAUDE_PLUGIN_ROOT}/report-standard/check-report.sh" "$OUT/report.md"
 ```
@@ -411,7 +419,9 @@ RUN_DATE="$(date -u +%Y-%m-%d)"
 OUT="${TARGET_DIR}/${RUN_DATE}"
 RESOLVED="0"   # fixed count from this run's delta; 0 on the first run
 LINE="$(jq -c --arg d "$RUN_DATE" --argjson resolved "$RESOLVED" \
-  '{run_date:$d, skill:"audit-azure", overall:.score.overall, gate:.score.gate,
+  '{run_date:$d, skill:"audit-azure", overall:.score.overall, state:.score.state,
+    scoring_model:.score.scoring_model, check_set:.score.check_set,
+    assessment_coverage_percent:.score.assessment.coverage_percent, gate:.score.gate,
     end_to_end:.score.end_to_end, severity_counts:.severity_counts,
     lifecycle_counts:((reduce .findings[].lifecycle as $l ({}; .[$l] = (.[$l] // 0) + 1)) + {resolved:$resolved})}' \
   "$OUT/findings.json")"
@@ -419,7 +429,7 @@ TMP="$(mktemp)"
 [ -f "${TARGET_DIR}/history.jsonl" ] && grep -v "\"run_date\":\"${RUN_DATE}\"" "${TARGET_DIR}/history.jsonl" > "$TMP" || true
 printf '%s\n' "$LINE" >> "$TMP"
 mv "$TMP" "${TARGET_DIR}/history.jsonl"
-tail -1 "${TARGET_DIR}/history.jsonl" | jq -e '.run_date and (.overall >= 0)' >/dev/null && echo "history.jsonl updated"
+tail -1 "${TARGET_DIR}/history.jsonl" | jq -e '.run_date and ((.overall|type)=="number" or .overall==null) and .scoring_model and .check_set' >/dev/null && echo "history.jsonl updated"
 ```
 
 The report's trend line renders the last five history.jsonl entries, oldest first; the ledger is derived and never drives finding lifecycle. Then send the Slack brief: titles only, never evidence values, hostnames, subscription ids, tenant ids, or endpoints:
@@ -436,26 +446,43 @@ TARGET_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${AZ_SEG}"
 RUN_DATE="$(date -u +%Y-%m-%d)"
 OUT="${TARGET_DIR}/${RUN_DATE}"
 TOPO_LINE="Topology readiness: readiness not recorded"  # replace with "r/n services sync-ready" from Phase 10
+COST_LINE=""   # optional; set to "Cost: N optimization opportunities found" only when AZROPT findings exist this run
 # slack.webhook_env names the webhook variable; skip when unset.
 if [ -n "${SCOUTFLO_SLACK_WEBHOOK:-}" ]; then
   OUT_ABS="$(cd "$OUT" && pwd)"   # absolute path: the brief must be openable from anywhere
   SCORE="$(jq -r '.score.overall' "$OUT/findings.json")"
+  SCORE_STATE="$(jq -r '.score.state' "$OUT/findings.json")"
+  CUR_MODEL="$(jq -r '.score.scoring_model' "$OUT/findings.json")"
+  CUR_SET="$(jq -r '.score.check_set' "$OUT/findings.json")"
+  ASSESSMENT="$(jq -r '.score.assessment | "\(.assessed_checks)/\(.applicable_checks) (\(.coverage_percent)%) assessed, \(.scored_checks) scored, \(.blocked_checks) blocked, \(.suppressed_checks) suppressed"' "$OUT/findings.json")"
   E2E="$(jq -r 'if .score.end_to_end then "end-to-end" else "not end-to-end" end' "$OUT/findings.json")"
   COUNTS="$(jq -r '.severity_counts | "\(.critical) critical, \(.high) high, \(.medium) medium, \(.low) low"' "$OUT/findings.json")"
   CHECKS="$(jq -r '"\([.score.categories[].checks_passed] | add)/\([.score.categories[].checks_total] | add) checks passed"' "$OUT/findings.json")"
-  TOP="$(jq -r '[.findings[] | "\(.id) \(.title)"] | .[0:5] | join("\n")' "$OUT/findings.json")"
+  TOP="$(jq -r '[.findings[] | select((.lifecycle // "new") != "suppressed") | select(.area != "cost-optimization") | "\(.id) \(.title)"] | .[0:5] | join("\n")' "$OUT/findings.json")"
+  AZROPT_COUNT="$(jq -r '[.findings[] | select(.area == "cost-optimization")] | length' "$OUT/findings.json")"
+  [ "$AZROPT_COUNT" -gt 0 ] && COST_LINE="Cost: ${AZROPT_COUNT} optimization opportunities found"
   PREV="$(find "$TARGET_DIR" -mindepth 1 -maxdepth 1 -type d | grep -v '/runs$' | sort | tail -2 | head -1)"
   MOVE=""; DELTA="first run"
   if [ -n "$PREV" ] && [ "$PREV" != "$OUT" ]; then
+    PREV_MODEL="$(jq -r '.score.scoring_model // ""' "$PREV/findings.json")"
+    PREV_SET="$(jq -r '.score.check_set // ""' "$PREV/findings.json")"
+    PREV_SCORE="$(jq -r 'if (.score.overall|type)=="number" then .score.overall else "" end' "$PREV/findings.json")"
+    if [ "$SCORE_STATE" = "assessed" ] && [ -n "$PREV_SCORE" ] && [ "$PREV_MODEL" = "$CUR_MODEL" ] && [ "$PREV_SET" = "$CUR_SET" ]; then
     MOVE="$(jq -rn --argjson prev "$(jq '.score.overall' "$PREV/findings.json")" --argjson cur "$SCORE" \
       '(($cur - $prev) | if . >= 0 then "(+\(.))" else "(\(.))" end)')"
+    fi
     DELTA="$(jq -rn --slurpfile p "$PREV/findings.json" --slurpfile c "$OUT/findings.json" '
       [$p[0].findings[].id] as $b | [$c[0].findings[].id] as $n |
       "\(($b - $n) | length) fixed, \(($n - $b) | length) new, \(($n - ($n - $b)) | length) unchanged"')"
   fi
-  jq -n --arg head "audit-azure ${RUN_DATE}: ${SCORE}/100${MOVE:+ $MOVE}, ${E2E}. ${COUNTS}. ${CHECKS}." \
-        --arg top "$TOP" --arg delta "$DELTA" --arg topo "$TOPO_LINE" --arg path "$OUT_ABS/report.md" \
-        '{text: ($head + "\nTop findings:\n" + $top + "\nDelta: " + $delta + "\n" + $topo + "\nReport: " + $path)}' \
+  if [ "$SCORE_STATE" = "unassessed" ]; then
+    HEAD="audit-azure ${RUN_DATE}: readiness unassessed; ${ASSESSMENT}. ${COUNTS}."
+  else
+    HEAD="audit-azure ${RUN_DATE}: ${SCORE}/100${MOVE:+ $MOVE}, ${E2E}; ${ASSESSMENT}. ${COUNTS}. ${CHECKS}."
+  fi
+  jq -n --arg head "$HEAD" \
+        --arg top "$TOP" --arg delta "$DELTA" --arg topo "$TOPO_LINE" --arg cost "$COST_LINE" --arg path "$OUT_ABS/report.md" \
+        '{text: ($head + "\nTop findings:\n" + $top + "\nDelta: " + $delta + "\n" + $topo + ($cost | if . == "" then "" else "\n" + . end) + "\nReport: " + $path)}' \
     | curl -fsS --max-time 10 -H 'Content-Type: application/json' -d @- "$SCOUTFLO_SLACK_WEBHOOK" \
     || echo "Slack brief failed to send; audit result unaffected"
 fi
@@ -522,7 +549,7 @@ The subscription- and category-scoped checks (alert routing AZR-001, alert cover
 
 ## Cost and Resource Optimization (not scored)
 
-A separate, **never-scored** section reports Azure cost and idle-resource signals under the `AZROPT-NNN` prefix, per [references/azure-cost-checks.md](references/azure-cost-checks.md). None of it enters `score.categories` or `score.excluded`; every finding carries `points_recoverable: 0` and `area: cost-optimization`. The one hard rule: `estimated_monthly_savings_usd` appears **only** when copied verbatim from Azure Advisor's own cost recommendation — never recomputed against a price table, never converted from an annual or non-USD figure. Everything else (unattached disks, unassociated public IPs, stopped-but-not-deallocated VMs, over-scaled VMSS, orphaned resources) is a presence fact with no dollar. The subscription's month-to-date `PreTaxCost` from the Cost Management Query REST API (api-version `2023-11-01`, rate-limited — **handle 429 with backoff**) is spend already incurred, reported as context and never summed into savings. `az costmanagement query` **does not exist**; the read path is the Cost Management Query REST API only. The full catalog, the 429-aware `readOnly` POST helper, Resource Graph enumeration, and the forbidden-command list are in [references/azure-cost-checks.md](references/azure-cost-checks.md).
+A separate, **never-scored** section reports Azure cost and idle-resource signals under the `AZROPT-NNN` prefix, per [references/azure-cost-checks.md](references/azure-cost-checks.md). None of it enters `score.categories`, `score.excluded`, or `checks[]`; every finding carries `scoring_scope: "non-scored"`, `points_recoverable: 0`, and `area: cost-optimization`. Its findings still live in the normal `findings[]` array (so history, lifecycle, and exemptions all apply unmodified). The one hard rule: `estimated_monthly_savings_usd` appears **only** when copied verbatim from Azure Advisor's own cost recommendation — never recomputed against a price table, never converted from an annual or non-USD figure. Everything else (unattached disks, unassociated public IPs, stopped-but-not-deallocated VMs, over-scaled VMSS, orphaned resources) is a presence fact with no dollar. The subscription's month-to-date `PreTaxCost` from the Cost Management Query REST API (api-version `2023-11-01`, rate-limited — **handle 429 with backoff**) is spend already incurred, reported as context and never summed into savings. `az costmanagement query` **does not exist**; the read path is the Cost Management Query REST API only. The full catalog, the 429-aware `readOnly` POST helper, Resource Graph enumeration, and the forbidden-command list are in [references/azure-cost-checks.md](references/azure-cost-checks.md).
 
 ## Remediation pointers
 

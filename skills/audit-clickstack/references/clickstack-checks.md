@@ -162,13 +162,13 @@ One permanent ID per check. IDs never change or get reused; retired checks keep 
 
 | ID | Category | Check | Typical fail severity |
 | --- | --- | --- | --- |
-| CS-007 | Scope guardrail | Reachable ClickHouse with **zero rows across every `otel_*` table**, or HyperDX reachable with **zero alerts**, is a visibility/ingestion gap — blocks the coverage/alerting-dependent categories, never a confident 0 | info |
+| CS-007 | Telemetry coverage | Reachable ClickHouse with **zero rows across every `otel_*` table**, or HyperDX reachable with **zero alerts**, is a visibility/ingestion gap — blocks the coverage/alerting-dependent categories, never a confident 0 | info |
 | CS-010 | Telemetry coverage | Logs, traces, and metrics tables carry recent data for the critical services | high |
 | CS-011 | Ingestion freshness | `max(Timestamp)` lag on `otel_logs` / `otel_traces` / `otel_metrics_*` within threshold (stale = broken pipeline) | high |
 | CS-020 | Retention | Each `otel_*` table has a deliberate TTL (unbounded = cost/compliance gap; too-short = data-loss gap) | high |
 | CS-030 | ClickHouse health | Part counts sane, replicas in sync, no spiking `system.errors` codes (discount the single `READONLY` (164) entry the section-1 probe itself may add on a profile-readonly user), no stuck mutations | high |
 | CS-040 | HyperDX alerting | Alerts exist **and** route to a live receiver (webhook/Slack/PagerDuty); an alert wired to nothing is the core failure | critical |
-| CS-041 | HyperDX dashboards/sources | Dashboards exist and sources are connected for the critical services | medium |
+| CS-041 | Dashboards and sources | Dashboards exist and sources are connected for the critical services | medium |
 | CS-050 | Security posture | External `default` user requires a password; service users off `plaintext_password`; TLS on the wire; a least-privilege read-only user exists for audits | high |
 | CS-060 | ClickHouse health | Disk headroom vs telemetry growth — days-to-read-only before the disk fills and every INSERT is rejected (243 `NOT_ENOUGH_SPACE`) | high |
 | CS-061 | ClickHouse health | Write-path INSERT failures — collector writes rejected by ClickHouse (`query_log` Insert exceptions; disk-full 243, merge backlog 252 `TOO_MANY_PARTS`, profile/replica 164 `READONLY`, quota 201 `QUOTA_EXCEEDED`) | high |

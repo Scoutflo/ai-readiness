@@ -288,14 +288,14 @@ If `./scoutflo-audits/topology.md` exists, load it; its service list is the crit
 
 Build the raw picture with the commands in [references/zenduty-checks.md](references/zenduty-checks.md) section 4, pacing per the rate-limit rule: the audited teams, and per team the escalation policies (with rule and target shapes), on-call, schedules, services (with `collation`/`collation_time` and status), per-service integrations (with `is_enabled` and ingestion type) and their alert rules, and maintenance windows; plus the global alert routers. Judgment starts in Phase 3. A 403 on any surface is an auth-scope note; a 429 is a pacing signal, not a finding.
 
-## Phase 3: Escalation and on-call (ZD-001 to ZD-005)
+## Phase 3: Escalation and on-call (ZD-001 to ZD-006)
 
 Commands in section 5. Judge whether a page reaches a reachable human — and for every scored finding compute a real blast radius, not a shape assertion: join `services.json`'s `.escalation_policy` back to the offending policy to count *which* services (and which critical ones from topology) actually page through it, and cite ZD-030's aging incidents as the live proof a backstop already failed. Every audited team has an escalation policy and no production team's policy is a single rule with one target and `repeat_policy: 0` (`ZD-001`, critical when missing, high on the SPOF shape — state the services routing through it); escalation actually advances (`ZD-002` reads `move_to_next`: a multi-level policy with `move_to_next:false` never progresses past level 1, so its level-2 targets are decorative — name the services that then escalate to nobody); every escalation policy's on-call resolves to a staffed rotation now — an empty `oncalls` user array pages nobody (`ZD-003`, high); schedules referenced are non-empty and cover the window (`ZD-004`); no integration on a live ingestion path sits `is_enabled: false` so nothing can create alerts and the service goes fully dark (`ZD-005`, critical — count enabled integrations per service and intersect the zero-enabled ones with critical services); and no escalation level targets a lone named individual instead of a rotation/schedule (`ZD-006`, high, **verify-pending** — the `target_type` enum is unproven live).
 
 - ❌ `Escalation pass: every team names a policy.`
 - ✅ `Escalation partial: the payments EP is one rule, one user, repeat_policy 0 (ZD-001); 6 services route through it (services.json join), 2 critical (checkout, payments); its primary escalation has an empty on-call now (ZD-003) and 9 checkout incidents already sit triggered >4h (ZD-030); affected: checkout, payments.`
 
-## Phase 4: Alert noise (ZD-010 to ZD-016)
+## Phase 4: Alert noise (ZD-010 to ZD-017)
 
 Commands in section 6. This is the alert-hygiene category; every scored finding here carries a live count, not an "X is off" scanner line. Per-service `collation` on where a service is chatty — and PROVE the chattiness from `service_analytics` `total_incidents` vs `total_acknowledged` for that service (e.g. "checkout: collation:0, 412 incidents / 27 acked in 30d"), remembering the API reads time-based-vs-off and content-based correlation is not API-readable (`ZD-010`); suppress alert rules present for known-noisy sources and reviewed for over-broad matchers that silently drop real alerts (`ZD-011`, high — a suppress rule with an always-true condition is an accidental drop-all); the "Seconds Since Last Similar Incident" condition used to guard flapping where a source re-fires after resolution (`ZD-012`); delay-notification rules deliberate rather than blanket off-hours muting (`ZD-013`); a stable, non-blank `entity_id` so the default dedup collapses repeats — a rule that blanks or randomizes `entity_id` disables dedup (`ZD-014`); auto-acknowledge/auto-resolve working because sources emit resolve `alert_type`s rather than only ever firing (`ZD-015`); no maintenance window that is an open-ended recurring suppression — `repeat_interval` set with `repeat_until: null` (`ZD-016`, high — expand the retained `services[]` to name which covered services are critical and how many days the blackout has run); and no alert rule that downgrades a critical-service incident's urgency to non-paging, keeping the incident but never waking anyone (`ZD-017`, high, **verify-pending** — the "Change Incident Urgency" action is real but its `action_type` enum is unproven live).
 
@@ -331,7 +331,7 @@ Then render the Scoutflo Topology Readiness section per [topology-readiness.md](
 
 ## Phase 8: Score, write, brief
 
-Score per [severity-and-scoring.md](../../report-standard/severity-and-scoring.md): each check yields `pass` (1.0), `partial` (0.5), `fail`/`blocked` (0), `not-in-scope` leaves the denominator. Category score is the credit ratio times 100 rounded down; overall is the weight-normalized sum over included categories. Whole categories or teams that could not be assessed (a team that 403'd; a category the rate limiter blocked mid-run) are excluded, renormalized, and stated; blocked checks inside an assessable category score 0. Score conservatively: when unsure between two results, pick the lower and say why. Assign each category a maturity value (`reactive`, `proactive`, `systematic`).
+Score per [severity-and-scoring.md](../../report-standard/severity-and-scoring.md): each check yields `pass` (1.0), `partial` (0.5), or `fail` (0). `blocked` is unassessed and leaves the readiness denominator; `not-in-scope` leaves both readiness and assessment-coverage denominators. Category score is the assessed-credit ratio times 100 rounded down; overall is the weight-normalized sum over categories with at least one assessed check. A team or API surface that returns 401/403/404, or a category the rate limiter blocked mid-run, is blocked with the exact state, never failed or empty. Show assessment coverage separately. A fully blocked run is `unassessed` with `overall: null`, never 0/100. Score conservatively: when unsure between two results, pick the lower and say why. Assign each category a maturity value (`reactive`, `proactive`, `systematic`).
 
 | Category | Weight | ID range |
 | --- | ---: | --- |
@@ -342,13 +342,15 @@ Score per [severity-and-scoring.md](../../report-standard/severity-and-scoring.m
 
 The full check catalog and the target profile (what 100 means per category) are at the top of [references/zenduty-checks.md](references/zenduty-checks.md). IDs are stable: the same defect gets the same ID every run, one finding per failed check, affected objects and their team enumerated. Compute `points_recoverable` per finding by re-running the scoring model with that check at full credit; `info` findings and excluded categories carry 0. The executive summary states the gap to target and the two or three findings with the highest `points_recoverable` as the biggest levers.
 
-End-to-end gate: claim end-to-end coverage only when the overall score is at or above 85, every critical service passes every applicable coverage row, and no category or team was excluded. Below the gate, write "good base coverage", never "end to end". A run the rate limiter forced to skip some teams cannot claim end-to-end; say which teams the claim rests on.
+End-to-end gate: claim end-to-end coverage only when the overall score is at or above 85, assessment coverage is 100%, every critical service passes every applicable coverage row, and no category or team was excluded. Below the gate, write "good base coverage", never "end to end". A run the rate limiter forced to skip some teams cannot claim end-to-end; say which teams the claim rests on.
 
 Lifecycle, exemptions, and totals, before rendering the report:
 
 1. Load the previous run's `findings.json` when one exists; classify every finding per the lifecycle table in the [findings schema](../../report-standard/findings-schema.md) (`new`, `unchanged`, `regressed`; resolved IDs go to the delta, and the executive summary names regressions first).
-2. Load `./scoutflo-audits/exemptions.yaml` when present. Entries with `id`, `reason`, and `expires` all set and unexpired suppress their finding into the Suppressed appendix; malformed or expired entries are reported, never honored.
+2. Load `./scoutflo-audits/exemptions.yaml` when present. Entries with `id`, `reason`, and `expires` all set and unexpired suppress their finding into the Suppressed appendix; malformed or expired entries are reported, never honored. On the same-ID `checks[]` row, retain the observed `partial` or `fail` result and add `suppressed: true` plus `suppression_reason`; set the finding's `points_recoverable` to 0. Suppressed checks remain assessed for coverage but are excluded from readiness scoring.
 3. Every findings area and coverage cell carries its denominator (`passed/total`).
+4. Emit one `checks[]` row for every stable `ZD-*` catalog check, including passes, partials, failures, blockers, and not-in-scope checks. Derive category counts, readiness, assessment coverage, and `score.check_set` from that complete ledger; never write them independently.
+5. Every finding declares `scoring_scope: "readiness"` and `report_lanes`: `general-audit`, `ai-sre-readiness`, or both. Use the AI SRE lane only when the evidence shows impact to telemetry quality, service identity/naming, topology/ownership context, incident routing evidence, RCA trust, or action safety — a coverage, naming, or routing-evidence gap is typically both, a pure reliability/cost/security-posture gap is `general-audit` only. This classification never changes severity or score.
 
 Emit and verify:
 
@@ -363,10 +365,15 @@ if [ "$ZD_KIND" = seq ]; then ZD_SEG="zenduty/${ZD_LABEL}"; else ZD_SEG="zenduty
 RUN_DATE="$(date -u +%Y-%m-%d)"
 OUT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${ZD_SEG}/${RUN_DATE}"
 mkdir -p "$OUT"
-# ... write findings.json, inventory.json, and report.md per the report standard. The findings.json
-# ".target" is the per-target slug (equal to $ZD_SEG: "zenduty" for a single block, "zenduty/<label>"
-# for a labeled list target), so audit-all/correlation/render disambiguate multiple Zenduty accounts. Verify:
-jq -e --arg seg "$ZD_SEG" '.schema == "scoutflo-findings/v1" and .target == $seg and (.findings | type == "array")' \
+# ... write findings.json (scoutflo-findings/v2 with a complete checks[] ledger — one row per
+# ZD-* catalog check, lifecycle + scoring_scope + report_lanes set per finding), inventory.json,
+# and report.md per the report standard. The findings.json ".target" is the per-target slug
+# (equal to $ZD_SEG: "zenduty" for a single block, "zenduty/<label>" for a labeled list target),
+# so audit-all/correlation/render disambiguate multiple Zenduty accounts. Verify:
+jq -e --arg seg "$ZD_SEG" '.schema == "scoutflo-findings/v2" and .target == $seg
+  and (.checks | type == "array" and length > 0)
+  and (.findings | type == "array")
+  and (.findings | all(has("lifecycle") and (.scoring_scope == "readiness") and (.report_lanes | type == "array" and length > 0)))' \
   "$OUT/findings.json" >/dev/null && echo "findings.json valid"
 grep -q '^# ' "$OUT/report.md" && echo "report.md present"
 sh "${CLAUDE_PLUGIN_ROOT}/report-standard/check-findings.sh" "$OUT/findings.json"
@@ -375,6 +382,8 @@ sh "${CLAUDE_PLUGIN_ROOT}/report-standard/check-findings.sh" "$OUT/findings.json
 # with items; the ## Inventory section of report.md IS this render.
 jq -e '.schema == "scoutflo-inventory/v1" and (.items | type == "array") and (.counts.total == (.items | length))' "$OUT/inventory.json" >/dev/null && echo "inventory.json valid"
 sh "${CLAUDE_PLUGIN_ROOT}/report-standard/render-report-viz.sh" inventory "$OUT/inventory.json" >/dev/null && echo "inventory section renders"
+sh "${CLAUDE_PLUGIN_ROOT}/report-standard/render-report-viz.sh" lanes "$OUT/findings.json" >/dev/null && echo "findings-by-purpose section renders"
+grep -qxF '## Findings by purpose' "$OUT/report.md" && echo "findings-by-purpose section present"
 sh "${CLAUDE_PLUGIN_ROOT}/report-standard/render-report-viz.sh" html "$OUT/findings.json" "$OUT/report.html" "$(dirname "$OUT")/history.jsonl"
 sh "${CLAUDE_PLUGIN_ROOT}/report-standard/check-report.sh" "$OUT/report.md"
 ```
@@ -394,7 +403,9 @@ RUN_DATE="$(date -u +%Y-%m-%d)"
 OUT="${TARGET_DIR}/${RUN_DATE}"
 RESOLVED="0"   # fixed count from this run's delta; 0 on the first run
 LINE="$(jq -c --arg d "$RUN_DATE" --argjson resolved "$RESOLVED" \
-  '{run_date:$d, skill:"audit-zenduty", overall:.score.overall, gate:.score.gate,
+  '{run_date:$d, skill:"audit-zenduty", overall:.score.overall, state:.score.state,
+    scoring_model:.score.scoring_model, check_set:.score.check_set,
+    assessment_coverage_percent:.score.assessment.coverage_percent, gate:.score.gate,
     end_to_end:.score.end_to_end, severity_counts:.severity_counts,
     lifecycle_counts:((reduce .findings[].lifecycle as $l ({}; .[$l] = (.[$l] // 0) + 1)) + {resolved:$resolved})}' \
   "$OUT/findings.json")"
@@ -402,7 +413,7 @@ TMP="$(mktemp)"
 [ -f "${TARGET_DIR}/history.jsonl" ] && grep -v "\"run_date\":\"${RUN_DATE}\"" "${TARGET_DIR}/history.jsonl" > "$TMP" || true
 printf '%s\n' "$LINE" >> "$TMP"
 mv "$TMP" "${TARGET_DIR}/history.jsonl"
-tail -1 "${TARGET_DIR}/history.jsonl" | jq -e '.run_date and (.overall >= 0)' >/dev/null && echo "history.jsonl updated"
+tail -1 "${TARGET_DIR}/history.jsonl" | jq -e '.run_date and ((.overall|type)=="number" or .overall==null) and .scoring_model and .check_set' >/dev/null && echo "history.jsonl updated"
 ```
 
 The report's trend line renders the last five history.jsonl entries, oldest first. After the report is written, close with the run-completion message per the report standard ([report-template.md](../../report-standard/report-template.md#run-completion-message-what-the-skill-says-in-chat-when-the-run-finishes)): the one-line score headline, the top fixes by points_recoverable, the **absolute** report path, the OS-specific open command, and the leak-safe share pointer (Slack brief). Then send the Slack brief exactly as [report-template.md](../../report-standard/report-template.md) specifies: score, severity counts, top finding titles, delta line, topology readiness line, report path — titles only, never evidence values, service names allowed. When invoked by `audit-all`, skip the brief; the orchestrator sends exactly one combined message per run. Keep `./scoutflo-audits/` out of public version control; reports describe your paging setup.

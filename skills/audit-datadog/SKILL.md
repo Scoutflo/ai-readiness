@@ -242,7 +242,7 @@ Build the raw picture with the commands in [references/datadog-checks.md](refere
 
 ## Phase 3: Monitor delivery (DD-001 to DD-005)
 
-Commands in section 5. Judge whether a monitor reaches a live target: every monitor names at least one `@handle` (`DD-001`, critical when a monitor notifies nobody), no monitor targets a dead handle — a Slack channel, webhook, or PagerDuty service that no longer resolves (`DD-002`, high), no monitor left in `draft` status masquerading as coverage (`DD-003`, high — drafts never notify), org-level notification rules and config policies reviewed where the org uses them (`DD-004`, computing the routing fall-through set), and critical-service monitors carrying a `priority` so paging can be tiered rather than flat (`DD-005`, medium, **verify-pending** — section 5.1). DD-001/DD-002/DD-003 do not stop at a count: each joins the failing monitor to its `service:` tag and criticality so the finding names which service goes blind, and each is one of the suppressors the Phase-6 DD-033 effective-coverage flagship subtracts.
+Commands in section 5. Judge whether a monitor reaches a live target: every monitor names at least one `@handle` (`DD-001`, critical when a monitor notifies nobody), no monitor targets a dead handle — a Slack channel, webhook, or PagerDuty service that no longer resolves (`DD-002`, high), no monitor left in `draft` status masquerading as coverage (`DD-003`, high — drafts never notify), org-level notification rules and config policies reviewed where the org uses them (`DD-004`, computing the routing fall-through set), and critical-service monitors carrying a `priority` so paging can be tiered rather than flat (`DD-005`, medium, **live-verified (read-only)** — section 5.1, no residual: `priority` observed present and `null` on real monitors, exactly the untiered case it flags). DD-001/DD-002/DD-003 do not stop at a count: each joins the failing monitor to its `service:` tag and criticality so the finding names which service goes blind, and each is one of the suppressors the Phase-6 DD-033 effective-coverage flagship subtracts.
 
 - ❌ `Delivery pass: every monitor has a message.`
 - ✅ `Delivery partial: every monitor has a message, but six target @slack-prod-alerts which is not in the Slack integration's channel list (DD-002), and two are drafts (DD-003); affected: checkout, payments.`
@@ -251,7 +251,7 @@ Commands in section 5. Judge whether a monitor reaches a live target: every moni
 
 Commands in section 6. This is the alert-hygiene category. Recovery thresholds where a monitor has warning/critical thresholds and can flap (`DD-010`, joined to the notification handle so the finding names where the flap noise lands), deliberate no-data handling rather than a silent blind spot or a false page (`DD-011`, isolating the dangerous notify_no_data=false heartbeats), bounded renotification instead of forever (`DD-012`), evaluation and new-group delay where the query needs late data (`DD-013`), deliberate auto-resolve per type (`DD-014`), and Datadog's own `quality_issues[]` reviewed and reconciled with this audit (`DD-015`, info).
 
-Two noise checks are **verify-pending** (section 6.1): receiver noise concentration — the real critical-service pages sharing a handle with many flap-prone/renotify-heavy monitors so they are statistically buried (`DD-016`, high, the doctrine's alert-fatigue worked example made executable for Datadog); and monitors stuck in `overall_state == "Alert"` so long they can never re-page a new breach (`DD-017`, medium). DD-016's load-bearing computation is the handle→monitor concentration map plus the DD-010/DD-012 noisy set — no unverified vendor string; the `quality_issues[]` corroboration (high-alert-volume / stuck member strings) is provisional until a live run pins the exact member strings, since only `broken_at_handle` is proven. Never present those regex members as fact.
+Two noise checks are **live-verified (read-only)** (section 6.1): receiver noise concentration — the real critical-service pages sharing a handle with many flap-prone/renotify-heavy monitors so they are statistically buried (`DD-016`, high, the doctrine's alert-fatigue worked example made executable for Datadog); and monitors stuck in `overall_state == "Alert"` so long they can never re-page a new breach (`DD-017`, medium). Both load-bearing computations run on real monitor objects: DD-016's handle→monitor concentration map plus the DD-010/DD-012 noisy set, and DD-017's `overall_state` stuck-state read (observed `OK` on the live sample) — no dependence on any unverified vendor string. **One narrow residual stays verify-pending:** the `quality_issues[]` corroboration layer these checks may add (high-alert-volume / stuck member strings) — the exact member strings were not exercised because no monitor in the live sample carried quality issues; only `broken_at_handle` is proven. Never present those regex members as fact.
 
 Honest ceiling, stated in the report every run: monitor options are metadata about intent; whether a monitor actually flapped is visible only in its state history, which this audit samples but does not exhaustively reconstruct. Event Management correlation exists in Datadog but has no public API for its rules, so this audit reports correlation as UI-only and does not score it.
 
@@ -280,7 +280,7 @@ Then render the Scoutflo Topology Readiness section per [topology-readiness.md](
 
 ## Phase 8: Score, write, brief
 
-Score per [severity-and-scoring.md](../../report-standard/severity-and-scoring.md): each check yields `pass` (1.0), `partial` (0.5), `fail`/`blocked` (0), `not-in-scope` leaves the denominator. Category score is the credit ratio times 100 rounded down; overall is the weight-normalized sum over included categories. Whole categories that could not be assessed are excluded, renormalized, and stated; blocked checks inside an assessable category score 0. Score conservatively. Assign each category a maturity value (`reactive`, `proactive`, `systematic`).
+Score per [severity-and-scoring.md](../../report-standard/severity-and-scoring.md): each check yields `pass` (1.0), `partial` (0.5), or `fail` (0). `blocked` is unassessed and leaves the readiness denominator; `not-in-scope` leaves both readiness and assessment-coverage denominators. Category score is the assessed-credit ratio times 100 rounded down; overall is the weight-normalized sum over categories with at least one assessed check. Show assessment coverage separately. A fully blocked run is `unassessed` with `overall: null`, never 0/100. Score conservatively: when unsure between a defect and missing evidence, use `blocked` and state the exact evidence-unlock action. Assign each category a maturity value (`reactive`, `proactive`, `systematic`). `DDOPT-*` Cost & Resource Optimization findings carry `points_recoverable: 0` always and never enter this arithmetic.
 
 | Category | Weight | ID range |
 | --- | ---: | --- |
@@ -289,17 +289,19 @@ Score per [severity-and-scoring.md](../../report-standard/severity-and-scoring.m
 | Muting and downtime | 20 | DD-020 to DD-022 |
 | Coverage and staleness | 25 | DD-030 to DD-034 |
 
-The three checks added on the v0.1.134 depth pass fold into existing categories (DD-005 into Monitor delivery, DD-016/DD-017 into Monitor noise), so the weights are unchanged and still sum to 100. DD-005/DD-016/DD-017 are **verify-pending**: drafted against Datadog's documented API and adversarially reviewed, but not yet run against a live tenant (there is no Datadog org in the benchmark estate). They score like any other check once a live run confirms them; until then their findings carry the verify-pending caveat and never a fabricated live observation. See [references/datadog-checks.md](references/datadog-checks.md) sections 5.1 and 6.1.
+The three checks added on the v0.1.134 depth pass fold into existing categories (DD-005 into Monitor delivery, DD-016/DD-017 into Monitor noise), so the weights are unchanged and still sum to 100. Their load-bearing mechanisms are **live-verified read-only** against a real Datadog org on the `us5` site, matching [references/datadog-checks.md](references/datadog-checks.md) sections 5.1 and 6.1: DD-005's `priority` field was observed present and `null` on real monitors (exactly the untiered case it flags); DD-016's handle→monitor concentration map and DD-017's `overall_state` stuck-state read (observed `OK` on the live sample) both run on the real monitor objects, with no dependence on any unverified vendor string. **One narrow residual stays verify-pending:** the *vendor `quality_issues[]` corroboration* layer DD-016/DD-017 may add — the exact `quality_issues[]` member strings (`high-alert-volume`, `stuck`) — was not exercised, because no monitor in the live sample carried quality issues; treat those member matches as still-unproven and never present them as fact, while the concentration and stuck-state computations that actually score are proven. DD-005 carries no residual. All three score like any other check.
 
 The full check catalog and the target profile (what 100 means per category) are at the top of [references/datadog-checks.md](references/datadog-checks.md). IDs are stable: the same defect gets the same ID every run, one finding per failed check, affected objects enumerated. Compute `points_recoverable` per finding by re-running the scoring model with that check at full credit; `info` findings and excluded categories carry 0. The executive summary states the gap to target and the two or three findings with the highest `points_recoverable` as the biggest levers.
 
-End-to-end gate: claim end-to-end coverage only when the overall score is at or above 85, every critical service passes every applicable coverage row, and no category was excluded. Below the gate, write "good base coverage", never "end to end".
+End-to-end gate: claim end-to-end coverage only when the overall score is at or above 85, assessment coverage is 100%, every critical service passes every applicable coverage row, and no category was excluded. Below the gate, write "good base coverage", never "end to end". The Cost & Resource Optimization section never affects this gate either way.
 
 Lifecycle, exemptions, and totals, before rendering the report:
 
-1. Load the previous run's `findings.json` when one exists; classify every finding per the lifecycle table in the [findings schema](../../report-standard/findings-schema.md) (`new`, `unchanged`, `regressed`; resolved IDs go to the delta, and the executive summary names regressions first).
-2. Load `./scoutflo-audits/exemptions.yaml` when present. Entries with `id`, `reason`, and `expires` all set and unexpired suppress their finding into the Suppressed appendix; malformed or expired entries are reported, never honored.
+1. Load the previous run's `findings.json` when one exists; classify every finding, `DD-*` and `DDOPT-*` alike, per the lifecycle table in the [findings schema](../../report-standard/findings-schema.md) (`new`, `unchanged`, `regressed`; resolved IDs go to the delta, and the executive summary names regressions first).
+2. Load `./scoutflo-audits/exemptions.yaml` when present. Entries with `id`, `reason`, and `expires` all set and unexpired suppress their finding into the Suppressed appendix; malformed or expired entries are reported, never honored. For a readiness finding, retain the observed `partial` or `fail` result on the same-ID `checks[]` row and add `suppressed: true` plus `suppression_reason`; set the finding's `points_recoverable` to 0. Suppressed readiness checks remain assessed for coverage but are excluded from readiness scoring. A non-scored `DDOPT-*` finding has no check row: set only its lifecycle to `suppressed`, preserve `scoring_scope: "non-scored"`, and keep zero readiness points.
 3. Every findings area and coverage cell carries its denominator (`passed/total`).
+4. Emit one `checks[]` row for every stable `DD-*` readiness catalog check, including passes, partials, failures, blockers, and not-in-scope checks. Derive category counts, readiness, assessment coverage, and `score.check_set` from that complete ledger; never write them independently. `DDOPT-*` findings stay outside the readiness ledger and explicitly carry `scoring_scope: "non-scored"`.
+5. Every finding declares `scoring_scope` (`readiness` for a same-ID non-pass `DD-*` check; `non-scored` for `DDOPT-*`) and `report_lanes`: `general-audit`, `ai-sre-readiness`, or both. Default to `general-audit` (operational reliability); add or also use `ai-sre-readiness` only when the evidence bears on telemetry quality, service identity/naming, topology/ownership context, incident routing evidence, RCA trust, or action safety — what trustworthy AI-assisted diagnosis needs. A coverage/naming/routing-evidence finding is typically both; a pure reliability/cost/security-posture finding is `general-audit` only. This classification never changes severity or score.
 
 Emit and verify:
 
@@ -314,18 +316,28 @@ if [ "$DD_KIND" = seq ]; then DD_SEG="datadog/${DD_LABEL}"; else DD_SEG="datadog
 RUN_DATE="$(date -u +%Y-%m-%d)"
 OUT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${DD_SEG}/${RUN_DATE}"
 mkdir -p "$OUT"
-# ... write findings.json, inventory.json, and report.md per the report standard. The findings.json
-# ".target" is the per-target slug (equal to $DD_SEG: "datadog" for a single block, "datadog/<label>"
-# for a labeled-list target), so audit-all/correlation/render disambiguate multiple Datadog targets. Verify:
-jq -e --arg seg "$DD_SEG" '.schema == "scoutflo-findings/v1" and .target == $seg and (.findings | type == "array")' \
+# ... write findings.json (scoutflo-findings/v2 with a complete checks[] ledger — one row per DD-* catalog
+# check, lifecycle set per finding, scoring_scope, and report_lanes), inventory.json, and report.md per the
+# report standard. The findings.json ".target" is the per-target slug (equal to $DD_SEG: "datadog" for a
+# single block, "datadog/<label>" for a labeled-list target), so audit-all/correlation/render disambiguate
+# multiple Datadog targets. Then verify:
+jq -e --arg seg "$DD_SEG" '.schema == "scoutflo-findings/v2" and .target == $seg
+  and (.checks | type == "array" and length > 0)
+  and (.findings | type == "array")
+  and (.findings | all((.scoring_scope | IN("readiness","non-scored")) and (.report_lanes | type == "array" and length > 0)))' \
   "$OUT/findings.json" >/dev/null && echo "findings.json valid"
 grep -q '^# ' "$OUT/report.md" && echo "report.md present"
+# Output conformance: check-findings.sh recomputes every v2 denominator, category score, the
+# assessment coverage, and the check_set fingerprint, and enforces the checks[]<->findings[]
+# referential integrity — a score that does not reconcile with its own ledger fails here.
 sh "${CLAUDE_PLUGIN_ROOT}/report-standard/check-findings.sh" "$OUT/findings.json"
 # Inventory (scoutflo-inventory/v1): the complete Phase-2 catalog of what exists,
 # built from the raw pull (never invented, redacted). counts.total must reconcile
 # with items; the ## Inventory section of report.md IS this render.
 jq -e --arg seg "$DD_SEG" '.schema == "scoutflo-inventory/v1" and .target == $seg and (.items | type == "array") and (.counts.total == (.items | length))' "$OUT/inventory.json" >/dev/null && echo "inventory.json valid"
 sh "${CLAUDE_PLUGIN_ROOT}/report-standard/render-report-viz.sh" inventory "$OUT/inventory.json" >/dev/null && echo "inventory section renders"
+sh "${CLAUDE_PLUGIN_ROOT}/report-standard/render-report-viz.sh" lanes "$OUT/findings.json" >/dev/null && echo "findings-by-purpose section renders"
+grep -qxF '## Findings by purpose' "$OUT/report.md" && echo "findings-by-purpose section present"
 sh "${CLAUDE_PLUGIN_ROOT}/report-standard/render-report-viz.sh" html "$OUT/findings.json" "$OUT/report.html" "$(dirname "$OUT")/history.jsonl"
 sh "${CLAUDE_PLUGIN_ROOT}/report-standard/check-report.sh" "$OUT/report.md"
 ```
@@ -345,7 +357,9 @@ RUN_DATE="$(date -u +%Y-%m-%d)"
 OUT="${TARGET_DIR}/${RUN_DATE}"
 RESOLVED="0"   # fixed count from this run's delta; 0 on the first run
 LINE="$(jq -c --arg d "$RUN_DATE" --argjson resolved "$RESOLVED" \
-  '{run_date:$d, skill:"audit-datadog", overall:.score.overall, gate:.score.gate,
+  '{run_date:$d, skill:"audit-datadog", overall:.score.overall, state:.score.state,
+    scoring_model:.score.scoring_model, check_set:.score.check_set,
+    assessment_coverage_percent:.score.assessment.coverage_percent, gate:.score.gate,
     end_to_end:.score.end_to_end, severity_counts:.severity_counts,
     lifecycle_counts:((reduce .findings[].lifecycle as $l ({}; .[$l] = (.[$l] // 0) + 1)) + {resolved:$resolved})}' \
   "$OUT/findings.json")"
@@ -353,14 +367,14 @@ TMP="$(mktemp)"
 [ -f "${TARGET_DIR}/history.jsonl" ] && grep -v "\"run_date\":\"${RUN_DATE}\"" "${TARGET_DIR}/history.jsonl" > "$TMP" || true
 printf '%s\n' "$LINE" >> "$TMP"
 mv "$TMP" "${TARGET_DIR}/history.jsonl"
-tail -1 "${TARGET_DIR}/history.jsonl" | jq -e '.run_date and (.overall >= 0)' >/dev/null && echo "history.jsonl updated"
+tail -1 "${TARGET_DIR}/history.jsonl" | jq -e '.run_date and ((.overall|type)=="number" or .overall==null) and .scoring_model and .check_set' >/dev/null && echo "history.jsonl updated"
 ```
 
 The report's trend line renders the last five history.jsonl entries, oldest first. After the report is written, close with the run-completion message per the report standard ([report-template.md](../../report-standard/report-template.md#run-completion-message-what-the-skill-says-in-chat-when-the-run-finishes)): the one-line score headline, the top fixes by points_recoverable, the **absolute** report path, the OS-specific open command, and the leak-safe share pointer (Slack brief). Then send the Slack brief exactly as [report-template.md](../../report-standard/report-template.md) specifies: score, severity counts, top finding titles, delta line, topology readiness line, report path — titles only, never evidence values. When invoked by `audit-all`, skip the brief; the orchestrator sends exactly one combined message per run. Keep `./scoutflo-audits/` out of public version control; reports describe your monitoring setup.
 
 ## Cost & Resource Optimization (non-scored)
 
-This section is reported and never scored, the same pattern `audit-aws` uses. It runs only when the doctor `datadog cost-permissions` row is `pass`; on `skipped` (the app key lacks `usage_read`/`billing_read`, or `datadog.cost_checks` is `false`), the section reports `excluded, reason: <the doctor reason>` and runs no partial checks. Commands in [references/datadog-checks.md](references/datadog-checks.md) section 11. Findings use the `DDOPT-NNN` prefix, always carry `points_recoverable: 0`, never appear in `score.categories` or `score.excluded`, and render under their own heading after Topology Readiness. An `estimated_monthly_cost_usd` field appears only on a finding whose number came straight from Datadog's own usage endpoint; presence facts (a top custom-metric contributor, an unused dashboard) carry no invented dollar figure.
+This section is reported and never scored, the same pattern `audit-aws` uses. It runs only when the doctor `datadog cost-permissions` row is `pass`; on `skipped` (the app key lacks `usage_read`/`billing_read`, or `datadog.cost_checks` is `false`), the section reports `excluded, reason: <the doctor reason>` and runs no partial checks. Commands in [references/datadog-checks.md](references/datadog-checks.md) section 11. Findings use the `DDOPT-NNN` prefix, always carry `scoring_scope: "non-scored"` and `points_recoverable: 0`, never appear in `score.categories`, `score.excluded`, or the `checks[]` ledger, still carry their own `report_lanes` (typically `general-audit`), and render under their own heading after Topology Readiness. An `estimated_monthly_cost_usd` field appears only on a finding whose number came straight from Datadog's own usage endpoint; presence facts (a top custom-metric contributor, an unused dashboard) carry no invented dollar figure.
 
 
 ## Metadata Load (v0.1.68+)
