@@ -86,16 +86,13 @@ Green = read-only (safe, changes nothing) · amber = write, gated behind your co
 
 ## What's new (latest release)
 
-- **Reports are now visual, not walls of text.** Every audit report opens with an **At a glance** dashboard (a score bar, a trend sparkline, checks-passed, a severity histogram, and a "start here" pointer to the highest-value fix) and ships a standalone **`report.html`** dashboard next to `report.md` — a self-contained file (score donut, colored severity bars, sortable scorecard and findings) you open in any browser. All rendered deterministically from `findings.json`, so a visual can never disagree with the numbers.
-- **`/scoutflo:rca` is now live-first.** Ask *"why is `<service>` failing?"* and it uses your reports as reference and the topology as a blast-radius map, then makes strictly read-only live checks (pod status, restarts, OOM/exit codes, events, recent logs) to name an evidence-cited root cause — every fact tagged whether it came from a report or a live check. It never invents a cause and degrades to a report-only answer when it has no cluster access.
-- **Team-scoped audits never score a confident wrong `0/100` on a hidden scope.** `audit-jsm` and `audit-zenduty` (like `audit-elk` with Kibana spaces) now treat "the key can see no teams" as a visibility gap, not an empty estate.
-- **ELK audits discover your Kibana spaces — never assume `default`.** `audit-elk` enumerates every space your key can see (`GET /api/spaces/space`) and audits where your rules actually live, so a stack whose alerting sits in a non-default space is no longer reported as an empty `0/100`. When zero rules are visible it says so honestly (a possible key-visibility gap: widen the key to `spaces:["*"]` read) instead of a confident wrong score. The `/scoutflo:connect` recipe now grants the correct Kibana feature privileges at all spaces.
-- **A token you added is picked up in the same session.** Every audit now sources `~/.scoutflo/env` at its doctor gate, exactly as `/scoutflo:doctor` does — so a credential added mid-session works immediately, no new terminal. A new FAQ entry spells out where the token value goes (`~/.scoutflo/env`, keyed by the `*_env` name — not into `toolkit.yaml`).
-- **Prometheus is first-class discoverable.** `audit-lgtm` is your Prometheus audit (scrape targets, rules, TSDB cardinality, retention); pair it with `audit-alert-routing` for the Prometheus→Alertmanager paging path. Both name Prometheus explicitly so "audit my Prometheus" finds them.
-- **`/scoutflo:audit-cost` — deep, per-resource cloud cost.** Queries each provider's own cost APIs (AWS Compute Optimizer / Cost Explorer, GCP Recommender, Datadog usage, Kubernetes requests-vs-usage, DigitalOcean billing) for ranked savings opportunities. Never invents a dollar figure — every number is copied verbatim from the provider or reported as a presence fact.
-- **Business context as a source of truth** — `/scoutflo:business-context` captures SLAs per service, per-environment access/SLA, critical services, exclusions, and your own custom rules into one `business_context.md`; every audit reads it to tune severity and scope.
-- **Large-estate scope checkpoint** — audits pause on a big estate and let you scope before spending tokens, instead of grinding everything.
-- **Self-policing quality** — the numbers in every report reconcile with their own scorecard, secrets are never emitted, and each audit's behavior is enforced by a suite of structure and behavioral-parity CI gates plus report self-validation and a growing set of test suites, so quality can't silently regress.
+- **Honest, evidence-aware scoring.** A check the plugin couldn't run — a denied API, a missing permission — is now recorded as *unassessed* and kept **out** of the score, instead of looking like a broken service and dragging the number down. A fully-blocked audit reads **"Unassessed"**, never a misleading `0/100` or `100/100`, and every report shows its **assessment coverage** (how much was actually checked) next to the score — so a high number can't hide a half-checked estate.
+- **Two report views from the same findings.** Each report's **Findings by purpose** section splits into a **General audit** view (operational reliability) and an **AI SRE readiness** view (telemetry quality, service identity, topology, routing evidence — what trustworthy AI-assisted diagnosis needs). Each finding is shown with its severity, what's wrong, why it matters, and the recommended action. Same evidence, one score, no duplication — just the right lens for the right reader.
+- **More accurate audits, fewer overreaches.** AWS is engine-aware (RDS vs Aurora vs DocumentDB scored correctly); an `INSUFFICIENT_DATA` alarm isn't called "broken" without evidence; notification *configuration* is no longer treated as proof a human was paged; and a failed ELK/Grafana API read can no longer show up as an "empty estate" (full pagination, partial results preserved).
+- **Reports are visual.** Every report opens with an **At a glance** dashboard (score bar, trend sparkline, checks-passed, severity histogram, a "start here" pointer) and ships a standalone **`report.html`** you open in any browser — all rendered deterministically from `findings.json`, so a visual can never disagree with the numbers.
+- **`/scoutflo:rca` is live-first** — ask *"why is `<service>` failing?"* and it correlates your reports with strictly read-only live checks (pod status, restarts, OOM/exit codes, events, logs) to name an evidence-cited root cause, tags every fact as report- or live-sourced, never invents a cause, and degrades to a report-only answer with no cluster access.
+- **`/scoutflo:audit-cost`** — deep per-resource cloud cost from each provider's own cost APIs (AWS Compute Optimizer / Cost Explorer, GCP Recommender, Datadog usage, Kubernetes requests-vs-usage, DigitalOcean billing), ranked savings, never an invented dollar.
+- **Business context as a source of truth** — `/scoutflo:business-context` captures SLAs, critical services, per-environment rules, and exclusions into one `business_context.md` every audit reads to tune severity and scope (an account/region you mark out-of-scope is recorded as such, never scored as a failure).
 
 See [CHANGELOG.md](CHANGELOG.md) for the current version and full release history.
 
@@ -135,6 +132,24 @@ claude plugin install scoutflo@scoutflo
 That orients you — what's installed, what to do first, where reports land. Every skill after this (`/scoutflo:connect`, `/scoutflo:audit-lgtm`, etc.) is a normal slash command you type directly in that Local session. If `/scoutflo:connect` reports it can't write the toolkit file, you're in a cloud surface (Chat tab or browser) — switch to a Local session per the box above.
 
 For team-wide or org-wide rollout instead of one person at a time, see [docs/install.md](docs/install.md).
+
+## Updating the plugin
+
+New releases ship from this repo's `main` branch and the marketplace serves the latest. Updating is the same surface split as install — the plugin **update** commands run in the terminal (or the desktop app's plugin browser), not Claude.app's chat box.
+
+**In the `claude` terminal CLI:**
+
+```bash
+claude plugin marketplace update scoutflo    # refresh the marketplace from GitHub
+claude plugin update scoutflo@scoutflo        # update to the latest release
+claude plugin list                            # confirm the new version (compare to CHANGELOG.md)
+```
+
+Then **fully restart** Claude Code / Claude.app so the new skills load — or, inside an open `claude` session, run `/reload-plugins` to pick them up without a full restart. (A running session keeps the *old* version until one of those happens.)
+
+**In the Claude desktop app (UI, no terminal):** click the **+** next to the prompt → **Plugins**, find **scoutflo**, and choose **Update** — the app checks the marketplace and installs the latest. Restart the app afterward so the new skills load. (This works once the marketplace has been added; adding a *brand-new* marketplace still needs the one-time terminal / `settings.json` step from Install above.)
+
+**Team / Enterprise:** if you rolled out via `settings.json` with `"autoUpdate": true` (see [docs/install.md](docs/install.md)), everyone stays on the latest automatically — no per-person action.
 
 ## Your first 15 minutes
 
@@ -228,9 +243,9 @@ Every audit run writes three files:
       report.html              # standalone visual dashboard — open in any browser
 ```
 
-`report.md` opens with an **At a glance** dashboard (a score bar, a trend sparkline, checks-passed, a severity histogram, and a "start here" pointer to the highest-value fix), then an executive summary and a score out of 100, a weighted scorecard by category, a findings section (every finding has a severity, real evidence, and a direct pointer to the setup skill that fixes it), and a "next safe actions" list ordered so you can start at row 1 with nothing to prepare first. `report.html` is a self-contained visual version of the same data (score donut, severity bars, sortable scorecard and findings) that opens in any browser. Re-run the same audit later and it shows you the delta — what got fixed, what's new, how the score moved.
+`report.md` opens with an **At a glance** dashboard (a score bar, a trend sparkline, checks-passed, a severity histogram, and a "start here" pointer to the highest-value fix), then an executive summary and a score out of 100, a weighted scorecard by category, a findings section (every finding has a severity, real evidence, and a direct pointer to the setup skill that fixes it), a **Findings by purpose** view that lists the same findings under a **General audit** heading (operational reliability) and an **AI SRE readiness** heading (each with what's wrong, why it matters, and the fix — same evidence, no second score), and a "next safe actions" list ordered so you can start at row 1 with nothing to prepare first. `report.html` is a self-contained visual version of the same data (score donut, severity bars, sortable scorecard and findings) that opens in any browser. Re-run the same audit later and it shows you the delta — what got fixed, what's new, how the score moved.
 
-A score of 85+ with full coverage of every critical service earns the "end-to-end" label; below that, the honest phrasing is "good base coverage" — this toolkit never inflates a partial setup into a false "you're covered."
+A score of 85+ with full coverage of every critical service earns the "end-to-end" label; below that, the honest phrasing is "good base coverage" — this toolkit never inflates a partial setup into a false "you're covered." And a check it genuinely couldn't run — a denied API, a missing permission — is marked *unassessed* and kept **out** of the score (not counted as a failure); a fully-blocked audit reads **"Unassessed"** rather than a misleading `0/100`, and **assessment coverage** (how much was actually checked) is always shown next to the score.
 
 Every `report.md` is validated against a fixed output-conformance standard before it is written, so the structure — at-a-glance dashboard, summary, scorecard, findings, next safe actions, evidence — is the same run to run and across every stack.
 

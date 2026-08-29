@@ -54,7 +54,7 @@ Every run after the first computes a delta against the previous run:
 Beyond the two-run delta, each target keeps a long-lived trend file: `./scoutflo-audits/<target>/history.jsonl`. After `findings.json` and `report.md` are written, the run appends exactly one JSON line:
 
 ```json
-{"run_date":"2026-07-17","skill":"audit-lgtm","overall":68,"gate":85,"end_to_end":false,"scoring_model":"assessed-only-v1","check_set":"cksum-v1:123456789:512","assessment_coverage_percent":92,"severity_counts":{"critical":1,"high":2,"medium":4,"low":3,"info":1},"lifecycle_counts":{"new":4,"unchanged":6,"resolved":3,"regressed":1,"suppressed":2}}
+{"run_date":"2026-07-17","skill":"audit-lgtm","overall":68,"gate":85,"end_to_end":false,"scoring_model":"assessed-only-v1","check_set":"cksum-v2:123456789:512","assessment_coverage_percent":92,"severity_counts":{"critical":1,"high":2,"medium":4,"low":3,"info":1},"lifecycle_counts":{"new":4,"unchanged":6,"resolved":3,"regressed":1,"suppressed":2}}
 ```
 
 Rules:
