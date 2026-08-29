@@ -34,6 +34,7 @@ Expected output: one key per line, for example `grafana`, `sentry`, `prometheus`
 
 | Config keys present | Audit queued |
 | --- | --- |
+| `prometheus` | `audit-prometheus` (the server + rule-engine plane; runs alongside `audit-lgtm` on the same block) |
 | `prometheus`, `loki`, `tempo`, `mimir`, or `victoriametrics` | `audit-lgtm` |
 | `grafana` | `audit-grafana` |
 | `sentry` | `audit-sentry` |

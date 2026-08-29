@@ -12,6 +12,8 @@
 #         in Phase 3.6, not the Phase-1 mapping).
 #       - audit-lgtm: keyed by prometheus/loki/tempo/mimir/victoriametrics.
 #       - audit-alert-routing: keyed by alertmanager_url/vmalert_url.
+#       - audit-prometheus: shared-backend audit keyed by the prometheus block
+#         (runs alongside audit-lgtm on the same prometheus: block, different plane).
 #     The exempt audits still appear in the table by those config keys; they are
 #     exempt from the by-name row assertion only.
 #
@@ -29,7 +31,7 @@ FAIL=0
 [ -f "$SKILL" ] || { echo "AUDIT-ALL-MAP: missing $SKILL"; exit 1; }
 
 # Own-block audits exempt from the by-name row assertion (see header).
-EXEMPT="audit-all audit-cost audit-lgtm audit-alert-routing"
+EXEMPT="audit-all audit-cost audit-lgtm audit-alert-routing audit-prometheus"
 
 # Scope the search to the Phase-1 mapping table only (from the "Map keys to
 # audits" prose through the end of Phase 1), so a stray mention elsewhere in the
