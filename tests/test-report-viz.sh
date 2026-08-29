@@ -30,6 +30,51 @@ printf '%s' "$AAG" | grep -q '🔴 critical' || fail "no severity histogram"
 printf '%s' "$AAG" | grep -q 'GRAF-014' || fail "top lever (highest points_recoverable) not surfaced"
 echo "PASS"
 
+echo "Test 7a: v2 renders readiness and assessment coverage as separate facts"
+cat > "$WORK/v2.json" <<'EOF'
+{"schema":"scoutflo-findings/v2","toolkit_version":"0.1.153","skill":"audit-grafana","target":"example","run_date":"2026-08-28","generated_at":"2026-08-28T00:00:00Z","score":{"overall":90,"state":"assessed","gate":85,"end_to_end":false,"scoring_model":"assessed-only-v1","check_set":"cksum-v1:1:1","assessment":{"applicable_checks":10,"assessed_checks":4,"scored_checks":4,"blocked_checks":6,"suppressed_checks":0,"not_in_scope_checks":2,"coverage_percent":40},"categories":[{"name":"Signals","weight":100,"score":90,"maturity":"proactive","checks_passed":3,"checks_total":4,"checks_blocked":6,"checks_suppressed":0}],"excluded":[]},"severity_counts":{"critical":0,"high":0,"medium":0,"low":0,"info":0},"findings":[]}
+EOF
+printf '%s\n' \
+  '{"run_date":"2026-08-20","overall":10,"scoring_model":"legacy","check_set":"old"}' \
+  '{"run_date":"2026-08-27","overall":80,"scoring_model":"assessed-only-v1","check_set":"cksum-v1:1:1"}' \
+  '{"run_date":"2026-08-28","overall":90,"scoring_model":"assessed-only-v1","check_set":"cksum-v1:1:1"}' > "$WORK/v2-history.jsonl"
+V2="$(sh "$VIZ" at-a-glance "$WORK/v2.json" "$WORK/v2-history.jsonl")"
+printf '%s' "$V2" | grep -q 'Assessment coverage: \*\*4/10 (40%)\*\*' || fail "v2 assessment coverage missing"
+printf '%s' "$V2" | grep -q '80 → 90' || fail "compatible v2 trend missing"
+printf '%s' "$V2" | grep -q '10 →' && fail "incompatible score leaked into v2 trend"
+echo "PASS"
+
+echo "Test 7b: fully blocked v2 run renders unassessed, never 0/100"
+jq '.score.overall=null | .score.state="unassessed" | .score.assessment={"applicable_checks":3,"assessed_checks":0,"scored_checks":0,"blocked_checks":3,"suppressed_checks":0,"not_in_scope_checks":0,"coverage_percent":0}' "$WORK/v2.json" > "$WORK/v2-unassessed.json"
+VU="$(sh "$VIZ" at-a-glance "$WORK/v2-unassessed.json")"
+printf '%s' "$VU" | grep -q 'Readiness: unassessed' || fail "unassessed state not rendered"
+printf '%s' "$VU" | grep -q 'Score: 0/100' && fail "unassessed state rendered as zero readiness"
+echo "PASS"
+
+echo "Test 7b.1: an all-suppressed v2 run explains exemptions rather than missing evidence"
+jq '.score.overall=null | .score.state="unassessed" | .score.assessment={"applicable_checks":2,"assessed_checks":2,"scored_checks":0,"blocked_checks":0,"suppressed_checks":2,"not_in_scope_checks":0,"coverage_percent":100}' "$WORK/v2.json" > "$WORK/v2-all-suppressed.json"
+VS="$(sh "$VIZ" at-a-glance "$WORK/v2-all-suppressed.json")"
+printf '%s' "$VS" | grep -q 'all assessed gaps are covered by explicit exemptions' \
+  || fail "all-suppressed run was misreported as missing evidence"
+printf '%s' "$VS" | grep -q 'No applicable check produced enough evidence' \
+  && fail "all-suppressed run incorrectly claimed no evidence"
+echo "PASS"
+
+echo "Test 7c: findings-by-purpose renders general and AI SRE lanes without duplicating evidence"
+jq '.findings=[
+  {"id":"FX-001","severity":"high","title":"Paging route is broken","report_lanes":["general-audit","ai-sre-readiness"]},
+  {"id":"FX-002","severity":"medium","title":"Service identity is inconsistent","report_lanes":["ai-sre-readiness"]},
+  {"id":"FX-003","severity":"low","title":"Approved exception","lifecycle":"suppressed","report_lanes":["general-audit"]}
+]' "$WORK/v2.json" > "$WORK/v2-lanes.json"
+LANES="$(sh "$VIZ" lanes "$WORK/v2-lanes.json")"
+printf '%s' "$LANES" | grep -q '^### General audit' || fail "general-audit lane missing"
+printf '%s' "$LANES" | grep -q '^### AI SRE readiness' || fail "AI SRE readiness lane missing"
+[ "$(printf '%s' "$LANES" | grep -c 'FX-001')" -eq 2 ] || fail "dual-lane finding did not appear once in each lane"
+[ "$(printf '%s' "$LANES" | grep -c 'FX-002')" -eq 1 ] || fail "AI-only finding leaked into the general lane"
+printf '%s' "$LANES" | grep -q 'FX-003' && fail "suppressed finding leaked into an active review lane"
+printf '%s' "$LANES" | grep -qi 'observed' && fail "lane view exposed raw evidence"
+echo "PASS"
+
 echo "Test 2: at-a-glance picks the MAX points_recoverable as the top lever"
 printf '%s' "$AAG" | grep -q 'GRAF-051' && fail "surfaced the lower-points finding as the top lever"
 echo "PASS"
@@ -38,6 +83,13 @@ echo "Test 3: scorecard renders a bar per category and keeps the excluded row"
 SC="$(sh "$VIZ" scorecard "$WORK/f.json")"
 printf '%s' "$SC" | grep -q 'Alert delivery | 30 | 60/100' || fail "category row missing/wrong"
 printf '%s' "$SC" | grep -q 'Traces | 20 | excluded' || fail "excluded category row dropped"
+echo "PASS"
+
+echo "Test 3b: a category present in categories and excluded renders exactly once"
+jq '.score.categories += [{"name":"Traces","weight":20,"score":0,"maturity":"reactive","checks_passed":0,"checks_total":0,"checks_blocked":2}]' "$WORK/f.json" > "$WORK/f-category-and-excluded.json"
+SC2="$(sh "$VIZ" scorecard "$WORK/f-category-and-excluded.json")"
+[ "$(printf '%s' "$SC2" | grep -c '^| Traces |')" -eq 1 ] || fail "excluded category rendered more than once"
+printf '%s' "$SC2" | grep -q 'Traces | 20 | excluded' || fail "excluded category rendered as a numeric score"
 echo "PASS"
 
 echo "Test 4: mermaid-topo emits a flowchart touching the target, with the target class"
@@ -55,6 +107,17 @@ grep -q '<!doctype html>' "$WORK/r.html" || fail "html not a full document"
 grep -q '>72<' "$WORK/r.html" || fail "score not in the donut"
 grep -q 'GRAF-014' "$WORK/r.html" || fail "finding not in the table"
 grep -qi 'keep within your team' "$WORK/r.html" || fail "missing privacy caveat in footer"
+echo "PASS"
+
+echo "Test 5b: HTML keeps suppressed findings out of the active table and lists them separately"
+jq '.findings=[
+  {"id":"FX-010","severity":"high","title":"Active defect","lifecycle":"new","points_recoverable":5},
+  {"id":"FX-011","severity":"medium","title":"Approved exception","lifecycle":"suppressed","points_recoverable":0}
+]' "$WORK/v2.json" > "$WORK/v2-html-suppressed.json"
+sh "$VIZ" html "$WORK/v2-html-suppressed.json" "$WORK/v2-suppressed.html" >/dev/null
+grep -q 'Suppressed findings' "$WORK/v2-suppressed.html" || fail "HTML omitted the suppressed-findings section"
+[ "$(grep -c 'FX-011' "$WORK/v2-suppressed.html")" -eq 1 ] || fail "suppressed finding was duplicated into the active HTML table"
+grep -q 'FX-010' "$WORK/v2-suppressed.html" || fail "active finding missing from HTML"
 echo "PASS"
 
 echo "Test 6: html has NO external asset references (self-contained, no network)"
@@ -97,11 +160,29 @@ done
 mkdir -p "$WORK/roll/kubernetes/ctx-a/2026-08-16"
 printf '{"schema":"scoutflo-findings/v1","skill":"audit-kubernetes","target":"kubernetes/ctx-a","run_date":"2026-08-16","generated_at":"x","score":{"overall":90,"categories":[],"excluded":[]},"severity_counts":{"critical":0,"high":0,"medium":0,"low":0,"info":0},"findings":[]}' > "$WORK/roll/kubernetes/ctx-a/2026-08-16/findings.json"
 RU="$(sh "$VIZ" rollup "$WORK/roll" 2026-08-16)"
-printf '%s' "$RU" | grep -q 'Stacks passing the 85 gate: 2/4' || fail "gate count wrong (want 2/4 incl. the two-level kubernetes/ctx-a stack)"
+printf '%s' "$RU" | grep -q 'Stacks end-to-end (>= 85 gate and fully assessed): 2/4' || fail "gate count wrong (want 2/4 incl. the two-level kubernetes/ctx-a stack)"
 printf '%s' "$RU" | grep -q '`kubernetes/ctx-a` | 90/100' || fail "two-level kubernetes/ctx-a score row missing from rollup"
 printf '%s' "$RU" | grep -qi 'never a combined average' || fail "missing no-average note"
 # worst-first: aws (20) must appear before sentry (91)
 printf '%s' "$RU" | awk '/`aws`/{a=NR} /`sentry`/{s=NR} END{exit !(a<s)}' || fail "rollup not worst-first ordered"
+echo "PASS"
+
+echo "Test 10b: rollup keeps an unassessed v2 run neutral instead of displaying 0/100"
+mkdir -p "$WORK/roll/elk/2026-08-16"
+printf '{"schema":"scoutflo-findings/v2","skill":"audit-elk","target":"elk","run_date":"2026-08-16","generated_at":"x","score":{"overall":null,"state":"unassessed","categories":[],"excluded":[]},"severity_counts":{"critical":0,"high":0,"medium":0,"low":0,"info":0},"findings":[]}' > "$WORK/roll/elk/2026-08-16/findings.json"
+RU2="$(sh "$VIZ" rollup "$WORK/roll" 2026-08-16)"
+printf '%s' "$RU2" | grep -q '`elk` | unassessed' || fail "unassessed stack missing from rollup"
+printf '%s' "$RU2" | grep -q '`elk` | 0/100' && fail "unassessed stack rendered as zero readiness"
+printf '%s' "$RU2" | grep -q 'Stacks end-to-end (>= 85 gate and fully assessed): 2/5' || fail "unassessed stack not counted in the rollup denominator"
+echo "PASS"
+
+echo "Test 10c: a high-score low-coverage v2 stack is flagged and NOT counted as end-to-end"
+mkdir -p "$WORK/roll/datadog/2026-08-16"
+printf '{"schema":"scoutflo-findings/v2","skill":"audit-datadog","target":"datadog","run_date":"2026-08-16","generated_at":"x","score":{"overall":90,"state":"assessed","assessment":{"coverage_percent":40},"categories":[],"excluded":[]},"severity_counts":{"critical":0,"high":0,"medium":0,"low":0,"info":0},"findings":[]}' > "$WORK/roll/datadog/2026-08-16/findings.json"
+RU3="$(sh "$VIZ" rollup "$WORK/roll" 2026-08-16)"
+printf '%s' "$RU3" | grep -q 'Stacks end-to-end (>= 85 gate and fully assessed): 2/6' || fail "low-coverage v2 stack (90/100, 40% assessed) wrongly counted as end-to-end"
+printf '%s' "$RU3" | grep -q '`datadog` | 90/100' || fail "datadog row missing from rollup"
+printf '%s' "$RU3" | grep -q 'only 40% assessed' || fail "low-coverage v2 stack not flagged as not-end-to-end in its rollup row"
 echo "PASS"
 
 echo "Test 11: inventory-rollup includes BOTH the one-level and the two-level (kubernetes/ctx-a) stacks"

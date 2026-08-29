@@ -30,7 +30,9 @@ names a gate/case that no longer exists, that is itself a defect.
 - **Producer:** every `audit-*` (except `audit-all`, `audit-cost` for inventory).
 - **Consumers:** `audit-all`, `correlation-engine`, `cost-analysis`,
   `render-report-viz`, `rca`, the history ledger.
-- **Invariants:** `findings.json` is `scoutflo-audit/v1`; `overall` reconciles
+- **Invariants:** evidence-aware audit emitters use `scoutflo-findings/v2`;
+  `v1` remains readable for historical input and audit skills still in the
+  staged migration. In both versions, `overall` reconciles
   with the scorecard (weight-normalized sum over included categories); weights
   sum 100; `severity_counts` = histogram of **non-suppressed** findings; every
   non-`info` finding carries a concrete `affected` resource; one **registered**
@@ -39,7 +41,8 @@ names a gate/case that no longer exists, that is itself a defect.
 - **SSOT:** `report-standard/findings-schema.md`, `inventory-schema.md`,
   `report-template.md`, `severity-and-scoring.md`, `README.md`.
 - **Guards:** `report-standard/check-findings.sh` (reconciliation, histogram,
-  affected, enums — run by every audit + `tests/`), `check-report.sh`
+  affected, enums — run by every audit + `tests/`), `check-report.sh` plus
+  `tests/test-check-report.sh`
   (report.md/report.html/inventory reconcile), `ci/skill-completeness-check.sh`,
   the finding-ID prefix-registry check (see C9). Selftest: `layer_validators`,
   `report-real:*`.
@@ -282,6 +285,34 @@ names a gate/case that no longer exists, that is itself a defect.
   is the operator-facing declaration + template; the audit-side enforcement of the
   same optionality is the skill's own doctor-gate behavior + the maintainer review.
 
+## C16 — Evidence-aware check ledger, readiness, and assessment coverage
+
+- **Producer:** each v2 audit writes one `checks[]` row per stable catalog check,
+  including pass and not-in-scope rows that do not become findings.
+- **Consumers:** `check-findings.sh`, `render-report-viz.sh`, the scorecard,
+  Slack brief, and `history.jsonl`.
+- **Invariants:** `blocked` means unassessed and never counts as a verified
+  failure; readiness is calculated only over unsuppressed pass/partial/fail
+  checks; assessment coverage is assessed/applicable; every partial/fail/blocked
+  row has a same-ID finding, every readiness finding points back to one such
+  row, and pass/not-in-scope rows cannot carry open findings; deliberately
+  non-scored findings explicitly declare `scoring_scope:non-scored`, have no
+  check row, and recover zero points; an active exemption is represented by
+  `suppressed:true` plus `suppression_reason` on the original partial/fail row
+  and a same-ID lifecycle=suppressed finding; blocked and suppressed findings
+  recover zero readiness points; a run with no scored checks is `unassessed`
+  with `overall:null`; end-to-end requires 100% assessment coverage.
+  Raw score deltas and trend points are comparable only when `scoring_model` and
+  `check_set` match. Customer reports render `report_lanes` through the
+  deterministic `Findings by purpose` view; the two lanes never create a second
+  score or duplicate the detailed finding evidence.
+- **SSOT:** `report-standard/findings-schema.md` and
+  `report-standard/severity-and-scoring.md`.
+- **Guards:** `report-standard/check-findings.sh` and
+  `tests/test-check-findings.sh`; renderer and report-lane parity are covered by
+  `tests/test-report-viz.sh` and `tests/test-check-report.sh`; prompt-level
+  roll-up and Slack consumers are covered by `tests/test-v2-consumer-safety.sh`.
+
 ---
 
 ## Gate & test index (kept honest by `ci/contract-map-check.sh`)
@@ -314,12 +345,12 @@ Behavioral parity:
 `ci/multi-target-consumer-check.sh` (**C2** — the three aggregators dual-glob).
 
 Output correctness (run by every audit + `ci/run-tests.sh`):
-`report-standard/check-findings.sh` (**C1/C4**) · `report-standard/check-report.sh` (**C1/C8/C_M**) ·
+`report-standard/check-findings.sh` (**C1/C4/C16**) · `report-standard/check-report.sh` (**C1/C8/C_M**) ·
 `ci/leak-scan.sh` (**C13**).
 
 Behavioral test suites (real libs, run by `ci/run-tests.sh`):
 `skills/correlation-engine/tests/` (**C2/C4/C5**) · `skills/cost-analysis/tests/` (**C2**) ·
-`tests/test-report-viz.sh` (**C2**) · `skills/business-context/tests/` (**C6**) ·
+`tests/test-report-viz.sh` (**C2/C16**) · `tests/test-check-findings.sh` (**C16**) · `skills/business-context/tests/` (**C6**) ·
 `skills/topology-guided-setup/tests/` (**C5**) · `tests/test-multi-target-enumerator.sh` (**C3**).
 
 Local behavioral net (not shipped): `../selftest/run.sh` — one case per contract above,

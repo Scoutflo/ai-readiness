@@ -729,8 +729,8 @@ fi
 
 # --- elk / kibana -------------------------------------------------------------------
 # Kibana authenticates the Elasticsearch API key with "Authorization: ApiKey <encoded>",
-# not a Bearer header, so this block uses its own curl call. /api/alerting/_health is the
-# cheapest alerting-scoped probe and is itself an audit signal.
+# not a Bearer header, so this block uses its own curl call. /api/status is the
+# target-identity gate; /api/alerting/_health is a separate audit-scope probe.
 
 ELK_KIND="$(tkind elk)"; ELK_N="$(tcount elk)"
 if [ "${ELK_N:-0}" -eq 0 ]; then
@@ -756,44 +756,94 @@ else
         row "$E_INT" config yes - fail - "elk.token_env is empty in toolkit.yaml; name the variable holding the Kibana API key"
       elif [ "$ELK_TOKEN_STATE" = "missing" ]; then
         row "$E_INT" env yes "$ELK_TOKEN_VAR" env-missing - "$(missing_hint "$ELK_TOKEN_VAR")"
-        row "$E_INT" alerting-health yes "$ELK_TOKEN_VAR" skipped - "blocked: ${ELK_TOKEN_VAR} is not set — see the ${ELK_TOKEN_VAR} env row above, then rerun"
+        row "$E_INT" kibana-status yes "$ELK_TOKEN_VAR" skipped - "blocked: ${ELK_TOKEN_VAR} is not set — see the ${ELK_TOKEN_VAR} env row above, then rerun"
+        row "$E_INT" alerting-health yes "$ELK_TOKEN_VAR" skipped - "blocked: Kibana identity was not checked because ${ELK_TOKEN_VAR} is not set"
       else
         row "$E_INT" env yes "$ELK_TOKEN_VAR" pass - -
-        note "doctor: checking ${E_INT} alerting-health: GET ${ELK_KIBANA_URL}/api/alerting/_health"
+        note "doctor: checking ${E_INT} identity: GET ${ELK_KIBANA_URL}/api/status"
         ELK_RC=0; ELK_BODY="$(mktemp)"
         ELK_META="$(curl -s -o "$ELK_BODY" -w '%{http_code} %{content_type}' \
           --connect-timeout "$CONNECT_TIMEOUT" --max-time "$MAX_TIME" \
-          -H "Authorization: ApiKey ${ELK_TOKEN}" "${ELK_KIBANA_URL}/api/alerting/_health")" || ELK_RC=$?
+          -H "Authorization: ApiKey ${ELK_TOKEN}" "${ELK_KIBANA_URL}/api/status")" || ELK_RC=$?
         ELK_CODE="${ELK_META%% *}"; ELK_CT="${ELK_META#* }"
+        ELK_IDENTITY_OK=0
         if [ "$ELK_RC" -ne 0 ]; then
-          row "$E_INT" alerting-health yes "$ELK_TOKEN_VAR" fail "000" "$(transport_hint "$ELK_RC") (${ELK_KIBANA_URL}/api/alerting/_health)"
-        elif [ "$ELK_CODE" = "200" ] && printf '%s' "$ELK_CT" | grep -qi json && jq -e 'type=="object" or type=="array"' "$ELK_BODY" >/dev/null 2>&1; then
-          row "$E_INT" alerting-health yes "$ELK_TOKEN_VAR" pass "$ELK_CODE" "-"
+          row "$E_INT" kibana-status yes "$ELK_TOKEN_VAR" fail "000" "$(transport_hint "$ELK_RC") (${ELK_KIBANA_URL}/api/status)"
+        elif [ "$ELK_CODE" = "200" ] && printf '%s' "$ELK_CT" | grep -qi json && jq -e '.version.number | type=="string" and length>0' "$ELK_BODY" >/dev/null 2>&1; then
+          ELK_IDENTITY_OK=1
+          row "$E_INT" kibana-status yes "$ELK_TOKEN_VAR" pass "$ELK_CODE" "Kibana $(jq -r '.version.number' "$ELK_BODY")"
+        elif [ "$ELK_CODE" = "200" ]; then
+          row "$E_INT" kibana-status yes "$ELK_TOKEN_VAR" fail "$ELK_CODE" "200 but Content-Type='${ELK_CT}' or version.number missing: this is not a verified Kibana API response"
+        elif [ "$ELK_CODE" = "401" ]; then
+          row "$E_INT" kibana-status yes "$ELK_TOKEN_VAR" fail "$ELK_CODE" "HTTP 401: the API key was not authenticated"
+        elif [ "$ELK_CODE" = "403" ]; then
+          row "$E_INT" kibana-status yes "$ELK_TOKEN_VAR" fail "$ELK_CODE" "HTTP 403: the key was recognized but cannot read Kibana status; target identity cannot be verified safely"
+        elif [ "$ELK_CODE" = "404" ]; then
+          row "$E_INT" kibana-status yes "$ELK_TOKEN_VAR" fail "$ELK_CODE" "HTTP 404: elk.kibana_url is not the Kibana base URL (or its base-path prefix is missing)"
+        else
+          row "$E_INT" kibana-status yes "$ELK_TOKEN_VAR" fail "$ELK_CODE" "$(http_hint "$ELK_CODE")"
+        fi
+        rm -f "$ELK_BODY"
+
+        if [ "$ELK_IDENTITY_OK" -eq 1 ]; then
+          note "doctor: checking ${E_INT} alerting scope: GET ${ELK_KIBANA_URL}/api/alerting/_health"
+          ELK_RC=0; ELK_BODY="$(mktemp)"
+          ELK_META="$(curl -s -o "$ELK_BODY" -w '%{http_code} %{content_type}' \
+            --connect-timeout "$CONNECT_TIMEOUT" --max-time "$MAX_TIME" \
+            -H "Authorization: ApiKey ${ELK_TOKEN}" "${ELK_KIBANA_URL}/api/alerting/_health")" || ELK_RC=$?
+          ELK_CODE="${ELK_META%% *}"; ELK_CT="${ELK_META#* }"
+          if [ "$ELK_RC" -ne 0 ]; then
+            row "$E_INT" alerting-health yes "$ELK_TOKEN_VAR" skipped "000" "blocked after Kibana identity passed: $(transport_hint "$ELK_RC")"
+          elif [ "$ELK_CODE" = "200" ] && printf '%s' "$ELK_CT" | grep -qi json && jq -e 'type=="object"' "$ELK_BODY" >/dev/null 2>&1; then
+            row "$E_INT" alerting-health yes "$ELK_TOKEN_VAR" pass "$ELK_CODE" "-"
+          elif [ "$ELK_CODE" = "401" ]; then
+            row "$E_INT" alerting-health yes "$ELK_TOKEN_VAR" skipped "$ELK_CODE" "blocked: alerting endpoint did not authenticate this request; audit-elk will record the evidence gap"
+          elif [ "$ELK_CODE" = "403" ]; then
+            row "$E_INT" alerting-health yes "$ELK_TOKEN_VAR" skipped "$ELK_CODE" "blocked: key is authenticated but lacks Kibana Alerting read privileges; audit-elk will report blocked checks"
+          elif [ "$ELK_CODE" = "404" ]; then
+            row "$E_INT" alerting-health yes "$ELK_TOKEN_VAR" skipped "$ELK_CODE" "blocked/unsupported: verified Kibana does not expose this alerting-health route; audit-elk will continue with other readable surfaces"
+          elif [ "$ELK_CODE" = "200" ]; then
+            row "$E_INT" alerting-health yes "$ELK_TOKEN_VAR" skipped "$ELK_CODE" "blocked: non-JSON alerting-health response; audit-elk will preserve it as an evidence gap"
+          else
+            row "$E_INT" alerting-health yes "$ELK_TOKEN_VAR" skipped "$ELK_CODE" "blocked after Kibana identity passed: $(http_hint "$ELK_CODE")"
+          fi
+          rm -f "$ELK_BODY"
+
           # Space visibility: audit-elk auto-discovers spaces via GET /api/spaces/space, but the
           # response is filtered to spaces this key can see. Surface how many are visible so a
           # single-space key (the wrong/empty-space bug) is caught at doctor time. Degrade
           # gracefully: a non-200 or empty body just skips this row, it never fails the elk block.
-          ELK_SPACES_JSON="$(curl -s --connect-timeout "$CONNECT_TIMEOUT" --max-time "$MAX_TIME" \
-            -H "Authorization: ApiKey ${ELK_TOKEN}" "${ELK_KIBANA_URL}/api/spaces/space" 2>/dev/null || echo '')"
-          ELK_SPACE_IDS="$(printf '%s' "$ELK_SPACES_JSON" | jq -r 'if type=="array" then .[].id else empty end' 2>/dev/null | tr '\n' ' ')"
+          ELK_SPACES_RC=0; ELK_SPACES_BODY="$(mktemp)"
+          ELK_SPACES_META="$(curl -s -o "$ELK_SPACES_BODY" -w '%{http_code} %{content_type}' \
+            --connect-timeout "$CONNECT_TIMEOUT" --max-time "$MAX_TIME" \
+            -H "Authorization: ApiKey ${ELK_TOKEN}" "${ELK_KIBANA_URL}/api/spaces/space")" || ELK_SPACES_RC=$?
+          ELK_SPACES_CODE="${ELK_SPACES_META%% *}"; ELK_SPACES_CT="${ELK_SPACES_META#* }"
+          ELK_SPACE_IDS=""
+          if [ "$ELK_SPACES_RC" -eq 0 ] && [ "$ELK_SPACES_CODE" = "200" ] \
+             && printf '%s' "$ELK_SPACES_CT" | grep -qi json \
+             && jq -e 'type=="array"' "$ELK_SPACES_BODY" >/dev/null 2>&1; then
+            ELK_SPACE_IDS="$(jq -r '.[].id' "$ELK_SPACES_BODY" | tr '\n' ' ')"
+          fi
           ELK_SPACE_N="$(printf '%s' "$ELK_SPACE_IDS" | wc -w | tr -d ' ')"
           if [ "${ELK_SPACE_N:-0}" -gt 0 ]; then
             if [ "$ELK_SPACE_N" = "1" ] && printf '%s' "$ELK_SPACE_IDS" | grep -qw default; then
-              row "$E_INT" spaces yes "$ELK_TOKEN_VAR" pass "$ELK_CODE" "only the 'default' space is visible to this key; if alerting rules live in another space, widen the key to spaces:[\"*\"] read (connect references/providers.md) so audit-elk can discover it"
+              row "$E_INT" spaces yes "$ELK_TOKEN_VAR" pass "$ELK_SPACES_CODE" "only the 'default' space is visible to this key; if alerting rules live in another space, widen the key to spaces:[\"*\"] read (connect references/providers.md) so audit-elk can discover it"
             else
-              row "$E_INT" spaces yes "$ELK_TOKEN_VAR" pass "$ELK_CODE" "visible spaces (${ELK_SPACE_N}): ${ELK_SPACE_IDS}"
+              row "$E_INT" spaces yes "$ELK_TOKEN_VAR" pass "$ELK_SPACES_CODE" "visible spaces (${ELK_SPACE_N}): ${ELK_SPACE_IDS}"
             fi
+          elif [ "$ELK_SPACES_RC" -ne 0 ]; then
+            row "$E_INT" spaces yes "$ELK_TOKEN_VAR" skipped "000" "blocked: $(transport_hint "$ELK_SPACES_RC")"
+          elif [ "$ELK_SPACES_CODE" = "401" ]; then
+            row "$E_INT" spaces yes "$ELK_TOKEN_VAR" skipped "$ELK_SPACES_CODE" "blocked: spaces request was unauthenticated"
+          elif [ "$ELK_SPACES_CODE" = "403" ]; then
+            row "$E_INT" spaces yes "$ELK_TOKEN_VAR" skipped "$ELK_SPACES_CODE" "blocked: authenticated key lacks permission to enumerate Kibana spaces"
+          elif [ "$ELK_SPACES_CODE" = "404" ]; then
+            row "$E_INT" spaces yes "$ELK_TOKEN_VAR" skipped "$ELK_SPACES_CODE" "unsupported: Spaces API unavailable; audit-elk will use its explicit fallback and report reduced coverage"
+          else
+            row "$E_INT" spaces yes "$ELK_TOKEN_VAR" skipped "$ELK_SPACES_CODE" "blocked: spaces response was not a readable JSON array"
           fi
-        elif [ "$ELK_CODE" = "200" ]; then
-          row "$E_INT" alerting-health yes "$ELK_TOKEN_VAR" fail "$ELK_CODE" "200 but Content-Type='${ELK_CT}' / non-JSON body: Kibana is likely behind an SSO/OAuth reverse proxy returning its login page (or kibana_url is wrong) — a 200 HTML page is not proof of API access; audit-elk cannot read alerting until a real JSON response comes back"
-        elif [ "$ELK_CODE" = "404" ]; then
-          row "$E_INT" alerting-health yes "$ELK_TOKEN_VAR" fail "$ELK_CODE" "HTTP 404: elk.kibana_url likely points at Elasticsearch, not Kibana, or a space/base-path prefix is wrong; alerting rules live in Kibana (:5601 self-managed)"
-        elif [ "$ELK_CODE" = "401" ] || [ "$ELK_CODE" = "403" ]; then
-          row "$E_INT" alerting-health yes "$ELK_TOKEN_VAR" fail "$ELK_CODE" "HTTP ${ELK_CODE}: key invalid, or the role lacks Kibana Read on Stack Rules; grant the privileges in connect references/providers.md"
-        else
-          row "$E_INT" alerting-health yes "$ELK_TOKEN_VAR" fail "$ELK_CODE" "$(http_hint "$ELK_CODE")"
+          rm -f "$ELK_SPACES_BODY"
         fi
-        rm -f "$ELK_BODY"
       fi
     fi
     _ei=$((_ei+1))
@@ -998,6 +1048,40 @@ else
     fi
     _gci=$((_gci+1))
   done
+fi
+
+# --- LGTM runtime contract ----------------------------------------------------------
+# audit-lgtm has platform-specific checks. The operator must declare the deployment
+# mode; neither doctor nor the audit may infer it from metric names or dashboards.
+LGTM_MODE="$(cfg lgtm runtime_mode)"
+LGTM_BACKEND_CONFIGURED=0
+for _lgtm_backend in prometheus loki tempo mimir victoriametrics; do
+  [ -n "$(cfg "$_lgtm_backend" url)" ] && LGTM_BACKEND_CONFIGURED=1
+done
+[ -n "$(cfg prometheus alertmanager_url)" ] && LGTM_BACKEND_CONFIGURED=1
+[ -n "$(cfg victoriametrics vmalert_url)" ] && LGTM_BACKEND_CONFIGURED=1
+if [ -z "$LGTM_MODE" ]; then
+  if grep -q '^lgtm:' "$CONFIG" || [ "$LGTM_BACKEND_CONFIGURED" -eq 1 ]; then
+    row lgtm runtime-mode yes - fail - "lgtm.runtime_mode is required; set exactly one of kubernetes, ec2-systemd, docker, external"
+  else
+    row lgtm runtime-mode no - skipped - "add lgtm.runtime_mode via /scoutflo:connect before running audit-lgtm"
+  fi
+else
+  case "$LGTM_MODE" in
+    kubernetes)
+      if [ -z "$(cfg kubernetes context)" ]; then
+        row lgtm runtime-mode yes - fail - "lgtm.runtime_mode=kubernetes requires kubernetes.context; add the exact live context via /scoutflo:connect"
+      else
+        row lgtm runtime-mode yes - pass - "declared kubernetes; the kubernetes identity/RBAC row verifies the configured context live"
+      fi
+      ;;
+    ec2-systemd|docker|external)
+      row lgtm runtime-mode yes - pass - "declared ${LGTM_MODE}; audit-lgtm must still cite an on-target runtime identity or inventory read"
+      ;;
+    *)
+      row lgtm runtime-mode yes - fail - "invalid lgtm.runtime_mode '${LGTM_MODE}'; use exactly one of kubernetes, ec2-systemd, docker, external"
+      ;;
+  esac
 fi
 
 # --- prometheus and alertmanager (one block, shared optional token) -----------------
@@ -1566,7 +1650,7 @@ done
 # doctor does not know is reported, never silently ignored (a clickstack-only config
 # once exited 0 "PASS" with zero rows — that class of false green is what this kills).
 
-KNOWN_BLOCKS="grafana sentry pagerduty datadog elk jsm zenduty groundcover prometheus alertmanager loki tempo mimir victoriametrics vmalert signoz digitalocean gcp aws azure github kubernetes clickstack slack"
+KNOWN_BLOCKS="grafana sentry pagerduty datadog elk jsm zenduty groundcover lgtm prometheus alertmanager loki tempo mimir victoriametrics vmalert signoz digitalocean gcp aws azure github kubernetes clickstack slack"
 for blk in $(sed -n 's/^\([a-z_][a-z_0-9]*\):.*$/\1/p' "$CONFIG" | sort -u); do
   case " $KNOWN_BLOCKS " in
     *" $blk "*) : ;;

@@ -12,6 +12,7 @@
 # Usage:
 #   render-report-viz.sh at-a-glance      <findings.json> [history.jsonl]
 #   render-report-viz.sh scorecard        <findings.json>
+#   render-report-viz.sh lanes            <findings.json>
 #   render-report-viz.sh mermaid-topo     <topology-export.json> <target>
 #   render-report-viz.sh html             <findings.json> <out.html> [history.jsonl]
 #   render-report-viz.sh overlaps         <correlation.json>
@@ -85,10 +86,23 @@ score_label() {  # a plain-language band for a 0-100 score; $2 = end_to_end (tru
   fi
 }
 
-# --- trend from history.jsonl (last 5 overall scores, oldest first) -----------
-trend_scores() {  # $1 = history.jsonl (optional)
+# --- trend from history.jsonl (last 5 compatible scores, oldest first) -------
+trend_scores() {  # $1 = history.jsonl (optional), $2 = current findings.json
   [ -n "${1:-}" ] && [ -f "$1" ] || return 0
-  tail -n 5 "$1" 2>/dev/null | jq -r '.overall // empty' 2>/dev/null | tr '\n' ' '
+  tv_f="${2:-}"
+  tv_model=""; tv_set=""
+  if [ -n "$tv_f" ] && [ -f "$tv_f" ]; then
+    tv_model="$(jq -r '.score.scoring_model // ""' "$tv_f")"
+    tv_set="$(jq -r '.score.check_set // ""' "$tv_f")"
+  fi
+  if [ -n "$tv_model" ] && [ -n "$tv_set" ]; then
+    tail -n 30 "$1" 2>/dev/null \
+      | jq -r --arg model "$tv_model" --arg set "$tv_set" \
+          'select(.scoring_model == $model and .check_set == $set and (.overall|type)=="number") | .overall' 2>/dev/null \
+      | tail -n 5 | tr '\n' ' '
+  else
+    tail -n 5 "$1" 2>/dev/null | jq -r 'select((.overall|type)=="number") | .overall' 2>/dev/null | tr '\n' ' '
+  fi
 }
 
 # =============================================================================
@@ -96,7 +110,8 @@ case "$MODE" in
   at-a-glance)
     F="${1:?findings.json}"; HIST="${2:-}"
     [ -f "$F" ] || { echo "render-report-viz: no such file: $F" >&2; exit 1; }
-    OVERALL="$(jq -r '.score.overall // 0' "$F")"
+    OVERALL="$(jq -r 'if .score.overall == null then "unassessed" else .score.overall end' "$F")"
+    SCORE_STATE="$(jq -r '.score.state // "assessed"' "$F")"
     read -r CP CT <<EOF
 $(jq -r '(([.score.categories[]?.checks_passed]|add // 0)|tostring) + " " + (([.score.categories[]?.checks_total]|add // 0)|tostring)' "$F")
 EOF
@@ -104,19 +119,38 @@ EOF
 $(jq -r '.severity_counts | "\(.critical//0) \(.high//0) \(.medium//0) \(.low//0) \(.info//0)"' "$F")
 EOF
     SEVMAX="$(printf '%s\n' "$SC" "$SH" "$SM" "$SL" "$SI" | sort -rn | head -1)"; [ "${SEVMAX:-0}" -gt 0 ] || SEVMAX=1
-    TREND="$(trend_scores "$HIST")"
+    TREND="$(trend_scores "$HIST" "$F")"
     E2E="$(jq -r '.score.end_to_end // false' "$F")"
     # Severity first, then points: a +1 critical outranks a +3 high — the lever
     # is "restore the paging path", not "harvest the most points". (Found live:
     # points-first told the operator to fix Loki rate-limiting before a dead
     # default receiver.) Within a severity band, higher points win.
-    TOP="$(jq -r '[.findings[]? | select((.severity!="info") and ((.points_recoverable//0)>0))]
+    TOP="$(jq -r '[.findings[]? | select((.lifecycle // "new") != "suppressed") | select((.severity!="info") and ((.points_recoverable//0)>0))]
       | sort_by([ ({critical:0,high:1,medium:2,low:3,info:4}[.severity] // 5), ((.points_recoverable // 0) * -1) ])
       | (.[0] // empty) | "\(.id)\t\(.points_recoverable)\t\(.severity)\t\(.title)"' "$F" 2>/dev/null)"
 
     echo "## At a glance"
     echo
-    echo "**Score: ${OVERALL}/100**  \`$(viz_bar "$OVERALL" 100 20)\`  $(score_label "$OVERALL" "$E2E")"
+    if [ "$SCORE_STATE" = "unassessed" ] || [ "$OVERALL" = "unassessed" ]; then
+      suppressed_count="$(jq -r '.score.assessment.suppressed_checks // 0' "$F")"
+      blocked_count="$(jq -r '.score.assessment.blocked_checks // 0' "$F")"
+      if [ "$suppressed_count" -gt 0 ] && [ "$blocked_count" -eq 0 ]; then
+        echo "**Readiness: unassessed**  No unsuppressed check remains in the readiness denominator; all assessed gaps are covered by explicit exemptions."
+      elif [ "$suppressed_count" -gt 0 ]; then
+        echo "**Readiness: unassessed**  No unsuppressed check remains in the readiness denominator; applicable checks are blocked or explicitly exempted."
+      else
+        echo "**Readiness: unassessed**  No applicable check produced enough evidence for a readiness score."
+      fi
+    else
+      echo "**Score: ${OVERALL}/100**  \`$(viz_bar "$OVERALL" 100 20)\`  $(score_label "$OVERALL" "$E2E")"
+    fi
+    if jq -e '.score.assessment | type == "object"' "$F" >/dev/null 2>&1; then
+      read -r AA AS AX AB AU AN AC <<EOF
+$(jq -r '.score.assessment | "\(.applicable_checks) \(.assessed_checks) \(.scored_checks // .assessed_checks) \(.blocked_checks) \(.suppressed_checks // 0) \(.not_in_scope_checks) \(.coverage_percent)"' "$F")
+EOF
+      echo
+      echo "Assessment coverage: **${AS}/${AA} (${AC}%)** applicable checks assessed; **${AX} scored**; **${AB} blocked**; **${AU} suppressed**; **${AN} not in scope**."
+    fi
     if [ -n "$TREND" ]; then
       CURFIRST="${TREND%% *}"; CURLAST="$(printf '%s' "$TREND" | awk '{print $NF}')"
       DELTA=$(( CURLAST - CURFIRST ))
@@ -143,16 +177,51 @@ EOF
 
   scorecard)
     F="${1:?findings.json}"; [ -f "$F" ] || { echo "no such file: $F" >&2; exit 1; }
-    echo "| Category | Weight | Score | | Maturity | Checks |"
-    echo "| --- | ---: | ---: | --- | --- | ---: |"
-    jq -r '.score.categories[]? | "\(.name)\t\(.weight)\t\(.score)\t\(.maturity)\t\(.checks_passed)\t\(.checks_total)"' "$F" \
-    | while IFS="$(printf '\t')" read -r nm wt sc mat cp ct; do
-        echo "| ${nm} | ${wt} | ${sc}/100 | \`$(viz_bar "$sc" 100 10)\` | ${mat} | ${cp}/${ct} |"
+    echo "| Category | Weight | Score | | Maturity | Passed / scored | Blocked | Suppressed |"
+    echo "| --- | ---: | ---: | --- | --- | ---: | ---: | ---: |"
+    jq -r '(.score.excluded // [] | map(.name)) as $excluded
+      | .score.categories[]?
+      | select(.name as $name | ($excluded | index($name)) == null)
+      | "\(.name)\t\(.weight)\t\(.score)\t\(.maturity)\t\(.checks_passed)\t\(.checks_total)\t\(.checks_blocked // 0)\t\(.checks_suppressed // 0)"' "$F" \
+    | while IFS="$(printf '\t')" read -r nm wt sc mat cp ct cb cs; do
+        echo "| ${nm} | ${wt} | ${sc}/100 | \`$(viz_bar "$sc" 100 10)\` | ${mat} | ${cp}/${ct} | ${cb} | ${cs} |"
       done
     jq -r '.score.excluded[]? | "\(.name)\t\(.weight)\t\(.reason)"' "$F" \
     | while IFS="$(printf '\t')" read -r nm wt rs; do
-        echo "| ${nm} | ${wt} | excluded | \`░░░░░░░░░░\` | - | - |"
+        echo "| ${nm} | ${wt} | excluded | \`░░░░░░░░░░\` | - | - | - | - |"
       done
+    ;;
+
+  lanes)
+    F="${1:?findings.json}"; [ -f "$F" ] || { echo "no such file: $F" >&2; exit 1; }
+    echo "## Findings by purpose"
+    echo
+    echo "This view separates foundational operations work from the evidence needed for trustworthy AI-assisted diagnosis. A finding can appear in both lists; its detailed evidence appears once in its own detailed section below — the Findings table for readiness findings, or the relevant non-scored section (e.g. Cost & Resource Optimization, Scoutflo Topology Readiness) for a non-scored finding."
+    for lane in general-audit ai-sre-readiness; do
+      case "$lane" in
+        general-audit) heading="General audit" ;;
+        *) heading="AI SRE readiness" ;;
+      esac
+      echo
+      echo "### ${heading}"
+      echo
+      count="$(jq --arg lane "$lane" '[.findings[]? | select((.lifecycle // "new") != "suppressed") | select((.report_lanes // []) | index($lane))] | length' "$F")"
+      if [ "$count" -eq 0 ]; then
+        echo "_No findings classified in this lane._"
+        continue
+      fi
+      echo "| Ref | Severity | Finding |"
+      echo "| --- | --- | --- |"
+      jq -r --arg lane "$lane" '
+        .findings[]?
+        | select((.lifecycle // "new") != "suppressed")
+        | select((.report_lanes // []) | index($lane))
+        | [(.id|gsub("\\|";"\\|")), (.severity|gsub("\\|";"\\|")), (.title|gsub("\\|";"\\|"))]
+        | @tsv' "$F" \
+      | while IFS="$(printf '\t')" read -r id severity title; do
+          echo "| ${id} | ${severity} | ${title} |"
+        done
+    done
     ;;
 
   mermaid-topo)
@@ -175,18 +244,23 @@ EOF
     F="${1:?findings.json}"; OUT="${2:?out.html}"; HIST="${3:-}"
     [ -f "$F" ] || { echo "no such file: $F" >&2; exit 1; }
     SKILL="$(jq -r '.skill // "audit"' "$F")"; TARGET="$(jq -r '.target // "target"' "$F")"
-    RUNDATE="$(jq -r '.run_date // ""' "$F")"; OVERALL="$(jq -r '.score.overall // 0' "$F")"
+    RUNDATE="$(jq -r '.run_date // ""' "$F")"; OVERALL="$(jq -r 'if .score.overall == null then 0 else .score.overall end' "$F")"
+    OVERALL_LABEL="$(jq -r 'if .score.overall == null then "unassessed" else (.score.overall|tostring) end' "$F")"
     # Human display name: strip the 'audit-' lane prefix and title-case the words
     # (so the tab/heading read "Grafana audit — <target>", not the raw "audit-grafana" slug).
     DISPLAY="$(printf '%s' "$SKILL" | sed 's/^audit-//' | awk -F- '{for(i=1;i<=NF;i++){$i=toupper(substr($i,1,1)) substr($i,2)}}1' OFS=' ') audit"
     read -r SC SH SM SL SI <<EOF
 $(jq -r '.severity_counts | "\(.critical//0) \(.high//0) \(.medium//0) \(.low//0) \(.info//0)"' "$F")
 EOF
-    # score color band
-    if [ "$OVERALL" -ge "$GATE" ]; then SCOLOR="#2f855a"; elif [ "$OVERALL" -ge 50 ]; then SCOLOR="#b7791f"; else SCOLOR="#c53030"; fi
+    # score color band. An unassessed run is neutral, not a red 0/100.
+    if [ "$OVERALL_LABEL" = "unassessed" ]; then SCOLOR="#718096"
+    elif [ "$OVERALL" -ge "$GATE" ]; then SCOLOR="#2f855a"
+    elif [ "$OVERALL" -ge 50 ]; then SCOLOR="#b7791f"
+    else SCOLOR="#c53030"
+    fi
     # SVG donut math: circumference for r=54
     DASH="$(awk -v s="$OVERALL" 'BEGIN{c=2*3.14159265*54; printf "%.1f %.1f", c*s/100, c*(1-s/100)}')"
-    TREND="$(trend_scores "$HIST")"
+    TREND="$(trend_scores "$HIST" "$F")"
     SPARK_PTS="$(printf '%s' "$TREND" | awk '{n=split($0,a," ");for(i=1;i<=n;i++){x=(i-1)*(300/((n>1)?n-1:1)); y=60-(a[i]*0.5); printf "%s%.0f,%.0f", (i>1?" ":""), x, y}}')"
 
     {
@@ -213,12 +287,12 @@ th{cursor:pointer;user-select:none;color:#4a5568}
 </style></head><body><div class="wrap">
 <div class="card"><h1>${DISPLAY} — ${TARGET}</h1><div class="sub">Scoutflo AI Readiness · ${RUNDATE} (UTC)</div>
 <div class="top" style="margin-top:16px">
-<svg width="130" height="130" viewBox="0 0 130 130" role="img" aria-label="score ${OVERALL} of 100">
+<svg width="130" height="130" viewBox="0 0 130 130" role="img" aria-label="score ${OVERALL_LABEL}">
 <circle cx="65" cy="65" r="54" fill="none" stroke="#e2e8f0" stroke-width="14"/>
 <circle cx="65" cy="65" r="54" fill="none" stroke="${SCOLOR}" stroke-width="14" stroke-linecap="round"
  stroke-dasharray="${DASH}" transform="rotate(-90 65 65)"/>
-<text x="65" y="60" text-anchor="middle" font-size="30" font-weight="700" fill="${SCOLOR}">${OVERALL}</text>
-<text x="65" y="82" text-anchor="middle" font-size="12" fill="#718096">/ 100</text></svg>
+<text x="65" y="60" text-anchor="middle" font-size="30" font-weight="700" fill="${SCOLOR}">${OVERALL_LABEL}</text>
+<text x="65" y="82" text-anchor="middle" font-size="12" fill="#718096">readiness</text></svg>
 <div><div class="sev">
 <span class="chip"><span class="dot" style="background:#c53030"></span>${SC} critical</span>
 <span class="chip"><span class="dot" style="background:#dd6b20"></span>${SH} high</span>
@@ -227,19 +301,31 @@ th{cursor:pointer;user-select:none;color:#4a5568}
 <span class="chip"><span class="dot" style="background:#a0aec0"></span>${SI} info</span>
 </div>
 HTMLHEAD
+    if jq -e '.score.assessment | type == "object"' "$F" >/dev/null 2>&1; then
+      jq -r '.score.assessment | "<div class=\"sub\" style=\"margin-top:10px\">Assessment coverage: <strong>\(.assessed_checks)/\(.applicable_checks) (\(.coverage_percent)%)</strong>; \(.scored_checks // .assessed_checks) scored; \(.blocked_checks) blocked; \(.suppressed_checks // 0) suppressed; \(.not_in_scope_checks) not in scope.</div>"' "$F"
+    fi
     if [ -n "$SPARK_PTS" ]; then
       echo "<svg width=\"320\" height=\"64\" style=\"margin-top:12px\" role=\"img\" aria-label=\"score trend\"><polyline fill=\"none\" stroke=\"${SCOLOR}\" stroke-width=\"2\" points=\"${SPARK_PTS}\"/></svg><div class=\"sub\">score trend (last ${TREND:+$(printf '%s' "$TREND" | wc -w | tr -d ' ')} runs)</div>"
     fi
     cat <<'HTMLMID'
 </div></div></div>
 <div class="card"><h1 style="font-size:16px">Scorecard</h1>
-<table><thead><tr><th onclick="sortT(this,0)">Category</th><th onclick="sortT(this,1,1)">Weight</th><th onclick="sortT(this,2,1)">Score</th><th>Maturity</th><th>Checks</th></tr></thead><tbody>
+<table><thead><tr><th onclick="sortT(this,0)">Category</th><th onclick="sortT(this,1,1)">Weight</th><th onclick="sortT(this,2,1)">Score</th><th>Maturity</th><th>Passed / scored</th><th>Blocked</th><th>Suppressed</th></tr></thead><tbody>
 HTMLMID
-    jq -r '.score.categories[]? | [.name,(.weight|tostring),(.score|tostring),.maturity,(.checks_passed|tostring),(.checks_total|tostring)] | @tsv' "$F" \
-    | while IFS="$(printf '\t')" read -r nm wt sc mat cp ct; do
+    jq -r '(.score.excluded // [] | map(.name)) as $excluded
+      | .score.categories[]?
+      | select(.name as $name | ($excluded | index($name)) == null)
+      | [.name,(.weight|tostring),(.score|tostring),.maturity,(.checks_passed|tostring),(.checks_total|tostring),((.checks_blocked//0)|tostring),((.checks_suppressed//0)|tostring)] | @tsv' "$F" \
+    | while IFS="$(printf '\t')" read -r nm wt sc mat cp ct cb cs; do
         if [ "$sc" -ge "$GATE" ]; then bc="#2f855a"; elif [ "$sc" -ge 50 ]; then bc="#b7791f"; else bc="#c53030"; fi
         enm="$(printf '%s' "$nm" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g')"
-        echo "<tr><td>${enm}</td><td>${wt}</td><td>${sc}/100<div class=\"barwrap\"><div class=\"bar\" style=\"width:${sc}%;background:${bc}\"></div></div></td><td>${mat}</td><td>${cp}/${ct}</td></tr>"
+        echo "<tr><td>${enm}</td><td>${wt}</td><td>${sc}/100<div class=\"barwrap\"><div class=\"bar\" style=\"width:${sc}%;background:${bc}\"></div></div></td><td>${mat}</td><td>${cp}/${ct}</td><td>${cb}</td><td>${cs}</td></tr>"
+      done
+    jq -r '.score.excluded[]? | [.name,(.weight|tostring),(.reason // "excluded")] | @tsv' "$F" \
+    | while IFS="$(printf '\t')" read -r nm wt reason; do
+        enm="$(printf '%s' "$nm" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g')"
+        ers="$(printf '%s' "$reason" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g')"
+        echo "<tr><td>${enm}</td><td>${wt}</td><td>excluded</td><td>-</td><td>-</td><td title=\"${ers}\">-</td><td>-</td></tr>"
       done
     cat <<'HTMLFIND'
 </tbody></table></div>
@@ -251,6 +337,7 @@ HTMLFIND
     # numerically, then dropped. All severities including info are shown, so the
     # table matches report.md and the info chip's count.
     jq -r '.findings[]?
+      | select((.lifecycle // "new") != "suppressed")
       | ({critical:0,high:1,medium:2,low:3,info:4}[.severity] // 5) as $r
       | [($r|tostring), (((.points_recoverable//0) * -1)|tostring), .severity, ((.points_recoverable//0)|tostring), .title, .id] | @tsv' "$F" \
     | sort -t"$(printf '\t')" -k1,1n -k2,2n \
@@ -260,6 +347,20 @@ HTMLFIND
         et="$(printf '%s' "$title" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g')"
         echo "<tr><td><span class=\"dot\" style=\"background:${sd}\"></span> ${sev}</td><td>${et}</td><td>${pts}</td><td><code>${id}</code></td></tr>"
       done
+    SUPPRESSED="$(jq '[.findings[]? | select(.lifecycle == "suppressed")] | length' "$F")"
+    if [ "$SUPPRESSED" -gt 0 ]; then
+      cat <<'HTMLSUPPRESSED'
+</tbody></table></div>
+<div class="card"><h1 style="font-size:16px">Suppressed findings</h1>
+<p class="sub">Active approved exemptions. These findings are excluded from readiness scoring and the active severity totals.</p>
+<table><thead><tr><th>Severity</th><th>Finding</th><th>Ref</th></tr></thead><tbody>
+HTMLSUPPRESSED
+      jq -r '.findings[]? | select(.lifecycle == "suppressed") | [.severity,.title,.id] | @tsv' "$F" \
+      | while IFS="$(printf '\t')" read -r sev title id; do
+          et="$(printf '%s' "$title" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g')"
+          echo "<tr><td>${sev}</td><td>${et}</td><td><code>${id}</code></td></tr>"
+        done
+    fi
     cat <<HTMLFOOT
 </tbody></table></div>
 <div class="footer">Generated by Scoutflo AI Readiness for Claude Code · report.html mirrors findings.json · contains infrastructure detail — keep within your team</div>
@@ -364,29 +465,52 @@ HTMLFOOT
     # Glob BOTH the one-level `<target>/<date>/` and two-level
     # `<integration>/<label>/<date>/` layouts (multi-target labels, and single-block
     # signoz/kubernetes which always nest), mirroring audit-all's Phase-3 loops.
+    # A stack is "end-to-end" only when it clears the score gate AND was fully
+    # assessed (v2 coverage 100%). A high score over a mostly-blocked estate is NOT
+    # end-to-end and must not be counted or rendered as if it were (else partial
+    # collection reads as a clean bill of health at the leader-facing headline).
+    # cov is the v2 assessment coverage percent, or "na" for a v1 stack that has none.
     ROWS=""; total=0; passing=0
     for f in "$D"/*/"$RD"/findings.json "$D"/*/*/"$RD"/findings.json; do
       [ -f "$f" ] || continue
       tgt="$(jq -r '.target // "?"' "$f" 2>/dev/null)"
       case "$tgt" in all|cost|cost-analysis|doctor|"?") continue;; esac
-      sc="$(jq -r '.score.overall // 0' "$f" 2>/dev/null)"
-      case "$sc" in *[!0-9]*) sc=0;; esac
-      total=$((total + 1)); [ "$sc" -ge "$GATE" ] && passing=$((passing + 1))
-      ROWS="${ROWS}${sc}	${tgt}
+      sc="$(jq -r 'if .score.overall == null then "unassessed" else .score.overall end' "$f" 2>/dev/null)"
+      cov="$(jq -r '.score.assessment.coverage_percent // "na"' "$f" 2>/dev/null)"
+      total=$((total + 1))
+      if [ "$sc" = "unassessed" ]; then
+        sort_key=-1
+      else
+        case "$sc" in *[!0-9]*) sc="unassessed"; sort_key=-1;;
+          *) sort_key="$sc"
+             # full coverage: v1 (na) or unparseable is not penalized; v2 must be 100
+             full=1; case "$cov" in ''|na|*[!0-9]*) full=1;; *) [ "$cov" -eq 100 ] || full=0;; esac
+             [ "$sc" -ge "$GATE" ] && [ "$full" -eq 1 ] && passing=$((passing + 1));;
+        esac
+      fi
+      ROWS="${ROWS}${sort_key}	${sc}	${cov}	${tgt}
 "
     done
     if [ "$total" -eq 0 ]; then echo "_No completed audits for ${RD}._"; exit 0; fi
-    echo "**Stacks passing the ${GATE} gate: ${passing}/${total}**  \`$(viz_bar "$passing" "$total" 12)\`"
+    echo "**Stacks end-to-end (>= ${GATE} gate and fully assessed): ${passing}/${total}**  \`$(viz_bar "$passing" "$total" 12)\`"
     echo
     echo "| Stack | Score | | |"
     echo "| --- | ---: | --- | --- |"
-    printf '%s' "$ROWS" | sort -n | while IFS="$(printf '\t')" read -r sc tgt; do
+    printf '%s' "$ROWS" | sort -t"$(printf '\t')" -k1,1n | while IFS="$(printf '\t')" read -r sort_key sc cov tgt; do
       [ -n "$tgt" ] || continue
-      [ "$sc" -ge "$GATE" ] && flag="" || flag="← below gate"
-      echo "| \`${tgt}\` | ${sc}/100 | \`$(viz_bar "$sc" 100 12)\` | ${flag} |"
+      if [ "$sc" = "unassessed" ]; then
+        echo "| \`${tgt}\` | unassessed | \`░░░░░░░░░░░░\` | ← no readiness score |"
+      else
+        full=1; case "$cov" in ''|na|*[!0-9]*) full=1;; *) [ "$cov" -eq 100 ] || full=0;; esac
+        if [ "$sc" -lt "$GATE" ]; then flag="← below gate"
+        elif [ "$full" -eq 0 ]; then flag="← only ${cov}% assessed — not end-to-end"
+        else flag=""
+        fi
+        echo "| \`${tgt}\` | ${sc}/100 | \`$(viz_bar "$sc" 100 12)\` | ${flag} |"
+      fi
     done
     echo
-    echo "_Worst-first — send the team to the top row. Never a combined average: one score line per stack._"
+    echo "_Worst-first — send the team to the top row. A high score over a partly-assessed estate is flagged, not counted as end-to-end. Never a combined average: one score line per stack._"
     ;;
 
   inventory)

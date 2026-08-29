@@ -79,6 +79,7 @@ Ask which integrations to configure as a plain numbered list in a normal chat me
 | JSM Operations | audit-jsm | `jsm:` | `JSM_EMAIL` + `JSM_API_TOKEN` | Atlassian API token over Basic auth; read-only by GET-only use |
 | Zenduty | audit-zenduty | `zenduty:` | `ZENDUTY_TOKEN` | `Authorization: Token` API key; Bot Token (Beta) for least privilege, read-only by GET-only use |
 | Groundcover | audit-groundcover | `groundcover:` | `GROUNDCOVER_API_KEY` | service-account API key on a Viewer role = true read-only tier |
+| LGTM runtime | audit-lgtm | `lgtm:` | none | explicit `runtime_mode`; choose from live deployment evidence, never infer it from metric names |
 | Prometheus + Alertmanager | audit-lgtm, setup-lgtm, audit-alert-routing | `prometheus:` | `PROM_TOKEN` (only if your endpoints require auth) | URL reachability; optional bearer |
 | ClickStack (ClickHouse + HyperDX) | audit-clickstack, setup-clickstack | `clickstack:` | `CH_KEY` (ClickHouse read-only user password) + `HDX_API_KEY` (HyperDX **Personal API Access Key**, not the ingestion key) | ClickHouse: a read-only user with `SELECT` on the telemetry db + `system.*`; HyperDX: the per-user Personal API Access Key (Settings → API Keys) that reads the external API v2 (`GET /api/v2/alerts`, `/api/v2/dashboards`, `/api/v2/sources`) via `Authorization: Bearer` |
 | SigNoz (ClickHouse-backed) | audit-signoz | `signoz:` | `SIGNOZ_API_KEY` (Service Account token assigned the read-only `signoz-viewer` role) + optional `SIGNOZ_CH_KEY` (ClickHouse read-only user password) | A `signoz-viewer`-role service-account token (Settings → Service Accounts → Roles) that can `GET /api/v1/rules`, `/api/v1/channels`, `/api/v2/dashboards` and `POST /api/v3/query_range`; optionally a read-only ClickHouse user with `SELECT` on `signoz_*` + `system.*` for the deep backend lane |
@@ -108,6 +109,7 @@ Judgment step: collect the non-secret facts for every integration you picked bef
 | JSM Operations | `jsm.site`, `jsm.email_env`, `jsm.token_env`, `jsm.tier`; optional `cloud_id`, `teams` | `site: your-site.atlassian.net` |
 | Zenduty | `zenduty.token_env`, `zenduty.tier`; optional `teams` | `token_env: ZENDUTY_TOKEN` |
 | Groundcover | `groundcover.token_env`, `groundcover.tier`; optional `backend_id`, `api_url` | `token_env: GROUNDCOVER_API_KEY` |
+| LGTM runtime | `lgtm.runtime_mode`; exactly one of `kubernetes`, `ec2-systemd`, `docker`, `external` | `runtime_mode: ec2-systemd` |
 | Prometheus + Alertmanager | `prometheus.url`, `prometheus.alertmanager_url`; add `token_env` and `tier` only behind an auth proxy | `url: https://prometheus.example.com` |
 | ClickStack | `clickstack.clickhouse_url` / `clickstack.clickhouse_user` / `clickstack.clickhouse_password_env` **optional (ClickHouse lane)**; `clickstack.hyperdx_url` / `clickstack.hyperdx_api_key_env` **optional (HyperDX lane)** — configure at least one lane; a HyperDX-only or ClickHouse-only ClickStack config is valid and the audit scores the lane you have | `clickhouse_url: https://your-clickhouse-host:8123` |
 | SigNoz | `signoz.url`, `signoz.api_key_env`, and optional `signoz.clickhouse_url`, `signoz.clickhouse_user`, `signoz.clickhouse_password_env` | `url: https://your-signoz-host` |
@@ -131,6 +133,13 @@ grafana:
   url: https://grafana.example.com
   token_env: GRAFANA_TOKEN
   tier: read-only
+
+lgtm:
+  runtime_mode: kubernetes
+
+kubernetes:
+  context: your-kube-context
+  monitoring_namespace: monitoring
 
 prometheus:
   url: https://prometheus.example.com

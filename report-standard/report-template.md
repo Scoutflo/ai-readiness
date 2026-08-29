@@ -2,9 +2,9 @@
 
 `report.md` is the human-readable half of an audit run. It is generated from the same data as `findings.json` and must never disagree with it. Sections appear in the order below; empty sections state why they are empty rather than disappearing.
 
-**Output conformance (enforced).** Every generated `report.md` must pass [`check-report.sh`](check-report.sh), which validates this skeleton: the header table, the canonical `**Score: <n>/100**` line, and the required section spine (**At a glance**, Executive summary, Scorecard, Findings, Next safe actions, Evidence appendix) in order. It also warns when the standalone `report.html` dashboard is missing next to `report.md`.
+**Output conformance (enforced).** Every generated `report.md` must pass [`check-report.sh`](check-report.sh), which validates this skeleton: the header table, the canonical `**Score: <n>/100**` line for assessed runs (or `**Readiness: unassessed**` for a fully blocked v2 run), and the required section spine (**At a glance**, Executive summary, Scorecard, Findings, Next safe actions, Evidence appendix) in order. It also warns when the standalone `report.html` dashboard is missing next to `report.md`.
 
-**Visuals are generated, never hand-written.** [`render-report-viz.sh`](render-report-viz.sh) renders the At-a-glance block, the scorecard bars, an optional Mermaid blast-radius graph, and the standalone `report.html` dashboard — all computed from the canonical `findings.json` (+ `history.jsonl` for the trend, `topology-export.json` for the graph), so a visual can never drift from the numbers. In Phase 8, after `findings.json` is written and `check-findings.sh` passes, each audit runs the generator to write `report.html` and to produce the At-a-glance block it pastes into `report.md`, then runs `check-report.sh`. Each audit skill runs it on its own `report.md` in its final phase before declaring the run done, so rendered output cannot silently drift from this template. Run it directly with `sh report-standard/check-report.sh path/to/report.md`; it exits non-zero and lists each violation when a report drifts. A report that does not match this template is a bug, not a style choice.
+**Visuals are generated, never hand-written.** [`render-report-viz.sh`](render-report-viz.sh) renders the At-a-glance block, the scorecard bars, the findings-by-purpose view, an optional Mermaid blast-radius graph, and the standalone `report.html` dashboard — all computed from the canonical `findings.json` (+ `history.jsonl` for the trend, `topology-export.json` for the graph), so a visual can never drift from the numbers. In Phase 8, after `findings.json` is written and `check-findings.sh` passes, each audit runs the generator to write `report.html` and to produce the At-a-glance and findings-by-purpose blocks it pastes into `report.md`, then runs `check-report.sh`. Each audit skill runs it on its own `report.md` in its final phase before declaring the run done, so rendered output cannot silently drift from this template. Run it directly with `sh report-standard/check-report.sh path/to/report.md`; it exits non-zero and lists each violation when a report drifts. A report that does not match this template is a bug, not a style choice.
 
 ## Skeleton
 
@@ -39,18 +39,33 @@ urgent finding, whether the end-to-end label applies and if not what
 blocks it, what moved since the last run. Plain language, no jargon
 the reader's manager could not follow.>
 
-**Score: <n>/100** (gate for end-to-end: 85) | <X> of <Y> checks passed; <severity counts>
+**Score: <n>/100** (gate for end-to-end: 85) | <X> of <Y> assessed checks passed; <severity counts>
+**Assessment coverage: <a>/<applicable> (<p>%).** <s> scored; <b> applicable checks blocked; <x> suppressed; <n> not in scope.
 **Gap to target: <n> points.** Biggest levers: <PREFIX-NNN> (+<p>), <PREFIX-NNN> (+<p>), <PREFIX-NNN> (+<p>).
 <If categories were excluded: "Scored across <k> of <m> categories;
 <category> excluded (<reason>).">
+<If every applicable check was blocked: replace the score and gap lines with
+"**Readiness: unassessed** 0/<applicable> applicable checks assessed" and list the
+evidence-unlock actions. Never render 0/100 or 100/100.>
 
 ## Scorecard
 
-| Category | Weight | Score | Maturity | Checks | Notes |
-| --- | ---: | ---: | --- | ---: | --- |
-| <category> | <w> | <s>/100 | reactive | <passed>/<total> | <one-line note> |
-| <category> | <w> | <s>/100 | systematic | <passed>/<total> | <one-line note> |
-| <excluded category> | <w> | excluded | - | - | <reason> |
+| Category | Weight | Score | Maturity | Passed / scored | Blocked | Suppressed | Notes |
+| --- | ---: | ---: | --- | ---: | ---: | ---: | --- |
+| <category> | <w> | <s>/100 | reactive | <passed>/<scored> | <blocked> | <suppressed> | <one-line note> |
+| <category> | <w> | <s>/100 | systematic | <passed>/<scored> | <blocked> | <suppressed> | <one-line note> |
+| <excluded category> | <w> | excluded | - | - | <blocked> | <suppressed> | <reason> |
+
+## Findings by purpose
+
+<Paste the output of
+`sh report-standard/render-report-viz.sh lanes <findings.json>` verbatim.
+This provides two reader paths over the same canonical findings: General audit
+for reliability, security, capacity, backup, alerting, and operational hygiene;
+AI SRE readiness for telemetry quality, service identity, topology, ownership,
+change context, routing evidence, and safe RCA/automation. A finding can appear
+in both lists, but its detailed evidence is rendered only once below — in the Findings table, or in the relevant non-scored section (e.g. Cost & Resource Optimization, Scoutflo Topology Readiness) for a non-scored finding. This split
+does not create a second score or change severity.>
 
 ## Findings
 
@@ -230,7 +245,9 @@ Generated by [Scoutflo AI Readiness](https://scoutflo.com) for Claude Code.
 
 - **Header**: target, date, and toolkit version are mandatory; they make any report file self-identifying when it gets copied around.
 - **Executive summary** is written for a reader who will read nothing else. Lead with the verdict, not the methodology. The gap-to-target line follows the gap model in [severity-and-scoring.md](severity-and-scoring.md): gap in points, then the two or three open findings with the highest `points_recoverable` as the biggest levers.
-- **Scorecard** mirrors `score.categories` and `score.excluded` exactly, including the maturity value per category (`reactive`, `proactive`, `systematic`; definitions in [severity-and-scoring.md](severity-and-scoring.md)). Excluded rows stay visible with their reason and carry `-` for maturity and checks; they do not vanish.
+- **Scorecard** mirrors `score.categories` and `score.excluded` exactly, including the maturity value per category (`reactive`, `proactive`, `systematic`; definitions in [severity-and-scoring.md](severity-and-scoring.md)). For v2, show `checks_passed/checks_total` as passed over the unsuppressed readiness denominator and show blocked and suppressed separately. Excluded rows stay visible with their reason; they do not vanish or render a second numeric row.
+- **Scoring scope** is explicit on every v2 finding. Use `scoring_scope: readiness` when it explains a same-ID non-pass check. Use `scoring_scope: non-scored` only for an intentional parallel section, such as a cost opportunity, with no check row and zero recoverable readiness points.
+- **Findings by purpose** is derived from each v2 finding's `report_lanes` with `render-report-viz.sh lanes`. It is a navigation and ownership split only. General audit covers foundational operational defects; AI SRE readiness includes only evidence-backed gaps that reduce telemetry correlation, incident context, RCA trust, or action safety. Do not invent a second score, change severity, or duplicate detailed evidence.
 - **Every number carries its scale or denominator.** A score is `43/100`, a check count is `12/14`, a confidence is `8/10`, a coverage cell is `2/3`. A bare number with no total is a conformance bug anywhere in the report — the reader should never have to know the scale from memory.
 - **Findings** are written for any reader, not just the person who ran the tool. Each renders as a plain-English heading plus **What's wrong / Where / Why it matters / How to fix / Done when**, in that order. "Where" always names the concrete location (resource, service, namespace, route, alarm, receiver, host), never a vague "the cluster" — and **when it names more than one object it is rendered as a table (one row per affected object), never a comma-separated sentence or inline list**; a multi-item "Where" being a table is a conformance requirement, not a preference, so the format is identical no matter which model writes the report. "How to fix" is 1 to 3 numbered concrete steps naming the exact object and change (the setup-skill pointer cited on the step it automates, never as the whole fix); "Done when" is one observable verification condition. A fix a reader cannot start executing, or verify finishing, without asking follow-up questions is a conformance bug. The coded check ID (`ALR-002`, `DO-050`, ...) is demoted to the small `ref:` line and is the only place it appears in a finding — it exists for delta tracking, the Evidence appendix, and exemptions, and a human should not need it to understand the finding. The full raw command output lives once, in the Evidence appendix, keyed by the same ID, so the finding stays readable. Lifecycle values follow the finding lifecycle table in [findings-schema.md](findings-schema.md). Findings and the appendix cap at `REPORT_MAX_FINDINGS` (25; example, tune to your estate size), ordered by severity then `points_recoverable` descending; the remainder is a single "N more findings in findings.json, ordered by points_recoverable" line. `findings.json` is never capped; the report cap only shortens what gets rendered.
 - **Suppressed findings** lists findings silenced by a live exemption, with the reason, approver, and expiry from exemptions.yaml. Suppressed findings are excluded from the score and severity counts; the scorecard states the suppressed count.
@@ -244,7 +261,7 @@ Generated by [Scoutflo AI Readiness](https://scoutflo.com) for Claude Code.
 
   Rules for the summary line: sum only the `estimated_monthly_savings_usd` values that came verbatim from a provider recommendation API; multiply by 12 for the annual figure and label it clearly as an estimate ("~", "potential"); state the count of opportunities *with* a figure separately from the count *without* one (so the reader never reads "$1,240" as the whole story when 4 items have no number); name the single biggest lever. If **no** row has a provider-sourced figure, say so plainly ("N opportunities found; no provider-sourced dollar figures available — each is a presence fact to review") rather than printing `$0`, which would falsely imply nothing to save. Then render the per-row table below the summary. Every number carries its unit and period (`/mo`, `/year`), and no figure appears that was not copied from a provider API — the toolkit-wide "never invent a number" rule applies doubly to money, because it gets pasted into a budget conversation.
 
-- **Every score and count reads as a plain-language sentence, not just a digit.** The executive summary already states the score; reinforce comprehension by pairing each headline number with what it means in one clause — `72/100 (good base coverage — above 50, below the 85 end-to-end gate)`, `41/47 checks passed (6 blocked on missing scopes, listed below)`, `Topology readiness 4/6 services (2 need a provider attribute added)`. A number the reader has to interpret from memory is a missed chance to guide them.
+- **Every score and count reads as a plain-language sentence, not just a digit.** The executive summary already states the score; reinforce comprehension by pairing each headline number with what it means in one clause — `72/100 readiness across 87% assessment coverage`, `41/47 assessed checks passed; 6 applicable checks blocked`, `Topology readiness 4/6 services (2 need a provider attribute added)`. A number the reader has to interpret from memory is a missed chance to guide them. Never present a v2 readiness score without its assessment coverage when coverage is below 100%.
 
 - **Lead the reader to the highest-value action.** The executive summary's "Biggest levers" line and the Next safe actions table already exist; make the single top action unmistakable — one bolded first line the reader can act on without reading the whole report, e.g. **"Start here: add a real default receiver (ALR-014) — recovers the most points and closes the biggest paging gap."** Guiding attention is as valuable as the data itself.
 - **Next safe actions** is the bridge to the setup lane: finding ID to remediation pointer, ordered so the reader can start at row 1 without preparing anything else.
@@ -256,9 +273,9 @@ Generated by [Scoutflo AI Readiness](https://scoutflo.com) for Claude Code.
 When Slack delivery is configured, the skill derives one brief per run from the report. The brief contains, in order:
 
 1. Skill and target, date.
-2. Score with movement: `72/100 (+9)`, plus the end-to-end label state.
+2. Score with movement: `72/100 (+9)` only when the scoring model and check set match the baseline; otherwise `72/100 (score delta not comparable: check set changed)`, plus the end-to-end label state.
 3. Severity counts: `1 critical, 2 high, 4 medium, 3 low`.
-3a. Check totals: `41/47 checks passed`.
+3a. Check totals and assessment coverage: `41/47 assessed checks passed; 47/53 applicable checks assessed (89%); 6 blocked`.
 4. Top 3 to 5 finding titles, highest severity first, each with its ID.
 5. Delta line: `3 fixed, 1 new, 6 unchanged` (or `first run`).
 6. Topology readiness line: `Topology readiness: 4 of 6 critical services are ready for automatic Scoutflo correlation` (counts only, no service names required).

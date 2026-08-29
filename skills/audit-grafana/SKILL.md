@@ -17,6 +17,8 @@ This audit owns the Grafana application layer: datasources, dashboards, Grafana-
 - Error-tracker health belongs to `audit-sentry`.
 - Every fix points at `setup-grafana`.
 
+Each target also gets one appended line in `./scoutflo-audits/grafana/[<label>/]history.jsonl`, following the report-standard history contract.
+
 **Read-only, absolutely.** Every call is a GET except `POST /api/ds/query`, which executes a read-only query (POST by transport, read by effect). No test notifications, no silences, no annotations, no dashboard saves, no state creation of any kind. If a check seems to need a write, it belongs in `setup-grafana`.
 
 ## Doctor gate
@@ -269,9 +271,21 @@ Runs on the large path only. State lives under a run-ID-keyed run directory, `./
      pending_n=$(awk -F'\t' '$2 == "pending"' "${WORKLIST}" | wc -l | tr -d ' ')
      echo "resuming existing worklist: done=${done_n} pending=${pending_n}"
    else
-     curl -fsS --max-time 15 -H "Authorization: Bearer ${GRAFANA_TOKEN}" \
-       "${GRAFANA_URL}/api/search?type=dash-db&limit=5000" \
-       | jq -r '.[].uid' | awk '{print $0"\tpending"}' > "${WORKLIST}"
+     # Use the inventory script's paginated evidence contract. A failed first
+     # page creates no index; a later-page failure creates only
+     # dashboard-index.partial.json. Neither is allowed to seed a supposedly
+     # complete worklist.
+     RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${GRAF_SEG}/$(date -u +%Y-%m-%d)/raw"
+     EMPTY_UIDS="${RUN_DIR}/batches/index-only.uids"; : > "${EMPTY_UIDS}"
+     OUT_DIR="${RAW_DIR}" DASHBOARD_UIDS_FILE="${EMPTY_UIDS}" SKIP_NON_DASHBOARD=1 \
+       GRAFANA_URL="${GRAFANA_URL}" GRAFANA_TOKEN="${GRAFANA_TOKEN}" \
+       bash "${CLAUDE_PLUGIN_ROOT}/skills/audit-grafana/scripts/grafana-audit.sh"
+     [ -f "${RAW_DIR}/dashboard-index.json" ] || {
+       echo "dashboard index incomplete; inspect request-status.jsonl and dashboard-index.partial.json, then retry" >&2
+       exit 1
+     }
+     jq -r '.[].uid' "${RAW_DIR}/dashboard-index.json" \
+       | awk '{print $0"\tpending"}' > "${WORKLIST}"
      total=$(wc -l < "${WORKLIST}" | tr -d ' ')
      echo "worklist built: ${total} dashboards, all pending"
    fi
@@ -409,7 +423,15 @@ cat "${RAW_DIR}/summary.txt"
 
 On the large path, this phase runs incrementally as part of the batch loop in [Large-path worklist: dashboard batches and resume](#large-path-worklist-dashboard-batches-and-resume); do not also run the unscoped call above, it defeats the batching.
 
-Expected: a summary of datasource, dashboard, panel, rule, and contact-point counts plus an error count. Failed calls are kept as `<file>.http-<status>` because a 403 or 404 body is evidence. Counts are inventory, not results: forty dashboards and two hundred rules prove nothing yet. `smells.json` holds candidate defects that must be verified live before any becomes a finding.
+Expected: a summary of datasource, dashboard, panel, rule, and contact-point counts plus an error count. `request-status.jsonl` records one normalized state per request: `success-empty`, `success-nonempty`, `forbidden`, `unauthenticated`, `unsupported`, `transport-error`, `http-error`, or `invalid-response`; the paginated aggregate also records `partial` when a later page fails. Failed calls retain their body as `<file>.http-<status>` (or `.invalid-response` / `.curl-failed`) because the failure is evidence. Counts are inventory, not results: forty dashboards and two hundred rules prove nothing yet. `smells.json` holds candidate defects that must be verified live before any becomes a finding.
+
+Evidence completeness rules:
+
+- Only HTTP 2xx with valid JSON of the expected shape may become `success-empty` or `success-nonempty`. A real 200 `[]` is a verified empty collection; a 401, 403, 404, 5xx, timeout, or malformed 200 is never serialized as `[]`.
+- `dashboard-index.json` exists only when all required search pages completed. If a later page fails, successful pages are preserved as `dashboard-index.partial.json`, the aggregate state is `partial`, and dashboard estate/coverage checks are `blocked` pending a complete retry. The partial file may support object-level investigation but never an estate-wide denominator.
+- A failed first search page creates neither index file. Do not infer that there are zero dashboards.
+- If one or more full dashboard reads fail, the derived files are `panel-targets.partial.json` and `smells.partial.json`; never present their counts as full-estate counts.
+- Use `notification_policies_state` from `summary.txt` or the matching request ledger row. File presence or nonzero byte size alone is not proof that notification policies were read successfully.
 
 ## Phase 2: Datasource checks
 
@@ -598,14 +620,16 @@ Then render the Scoutflo Topology Readiness section per [topology-readiness.md](
 | Usage and cost | 10 | Ingestion visibility, cost alerts, deliberate retention |
 | Service coverage | 15 | Dashboards, alerts, and ingestion per critical service |
 
-Mechanics follow [severity-and-scoring.md](../../report-standard/severity-and-scoring.md). Apply each catalog check across its objects: `pass` when every inspected object passes; `partial` when failures are confined to non-critical objects or the state is present but unproven live; `fail` when a critical service is affected or failure is widespread; `blocked` with the blocker as evidence. Unsure between two results, pick the lower and say why. A whole category blocked (for example, all provisioning reads 403) is excluded from scoring and stated everywhere the score appears.
+Mechanics follow [severity-and-scoring.md](../../report-standard/severity-and-scoring.md). Apply each catalog check across its objects: `pass` when every inspected object passes; `partial` when failures are confined to non-critical objects or the state is present but unproven live; `fail` when a critical service is affected or failure is widespread; `blocked` only when no conclusion is possible. Blocked checks leave the readiness denominator and reduce assessment coverage; `not-in-scope` leaves both denominators. A whole category with zero assessed checks is excluded. A fully blocked run is `unassessed` with `overall: null`, never 0/100. When unsure between a defect and missing evidence, use `blocked` and state the evidence-unlock action.
+
+Emit one `checks[]` row for every stable `GRAF-*` catalog check, including passes, partials, failures, blockers, and not-in-scope checks. Derive category counts, readiness, assessment coverage, and `score.check_set` from that complete ledger. Every finding declares `scoring_scope: "readiness"` and `report_lanes`: `general-audit`, `ai-sre-readiness`, or both. Use the AI SRE lane only when evidence shows impact to telemetry quality, correlation, topology/ownership context, incident routing, RCA trust, or action safety; the lane never changes severity or score.
 
 - ❌ `Scored dashboard semantics 100: forty dashboards render with no query errors.`
 - ✅ `Scored dashboard semantics 60: panels render, but three key stats mismatch the provider-native source (GRAF-027) and one dashboard silently queries org-wide scope (GRAF-021), so credit stops at partial.`
 
 Write both artifacts to `./scoutflo-audits/grafana/[<label>/]<YYYY-MM-DD>/` (the flat `grafana/<date>/` for a single block; `grafana/<label>/<date>/` for a labeled list target):
 
-- `findings.json` per the [schema](../../report-standard/findings-schema.md): prefix `GRAF`, IDs from the [check catalog](references/api-checks.md#check-catalog), evidence quoting real command output, every finding with a `remediation` pointer into `setup-grafana`, and `estate.objects`/`estate.path` set to the count and path chosen in [Estate sizing](#estate-sizing).
+- `findings.json` using `scoutflo-findings/v2` per the [schema](../../report-standard/findings-schema.md): prefix `GRAF`, complete `checks[]` ledger, IDs from the [check catalog](references/api-checks.md#check-catalog), evidence quoting real command output, `report_lanes` on every finding, every finding with a `remediation` pointer into `setup-grafana`, and `estate.objects`/`estate.path` set to the count and path chosen in [Estate sizing](#estate-sizing).
 - `report.md` per the [template](../../report-standard/report-template.md): executive summary, scorecard, findings table, the Phase 7 coverage matrix, the `## Inventory` section (the `render-report-viz.sh inventory` output), next safe actions ordered severity-then-safety, delta against the previous run (or "first run, no delta"), evidence appendix.
 - `inventory.json` per the [inventory schema](../../report-standard/inventory-schema.md) (`scoutflo-inventory/v1`): the complete Phase-1 catalog — one item per datasource, dashboard, alert rule, contact point, and notification policy — each with its `kind`, `covers` (the topology service or dashboard folder), `enabled`, `severity` (the object's own, or null), and `routes_to` for alerting objects. Built from the raw pull, never invented; redacted at capture, never a secret value.
 
@@ -621,13 +645,16 @@ GRAF_KIND=$(sh "$TT" "$CFG" grafana kind); GRAF_N=$(sh "$TT" "$CFG" grafana coun
 GRAF_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$GRAF_N" ]; do [ "$(sh "$TT" "$CFG" grafana label "$_i")" = "$SCOUTFLO_TARGET" ] && { GRAF_IDX=$_i; break; }; _i=$((_i+1)); done; fi
 GRAF_LABEL=$(sh "$TT" "$CFG" grafana label "$GRAF_IDX")
 if [ "$GRAF_KIND" = seq ]; then GRAF_SEG="grafana/${GRAF_LABEL}"; else GRAF_SEG="grafana"; fi
-OUT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${GRAF_SEG}/$(date -u +%Y-%m-%d)"
+RUN_DATE="$(date -u +%Y-%m-%d)"
+OUT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${GRAF_SEG}/${RUN_DATE}"
 mkdir -p "$OUT"
 # ... write findings.json, inventory.json, and report.md per the report standard. The findings.json and
 # inventory.json ".target" is the per-target slug $GRAF_SEG ("grafana" for a single block, "grafana/<label>"
 # for a labeled list target), so audit-all/correlation/render disambiguate multiple instances. Then verify:
-jq -e --arg seg "$GRAF_SEG" '.schema == "scoutflo-findings/v1" and .target == $seg
-       and (.findings | type == "array")' "$OUT/findings.json" >/dev/null \
+jq -e --arg seg "$GRAF_SEG" '.schema == "scoutflo-findings/v2" and .target == $seg
+       and (.checks | type == "array" and length > 0)
+       and (.findings | type == "array")
+       and (.findings | all((.scoring_scope == "readiness") and (.report_lanes | type == "array" and length > 0)))' "$OUT/findings.json" >/dev/null \
   && echo "findings.json valid"
 # Inventory (scoutflo-inventory/v1): the complete Phase-1 catalog of what exists,
 # built from the raw pull (never invented, redacted). counts.total must reconcile
@@ -637,6 +664,9 @@ jq -e --arg seg "$GRAF_SEG" '.schema == "scoutflo-inventory/v1" and .target == $
   "$OUT/inventory.json" >/dev/null && echo "inventory.json valid"
 sh "${CLAUDE_PLUGIN_ROOT}/report-standard/render-report-viz.sh" inventory "$OUT/inventory.json" >/dev/null \
   && echo "inventory section renders"
+sh "${CLAUDE_PLUGIN_ROOT}/report-standard/render-report-viz.sh" lanes "$OUT/findings.json" >/dev/null \
+  && echo "findings-by-purpose section renders"
+grep -qxF '## Findings by purpose' "$OUT/report.md" && echo "findings-by-purpose section present"
 jq -e '.estate.path == "small" or .estate.path == "medium" or .estate.path == "large"' \
   "$OUT/findings.json" >/dev/null && echo "estate sizing recorded"
 grep -q '^# ' "$OUT/report.md" && echo "report.md present"
@@ -646,25 +676,56 @@ sh "${CLAUDE_PLUGIN_ROOT}/report-standard/check-findings.sh" "$OUT/findings.json
 sh "${CLAUDE_PLUGIN_ROOT}/report-standard/render-report-viz.sh" html "$OUT/findings.json" "$OUT/report.html" "$(dirname "$OUT")/history.jsonl"
 sh "${CLAUDE_PLUGIN_ROOT}/report-standard/check-report.sh" "$OUT/report.md"
 
+# Append the derived per-target history row after findings/report validation.
+# A same-date rerun replaces that date's row instead of duplicating it.
+TARGET_DIR="$(dirname "$OUT")"
+RESOLVED="0"   # fixed count from this run's delta; 0 on the first run
+LINE="$(jq -c --arg d "$RUN_DATE" --argjson resolved "$RESOLVED" \
+  '{run_date:$d, skill:"audit-grafana", overall:.score.overall, state:.score.state,
+    scoring_model:.score.scoring_model, check_set:.score.check_set,
+    assessment_coverage_percent:.score.assessment.coverage_percent, gate:.score.gate,
+    end_to_end:.score.end_to_end, severity_counts:.severity_counts,
+    lifecycle_counts:((reduce .findings[].lifecycle as $l ({}; .[$l] = (.[$l] // 0) + 1)) + {resolved:$resolved})}' \
+  "$OUT/findings.json")"
+TMP="$(mktemp)"
+[ -f "${TARGET_DIR}/history.jsonl" ] && grep -v "\"run_date\":\"${RUN_DATE}\"" "${TARGET_DIR}/history.jsonl" > "$TMP" || true
+printf '%s\n' "$LINE" >> "$TMP"
+mv "$TMP" "${TARGET_DIR}/history.jsonl"
+tail -1 "${TARGET_DIR}/history.jsonl" | jq -e '.run_date and ((.overall|type)=="number" or .overall==null) and .scoring_model and .check_set' >/dev/null && echo "history.jsonl updated"
+
 # One Slack brief per run: titles only, never evidence values, no hostnames.
 # slack.webhook_env names the webhook variable; skip when unset.
 if [ -n "${SCOUTFLO_SLACK_WEBHOOK:-}" ]; then
   OUT_ABS="$(cd "$OUT" && pwd)"   # absolute path: the brief must be openable from anywhere
   TARGET_DIR="$(dirname "$OUT")"
   SCORE="$(jq -r '.score.overall' "$OUT/findings.json")"
+  SCORE_STATE="$(jq -r '.score.state' "$OUT/findings.json")"
+  CUR_MODEL="$(jq -r '.score.scoring_model' "$OUT/findings.json")"
+  CUR_SET="$(jq -r '.score.check_set' "$OUT/findings.json")"
+  ASSESSMENT="$(jq -r '.score.assessment | "\(.assessed_checks)/\(.applicable_checks) (\(.coverage_percent)%) assessed, \(.scored_checks) scored, \(.blocked_checks) blocked, \(.suppressed_checks) suppressed"' "$OUT/findings.json")"
   E2E="$(jq -r 'if .score.end_to_end then "end-to-end" else "not end-to-end" end' "$OUT/findings.json")"
   COUNTS="$(jq -r '.severity_counts | "\(.critical) critical, \(.high) high, \(.medium) medium, \(.low) low"' "$OUT/findings.json")"
-  TOP="$(jq -r '[.findings[] | "\(.id) \(.title)"] | .[0:5] | join("\n")' "$OUT/findings.json")"
+  TOP="$(jq -r '[.findings[] | select((.lifecycle // "new") != "suppressed") | "\(.id) \(.title)"] | .[0:5] | join("\n")' "$OUT/findings.json")"
   PREV="$(find "$TARGET_DIR" -mindepth 1 -maxdepth 1 -type d -name '[0-9]*-[0-9]*-[0-9]*' | sort | tail -2 | head -1)"
   MOVE=""; DELTA="first run"
   if [ -n "$PREV" ] && [ "$PREV" != "$OUT" ]; then
+    PREV_MODEL="$(jq -r '.score.scoring_model // ""' "$PREV/findings.json")"
+    PREV_SET="$(jq -r '.score.check_set // ""' "$PREV/findings.json")"
+    PREV_SCORE="$(jq -r 'if (.score.overall|type)=="number" then .score.overall else "" end' "$PREV/findings.json")"
+    if [ "$SCORE_STATE" = "assessed" ] && [ -n "$PREV_SCORE" ] && [ "$PREV_MODEL" = "$CUR_MODEL" ] && [ "$PREV_SET" = "$CUR_SET" ]; then
     MOVE="$(jq -rn --argjson prev "$(jq '.score.overall' "$PREV/findings.json")" --argjson cur "$SCORE" \
       '(($cur - $prev) | if . >= 0 then "(+\(.))" else "(\(.))" end)')"
+    fi
     DELTA="$(jq -rn --slurpfile p "$PREV/findings.json" --slurpfile c "$OUT/findings.json" '
       [$p[0].findings[].id] as $b | [$c[0].findings[].id] as $n |
       "\(($b - $n) | length) fixed, \(($n - $b) | length) new, \(($n - ($n - $b)) | length) unchanged"')"
   fi
-  jq -n --arg head "audit-grafana ${RUN_DATE:-$(date -u +%Y-%m-%d)}: ${SCORE}/100${MOVE:+ $MOVE}, ${E2E}. ${COUNTS}." \
+  if [ "$SCORE_STATE" = "unassessed" ]; then
+    HEAD="audit-grafana ${RUN_DATE:-$(date -u +%Y-%m-%d)}: readiness unassessed; ${ASSESSMENT}. ${COUNTS}."
+  else
+    HEAD="audit-grafana ${RUN_DATE:-$(date -u +%Y-%m-%d)}: ${SCORE}/100${MOVE:+ $MOVE}, ${E2E}; ${ASSESSMENT}. ${COUNTS}."
+  fi
+  jq -n --arg head "$HEAD" \
         --arg top "$TOP" --arg delta "$DELTA" --arg path "$OUT_ABS/report.md" \
         '{text: ($head + "\nTop findings:\n" + $top + "\nDelta: " + $delta + "\nReport: " + $path)}' \
     | curl -fsS --max-time 10 -H 'Content-Type: application/json' -d @- "$SCOUTFLO_SLACK_WEBHOOK" \
@@ -674,7 +735,7 @@ fi
 
 After the report is written, close with the run-completion message per the report standard ([report-template.md](../../report-standard/report-template.md#run-completion-message-what-the-skill-says-in-chat-when-the-run-finishes)): the one-line score headline, the top fixes by points_recoverable, the **absolute** report path, the OS-specific open command, and the leak-safe share pointer (Slack brief).
 
-Compute the delta against the previous run date per the [report standard](../../report-standard/README.md) and include the score movement and delta line in the brief text when a baseline exists. The end-to-end gate is 85 with zero exclusions and every critical service passing every coverage row. Below it, write "good base coverage", never "end to end". A failed brief send is noted and never fails the run. Keep `./scoutflo-audits/` out of public version control.
+Compute the delta against the previous run date per the [report standard](../../report-standard/README.md) and include score movement only when the scoring model and check set match. The end-to-end gate is 85 with 100% assessment coverage, zero exclusions, and every critical service passing every coverage row. Below it, write "good base coverage", never "end to end". A failed brief send is noted and never fails the run. Keep `./scoutflo-audits/` out of public version control.
 
 When invoked by `audit-all`, skip the Slack brief; the orchestrator
 sends exactly one combined message.
@@ -693,8 +754,12 @@ Before rendering the report:
    finding into the Suppressed appendix; malformed or expired entries are
    reported, never honored.
 3. Every findings area and coverage cell carries its denominator
-   (`passed/total checks`). The score excludes suppressed findings and
-   the scorecard states the suppressed count.
+   (`passed/total checks`). For each active exemption, retain the observed
+   `partial` or `fail` result on the same-ID `checks[]` row, add
+   `suppressed: true` plus `suppression_reason`, and set the suppressed
+   finding's `points_recoverable` to 0. Suppressed checks remain assessed for
+   coverage but are excluded from readiness scoring; the scorecard states the
+   suppressed count.
 
 ## Metadata Load (v0.1.68+)
 
@@ -754,6 +819,7 @@ When context is available, apply it per [BUSINESS-CONTEXT-INTEGRATION-v0168.md](
 | Score inflated by object counts | Forty dashboards prove nothing; credit only meaningful queries returning data a responder could act on |
 | Judging a stale export instead of the live object | Re-fetch dashboard JSON by UID this run and judge only that |
 | Blocked reads silently skipped or scored as pass | Record the 403 or timeout as `blocked` evidence; exclude and state whole-category blockage |
+| Failed dashboard pagination published as a complete or empty estate | Require `dashboard-index.json`; preserve incomplete reads only as `dashboard-index.partial.json` and block estate-wide coverage claims |
 | Backend internals audited from Grafana | Stay on the app layer; Loki, Tempo, Mimir, and VictoriaMetrics internals belong to `audit-lgtm` |
 | Token upgraded to Admin to avoid blocked rows | Run degraded and report the tradeoff; least privilege is itself under audit (GRAF-006) |
 | Worklist and batches run against a small install | Size the estate first; at or below `SMALL_MAX_OBJECTS` the small path runs one pass with no worklist file |

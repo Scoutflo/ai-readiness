@@ -626,7 +626,7 @@ The AWS CLI is a prerequisite for the AWS skills (install AWS CLI v2 from your p
 
 | Tier | Used by | Policy |
 | --- | --- | --- |
-| Read-only | audit-aws | `cloudwatch:Describe*`/`List*`/`Get*`, `sns:List*`/`Get*`, `rds:Describe*`, `ec2:Describe*`, `ecs:Describe*`/`List*`, `eks:Describe*`/`List*`, `lambda:List*`/`Get*`, `logs:Describe*`, `route53:Get*`/`List*`, `elasticloadbalancing:Describe*`, `cloudtrail:Describe*`/`Get*`, `config:Describe*`, `xray:Get*` |
+| Read-only | audit-aws | `cloudwatch:Describe*`/`List*`/`Get*`, `sns:List*`/`Get*`, `rds:Describe*`, `docdb:Describe*`, `ec2:Describe*`, `ecs:Describe*`/`List*`, `eks:Describe*`/`List*`, `lambda:List*`/`Get*`, `logs:Describe*`/`List*`, `application-signals:ListServiceLevelObjectives`/`GetServiceLevelObjective`, `route53:Get*`/`List*`, `elasticloadbalancing:Describe*`, `cloudtrail:Describe*`/`Get*`, `config:Describe*`, `xray:Get*` |
 | Read-only cost (optional) | audit-aws Cost & Resource Optimization section | add `compute-optimizer:Get*`, `ce:Get*`, `cost-optimization-hub:List*`, `support:Describe*` (Trusted Advisor needs Business or Enterprise support) |
 | Elevated | setup-aws | the read-only set plus the write actions listed in setup-aws's own doctor gate (`cloudwatch:PutMetricAlarm`, `sns:CreateTopic`/`Subscribe`, `logs:PutRetentionPolicy`, `route53:CreateHealthCheck`, `rds:ModifyDBInstance`, and their paired deletes) |
 
@@ -757,12 +757,17 @@ code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 -H "Authorization: B
 ### Config
 
 ```yaml
+lgtm:
+  runtime_mode: choose-one  # REQUIRED: kubernetes | ec2-systemd | docker | external
+
 prometheus:
   url: https://prometheus.example.com
   alertmanager_url: https://alertmanager.example.com
   # token_env: PROM_TOKEN     # only if your endpoints sit behind an auth proxy
   # tier: read-only           # record it whenever you set token_env
 ```
+
+Replace `choose-one` with the deployment mode proved by the target environment: `kubernetes`, `ec2-systemd`, `docker`, or `external` (provider-managed). Do not infer it from metric labels, dashboards, or an architecture diagram. For `kubernetes`, also configure `kubernetes.context` and verify that exact context live. For every other mode, the audit records the on-target service/container/provider identity that proves the selection. `/scoutflo:doctor` rejects a missing, placeholder, or unknown value before `audit-lgtm` runs.
 
 ### Getting a reachable URL
 

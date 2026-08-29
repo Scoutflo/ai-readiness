@@ -103,6 +103,9 @@ groundcover:
   # backend_id: your-backend                # required only for multi-backend accounts; sent as the X-Backend-Id header
   # api_url: https://api.groundcover.com    # override the API base if your deployment uses a different host
 
+lgtm:
+  runtime_mode: choose-one                  # REQUIRED: kubernetes | ec2-systemd | docker | external; doctor rejects this placeholder
+
 prometheus:
   url: https://prometheus.example.com
   alertmanager_url: https://alertmanager.example.com

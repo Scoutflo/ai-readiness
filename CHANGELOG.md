@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.1.153
+
+Evidence-truthfulness and report-audience hardening for AWS, LGTM, Grafana, and ELK audits.
+
+- **Evidence-aware findings v2.** These four audits now emit a complete check ledger, keep blocked reads out of the readiness denominator, report assessment coverage separately, and render a fully blocked run as unassessed rather than a false `0/100` or `100/100`. Suppressions remain visible but leave readiness scoring, deliberately non-scored findings are explicit, and score deltas are shown only when the scoring model and check-set fingerprint match.
+- **General audit and AI SRE readiness lanes.** Every v2 finding declares whether it belongs to the general operational audit, AI SRE readiness, or both. Reports render the two review lists from the same evidence without duplicating findings, changing severity, or inventing a second score.
+- **AWS evidence boundaries.** Managed-database checks are engine-aware; `INSUFFICIENT_DATA` alarms require resource, metric, namespace, period, and datapoint proof before being called stale; SNS configuration proves transport only, not human receipt; DNS, sampled-log, and ownership conclusions now require direct evidence.
+- **LGTM runtime and notification correctness.** `lgtm.runtime_mode` now explicitly distinguishes Kubernetes, EC2/systemd, Docker, and externally managed deployments. Alertmanager counters prove notification attempts or failures only; human receipt and acknowledgement require downstream evidence. LGTM and Grafana now append compatible per-run history entries instead of rendering empty or stale trends.
+- **Grafana collection-state correctness.** API reads now preserve authentication, authorization, unsupported-endpoint, HTTP, transport, invalid-response, and partial-pagination states. A failed or incomplete read can no longer be represented as an empty estate, and a same-day rerun cannot retain deleted dashboards or datasource-health artifacts.
+- **ELK scope and identity correctness.** A bundled read-only collector records normalized request states, paginates Kibana spaces/rules/connectors, and preserves partial evidence without presenting it as complete. Kibana identity is established with `/api/status` before permission-dependent alerting reads; denied or unsupported alerting surfaces remain blocked evidence.
+- **Pre-merge review fixes (PR #87).** Six should-fix items from an adversarial evidence-truthfulness review, folded in before merge: (1) the `check_set` fingerprint now folds in category **weights + the gate** (`cksum-v2`), so a pure re-weighting is correctly treated as incomparable instead of rendering a fabricated trend delta; (2) the `audit-all` rollup no longer counts a high-score **low-coverage** v2 stack as end-to-end — each row shows its coverage with an "only N% assessed" flag; (3) the AWS engine table splits Aurora from **non-Aurora RDS Multi-AZ DB clusters** (provisioned storage + `ReplicaLag`, not auto-grow + `AuroraReplicaLag`); (4) a Grafana same-day rerun now clears a stale `alert-rules.ruler.json` fallback so the summary can't falsely report a fallback; (5) the "Findings by purpose" pointer no longer misdirects a non-scored finding to the Findings table (points at its own section); (6) added regression tests for the end-to-end 100%-coverage gate, the re-weighting fingerprint, and the low-coverage rollup flag.
+
 ## 0.1.152
 
 Closeout fixes from an adversarial self-review of the v0.1.147–v0.1.151 arc. One real coverage-correctness gap, one contract-vs-code contradiction, and three consistency loose ends.

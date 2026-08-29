@@ -85,11 +85,17 @@ for f in "$AUDITS_DIR"/*/"$RUN_DATE"/findings.json "$AUDITS_DIR"/*/*/"$RUN_DATE"
   # per-audit schema (no .target, no .score, severity-less findings). Mirrors the
   # render-report-viz.sh guard (case "$tgt" in all|"?").
   case "$(jq -r '.target // "?"' "$f" 2>/dev/null)" in (all|cost|cost-analysis|doctor|"?") continue ;; esac
-  jq -r '"\(.target): \(.score.overall)/100 | critical=\(.severity_counts.critical) high=\(.severity_counts.high) medium=\(.severity_counts.medium) low=\(.severity_counts.low) info=\(.severity_counts.info)"' "$f"
+  jq -r '
+    .target as $target
+    | (if .score.overall == null then "unassessed" else "\(.score.overall)/100" end) as $readiness
+    | (if (.score.assessment | type) == "object"
+       then " | assessment=\(.score.assessment.assessed_checks)/\(.score.assessment.applicable_checks) (\(.score.assessment.coverage_percent)%)"
+       else "" end) as $coverage
+    | "\($target): \($readiness)\($coverage) | critical=\(.severity_counts.critical) high=\(.severity_counts.high) medium=\(.severity_counts.medium) low=\(.severity_counts.low) info=\(.severity_counts.info)"' "$f"
 done
 ```
 
-Expected output: one line per completed audit, for example `lgtm: 68/100 | critical=1 high=2 medium=4 low=3 info=1`. No lines means no audit completed; go back to the Phase 2 failures.
+Expected output: one line per completed audit, for example `lgtm: 68/100 | assessment=18/20 (90%) | critical=1 high=2 medium=4 low=3 info=1`. A v2 target with no readiness denominator reads `unassessed`, never `null/100` or `0/100`. No lines means no audit completed; go back to the Phase 2 failures.
 
 Top findings across all targets, highest severity first:
 
@@ -108,7 +114,7 @@ jq -rs '
   # .target and carries severity-less findings, which would make the rank lookup
   # index the object with null and crash. Same guard as the viz rollup (target
   # null/all → skip).
-  [.[] | select(.target != null and .target != "all") | .findings[]]
+  [.[] | select(.target != null and .target != "all") | .findings[] | select((.lifecycle // "new") != "suppressed")]
   | map(. + {rank: {"critical":0,"high":1,"medium":2,"low":3,"info":4}[.severity]})
   | sort_by(.rank) | .[:5][]
   | "\(.id) [\(.severity)] \(.title)"
@@ -137,22 +143,37 @@ Score trend per target, from each target's `history.jsonl`. The ledger is the on
 ```bash
 set -eu
 AUDITS_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}"   # report-standard output root
+RUN_DATE="$(date -u +%F)"        # UTC run date; matches each audit's directory name
 
 for h in "$AUDITS_DIR"/*/history.jsonl "$AUDITS_DIR"/*/*/history.jsonl; do
   [ -e "$h" ] || continue
   # target key = path relative to the reports root, so two-level targets read
   # "clickstack/hdx-eu" (not a bare "hdx-eu" that collides across integrations).
   target=$(dirname "$h"); target="${target#"$AUDITS_DIR"/}"
-  lines=$(tail -n 5 "$h" | wc -l | tr -d ' ')
-  parsed=$(tail -n 5 "$h" | jq -Rr 'fromjson? | .overall' | wc -l | tr -d ' ')
-  trend=$(tail -n 5 "$h" | jq -Rr 'fromjson? | .overall' \
-    | awk '{printf "%s%s", s, $0; s=" -> "} END {print ""}')
-  [ "$parsed" -eq "$lines" ] || echo "${target}: $((lines - parsed)) malformed history line(s) skipped"
-  echo "${target}: ${trend} (last ${parsed} runs, oldest first)"
+  current="$AUDITS_DIR/$target/$RUN_DATE/findings.json"
+  model=""; check_set=""
+  if [ -f "$current" ]; then
+    model=$(jq -r '.score.scoring_model // ""' "$current")
+    check_set=$(jq -r '.score.check_set // ""' "$current")
+  fi
+  if [ -n "$model" ] && [ -n "$check_set" ]; then
+    values=$(tail -n 30 "$h" | jq -Rr --arg model "$model" --arg set "$check_set" \
+      'fromjson? | select(.scoring_model == $model and .check_set == $set and (.overall|type)=="number") | .overall' \
+      | tail -n 5)
+  else
+    values=$(tail -n 5 "$h" | jq -Rr 'fromjson? | select((.overall|type)=="number") | .overall')
+  fi
+  parsed=$(printf '%s\n' "$values" | awk 'NF{n++} END{print n+0}')
+  if [ "$parsed" -eq 0 ]; then
+    echo "${target}: no comparable numeric history yet"
+    continue
+  fi
+  trend=$(printf '%s\n' "$values" | awk 'NF{printf "%s%s", s, $0; s=" -> "} END {print ""}')
+  echo "${target}: ${trend} (last ${parsed} compatible runs, oldest first)"
 done
 ```
 
-Expected output: one line per target with a ledger, for example `lgtm: 55 -> 61 -> 68 (last 3 runs, oldest first)`. A target with no `history.jsonl` gets no trend line; state "no history yet" for it in the report. Malformed ledger lines are skipped and reported, never guessed at.
+Expected output: one line per target with a ledger, for example `lgtm: 55 -> 61 -> 68 (last 3 compatible runs, oldest first)`. For v2, only numeric entries with the current `scoring_model` and `check_set` are comparable; unassessed and incompatible entries never become trend points. A target with no compatible numeric history reads `no comparable numeric history yet`; never invent a delta.
 
 The two history artifacts have two jobs; do not swap them:
 
@@ -327,7 +348,7 @@ Write `./scoutflo-audits/all/<YYYY-MM-DD>/report.md`. It summarizes and links; i
 
 1. **Header**: date (UTC), toolkit version, audits run as `<n> of <m> configured`.
 2. **At a glance (all stacks)**: paste the output of `sh "${CLAUDE_PLUGIN_ROOT}/report-standard/render-report-viz.sh" rollup "<audits-dir>" "<run-date>"` — a gate-count meter (stacks passing the 85 gate / total) and a worst-first per-stack score-bar table, so a leader sees estate health and which stack to send the team to first at a glance. Never a combined average (that hides a failing stack behind a healthy one); this only visualizes the per-target scores.
-3. **Scores**: one row per completed target: score, severity counts, estate size and sizing path (from the Phase 3 roll-up; `estate not recorded` when the audit did not emit one), delta versus that target's previous run (`+9`, `-3`, or `first run`), the score trend from its `history.jsonl` (last five runs, oldest first; `no history yet` when the ledger is missing), and the relative path to its full `report.md`. One score line per target, never a combined average: an average hides a failing stack behind a healthy one.
+3. **Scores**: one row per completed target: readiness (`n/100` or `unassessed`), v2 assessment coverage, severity counts, estate size and sizing path (from the Phase 3 roll-up; `estate not recorded` when the audit did not emit one), delta versus that target's previous compatible run (`+9`, `-3`, `first run`, or `not comparable`), the compatible score trend from its `history.jsonl` (last five runs, oldest first), and the relative path to its full `report.md`. Score movement is comparable only when `scoring_model` and `check_set` match. One score line per target, never a combined average: an average hides a failing stack behind a healthy one.
 4. **Blocked audits**: one row per blocked audit with reason and fix pointer. Omit the section only when nothing was blocked, and then state "No audits blocked."
 5. **Regressions**: the Phase 3 regressions list, one row per regressed finding with its target, ID, severity, and title, ordered highest severity first. State "No regressions this run." when the list is empty. This section always precedes Top findings; regressions are the highest-signal state in the lifecycle model and are named before anything else.
 6. **Topology Readiness (combined)**: one row per completed target, its "`<r> of <n> critical services are ready for automatic Scoutflo correlation`" headline from the Phase 3 topology-readiness roll-up, and a link to that target's own Scoutflo Topology Readiness section for the per-service detail. A target whose roll-up line read `readiness not recorded` gets that exact phrase in its row, not a blank or a guess.
@@ -417,6 +438,12 @@ done
 
 CHECKS_PASSED=0
 CHECKS_TOTAL=0
+ASSESSED_CHECKS=0
+APPLICABLE_CHECKS=0
+BLOCKED_CHECKS=0
+SUPPRESSED_CHECKS=0
+V2_TARGETS=0
+LEGACY_TARGETS=0
 for f in "$AUDITS_DIR"/*/"$RUN_DATE"/findings.json "$AUDITS_DIR"/*/*/"$RUN_DATE"/findings.json; do
   [ -e "$f" ] || continue
   # Skip the roll-up dirs (cost-analysis/, all/): no .score.categories to sum —
@@ -426,14 +453,29 @@ for f in "$AUDITS_DIR"/*/"$RUN_DATE"/findings.json "$AUDITS_DIR"/*/*/"$RUN_DATE"
   t=$(jq -r '[.score.categories[].checks_total] | add // 0' "$f")
   CHECKS_PASSED=$((CHECKS_PASSED + p))
   CHECKS_TOTAL=$((CHECKS_TOTAL + t))
+  if jq -e '.score.assessment | type == "object"' "$f" >/dev/null 2>&1; then
+    a=$(jq -r '.score.assessment.assessed_checks // 0' "$f")
+    ap=$(jq -r '.score.assessment.applicable_checks // 0' "$f")
+    b=$(jq -r '.score.assessment.blocked_checks // 0' "$f")
+    s=$(jq -r '.score.assessment.suppressed_checks // 0' "$f")
+    ASSESSED_CHECKS=$((ASSESSED_CHECKS + a))
+    APPLICABLE_CHECKS=$((APPLICABLE_CHECKS + ap))
+    BLOCKED_CHECKS=$((BLOCKED_CHECKS + b))
+    SUPPRESSED_CHECKS=$((SUPPRESSED_CHECKS + s))
+    V2_TARGETS=$((V2_TARGETS + 1))
+  else
+    LEGACY_TARGETS=$((LEGACY_TARGETS + 1))
+  fi
 done
 
 echo "regressions: ${REGRESSIONS}"
 echo "suppressed via exemptions: ${SUPPRESSED_TOTAL}"
 echo "checks passed: ${CHECKS_PASSED}/${CHECKS_TOTAL}"
+[ "$V2_TARGETS" -eq 0 ] || echo "v2 assessment coverage: ${ASSESSED_CHECKS}/${APPLICABLE_CHECKS}; blocked=${BLOCKED_CHECKS}; suppressed=${SUPPRESSED_CHECKS}"
+[ "$LEGACY_TARGETS" -eq 0 ] || echo "legacy targets without assessment-coverage fields: ${LEGACY_TARGETS}"
 ```
 
-Expected output: `regressions: none` (or the target-prefixed list), followed by `suppressed via exemptions: <n>`, followed by `checks passed: <n>/<m>`. These are the exact strings the brief template below quotes; nothing in the brief states a regression, suppression, or checks-passed number that was not printed here first. `checks_passed` and `checks_total` live per category under `score.categories[]` in each target's `findings.json` (see [findings-schema.md](../../report-standard/findings-schema.md)); this sums both across every category, then across every target.
+Expected output: `regressions: none` (or the target-prefixed list), `suppressed via exemptions: <n>`, `checks passed: <n>/<m>`, and the aggregate v2 assessment line when v2 targets exist. These are the exact strings the brief template below quotes; nothing in the brief states a regression, suppression, checks-passed, or coverage number that was not printed here first. Legacy v1 targets are counted separately because they do not carry assessment-coverage fields.
 
 ```bash
 set -eu

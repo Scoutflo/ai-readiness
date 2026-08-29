@@ -45,7 +45,7 @@ Every run after the first computes a delta against the previous run:
    - **fixed**: in the baseline, absent from the current run
    - **new**: in the current run, absent from the baseline
    - **unchanged**: in both; if the finding's `affected` list grew or shrank, say so
-3. Score movement: current overall score minus baseline score, plus per-category movement for every category that moved.
+3. Score movement: current overall score minus baseline score, plus per-category movement for every category that moved, **only when** both runs have the same `scoring_model` and `check_set`. Otherwise write `score delta not comparable: scoring model or check set changed`; finding lifecycle still compares by stable ID.
 4. First run: state "first run, no delta". Never invent a baseline.
 5. The delta reads `findings.json` files only: the most recent two are the reuse index for finding-level matching. The longer score trend comes from `history.jsonl` (below); never match findings against the ledger.
 
@@ -54,7 +54,7 @@ Every run after the first computes a delta against the previous run:
 Beyond the two-run delta, each target keeps a long-lived trend file: `./scoutflo-audits/<target>/history.jsonl`. After `findings.json` and `report.md` are written, the run appends exactly one JSON line:
 
 ```json
-{"run_date":"2026-07-17","skill":"audit-lgtm","overall":68,"gate":85,"end_to_end":false,"severity_counts":{"critical":1,"high":2,"medium":4,"low":3,"info":1},"lifecycle_counts":{"new":4,"unchanged":6,"resolved":3,"regressed":1,"suppressed":2}}
+{"run_date":"2026-07-17","skill":"audit-lgtm","overall":68,"gate":85,"end_to_end":false,"scoring_model":"assessed-only-v1","check_set":"cksum-v1:123456789:512","assessment_coverage_percent":92,"severity_counts":{"critical":1,"high":2,"medium":4,"low":3,"info":1},"lifecycle_counts":{"new":4,"unchanged":6,"resolved":3,"regressed":1,"suppressed":2}}
 ```
 
 Rules:
@@ -62,7 +62,7 @@ Rules:
 - One line per run date. A re-run on the same date replaces that date's line, matching the directory rule: the day is the run's identity.
 - Every value is copied or computed from that run's `findings.json` and its delta. The ledger is derived: never hand-edited, and regenerable from the date directories if lost or corrupted. A malformed line is skipped and reported, never guessed at.
 - `lifecycle_counts` counts the run's findings per lifecycle value, plus `resolved` taken from the delta.
-- Reports render the trend from the last five lines of history.jsonl, oldest first, per [report-template.md](report-template.md). With fewer than five runs, render what exists.
+- Reports render the last five rows whose `scoring_model` and `check_set` match the current run, oldest first. Incompatible rows stay in the ledger but are not plotted as one numerical trend. With fewer than five compatible runs, render what exists.
 
 ### Rotation
 
@@ -169,6 +169,6 @@ exemptions:
 Rules:
 
 - `id`, `reason`, and `expires` are mandatory; an exemptions.yaml entry missing any of them is ignored and reported as malformed.
-- A live exemption moves the finding to the report's Suppressed appendix with its reason and expiry. It never deletes the finding and never affects other findings.
+- A live exemption moves the finding to the report's Suppressed appendix with its reason and expiry. In a v2 artifact, its original partial/fail check row also carries `suppressed: true` and `suppression_reason`, so the validator can prove it left the readiness denominator. It never deletes the finding and never affects other findings.
 - Past `expires`, the exemption is dead: the finding returns to the open findings table flagged "exemption expired".
 - Suppressed findings are excluded from the score and severity counts; the scorecard states how many were suppressed so the score is never silently flattered.

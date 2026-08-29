@@ -33,7 +33,10 @@ for k in schema toolkit_version skill target run_date generated_at score severit
   jq -e --arg k "$k" 'has($k)' "$F" >/dev/null 2>&1 || fail "missing required envelope field: $k"
 done
 sch="$(jq -r '.schema // ""' "$F")"
-[ "$sch" = "scoutflo-findings/v1" ] || fail "schema is '$sch', expected 'scoutflo-findings/v1'"
+case "$sch" in
+  scoutflo-findings/v1|scoutflo-findings/v2) : ;;
+  *) fail "schema is '$sch', expected 'scoutflo-findings/v1' or 'scoutflo-findings/v2'" ;;
+esac
 
 # 2. severity_counts must equal the actual histogram of NON-SUPPRESSED
 #    findings[].severity. Suppressed findings (lifecycle=="suppressed") move to the
@@ -50,9 +53,17 @@ actual="$(jq -cS '[.findings[] | select(.lifecycle != "suppressed") | .severity]
      info:(map(select(.=="info"))|length)}' "$F")"
 [ "$declared" = "$actual" ] || fail "severity_counts $declared != actual histogram of non-suppressed findings $actual"
 
-# 3. Category weights (included + excluded) must sum to 100.
-wsum="$(jq '([.score.categories[]?.weight] + [.score.excluded[]?.weight // 0]) | add // 0' "$F")"
-[ "$wsum" = "100" ] || fail "category weights (incl+excl) sum to $wsum, expected 100"
+# 3. Category weights must sum to 100. Current artifacts keep every category in
+#    score.categories and use score.excluded as a named exclusion ledger. Older
+#    v1 artifacts may instead put omitted-category weight only in score.excluded;
+#    accept both shapes without double-counting a category named in both arrays.
+wsum="$(jq '
+  (.score.categories // []) as $cats
+  | ($cats | map(.name)) as $names
+  | (($cats | map(.weight) | add // 0)
+     + ([.score.excluded[]? | select(.name as $n | ($names | index($n)) == null) | (.weight // 0)] | add // 0))
+' "$F")"
+[ "$wsum" = "100" ] || fail "distinct category weights sum to $wsum, expected 100"
 
 # 4. overall must equal the weight-normalized sum over INCLUDED categories,
 #    rounded down — excluding any category whose name is in score.excluded
@@ -63,8 +74,15 @@ wsum="$(jq '([.score.categories[]?.weight] + [.score.excluded[]?.weight // 0]) |
 # Set `overall` numerically up front (a non-number becomes -1) so every later
 # integer comparison (the delta below, the end_to_end gate) stays safe even when
 # the file is malformed — a string overall must never reach shell arithmetic.
-overall="$(jq -r '(.score.overall | if type=="number" then . else -1 end)' "$F")"
-if jq -e '
+overall="$(jq -r 'if .score.overall == null then "null" elif (.score.overall|type)=="number" then .score.overall else "invalid" end' "$F")"
+score_state="$(jq -r '.score.state // "assessed"' "$F")"
+if [ "$overall" = "null" ]; then
+  if [ "$sch" != "scoutflo-findings/v2" ] || [ "$score_state" != "unassessed" ]; then
+    fail "score.overall may be null only for a v2 score.state=unassessed run"
+  fi
+  inc_count="$(jq '(.score.excluded // [] | map(.name)) as $ex | [.score.categories[]? | select(.name as $n | ($ex | index($n)) | not)] | length' "$F")"
+  [ "$inc_count" = "0" ] || fail "score.state=unassessed requires every scorecard category to be excluded"
+elif jq -e '
   (.score.overall   | type == "number" and . == floor)
   and (.score.categories | type == "array" and (length > 0))
 ' "$F" >/dev/null; then
@@ -81,7 +99,7 @@ if jq -e '
     [ "$d" -le 1 ] || fail "overall=$overall does not reconcile with scorecard (categories -> $recomp, delta $d > 1); overall must be the weight-normalized sum over included categories, rounded down"
   fi
 else
-  fail "score.overall must be an integer number and score.categories a non-empty array (got overall=$(jq -c '.score.overall' "$F" 2>/dev/null || echo missing), categories=$(jq -c '.score.categories | length' "$F" 2>/dev/null || echo missing))"
+  fail "score.overall must be an integer number (or null for a v2 unassessed run) and score.categories a non-empty array (got overall=$(jq -c '.score.overall' "$F" 2>/dev/null || echo missing), categories=$(jq -c '.score.categories | length' "$F" 2>/dev/null || echo missing))"
 fi
 
 # 5. Each included category: score 0-100, checks_passed <= checks_total,
@@ -99,7 +117,11 @@ badcat="$(jq -r '
 e2e="$(jq -r '.score.end_to_end' "$F")"
 nexcl="$(jq '.score.excluded // [] | length' "$F")"
 if [ "$e2e" = "true" ]; then
-  { [ "$overall" -ge 85 ] && [ "$nexcl" -eq 0 ]; } || fail "end_to_end=true but overall=$overall (<85) or excluded categories present ($nexcl); the gate forbids this"
+  if [ "$overall" = "null" ] || [ "$overall" = "invalid" ]; then
+    fail "end_to_end=true but the run has no numeric readiness score"
+  else
+    { [ "$overall" -ge 85 ] && [ "$nexcl" -eq 0 ]; } || fail "end_to_end=true but overall=$overall (<85) or excluded categories present ($nexcl); the gate forbids this"
+  fi
 fi
 
 # 7. Finding objects: id well-formed (PREFIX 2-6 alnum, ending in a letter, then
@@ -151,6 +173,186 @@ noaff="$(jq -r '.findings[] | select(.severity != "info") | select((.affected | 
 # 7g. info findings must carry points_recoverable 0.
 badpts="$(jq -r '.findings[] | select(.severity == "info" and (.points_recoverable // 0) != 0) | .id' "$F")"
 [ -z "$badpts" ] || fail "info findings with non-zero points_recoverable (must be 0): $(echo "$badpts" | tr '\n' ' ')"
+
+# 8. Version 2 evidence-aware scoring. The normalized checks[] ledger is the
+#    score input. Blocked means unassessed, never failed. This section
+#    recomputes every denominator, category score, the overall assessment
+#    coverage, and the check-set fingerprint so authored arithmetic cannot
+#    silently turn a denied or incomplete read into a readiness conclusion.
+if [ "$sch" = "scoutflo-findings/v2" ]; then
+  jq -e '
+    (.checks | type == "array" and length > 0)
+    and (.score.scoring_model == "assessed-only-v1")
+    and (.score.check_set | type == "string" and length > 0)
+    and (.score.assessment | type == "object")
+    and (.score.state | IN("assessed","unassessed"))
+  ' "$F" >/dev/null 2>&1 || fail "v2 requires a non-empty checks[] ledger plus score.state, scoring_model=assessed-only-v1, check_set, and score.assessment"
+
+  badcheck="$(jq -r '
+    .checks[]?
+    | select(
+        ((.id // "") | test("^[A-Z][A-Z0-9]{1,5}-[0-9]{2,4}$") | not)
+        or ((.category // "") | length == 0)
+        or ((.result // "") | IN("pass","partial","fail","blocked","not-in-scope") | not)
+        or (has("suppressed") and ((.suppressed | type) != "boolean"))
+      )
+    | .id // "?"' "$F")"
+  [ -z "$badcheck" ] || fail "v2 checks with malformed id/category/result: $(echo "$badcheck" | tr '\n' ' ')"
+
+  check_dupe="$(jq '[.checks[]?.id] | length - (unique | length)' "$F")"
+  [ "$check_dupe" = "0" ] || fail "v2 checks[] contains $check_dupe duplicate check ID(s)"
+
+  missing_reason="$(jq -r '.checks[]? | select(.result | IN("partial","blocked","not-in-scope")) | select(((.reason // "") | length) == 0) | .id' "$F")"
+  [ -z "$missing_reason" ] || fail "v2 partial/blocked/not-in-scope checks missing reason: $(echo "$missing_reason" | tr '\n' ' ')"
+
+  bad_suppressed_check="$(jq -r '
+    .checks[]?
+    | select(.suppressed == true)
+    | select(
+        ((.result | IN("partial","fail")) | not)
+        or (((.suppression_reason // "") | length) == 0)
+      )
+    | .id' "$F")"
+  [ -z "$bad_suppressed_check" ] || fail "v2 suppressed checks must retain a partial/fail result and a non-empty suppression_reason: $(echo "$bad_suppressed_check" | tr '\n' ' ')"
+
+  unknown_category="$(jq -r '(.score.categories | map(.name)) as $cats | .checks[]? | select(.category as $c | ($cats | index($c)) == null) | .id + ":" + .category' "$F")"
+  [ -z "$unknown_category" ] || fail "v2 checks reference scorecard categories that do not exist: $(echo "$unknown_category" | tr '\n' ' ')"
+
+  empty_category="$(jq -r '(.checks | map(.category)) as $used | .score.categories[]? | select(.name as $n | ($used | index($n)) == null) | .name' "$F")"
+  [ -z "$empty_category" ] || fail "v2 scorecard categories have no check-ledger rows: $(echo "$empty_category" | tr '\n' ' ')"
+
+  # Each non-pass scored check needs a same-ID finding. A finding is the
+  # explanation and remediation; the ledger row is the score input.
+  missing_finding="$(jq -r '(.findings | map(.id)) as $ids | .checks[]? | select(.result | IN("partial","fail","blocked")) | select(.id as $id | ($ids | index($id)) == null) | .id' "$F")"
+  [ -z "$missing_finding" ] || fail "v2 non-pass checks missing same-ID findings: $(echo "$missing_finding" | tr '\n' ' ')"
+
+  # Referential integrity is bidirectional. A readiness finding explains one
+  # non-pass ledger row. Deliberately non-scored findings (for example AWS cost
+  # opportunities) must declare that scope explicitly and recover zero points.
+  bad_scoring_scope="$(jq -r '.findings[]? | select((.scoring_scope // "") | IN("readiness","non-scored") | not) | .id' "$F")"
+  [ -z "$bad_scoring_scope" ] || fail "v2 findings require scoring_scope=readiness or non-scored: $(echo "$bad_scoring_scope" | tr '\n' ' ')"
+
+  orphan_finding="$(jq -r '(.checks | map(.id)) as $ids | .findings[]? | select(.scoring_scope == "readiness") | select(.id as $id | ($ids | index($id)) == null) | .id' "$F")"
+  [ -z "$orphan_finding" ] || fail "v2 readiness findings missing same-ID checks[] rows: $(echo "$orphan_finding" | tr '\n' ' ')"
+
+  bad_non_scored_finding="$(jq -r '
+    (.checks | map(.id)) as $ids
+    | .findings[]?
+    | select(.scoring_scope == "non-scored")
+    | select((.points_recoverable // -1) != 0 or (.id as $id | ($ids | index($id)) != null))
+    | .id' "$F")"
+  [ -z "$bad_non_scored_finding" ] || fail "v2 scoring_scope=non-scored findings must have points_recoverable=0 and no checks[] row: $(echo "$bad_non_scored_finding" | tr '\n' ' ')"
+
+  finding_on_nonfinding_result="$(jq -r '
+    (.checks | map({key:.id,value:.}) | from_entries) as $checks
+    | .findings[]?
+    | select(.scoring_scope == "readiness")
+    | select(($checks[.id].result // "missing") | IN("pass","not-in-scope"))
+    | .id' "$F")"
+  [ -z "$finding_on_nonfinding_result" ] || fail "v2 findings may describe only partial/fail/blocked checks, not pass/not-in-scope rows: $(echo "$finding_on_nonfinding_result" | tr '\n' ' ')"
+
+  bad_blocked_status="$(jq -r '(.findings | map({key:.id,value:.}) | from_entries) as $f | .checks[]? | select(.result=="blocked") | select(($f[.id].status // "") != "blocked" or (($f[.id].points_recoverable // -1) != 0)) | .id' "$F")"
+  [ -z "$bad_blocked_status" ] || fail "v2 blocked checks require a status=blocked finding with points_recoverable=0: $(echo "$bad_blocked_status" | tr '\n' ' ')"
+
+  bad_suppressed_finding="$(jq -r '
+    (.findings | map({key:.id,value:.}) | from_entries) as $findings
+    | .checks[]?
+    | select(.suppressed == true)
+    | select(
+        (($findings[.id].lifecycle // "") != "suppressed")
+        or (($findings[.id].points_recoverable // -1) != 0)
+      )
+    | .id' "$F")"
+  [ -z "$bad_suppressed_finding" ] || fail "v2 suppressed checks require a same-ID lifecycle=suppressed finding with points_recoverable=0: $(echo "$bad_suppressed_finding" | tr '\n' ' ')"
+
+  unsuppressed_ledger="$(jq -r '
+    (.checks | map({key:.id,value:.}) | from_entries) as $checks
+    | .findings[]?
+    | select(.lifecycle == "suppressed")
+    | select(($checks[.id] != null) and ($checks[.id].suppressed != true))
+    | .id' "$F")"
+  [ -z "$unsuppressed_ledger" ] || fail "v2 suppressed scored findings require suppressed=true on the same-ID checks[] row: $(echo "$unsuppressed_ledger" | tr '\n' ' ')"
+
+  bad_lanes="$(jq -r '
+    .findings[]?
+    | select(
+        (.report_lanes | type != "array")
+        or ((.report_lanes | length) == 0)
+        or ([.report_lanes[] | select(IN("general-audit","ai-sre-readiness") | not)] | length > 0)
+        or ((.report_lanes | unique | length) != (.report_lanes | length))
+      )
+    | .id' "$F")"
+  [ -z "$bad_lanes" ] || fail "v2 findings require unique report_lanes from general-audit/ai-sre-readiness: $(echo "$bad_lanes" | tr '\n' ' ')"
+
+  bad_check_score="$(jq -r '
+    (.score.excluded // [] | map(.name)) as $excluded
+    | .score.categories[] as $cat
+    | [.checks[] | select(.category == $cat.name)] as $rows
+    | ($rows | map(select((.suppressed != true) and .result=="pass")) | length) as $pass
+    | ($rows | map(select((.suppressed != true) and .result=="partial")) | length) as $partial
+    | ($rows | map(select((.suppressed != true) and .result=="fail")) | length) as $failed
+    | ($rows | map(select(.result=="blocked")) | length) as $blocked
+    | ($rows | map(select(.suppressed==true)) | length) as $suppressed
+    | ($rows | map(select(.result=="not-in-scope")) | length) as $nis
+    | ($pass + $partial + $failed) as $assessed
+    | (if $assessed == 0 then 0 else (((($pass * 2) + $partial) * 50 / $assessed) | floor) end) as $expected_score
+    | select(
+        (($cat.checks_passed // -1) != $pass)
+        or (($cat.checks_partial // -1) != $partial)
+        or (($cat.checks_failed // -1) != $failed)
+        or (($cat.checks_blocked // -1) != $blocked)
+        or (($cat.checks_suppressed // -1) != $suppressed)
+        or (($cat.checks_not_in_scope // -1) != $nis)
+        or (($cat.checks_total // -1) != $assessed)
+        or (($cat.score // -1) != $expected_score)
+        or (($assessed == 0) and (($excluded | index($cat.name)) == null))
+        or (($assessed > 0) and (($excluded | index($cat.name)) != null))
+      )
+    | $cat.name' "$F")"
+  [ -z "$bad_check_score" ] || fail "v2 category score/counts do not reconcile with checks[]: $(echo "$bad_check_score" | tr '\n' ' ')"
+
+  read -r exp_applicable exp_assessed exp_scored exp_blocked exp_suppressed exp_nis exp_coverage <<EOF
+$(jq -r '
+  ([.checks[] | select(.result != "not-in-scope")] | length) as $app
+  | ([.checks[] | select(.result | IN("pass","partial","fail"))] | length) as $assessed
+  | ([.checks[] | select((.suppressed != true) and (.result | IN("pass","partial","fail")))] | length) as $scored
+  | ([.checks[] | select(.result == "blocked")] | length) as $blocked
+  | ([.checks[] | select(.suppressed == true)] | length) as $suppressed
+  | ([.checks[] | select(.result == "not-in-scope")] | length) as $nis
+  | (if $app == 0 then 0 else (($assessed * 100 / $app) | floor) end) as $coverage
+  | "\($app) \($assessed) \($scored) \($blocked) \($suppressed) \($nis) \($coverage)"' "$F")
+EOF
+  read -r got_applicable got_assessed got_scored got_blocked got_suppressed got_nis got_coverage <<EOF
+$(jq -r '.score.assessment | "\(.applicable_checks // -1) \(.assessed_checks // -1) \(.scored_checks // -1) \(.blocked_checks // -1) \(.suppressed_checks // -1) \(.not_in_scope_checks // -1) \(.coverage_percent // -1)"' "$F")
+EOF
+  [ "$got_applicable $got_assessed $got_scored $got_blocked $got_suppressed $got_nis $got_coverage" = "$exp_applicable $exp_assessed $exp_scored $exp_blocked $exp_suppressed $exp_nis $exp_coverage" ] \
+    || fail "v2 score.assessment does not reconcile with checks[] (got $got_applicable/$got_assessed/$got_scored/$got_blocked/$got_suppressed/$got_nis/$got_coverage; expected $exp_applicable/$exp_assessed/$exp_scored/$exp_blocked/$exp_suppressed/$exp_nis/$exp_coverage)"
+
+  if [ "$exp_scored" -eq 0 ]; then
+    [ "$score_state" = "unassessed" ] || fail "v2 run with zero unsuppressed scored checks must use score.state=unassessed"
+    [ "$overall" = "null" ] || fail "v2 unassessed run must use score.overall=null"
+  else
+    [ "$score_state" = "assessed" ] || fail "v2 run with assessed checks must use score.state=assessed"
+    [ "$overall" != "null" ] && [ "$overall" != "invalid" ] || fail "v2 assessed run requires an integer score.overall"
+  fi
+
+  # The fingerprint folds category weights + the gate in, not just check id/category.
+  # A pure re-weighting changes the scoring model, so a prior run is NOT score-comparable
+  # and MUST produce a different check_set — otherwise the trend consumer renders a
+  # fabricated score delta for an estate that did not change. (cksum-v2 bumps the format
+  # so old id/category-only fingerprints never collide with a weighted one.)
+  expected_check_set="$(jq -r '
+    ( [ .checks[] | "chk\t" + .id + "\t" + .category ]
+      + [ .score.categories[] | "cat\t" + .name + "\t" + (.weight|tostring) ]
+      + [ "gate\t" + ((.score.gate // 85)|tostring) ]
+    ) | sort | .[]' "$F" | LC_ALL=C cksum | awk '{print "cksum-v2:" $1 ":" $2}')"
+  got_check_set="$(jq -r '.score.check_set // ""' "$F")"
+  [ "$got_check_set" = "$expected_check_set" ] || fail "v2 score.check_set '$got_check_set' does not match ledger fingerprint '$expected_check_set'"
+
+  if [ "$e2e" = "true" ] && [ "$exp_coverage" -ne 100 ]; then
+    fail "end_to_end=true but v2 assessment coverage is ${exp_coverage}% (must be 100%)"
+  fi
+fi
 
 if [ "$FAIL" -eq 0 ]; then
   echo "FINDINGS-OK: $F reconciles with the scoring model and schema (overall=$overall)"
