@@ -62,7 +62,7 @@ echo "PASS"
 
 echo "Test 7c: findings-by-purpose renders general and AI SRE lanes without duplicating evidence"
 jq '.findings=[
-  {"id":"FX-001","severity":"high","title":"Paging route is broken","report_lanes":["general-audit","ai-sre-readiness"]},
+  {"id":"FX-001","severity":"high","title":"Paging route is broken","impact":"a real page reaches no one","recommendation":"wire the route to a live receiver and prove delivery","report_lanes":["general-audit","ai-sre-readiness"]},
   {"id":"FX-002","severity":"medium","title":"Service identity is inconsistent","report_lanes":["ai-sre-readiness"]},
   {"id":"FX-003","severity":"low","title":"Approved exception","lifecycle":"suppressed","report_lanes":["general-audit"]}
 ]' "$WORK/v2.json" > "$WORK/v2-lanes.json"
@@ -73,6 +73,8 @@ printf '%s' "$LANES" | grep -q '^### AI SRE readiness' || fail "AI SRE readiness
 [ "$(printf '%s' "$LANES" | grep -c 'FX-002')" -eq 1 ] || fail "AI-only finding leaked into the general lane"
 printf '%s' "$LANES" | grep -q 'FX-003' && fail "suppressed finding leaked into an active review lane"
 printf '%s' "$LANES" | grep -qi 'observed' && fail "lane view exposed raw evidence"
+printf '%s' "$LANES" | grep -q 'Why it matters: a real page reaches no one' || fail "lane view did not render why-it-matters"
+printf '%s' "$LANES" | grep -q 'Recommended action: wire the route' || fail "lane view did not render the recommended action"
 echo "PASS"
 
 echo "Test 2: at-a-glance picks the MAX points_recoverable as the top lever"

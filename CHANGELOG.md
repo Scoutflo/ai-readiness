@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.154
+
+The general-audit vs AI-SRE-readiness split is now a readable, standalone view instead of a bare reference table. The **Findings by purpose** section renders each view (General audit / AI SRE readiness) with every finding's severity, what's wrong, why it matters, and the recommended action — so each view reads as a distinct analysis on its own. Same findings, same single score, and the full evidence still lives once in the Findings section (not duplicated). No schema change and no second score; `render-report-viz.sh lanes` and its test carry the richer format.
+
 ## 0.1.153
 
 Evidence-truthfulness and report-audience hardening for AWS, LGTM, Grafana, and ELK audits.
