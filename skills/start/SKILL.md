@@ -67,7 +67,7 @@ This toolkit audits, hardens, and monitors your infrastructure and observability
 | `/scoutflo:setup-aws` | setup | CloudWatch alarms, SNS routing, log forwarding, account observability |
 | `/scoutflo:audit-cost` | audit | Deep cross-provider cost: rightsizing, idle/unattached, commitment coverage, over-provisioned K8s requests — ranked by provider-native $ savings (never invented) |
 
-More audits are planned. This table lists the commands you invoke directly. A few helpers run **behind the scenes** and are not listed as rows: `business-context-resolver` (auto-discovers metadata for the audits), `cost-analysis` (the cost roll-up inside `audit-all`), and `topology-guided-setup` (a library the setup skills can source). Note `/scoutflo:checkpoint` and `/scoutflo:correlation-engine` are both — the audits invoke them for you, and you can also run them directly (`/scoutflo:checkpoint --reset-scope`, or `/scoutflo:correlation-engine` after a few audits).
+More audits are planned. This table lists the commands you invoke directly. A few helpers run **behind the scenes** and are not listed as rows: `business-context-resolver` (auto-discovers metadata for the audits), `cost-analysis` (the cost roll-up inside `audit-all`), `alert-fatigue` (the non-scored alert-fatigue roll-up inside `audit-all`, after correlation), and `topology-guided-setup` (a library the setup skills can source). Note `/scoutflo:checkpoint` and `/scoutflo:correlation-engine` are both — the audits invoke them for you, and you can also run them directly (`/scoutflo:checkpoint --reset-scope`, or `/scoutflo:correlation-engine` after a few audits).
 
 ## Where reports land
 

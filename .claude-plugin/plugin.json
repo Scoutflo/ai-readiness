@@ -1,6 +1,6 @@
 {
   "name": "scoutflo",
-  "version": "0.1.158",
+  "version": "0.1.159",
   "description": "Audit, harden, and monitor your infra and observability stacks (LGTM/VictoriaMetrics, ClickStack/ClickHouse/HyperDX, SigNoz, Grafana, Sentry, PagerDuty, Datadog, ELK/Kibana, JSM Operations, Zenduty, groundcover, Prometheus (server + rule-engine plane), DigitalOcean, GCP, Azure/AKS, AWS) with scored reports, Slack briefs, and guided remediation. Runs entirely on your side with your credentials.",
   "author": {
     "name": "Scoutflo",
