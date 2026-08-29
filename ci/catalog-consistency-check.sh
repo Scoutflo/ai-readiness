@@ -31,7 +31,7 @@ START="$DIR/skills/start/SKILL.md"
 # Internal helper skills: called BY other skills, never run directly by a user,
 # so they are intentionally NOT required to be catalog entries. Keep this list
 # tight — adding a skill here must be a deliberate "this is machinery" decision.
-INTERNAL_HELPERS="correlation-engine checkpoint cost-analysis topology-guided-setup business-context-resolver"
+INTERNAL_HELPERS="correlation-engine checkpoint cost-analysis topology-guided-setup business-context-resolver alert-fatigue"
 
 is_internal() {
   for h in $INTERNAL_HELPERS; do [ "$1" = "$h" ] && return 0; done

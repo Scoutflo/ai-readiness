@@ -328,6 +328,32 @@ names a gate/case that no longer exists, that is itself a defect.
   `tests/test-report-viz.sh` and `tests/test-check-report.sh`; prompt-level
   roll-up and Slack consumers are covered by `tests/test-v2-consumer-safety.sh`.
 
+## C17 — Alert-fatigue roll-up (non-scored cross-audit synthesis)
+
+- **Producer:** `skills/alert-fatigue/lib/alert-fatigue.sh` (`alert_fatigue_run`)
+  writes `${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/alert-fatigue.json`
+  (`scoutflo-alert-fatigue/v1`, `scoring_scope: non-scored`) with `AF-001`
+  (alerting-noise concentration), `AF-002` (cross-source storm: a service with
+  alerting-noise findings from ≥2 target dirs), and `AF-003` (alert-to-incident
+  ratio, computed only from an operator-provided `fatigue.json` signal block, else
+  `not-in-scope`).
+- **Consumers:** `audit-all` Phase 3.6 runs it after correlation and its report
+  §7 renders the summary; the file is otherwise terminal (nothing scores it).
+- **Invariants:** **zero provider calls** — reads only this run's per-audit
+  `findings.json` (same dual-glob + roll-up-dir skip as `correlation-engine`, so
+  signoz/kubernetes/multi-target stacks are never dropped); **never mutates a
+  finding or its severity and never re-scores** — every `source_findings[].finding_id`
+  exists in this run and its noise is scored once in its home audit; `AF-003`
+  **never fabricates** an actionability percentage (no signal block → `not-in-scope`).
+  `AF` is a registered **non-scored** prefix (findings-schema), like `COST`.
+- **SSOT:** `skills/alert-fatigue/SKILL.md`.
+- **Guards:** `skills/alert-fatigue/tests/test-alert-fatigue.sh` (run by
+  `ci/run-tests.sh`: storm detection, noise selection incl. exclusion of
+  non-alerting findings, non-scored + cites-source-IDs, and the `fatigue.json`
+  ratio path); `ci/prefix-registry-check.sh` (`AF` registered);
+  `ci/catalog-consistency-check.sh` (alert-fatigue is a documented internal
+  helper). Selftest: `layer_depth` alert-fatigue lock.
+
 ---
 
 ## Gate & test index (kept honest by `ci/contract-map-check.sh`)
@@ -364,7 +390,7 @@ Output correctness (run by every audit + `ci/run-tests.sh`):
 `ci/leak-scan.sh` (**C13**).
 
 Behavioral test suites (real libs, run by `ci/run-tests.sh`):
-`skills/correlation-engine/tests/` (**C2/C4/C5**) · `skills/cost-analysis/tests/` (**C2**) ·
+`skills/correlation-engine/tests/` (**C2/C4/C5**) · `skills/cost-analysis/tests/` (**C2**) · `skills/alert-fatigue/tests/` (**C17**) ·
 `tests/test-report-viz.sh` (**C2/C16**) · `tests/test-check-findings.sh` (**C16**) · `skills/business-context/tests/` (**C6**) ·
 `skills/topology-guided-setup/tests/` (**C5**) · `tests/test-multi-target-enumerator.sh` (**C3**).
 

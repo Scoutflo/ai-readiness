@@ -208,7 +208,7 @@ Because it makes no API calls, there is nothing to cache: the token cost is only
 
 ## See also
 
-- `/scoutflo:audit-all` — Phase 3.6: runs cost-analysis after correlation-engine
+- `/scoutflo:audit-all` — Phase 3.7: runs cost-analysis after correlation-engine and the alert-fatigue roll-up
 - `/scoutflo:correlation-engine` — detects overlaps + cascades
 - `/scoutflo:business-context` — sets env / cost sensitivity / critical dependencies
 - Individual skills (audit-aws, audit-gcp, etc) — produce `area: "cost-optimization"` findings in findings.json

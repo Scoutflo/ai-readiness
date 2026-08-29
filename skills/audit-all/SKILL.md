@@ -276,11 +276,38 @@ Expected output: `[correlation] Written <audits-dir>/correlation.json` followed 
 **Use cases:**
 - Surfaces candidate redundant monitoring (two stacks watching the same service) for consolidation review
 - Flags cascade risk: a failing database resource paired with untested alert delivery paths
-- Feeds cost-analysis deduplication (Phase 3.6) and `topology-guided-setup` fix sequencing
+- Feeds cost-analysis deduplication (Phase 3.7) and `topology-guided-setup` fix sequencing
 
 **Graceful degradation:** If the correlation library is absent (user on v0.1.65 or earlier), the log notes this and continues — correlation is optional but recommended for multi-stack estates.
 
-## Phase 3.6: Cost roll-up (v0.1.67+)
+## Phase 3.6: Alert-fatigue roll-up (v0.1.159+)
+
+After correlation completes, run the alert-fatigue roll-up. It aggregates every audit's alerting-noise findings into one estate view, finds services paged by **more than one tool** for a single incident (cross-source storm), and — only when a `fatigue.json` signal block supplies incident counts — computes the alert-to-incident ratio. It reads only this run's `findings.json` files, makes **no provider calls**, never mutates a finding or its severity, and is **not scored**: it cites source finding-IDs, and each noise finding stays scored once in its home audit.
+
+```bash
+set -eu
+# ${CLAUDE_PLUGIN_ROOT} is set by the plugin runtime. Running from a repo
+# checkout instead: export CLAUDE_PLUGIN_ROOT as the repo root first.
+AUDITS_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}"
+RUN_DATE="$(date -u +%F)"
+
+AF_LIB="${CLAUDE_PLUGIN_ROOT}/skills/alert-fatigue/lib/alert-fatigue.sh"
+if [ -f "$AF_LIB" ]; then
+  . "$AF_LIB"
+  alert_fatigue_run "$RUN_DATE"
+else
+  echo "[audit-all] Alert-fatigue roll-up not installed (v0.1.159+); skipping"
+fi
+```
+
+Expected output: `[alert-fatigue] Written <audits-dir>/alert-fatigue.json` plus a one-line summary (`alerting-noise findings: N | cross-source storms: N | tools with noise: N | ratio: computed|not-in-scope`). Zero findings for the date is a clean skip.
+
+**Outputs:**
+- `<audits-dir>/alert-fatigue.json` (`scoutflo-alert-fatigue/v1`, non-scored) — `AF-001` alerting-noise concentration by source tool, `AF-002` cross-source storms (a service paged by two or more tools), `AF-003` alert-to-incident ratio (only when a `fatigue.json` signal block is present, else `not-in-scope`). Every `source_findings[].finding_id` exists in this run's findings.
+
+**Graceful degradation:** If the library is absent (pre-v0.1.159), the log notes it and continues — the roll-up is optional. `AF-003` needs an operator-provided `fatigue.json` (`{window, alerts_fired, incidents}`); without it the ratio is `not-in-scope`, never fabricated.
+
+## Phase 3.7: Cost roll-up (v0.1.67+)
 
 After correlation completes, run the cost-analysis roll-up to aggregate every audit's cost-optimization findings (`area: cost-optimization` — `AWSOPT-*`, `DDOPT-*`) into one cross-provider view, deduplicated via `correlation.json`. This is a lightweight roll-up of findings the individual audits already produced; it makes no provider calls.
 
@@ -317,7 +344,7 @@ Expected output: `[cost-analysis] Report complete: <audits-dir>/cost-analysis/<d
 
 **Graceful degradation:** If the cost-analysis library is absent (v0.1.66 or earlier), the log notes this and continues — cost analysis is optional. If no audit emitted cost-optimization findings, it exits cleanly with a note.
 
-## Phase 3.7: Redaction pass (v0.1.71+)
+## Phase 3.8: Redaction pass (v0.1.71+)
 
 Before the combined report is finalized and any brief is assembled, run the redaction guardrail over the combined artifacts. Each audit's own report already avoids secrets by construction; this pass is defense-in-depth for the roll-up files this skill writes.
 
@@ -358,7 +385,7 @@ Write `./scoutflo-audits/all/<YYYY-MM-DD>/report.md`. It summarizes and links; i
    | --- | --- | --- |
    | `<target>` | `<r> of <n> critical services are ready for automatic Scoutflo correlation` or `readiness not recorded` | link to that target's `report.md#scoutflo-topology-readiness` |
 
-7. **Cross-stack correlation**: paste the output of `sh "${CLAUDE_PLUGIN_ROOT}/report-standard/render-report-viz.sh" overlaps "<audits-dir>/correlation.json"` — the redundant-monitoring overlaps (one service flagged by two or more stacks), any cascade chains, and the **Cross-tool coverage** subsection: a coverage gap in one provider (e.g. Azure "no metric alerts on checkout") that another provider actively covers (e.g. a routed Datadog monitor) is reframed as **single-tool dependency**, not zero coverage, while true gaps nothing covers are surfaced for elevation — all computed by the Phase 3.5 engine into `correlation.json`. This is the only cross-stack synthesis in the run; it renders the engine's output verbatim and never re-derives or re-scores correlation. It degrades to "No cross-stack overlaps, cascades, or cross-tool coverage reframing detected this run" when the engine found none, and to a run-`/scoutflo:audit-all` note when `correlation.json` is absent.
+7. **Cross-stack correlation**: paste the output of `sh "${CLAUDE_PLUGIN_ROOT}/report-standard/render-report-viz.sh" overlaps "<audits-dir>/correlation.json"` — the redundant-monitoring overlaps (one service flagged by two or more stacks), any cascade chains, and the **Cross-tool coverage** subsection: a coverage gap in one provider (e.g. Azure "no metric alerts on checkout") that another provider actively covers (e.g. a routed Datadog monitor) is reframed as **single-tool dependency**, not zero coverage, while true gaps nothing covers are surfaced for elevation — all computed by the Phase 3.5 engine into `correlation.json`. It renders the engine's output verbatim and never re-derives or re-scores correlation. It degrades to "No cross-stack overlaps, cascades, or cross-tool coverage reframing detected this run" when the engine found none, and to a run-`/scoutflo:audit-all` note when `correlation.json` is absent. **Alert fatigue (Phase 3.6):** then summarize `<audits-dir>/alert-fatigue.json` — `jq -r '.totals | "alerting-noise findings: \(.alerting_noise_findings) across \(.tools_with_noise) tool(s); cross-source storms: \(.cross_source_storms)"' "<audits-dir>/alert-fatigue.json"` — plus the `AF-003` ratio line (`computed` with `alerts_per_incident`, or its `not-in-scope` reason), and name each cross-source storm's service and tool count from `.af_findings[] | select(.type=="cross-source-alert-storm") | .storms[]`. This is likewise a verbatim, non-scored roll-up that cites source finding-IDs and re-scores nothing; it degrades to a one-line note when `alert-fatigue.json` is absent or has no alerting-noise findings.
 8. **Estate inventory (all stacks)**: paste the output of `sh "${CLAUDE_PLUGIN_ROOT}/report-standard/render-report-viz.sh" inventory-rollup "<audits-dir>" "<run-date>"` — the cross-stack current-state catalog (each stack's object totals by kind), read from every audit's `inventory.json`. This is the estate-level AI Readiness inventory deliverable: what you actually have configured, next to what's failing. It renders the per-stack `inventory.json` verbatim and never re-derives it; it degrades to "No `inventory.json` for `<run-date>`" when no audit emitted one.
 9. **Top findings**: the Phase 3 list with each finding's target added.
 10. **Suppressed**: the Phase 3 suppressed-findings roll-up, one line per target plus the `total suppressed across all targets` line. State "No findings suppressed via exemptions this run." when the total is `0`.
