@@ -38,11 +38,14 @@ Then run any `audit-*` skill and read the report in `./scoutflo-audits/<target>/
 In a terminal:
 
 ```bash
-claude plugin list
-claude plugin update scoutflo@scoutflo
+claude plugin marketplace update scoutflo    # refresh the marketplace cache from GitHub first
+claude plugin update scoutflo@scoutflo        # then update to the latest release
+claude plugin list                            # confirm the version
 ```
 
-(Or, inside a `claude` terminal session, the interactive `/plugin` command — not inside Claude.app's chat, same restriction as install.) Compare the installed version against [CHANGELOG.md](../CHANGELOG.md); the marketplace serves the latest release from the repository's `main` branch. Restart Claude Code / Claude.app after updating.
+Then **restart** Claude Code / Claude.app (fully quit and reopen), or run `/reload-plugins` inside an open `claude` session to load the new skills without a full restart — a running session keeps the old version until then. Compare the installed version against [CHANGELOG.md](../CHANGELOG.md); the marketplace serves the latest release from the repository's `main` branch.
+
+**From the Claude desktop app (no terminal):** the **+** next to the prompt → **Plugins** → **scoutflo** → **Update**, then restart the app. (The interactive `/plugin` command and the app's plugin browser both manage updates; only *adding a brand-new marketplace* is terminal/`settings.json`-only.)
 
 ### Uninstall
 

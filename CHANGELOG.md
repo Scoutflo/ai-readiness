@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.155
+
+Documentation refresh — no behavior change (docs only).
+
+- **README "What's new" now leads with the current release** — honest evidence-aware scoring (blocked = *unassessed* and out of the score, assessment coverage shown separately, a fully-blocked audit reads "Unassessed" not a fake `0/100`) and the **general-audit vs AI-SRE-readiness** report views. Older items are folded into the changelog.
+- **New "Updating the plugin" section in the README** — documents the update path both ways: the `claude` CLI (`claude plugin marketplace update scoutflo` → `claude plugin update scoutflo@scoutflo` → `/reload-plugins` or restart) and the Claude desktop app UI (**+** → **Plugins** → **scoutflo** → **Update**), plus the Team/Enterprise `autoUpdate` path.
+- **"Reading a report" documents the two views** (Findings by purpose: General audit / AI SRE readiness) and the honest Unassessed/coverage handling. `docs/install.md`'s update section gains the marketplace-refresh step and the desktop-app update path.
+- **Two doc nits fixed:** `report-standard/README.md`'s history example uses `cksum-v2` (matching the v0.1.152 fingerprint format), and `ci/structure-check.sh`'s header comment is now internally consistent (23 gates + an inline frontmatter check, matching AGENTS.md).
+
 ## 0.1.154
 
 The general-audit vs AI-SRE-readiness split is now a readable, standalone view instead of a bare reference table. The **Findings by purpose** section renders each view (General audit / AI SRE readiness) with every finding's severity, what's wrong, why it matters, and the recommended action — so each view reads as a distinct analysis on its own. Same findings, same single score, and the full evidence still lives once in the Findings section (not duplicated). No schema change and no second score; `render-report-viz.sh lanes` and its test carry the richer format.

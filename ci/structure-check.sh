@@ -1,5 +1,5 @@
 #!/bin/sh
-# structure-check.sh — composes 23 checks: frontmatter, anchor, cross-block,
+# structure-check.sh — composes 23 gates (plus an inline frontmatter check): anchor, cross-block,
 # coverage, remediation-map, skill-completeness, the four behavioral-parity
 # gates (scope-checkpoint, redaction-parity, business-context-parity,
 # env-load-parity), manifest-compat, min-version-consistency,
