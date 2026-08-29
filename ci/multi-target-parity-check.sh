@@ -9,15 +9,17 @@
 # Exemptions (documented, not silent):
 #   - audit-all: orchestrator; it aggregates the per-target dirs (two-level glob), not a target.
 #   - audit-cost: cross-provider aggregator; no own connection block.
-#   - audit-lgtm, audit-alert-routing: these read SHARED backend blocks (prometheus/loki/tempo/
-#     mimir/grafana/alertmanager), not a single own block, so "multiple targets" there is a
-#     distinct multi-stack design tracked as a follow-up. When they adopt it, remove them here.
+#   - audit-lgtm, audit-alert-routing, audit-prometheus: these read the SHARED backend block(s)
+#     (prometheus/loki/tempo/mimir/grafana/alertmanager) as a single mapping, not a labeled own
+#     block — a labeled list under prometheus: would break doctor/audit-lgtm/audit-alert-routing,
+#     which all read `cfg prometheus url`. "Multiple targets" there is a distinct multi-stack
+#     design tracked as a follow-up. When they adopt it, remove them here.
 #
 # Read-only. POSIX sh + grep.
 set -eu
 DIR="${1:-.}"
 FAIL=0
-EXEMPT="audit-all audit-cost audit-lgtm audit-alert-routing"
+EXEMPT="audit-all audit-cost audit-lgtm audit-alert-routing audit-prometheus"
 
 for d in "$DIR"/skills/audit-*/; do
   name="$(basename "$d")"
