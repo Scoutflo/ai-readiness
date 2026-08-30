@@ -116,7 +116,7 @@ Per-service integrations and their alert rules are pulled in section 6 (they are
 
 - `maintenance.json` keeps the full `services[]` (each `unique_id` and `name`), not just `service_count`, so **ZD-016** can resolve *which* covered services are critical rather than only how many.
 - `services.json` keeps `escalation_policy` (the EP `unique_id` each service routes through), so **ZD-001/ZD-002/ZD-006/ZD-030** can join a service to the escalation policy that pages for it.
-- The incident-filter capture (section 8) keeps per-incident `service`/`service_ids` and `sla_object`, so **ZD-030** can join each aging incident to its service's escalation policy and **ZD-031** can read the service's own acknowledge SLA. The old shape (unacked count + oldest only) discarded both and could not compute the per-service cause — section 8 now retains them.
+- The incident-filter capture (section 8) keeps per-incident `service`/`service_ids` and `sla_object`, so **ZD-030** can join each aging incident to its service's escalation policy and **ZD-031** can read the service's own acknowledge SLA — **when they are populated.** Integration-created incidents often return `service` AND `service_ids` as `null` (live-confirmed); when they do, the aging COUNT (ZD-030) and the `sla_object` still stand, but the per-service escalation-policy attribution degrades to the account/EP level — say so in the finding rather than dropping it. The old shape (unacked count + oldest only) discarded both and could not compute the per-service cause even when present — section 8 now retains them.
 
 ## 5. Escalation and on-call (ZD-001 to ZD-006)
 
@@ -421,12 +421,16 @@ curl -fsS --max-time 30 -H "$AUTH" -H "Content-Type: application/json" \
 #
 # ZD-031 is a TWO-SOURCE join, not a single-default comparison. sla_object.acknowledge_time is a
 # per-INCIDENT field on the POST /api/incidents/filter/ response (captured above); it is NOT on
-# services.json and service_analytics carries no SLA field. So compare the analytics mtta_seconds
-# for a service against that service's OWN sla_object.acknowledge_time from the incident filter, and
-# fall back to the documented MTTA_TARGET_MIN only when sla_object is absent. Then ATTRIBUTE the
-# miss by correlating with ZD-010/ZD-014 for the same service: "checkout mtta 2140s (36m) over 30d
-# on 88 acked incidents against its own SLA acknowledge_time of 900s (incident sla_object) — and
-# checkout has collation:0 (ZD-010), so the miss is a noise problem, not a staffing one." Downstream
+# services.json and service_analytics carries no SLA field. UNITS (live-confirmed): sla_object
+# .acknowledge_time is in MINUTES (e.g. 5 = a 5-minute ack SLA, 30 = 30-minute resolve), while
+# analytics mtta_seconds is in SECONDS — so multiply the SLA by 60 before comparing, else every
+# service falsely fails (217.7s MTTA would "miss" a 5 read as 5s). Compare the analytics mtta_seconds
+# for a service against that service's OWN (sla_object.acknowledge_time * 60) from the incident filter,
+# and fall back to (MTTA_TARGET_MIN * 60) — MTTA_TARGET_MIN is also minutes — only when sla_object is
+# absent. Then ATTRIBUTE the miss by correlating with ZD-010/ZD-014 for the same service: "checkout
+# mtta 2140s (36m) over 30d on 88 acked incidents against its own SLA acknowledge_time of 15 min
+# (900s target; incident sla_object) — and checkout has collation:0 (ZD-010), so the miss is a noise
+# problem, not a staffing one." Downstream
 # of ZD-010/ZD-014 (noise inflates MTTA) and ZD-003 (empty rotation delays ack). All figures carry
 # the analytics window (from_date/to_date) in evidence and are the vendor's own numbers, never
 # fabricated. Remediation is inline (no setup-zenduty ships): attribute-then-fix — noise-driven ->
