@@ -590,17 +590,18 @@ curl -fsS --max-time 15 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
 # it fires nothing. Cross-check the row's conditions against the SNTRY-013 immediate/review
 # tiers — a disabled immediate-tier rule on a production project is the finding.
 
-# Command 2 (VERIFY-PENDING metric-alert half): do NOT assert a string `status` on metric
-# alerts. Sentry's metric-alert (AlertRule) serializer is documented to return `status` as an
-# integer enum, so a string compare would be wrong. Gate on the OBSERVED type until a live run
-# confirms the shape: only compare when it actually is a string. Fixed the ASCII pipe here.
+# Command 2 (metric-alert half — status confirmed numeric, disabled-enum residual): do NOT assert
+# a string `status` on metric alerts. Confirmed live: the metric-alert (AlertRule) `status` is a
+# numeric enum (observed `0` on active rules), so a string compare never matches. The guard below
+# only compares when `status` is a string, so on real (numeric) data it reports nothing rather
+# than a wrong result. Fixed the ASCII pipe here.
 curl -fsS --max-time 30 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
   "${API}/organizations/${SENTRY_ORG}/alert-rules/" \
   | jq -r '.[] | select((.status | type) == "string" and (.status | ascii_downcase) != "active")
       | "\(.name)\tstatus=\(.status)"'
-# On a live tenant, if `status` proves to be an integer enum, replace the guard with the
-# documented enum value for "disabled" (confirm via the live_verify_plan) before scoring the
-# metric-alert half; until then it reports nothing rather than a wrong result.
+# `status` is confirmed a numeric enum on live data; once a disabled metric alert is observed,
+# replace the string guard with the observed disabled-enum value before scoring the metric-alert
+# half. Until then it reports nothing rather than a wrong result.
 ```
 
 Healthy: command 1 prints no rows (every rule is active). Fail (SNTRY-016, high): a disabled/muted rule whose conditions match an immediate or review tier — quantify with the SNTRY-001 accepted-error volume snippet for the project (*"checkout's only regression rule is `status=disabled`, so a fatal regression matches a switched-off rule and pages nobody; this project accepted E errors in the window and the coverage matrix currently scores it green"*). **Correlate:** SNTRY-016 directly gates SNTRY-013 (tier presence now excludes non-active rules) and SNTRY-012 (a disabled immediate rule is functionally no coverage); it chains with SNTRY-005 into the silent-incident flagship. Remediation `setup-sentry#alert-rule-taxonomy`; verification: re-GET `/projects/{org}/{project}/rules/` → the rule crediting the tier has `status == "active"`.
@@ -623,8 +624,8 @@ curl -fsS --max-time 15 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
   | jq -r '.[] | . as $r | .actions[]? | select((.targetType // "") == "IssueOwners")
       | "\($r.id)\t\($r.name)\ttargetType=IssueOwners"'
 
-# Ownership raw rules + fallthrough posture. VERIFY-PENDING: confirm the /ownership/ shape and
-# the exact fallthrough field name against a live org before scoring (see live_verify_plan).
+# Ownership raw rules + fallthrough posture. Live-verified: /ownership/ returns 200 with `raw`
+# and a boolean `fallthrough` (the `fallthroughChoice` fallback below is kept for older orgs).
 own="$(mktemp)"
 code=$(curl -s -o "$own" -w '%{http_code}' --max-time 15 \
   -H "Authorization: Bearer ${SENTRY_TOKEN}" "${API}/projects/${SENTRY_ORG}/${PROJECT}/ownership/")
@@ -640,11 +641,11 @@ rm -f "$own"
 
 Healthy: no owner-routed rule, or owner-routed rules with a non-empty `raw` ownership set. Fail (SNTRY-017, medium): an owner-routed rule with empty ownership `raw` — name the direction, *"the immediate rule on `<project>` routes to issue owners, but ownership raw is empty and fallthrough is off — matched issues notify nobody"* (or fallthrough on → pages everyone, mirroring SNTRY-001). A 403 on `/ownership/` blocks the check with the code as evidence, never a clean pass. **Correlate:** SNTRY-005 (owner-routed actions are a receiver-liveness blind spot the current SNTRY-005 chat/email classifier does not cover) and SNTRY-001 (fallthrough-to-all is the same over-paging failure). Remediation `setup-sentry#receiver-wiring`; verification: re-GET `/projects/{org}/{project}/ownership/` → non-empty `raw` for the owner-routed rule's paths, or the rule re-pointed at a concrete team/integration target.
 
-**live_verify_plan (read-only GETs that lift verify-pending on SNTRY-016/017):**
+**live_verify_plan — confirmed live (read-only GETs); one residual remains:**
 
-1. `GET /organizations/{org}/alert-rules/` → `jq '.[0].status, (.[0].status|type)'` — confirm whether metric-alert `status` is int or string, then fix SNTRY-016 command 2 accordingly.
-2. `GET /projects/{org}/{project}/rules/` → `jq '.[0].status'` — confirm issue-rule `status` is the string `active`/`disabled` command 1 relies on.
-3. `GET /projects/{org}/{project}/ownership/` → `jq '{raw, fallthrough, fallthroughChoice, autoAssignment}'` — confirm the `/ownership/` shape and the exact fallthrough field name for SNTRY-017.
+1. `GET /organizations/{org}/alert-rules/` → `jq '.[0].status, (.[0].status|type)'` — **confirmed:** metric-alert `status` is a number (observed `0` on active rules). **Residual:** the disabled-enum value, which needs a disabled metric alert to observe before command 2 can score the metric-alert half.
+2. `GET /projects/{org}/{project}/rules/` → `jq '.[0].status'` — **confirmed:** issue-rule `status` is the string `active` that command 1 relies on.
+3. `GET /projects/{org}/{project}/ownership/` → `jq '{raw, fallthrough, fallthroughChoice, autoAssignment}'` — **confirmed:** `/ownership/` returns 200 with `raw` and a boolean `fallthrough` (SNTRY-017 live-verified).
 4. `GET /projects/{org}/{project}/rules/` → `jq '[.[].actions[]?|select(.targetType=="IssueOwners")]'` — confirm `NotifyEmailAction targetType=IssueOwners` for SNTRY-017.
 5. `curl -o /dev/null -w '%{http_code}' GET /organizations/{org}/members/` — confirm `member:read` is present (200) before SNTRY-001 computes a member count; a 403 means SNTRY-001 files the fan-out sub-part blocked, never a fabricated N.
 
@@ -748,8 +749,8 @@ Permanent IDs. Never renumber, never reuse a retired ID; deltas depend on stabil
 | SNTRY-013 | Alert rules and routing | high | Every production project has at least one immediate-tier and one review-tier rule, correctly environment-scoped by the rule's own `environment` field |
 | SNTRY-014 | Alert rules and routing | medium | No rule pages on unfiltered every-event conditions or re-pages below your frequency floor |
 | SNTRY-015 | Alert rules and routing | high | Workflow-engine orgs (capability-gated): no detector with an empty `workflowIds` array — a detector connected to no automation notifies nobody; `not-in-scope` on classic-model orgs where the endpoint 404s |
-| SNTRY-016 | Alert rules and routing | high | *(verify-pending)* No disabled or muted alert rule is silently crediting tier coverage: a `status != active` issue rule still satisfies SNTRY-013 today, so a service reads covered while its immediate-tier rule fires nothing |
-| SNTRY-017 | Alert rules and routing | medium | *(verify-pending)* Rules that route to issue owners (`targetType: IssueOwners`) have real ownership rules behind them; empty ownership with fallthrough off notifies nobody, fallthrough on pages everyone |
+| SNTRY-016 | Alert rules and routing | high | No disabled or muted alert rule is silently crediting tier coverage: a `status != active` issue rule still satisfies SNTRY-013 today, so a service reads covered while its immediate-tier rule fires nothing *(issue-rule half live-verified; metric-alert half verify-pending on the disabled-enum value)* |
+| SNTRY-017 | Alert rules and routing | medium | Rules that route to issue owners (`targetType: IssueOwners`) have real ownership rules behind them; empty ownership with fallthrough off notifies nobody, fallthrough on pages everyone |
 | SNTRY-101 | Alert rules and routing | medium | Every notifying issue rule gates with a non-empty `filters` set; a broad trigger with an empty `filters` array fires un-tuned (every-event/frequency subset stays owned by SNTRY-014) |
 | SNTRY-102 | Alert rules and routing | medium | On a multi-environment project, every notifying issue rule sets its own `environment`; a null `environment` runs the rule across all environments and pages on dev/staging noise |
 | SNTRY-103 | Alert rules and routing | medium | Every metric alert sets `resolveThreshold`, pairs a `warning` trigger with `critical`, and uses a `timeWindow` (or `comparisonDelta`/`detectionType`) wide enough not to flap on transients |

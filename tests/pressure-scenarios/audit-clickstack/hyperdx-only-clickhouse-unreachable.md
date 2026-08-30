@@ -11,7 +11,7 @@ worse, invent a `0/100` for the ClickHouse categories.
 ```yaml
 clickstack:
   - label: hdx-us
-    hyperdx_url: https://clickstack.whatfix.com
+    hyperdx_url: https://clickstack.example.com
     hyperdx_api_key_env: HDX_US_KEY        # Personal API Access Key (not the ingestion key)
     # clickhouse_url / clickhouse_user / clickhouse_password_env: added later — CH is on a private network
 ```

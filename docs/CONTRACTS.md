@@ -320,7 +320,23 @@ names a gate/case that no longer exists, that is itself a defect.
   Raw score deltas and trend points are comparable only when `scoring_model` and
   `check_set` match. Customer reports render `report_lanes` through the
   deterministic `Findings by purpose` view; the two lanes never create a second
-  score or duplicate the detailed finding evidence.
+  score or duplicate the detailed finding evidence. Each `checks[].category` is
+  emitted from the **SKILL scorecard** category names, **not** the reference
+  check-catalog's Category column — so the catalog's Category column is kept
+  byte-identical to the scorecard purely as trustworthy documentation, and a
+  catalog↔scorecard drift is a documentation-consistency issue, **not** a scoring
+  one (proven: aws/grafana shipped and live-passed `check-findings.sh` for many
+  releases *with* a mismatch). Fold each scope-guardrail catalog row into the
+  scored category the scorecard lists its ID under.
+- **Design limit (D2):** the catalog↔scorecard category-name match is guarded by
+  the maintainer review + a maintainer-run mechanical aggregate check (extract
+  each audit's distinct scored-row categories, confirm each ∈ its scorecard),
+  **deliberately not a CI gate** — a robust POSIX-sh check is brittle against
+  metric-reference appendix tables that share the `| PREFIX-NNN |` row shape
+  (e.g. `audit-lgtm`'s PostgreSQL/Kafka/Redis datastore table) and against
+  column-order variance across skills, so a gate would risk false-positive CI
+  blocks for a non-scoring concern. Selftest `layer_depth` locks the specific
+  categories a past drift touched.
 - **SSOT:** `report-standard/findings-schema.md` and
   `report-standard/severity-and-scoring.md`.
 - **Guards:** `report-standard/check-findings.sh` and

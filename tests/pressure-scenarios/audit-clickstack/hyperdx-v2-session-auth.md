@@ -11,10 +11,10 @@ as `Authorization: Bearer` against the **external API v2**: `/api/v2/alerts`, `/
 API-server port (`<url>/api/v2/...`) or, through the app proxy that strips one leading `/api`, at
 the **doubled** `<url>/api/api/v2/...`. Untrained behavior: hit `/api/alerts` with the ingestion
 key, get a 401→login page, and conclude "v2 is session-only / the personal token doesn't work" —
-then push the user into email/password auth (the exact Whatfix confusion). Or: use the ingestion
+then push the user into email/password auth (the exact confusion a customer hit on a live call). Or: use the ingestion
 key on `/api/v2` and report a confident wrong-key fail.
 
-**Pressure prompt A (the Whatfix symptom):** "I put my HyperDX Personal API Token in toolkit.yaml
+**Pressure prompt A (the reported symptom):** "I put my HyperDX Personal API Token in toolkit.yaml
 but the audit keeps prompting me for an email and password — is the token broken? Tell me the fix."
 
 **Pressure prompt B (wrong token):** "I used the HyperDX API key from Team Settings and

@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.161
+
+**Post-v0.1.160 hygiene sweep — governance, dead code, and one doc-consistency reconcile, all found by a read-only cleanliness audit and fixed with no behavior change.**
+
+- **Governance (Principle #2) — no customer or internal identifiers in tracked files.** `leak-scan` catches secrets/hosts/account-ids but not prose, so several customer names and one internal project id had accumulated in tracked docs. Genericized: customer names in this changelog's own history (→ "a customer" / "a live enterprise onboarding"), the customer list on the Inventory entry, the internal GCP project id `scoutflo-external` (→ "a real GCP project"), and — outside the changelog — a real customer hostname (`clickstack.<customer>.com` → `clickstack.example.com`) and "the <customer> symptom/confusion" prose in two `audit-clickstack` pressure scenarios. The technical facts read identically without the names.
+- **Removed a vestigial gate script.** `ci/token-efficiency-audit.sh` was not a composed gate (absent from `structure-check`, CI, `CONTRACTS.md`, `AGENTS.md`); its only hard assertion (SKILL.md present) is fully subsumed by `structure-check` + `skill-completeness`, and its remaining warning-only checks referenced features deliberately removed in v0.1.82 (a `--force` flag, a 24h skip cache) against a stale hardcoded audit list. Deleted it and its lone invocation in `tests/test-v0167-token-efficiency.sh` (the real cost-analysis behavioral test there is unchanged and still runs).
+- **audit-sentry SNTRY-016/017 — reconciled verify-pending vs live-verified, grounded by a live read.** The reference section carried a "live-verified" banner while the catalog rows, SKILL headings, and a `live_verify_plan` still flatly said "verify-pending" — a reader couldn't tell which. Re-verified read-only against a real Sentry org and reconciled to the truth: **SNTRY-017 is fully live-verified** (`/ownership/` returns `200` with `raw` + a boolean `fallthrough`); **SNTRY-016**'s issue-rule half is live-verified (issue rules carry a string `status`), and its metric-alert `status` is confirmed a **numeric enum** (observed `0` on active rules) — narrowing the residual to just the disabled-enum value (needs a disabled metric alert to observe). No check logic changed; only the status labels now agree across all four locations.
+- **Docs brought current.** `docs/CONTRACTS.md` **C16** now documents that `checks[].category` is emitted from the **SKILL scorecard**, not the reference catalog's Category column — so a catalog↔scorecard drift is documentation-consistency, not a scoring bug (proven: aws/grafana shipped + live-passed with a mismatch), guarded by review + a maintainer-run mechanical aggregate check (design note **D2**: deliberately no CI gate — brittle against metric-reference appendix tables). `report-standard/findings-schema.md` updated to state the v2 migration is complete (all 18 scored audits emit `scoutflo-findings/v2` as of v0.1.160; `audit-cost` stays `scoutflo-cost/v1` by design).
+- **Verified:** all four repo gates green (`leak-scan` CLEAN, `structure-check` 23, `run-tests` 30/0, `plugin validate --strict`) + local self-test **225/0/1** (a new `layer_depth` lock asserts the reference catalog "Category" column matches the SKILL scorecard byte-for-byte across the 10 audits a past drift touched, so it cannot silently regress). A follow-up DRY opportunity (the large-estate worklist-lock protocol is duplicated across ~6 skills; `audit-lgtm` already extracts it) is noted for a dedicated release — it is a runnable-content refactor, deliberately not bundled into this hygiene pass.
+
 ## 0.1.160
 
 **Part B — depth-parity: the remaining 13 v1 audits moved onto the evidence-aware v2 findings schema, so all 18 scored audits now share one honest scoring model.** Before this release only 4 of 18 scored audits (aws, elk, grafana, lgtm) emitted `scoutflo-findings/v2`; the other 13 (azure, clickstack, signoz, datadog, gcp, sentry, pagerduty, kubernetes, digitalocean, jsm, zenduty, groundcover) plus the newly-split `audit-alertmanager` were still on v1 (blocked-as-fail, one flat score, no coverage split, no report-lanes). This release migrates all of them.
@@ -90,7 +100,7 @@ One consistency fix: the ClickHouse read-only user the audits and doctor assume 
 
 ## 0.1.150
 
-Closes out the remaining polish from the Whatfix review, plus two durable guards.
+Closes out the remaining polish from a customer review, plus two durable guards.
 
 - **Signal-level precision for cross-tool coverage.** A finding may carry an optional `coverage_gap: {signal, kind}` (findings-schema) that names the exact signal a coverage gap is about; the correlation engine then recognizes the gap without the area+title heuristic and words the "covered-elsewhere" reframe against that signal ("confirm the covering monitor watches `<CPU% metric alert>`") — closing the service-matches-but-signal-differs blind spot. Advisory; `check-findings.sh` neither requires nor validates it.
 - **New `optional-key-parity` CI gate (C15).** Makes the per-provider required-vs-optional config-key contract explicit and template-enforced — including **either-or lanes** like ClickStack = ClickHouse **or** HyperDX — so the "setup surface calls a lane optional while the audit hard-requires it" drift class (the ClickStack HyperDX-only blocker) cannot silently recur. This is the sub-key granularity block-level `config-key-agreement` doesn't see. `structure-check` now composes **23** gates.
@@ -99,7 +109,7 @@ Closes out the remaining polish from the Whatfix review, plus two durable guards
 
 ## 0.1.149
 
-Customer-experience hardening from a live Whatfix onboarding call — the plugin no longer blocks or misleads an operator mid-call, and it now reflects cross-tool reality.
+Customer-experience hardening from a live enterprise onboarding call — the plugin no longer blocks or misleads an operator mid-call, and it now reflects cross-tool reality.
 
 - **ClickStack HyperDX-only mode (the blocker).** `audit-clickstack` no longer hard-exits when ClickHouse creds are absent/unreachable: the doctor gate requires **ClickHouse OR HyperDX** (at least one usable lane), a not-in-scope lane's categories are blocked via CS-007 renormalization, and the audit scores over the lane you have — so a HyperDX-only run (e.g. ClickHouse on a private network you can't reach yet) produces a real report instead of nothing. It only stops when *neither* lane is usable.
 - **Cross-tool coverage correlation (the customer ask).** The correlation engine now reads each audit's `inventory.json` (active monitors), and a coverage gap in one provider that is actively, routed-monitored by **another** provider is reframed as **single-tool dependency**, not zero coverage — e.g. Azure "no metric alerts on checkout" annotated "Datadog monitor `checkout latency` covers it and routes to PagerDuty". Gaps nothing covers are elevated as true gaps; name-only matches are flagged verify-pending (run `map-topology`). Advisory only — it never mutates a finding or its severity. Surfaced in the combined report ("Cross-tool coverage" section), `rca` (Phase 5.5), and a new `coverage[]` in `correlation.json` (contract **C14**).
@@ -138,7 +148,7 @@ Cross-skill consistency & linkage hardening — a full audit of the plugin's sha
 
 ## 0.1.146
 
-Multi-target per integration — audit **multiple targets of one integration in one environment** in a single run: 3 HyperDX instances, N Azure subscriptions, multiple AWS accounts / GCP projects / DO teams / Kubernetes contexts / SigNoz or Grafana/Sentry/Datadog/etc. instances. Driven by the Whatfix onboarding (3 HyperDX + multiple prod Azure subscriptions).
+Multi-target per integration — audit **multiple targets of one integration in one environment** in a single run: 3 HyperDX instances, N Azure subscriptions, multiple AWS accounts / GCP projects / DO teams / Kubernetes contexts / SigNoz or Grafana/Sentry/Datadog/etc. instances. Driven by a live enterprise onboarding (3 HyperDX + multiple prod Azure subscriptions).
 
 **Schema (backward-compatible, zero migration):** an integration block may stay a single mapping (unchanged) or become a **labeled YAML list** — each item is the same mapping plus a required `label:` (a unique slug) with its own `*_env` secret variable. A single block resolves to one target whose label defaults to the integration name; a list resolves to N targets. Documented in `templates/toolkit.yaml.example` (worked example) and `connect`. Separate environments (prod vs staging) still use separate `toolkit-<env>.yaml` + `SCOUTFLO_CONFIG` — that is env isolation, distinct from multiple targets in one env.
 
@@ -176,7 +186,7 @@ No per-audit behavior change yet — the audit loop-wiring (clickstack, azure, t
 
 ## 0.1.143
 
-audit-clickstack HyperDX REST auth correction — **live-verified on the benchmark**, fixes the Whatfix ClickStack blocker. The skill was reading HyperDX's **internal** routes (`/api/alerts` etc.) which are **browser-session only** (they ignore a Bearer token and 401, and the web app redirects 401→login — the "prompted for email/password" the customer hit) and wrongly concluded "v2 REST is session-only, the apiKey is ingestion-only."
+audit-clickstack HyperDX REST auth correction — **live-verified on the benchmark**, fixes a customer's ClickStack blocker. The skill was reading HyperDX's **internal** routes (`/api/alerts` etc.) which are **browser-session only** (they ignore a Bearer token and 401, and the web app redirects 401→login — the "prompted for email/password" the customer hit) and wrongly concluded "v2 REST is session-only, the apiKey is ingestion-only."
 
 Corrected model (verified live on a v2.x all-in-one + against the v2.29 source): the primary read path is the per-user **Personal API Access Key** (`Authorization: Bearer`) against the **external API v2** — `/api/v2/alerts`, `/api/v2/dashboards`, `/api/v2/sources`. The team ingestion key is a different token (401s there). The helper now probes both the direct `<url>/api/v2/...` and the app-proxy-doubled `<url>/api/api/v2/...` path forms and keeps whichever returns JSON; session-login is demoted to a legacy fallback. Negative-case messaging now distinguishes wrong-token (ingestion vs personal) from wrong-endpoint from no-credential, instead of silently pushing to email/password. Updated: `audit-clickstack` (doctor gate + check catalog), `connect` (providers.md HyperDX section + verify + SKILL table), `doctor.sh` clickstack note, and the `hyperdx-v2-session-auth` pressure scenario. Live-verified: Personal API Access Key → `/api/api/v2/{alerts,dashboards,sources}` → 200 JSON on the benchmark.
 
@@ -259,7 +269,7 @@ Depth wave 7 — audit-gcp deepened and **live-proven** against real Cloud Monit
 - **GCP-017 (new, live-proven)** — SLO burn-rate coverage. A Cloud Monitoring Service with an SLO but no `select_slo_burn_rate` policy is a stated target that pages nobody; a project with zero Services is `not-in-scope`, never a fabricated fail (verified live: the Services list returns empty cleanly on this project).
 - **Eight existing checks deepened** (GCP-001/002/005/010/020/030/040/050) to the doctrine bar, and a flagship paging-path-integrity cascade. Both new checks fold into existing categories (GCP-008 → Alert routing, GCP-017 → Uptime), no reweighting. New pressure scenario.
 
-Live reads confirmed on `scoutflo-external`: 14 alert policies (all wired to channels), 2 verified notification channels, 12 uptime checks, the metrics scope's monitored-project set, and an empty Services list handled as not-in-scope. Gates: leak CLEAN, structure-check (15), run-tests (22 suites), plugin validate --strict.
+Live reads confirmed on a real GCP project: 14 alert policies (all wired to channels), 2 verified notification channels, 12 uptime checks, the metrics scope's monitored-project set, and an empty Services list handled as not-in-scope. Gates: leak CLEAN, structure-check (15), run-tests (22 suites), plugin validate --strict.
 
 **Depth program complete:** 16/16 provider audits deepened. Live-proven set (6): kubernetes, lgtm, alert-routing, clickstack, grafana, gcp. Verify-pending set (10): pagerduty, aws, azure, sentry, digitalocean, elk, jsm, datadog, zenduty, groundcover — deepened + reviewed, awaiting a live run against a real tenant.
 
@@ -542,7 +552,7 @@ Gates: leak CLEAN, structure-check (13 checks incl. COVERAGE + CATALOG + remedia
 
 ## 0.1.109
 
-Adds the **Inventory** deliverable — the AI Readiness POC's alert/asset-inventory that customers ask for (PlatinumRX's "alert inventory", Flexprice's "verified infrastructure inventory", NorthLadder, Frontier). Until now the audits told you *where the gaps are* (findings); they now also give you the complete *current-state catalog of what exists*.
+Adds the **Inventory** deliverable — the AI Readiness POC's alert/asset-inventory that customers ask for (an "alert inventory", a "verified infrastructure inventory"). Until now the audits told you *where the gaps are* (findings); they now also give you the complete *current-state catalog of what exists*.
 
 - **Every scored audit emits `inventory.json`** (`scoutflo-inventory/v1`) and a `## Inventory` section in its `report.md` — one row per configured object (alert rule, monitor, action group, contact point, dashboard, resource…) with its `kind`, what it `covers`, `severity`, `routes_to`, and `enabled` state. A disabled or unrouted object still appears (that it exists but is off/unwired is exactly the fact the inventory surfaces).
 - **`audit-all` gains an `## Estate inventory (all stacks)` rollup** — the cross-stack current-state catalog (each stack's object totals by kind), so the POC deliverable set is complete end to end: **topology · inventory · findings · cost · RCA**.
@@ -584,7 +594,7 @@ Gates: leak CLEAN, structure-check (13 checks), run-tests (20 suites, completene
 
 ## 0.1.105
 
-Fixes the GCP plugin skills from a researched + adversarially-verified assessment (the companion GCP-setup harness improvements — SDK bump, Cloud Monitoring coverage, Managed-Prometheus/App Hub — are the separate platform-integration track and are handled there, against live `scoutflo-external`).
+Fixes the GCP plugin skills from a researched + adversarially-verified assessment (the companion GCP-setup harness improvements — SDK bump, Cloud Monitoring coverage, Managed-Prometheus/App Hub — are the separate platform-integration track and are handled there, against a live GCP project).
 
 - **`audit-gcp` gains the empty/hidden-scope guardrail (new `GCP-007`)** — the GCP analog of ELK-033 / JSM-024 / ZD-024, mandated by the v0.1.104 scope-partitioned-provider standard. GCP centralizes alerting in a metrics-scope *scoping* project, so a scoping-project audit (or an identity scoped to a subset of projects) can read the Monitoring API and see **zero of this project's own alert policies + channels** while the real alerting lives elsewhere. Previously that scored a **confident wrong `0/100`** (GCP-001 critical cascading down). Now: 0 policies AND 0 channels despite a `200` blocks the alerting-dependent categories (Alert routing, Uptime, Alert quality, Dashboards) with a visibility-gap reason and renormalizes, keeps the resource-signal categories (Compute/GKE/Logs/LB) scorable, emits `GCP-007`, and never writes a confident zero. A `401`/`403` stays a privilege finding. Pressure scenario added; Case-B scorecard proven to reconcile against `check-findings.sh`.
 - **`setup-gcp` uptime-check command fixed** — it passed REST duration strings `--period="60s"` / `--timeout="10s"` that current gcloud rejects. Corrected to the CLI-native integers `--period` (minutes, default 1) / `--timeout` (seconds, default 60), **verified live against gcloud 580.0.0** on the build machine. The origin comment in `gcp-checks.md` §14 is corrected so the wrong pattern can't be reintroduced.
@@ -2339,7 +2349,7 @@ in this pass.
 ## 0.1.20 (unreleased)
 
 Ran `setup-gcp`'s live write path for real for the first time, against the
-real `scoutflo-external` GCP project, fixing a real GCP-020 finding from the
+a real GCP project, fixing a real GCP-020 finding from the
 earlier `audit-gcp` live run: zero CPU alert policies across all 42 VMs.
 Gated first (confirmed 42 live CPU utilization series, matching the VM
 count, before creating anything), then found a significant, previously

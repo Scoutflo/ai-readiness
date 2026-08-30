@@ -1,6 +1,6 @@
 # findings.json Schema
 
-`findings.json` is the machine-readable result of one audit run. The report, the delta, and the Slack brief all derive from it. Evidence-aware audit emitters use schema identifier `scoutflo-findings/v2`. The validator continues to accept `scoutflo-findings/v1` artifacts for historical data and for audit skills that have not yet completed the staged v2 migration.
+`findings.json` is the machine-readable result of one audit run. The report, the delta, and the Slack brief all derive from it. Evidence-aware audit emitters use schema identifier `scoutflo-findings/v2`; **as of v0.1.160 all 18 scored audits emit v2** (`audit-cost` uses its own `scoutflo-cost/v1` ranked-savings schema by design). The validator continues to accept `scoutflo-findings/v1` artifacts for historical (older-run) data.
 
 Version 2 adds a normalized `checks[]` ledger. The score is verified against that ledger, blocked checks are reported as unassessed instead of being treated as failures, and assessment coverage is shown separately from readiness. This prevents a missing permission from looking like a broken service and prevents a high score from hiding a mostly blocked audit.
 
@@ -121,7 +121,7 @@ Version 2 adds a normalized `checks[]` ledger. The score is verified against tha
 
 | Field | Type | Required | Meaning |
 | --- | --- | --- | --- |
-| `schema` | string | yes | `scoutflo-findings/v2` for evidence-aware emitters; `scoutflo-findings/v1` remains accepted for historical data and staged-migration compatibility |
+| `schema` | string | yes | `scoutflo-findings/v2` (all scored audits as of v0.1.160); `scoutflo-findings/v1` remains accepted for historical (older-run) data |
 | `toolkit_version` | string | yes | Plugin version that produced the file |
 | `skill` | string | yes | Emitting skill name, e.g. `audit-lgtm` |
 | `target` | string | yes | The resolved target segment slug the run wrote under, matching its `<reports-dir>` directory segment: the integration name for a single-block integration (`lgtm`, `grafana`), or `<integration>/<label>` for one target of a labeled multi-target list (`azure/prod-sub`, `clickstack/eu-hyperdx`); the single-block `signoz`/`kubernetes` audits resolve to `signoz/<host>` / `kubernetes/<context>`. See the multi-target example below |

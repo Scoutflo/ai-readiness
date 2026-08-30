@@ -56,13 +56,6 @@ else
   exit 1
 fi
 
-if sh ci/token-efficiency-audit.sh | grep -q "PASS"; then
-  record_result "✓ token-efficiency-audit: PASS"
-else
-  record_result "✗ token-efficiency-audit: FAILED"
-  exit 1
-fi
-
 record_result ""
 
 # ============================================================================
