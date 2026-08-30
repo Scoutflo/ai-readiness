@@ -270,10 +270,11 @@ jq '[.[] | select(.options.thresholds.critical != null and (.options.thresholds.
 # Per-monitor flap COUNT is an acknowledged ceiling (it lives in state history this audit
 # samples but does not exhaustively reconstruct), so do NOT invent a count: corroborate with
 # Datadog's own high-alert-volume quality signal from monitor-quality.json (DD-015 reads the
-# same array). NOTE: the exact quality_issues member string for high alert volume is NOT yet
-# confirmed against a live org — only `broken_at_handle` is proven (see section 4). Treat any
-# high-alert-volume member match as an unproven assumption until a live run pins the string;
-# the handle-join blast radius above stands on its own without it. Correlation: chains into
+# same array). The `quality_issues[]` member strings are confirmed live against a real org:
+# `alerted_too_long` (stuck / alerting too long), `broken_at_handle` / `missing_at_handle`
+# (dead or missing recipient), and `muted_duration_over_sixty_days`. Use `alerted_too_long` /
+# `broken_at_handle` to corroborate a concentrated handle; the handle-join blast radius above
+# stands on its own regardless. Correlation: chains into
 # DD-016 (receiver noise concentration) and DD-012 (renotify) — the alert-fatigue cascade.
 
 # DD-011: no-data handling. Emit the table, then ISOLATE the dangerous case — do not delegate
@@ -314,7 +315,7 @@ jq '[.[] | select((.quality_issues | length) > 0) | {id, name, quality_issues}]'
 
 ### 6.1 Receiver noise concentration and stuck-in-alert (DD-016, DD-017)
 
-> **Live-verified (read-only), one residual.** Run against a live Datadog org: monitors carry `overall_state` (observed `OK` on real monitors) and `last_triggered`/notification handles, so DD-017 (stuck-in-Alert that never re-pages) and the DD-016 handle→monitor concentration map are proven against real data. **Residual:** the *vendor-quality corroboration* layer depends on exact `quality_issues[]` member strings, which were **not** exercised (no monitor in the live sample carried quality issues) — treat those member matches as still-unproven until a monitor exhibits them; the load-bearing concentration/stuck-state computations do not depend on them.
+> **Live-verified (read-only).** Run against a live Datadog org: monitors carry `overall_state` (observed both `OK` and real `Alert` states) and `last_triggered`/notification handles, so DD-017 (stuck-in-Alert that never re-pages) and the DD-016 handle→monitor concentration map are proven against real data. The `quality_issues[]` corroboration member strings are now **confirmed live** too — a real org carried them on 36/38 monitors: `broken_at_handle`, `missing_at_handle`, `alerted_too_long` (the real "stuck/alerting-too-long" member — not `stuck`), and `muted_duration_over_sixty_days`. DD-016/DD-017 score off the grounded concentration/stuck-state computations; these vendor members are corroboration on top.
 
 ```bash
 set -eu
@@ -334,13 +335,13 @@ jq '[.[] | . as $m | ((.message // "") | scan("@[A-Za-z0-9._-]+")) | {handle: .,
 # the finding stands without any unverified vendor string:
 #   "handle @pagerduty-oncall carries 47 monitors, 12 of them DD-010 flap-prone, sharing the
 #    route with the 3 monitors that page for payments-down — the real pages are buried."
-# Corroborate (verify-pending) with Datadog's own high-alert-volume/stuck quality flags:
-jq '[.[] | select((.quality_issues | tostring) | test("alert_volume|stuck"))
+# Corroborate with Datadog's own quality flags (member strings CONFIRMED live against a real org
+# via `GET /api/v1/monitor/search?per_page=1000 | jq '[.monitors[]?.quality_issues[]?]|unique'`):
+jq '[.[] | select((.quality_issues | tostring) | test("broken_at_handle|missing_at_handle|alerted_too_long"))
     | {id, name, quality_issues}]' "${RAW_DIR}/monitor-quality.json"
-# CAUTION: the regex members `alert_volume`/`stuck` are UNPROVEN assumptions (only
-# `broken_at_handle` is confirmed live). Until a live run pins the real member strings via
-# `GET /api/v1/monitor/search?per_page=1000 | jq '[.monitors[]?.quality_issues[]?]|unique'`,
-# this corroboration line is provisional; the DD-010/DD-012 intersection above is the finding.
+# `broken_at_handle`/`missing_at_handle` corroborate a dead/missing recipient on a concentrated
+# handle; `alerted_too_long` corroborates a monitor whose volume buries the real pages. The
+# DD-010/DD-012 intersection above remains the load-bearing finding; this is corroboration.
 
 # DD-017: monitors stuck in overall_state == "Alert" — they never transition, so a NEW breach
 # on the same monitor produces no fresh page. overall_state and last_triggered_ts (the state
@@ -353,11 +354,12 @@ jq '[.[] | select(.overall_state == "Alert")
 # error-rate monitor has been in Alert since <last_triggered_ts>; a new checkout incident
 # produces no new page". Correlation: DD-011 (persistent No Data is the sibling stuck state)
 # and DD-033 (a permanently-firing monitor is subtracted from effective coverage — it cannot
-# signal a new incident). Corroborate (verify-pending) with the vendor stuck-in-alert flag:
-jq '[.[] | select((.quality_issues | tostring) | test("stuck")) | {id, name, quality_issues}]' \
+# signal a new incident). Corroborate with the vendor's stuck/alerting-too-long flag (the real
+# member string is `alerted_too_long`, CONFIRMED live — not `stuck`):
+jq '[.[] | select((.quality_issues | tostring) | test("alerted_too_long")) | {id, name, quality_issues}]' \
   "${RAW_DIR}/monitor-quality.json"
-# CAUTION: `stuck` is an UNPROVEN member string (same live-pin as DD-016); the overall_state
-# filter above is the grounded finding and does not depend on it.
+# `alerted_too_long` is Datadog's own signal for a monitor stuck alerting; it corroborated 4 of
+# the live overall_state=="Alert" monitors. The overall_state filter above is the grounded finding.
 ```
 
 Healthy: no notification handle concentrates many noisy monitors alongside the monitors that page for a critical service; no monitor sits in `Alert` long enough that a fresh breach cannot re-page. Fail (DD-016, high): a handle carrying the real critical-service pages is dominated by flap-prone/renotify-heavy monitors — name the handle, the monitor_count, the noisy count, and the buried critical monitors. Fail (DD-017, medium): a monitor stuck in `Alert` on a critical service — name the monitor, the service, and how long (from `last_triggered_ts`). Remediation is inline (no `setup-datadog` ships): DD-016 → split the noisy monitors onto a separate ticket/low-urgency route or tune them (recovery threshold, renotify cap) so the real page is not buried; DD-017 → fix the stuck monitor's query or thresholds so it can recover and re-alert (Monitor edit > Advanced options).
@@ -380,9 +382,9 @@ jq '[.[] | select((.options.silenced // {}) | to_entries | any(.value == null or
 # Expect: []. Blast radius — name WHAT is muted, not just "is muted": a muted_scope of "*"
 # on a service:payments monitor means payments alerting is FULLY suppressed with no end; a
 # single muted host (e.g. "host:web-3") is a partial gap. The muted-scope key alongside the
-# service tag is the blast radius. Corroborate since-when with Datadog's own muted>60d quality
-# signal in monitor-quality.json — but that exact quality_issues member string is NOT confirmed
-# live (only `broken_at_handle` is proven, section 4), so treat a muted>60d match as provisional.
+# service tag is the blast radius. Corroborate since-when with Datadog's own
+# `muted_duration_over_sixty_days` quality member (CONFIRMED live — it flagged 36/38 monitors on
+# a real org, and is exactly how an org-wide open-ended downtime shows up as a per-monitor mute).
 # Correlation: this set is a DD-033 suppressor and may double-count with a DD-021 downtime
 # silencing the same monitor — name whichever suppressor is active.
 
