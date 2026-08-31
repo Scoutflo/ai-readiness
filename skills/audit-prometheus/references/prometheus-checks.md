@@ -234,7 +234,10 @@ pq "/api/v1/rules" | jq -r '.data.groups[].rules[]
 # Does Prometheus have a live Alertmanager to send to, and is it dropping notifications?
 pq "/api/v1/alertmanagers" | jq -r '{active: (.data.activeAlertmanagers | length), dropped: (.data.droppedAlertmanagers | length)}'
 pqq 'increase(prometheus_notifications_dropped_total[1h])' | jq -r '.data.result[]? | "dropped_notifications/1h=\(.value[1])"'
-pqq 'prometheus_notifications_queue_length / prometheus_notifications_queue_capacity' | jq -r '.data.result[]? | "notif_queue_fill=\(.value[1])"'
+# sum()/max() is load-bearing, not style: on Prometheus 3.14 (confirmed live) queue_length carries
+# an `alertmanager` label while queue_capacity has none, so a bare division fails vector matching
+# and returns EMPTY — which reads as "healthy" when the queue could be saturating.
+pqq 'sum(prometheus_notifications_queue_length) / max(prometheus_notifications_queue_capacity)' | jq -r '.data.result[]? | "notif_queue_fill=\(.value[1])"'
 ```
 
 - **Healthy target:** at least one **active** Alertmanager, `dropped_notifications/1h == 0`, queue fill well below `1`.
@@ -298,7 +301,14 @@ if pqq 'prometheus_remote_storage_samples_pending' | jq -e '.data.result | lengt
   pqq 'prometheus_remote_storage_shards' | jq -r '.data.result[]? | "shards=\(.value[1])"'
   pqq 'prometheus_remote_storage_shards_max' | jq -r '.data.result[]? | "shards_max=\(.value[1])"'
   pqq 'increase(prometheus_remote_storage_samples_failed_total[1h])' | jq -r '.data.result[]? | select((.value[1]|tonumber) > 0) | "samples_failed/1h=\(.value[1])"'
-  pqq 'increase(prometheus_remote_storage_samples_dropped_total[1h])' | jq -r '.data.result[]? | select((.value[1]|tonumber) > 0) | "samples_dropped/1h=\(.value[1])"'
+  # samples_dropped_total does NOT exist on every engine (confirmed absent on Prometheus 3.14's
+  # 34 remote_storage self-metrics) — check presence first so a silent empty result is reported
+  # as "counter not exposed on this build", never mistaken for zero drops.
+  if pqq 'prometheus_remote_storage_samples_dropped_total' | jq -e '.data.result | length > 0' >/dev/null 2>&1; then
+    pqq 'increase(prometheus_remote_storage_samples_dropped_total[1h])' | jq -r '.data.result[]? | select((.value[1]|tonumber) > 0) | "samples_dropped/1h=\(.value[1])"'
+  else
+    echo "samples_dropped_total not exposed on this build — judge drops via samples_failed_total + write lag instead"
+  fi
   # Write lag: how far behind the remote endpoint is (highest local ts minus highest sent ts).
   pqq 'prometheus_remote_storage_highest_timestamp_in_seconds - ignoring(remote_name,url) group_right prometheus_remote_storage_queue_highest_sent_timestamp_seconds' \
     | jq -r '.data.result[]? | "write_lag_s=\(.value[1])"'

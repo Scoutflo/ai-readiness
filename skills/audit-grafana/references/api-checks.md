@@ -12,7 +12,7 @@ Every call this audit makes. Classify by effect, not verb: `/api/ds/query` is a 
 | Org identity | GET | `/api/org` | Org id and name; the identity check for both the doctor gate and the live-safety gate. `GET /api/user` is deliberately not used anywhere in this skill — confirmed live on Grafana 10.4.1 that a real, correctly-scoped service-account token gets a hard `403 "Endpoint only available for users"` from `/api/user` regardless of role, because that endpoint identifies an interactively logged-in user, not a service account |
 | Folders | GET | `/api/folders?limit=1000` | Folder inventory |
 | Datasource list | GET | `/api/datasources` | Full definitions minus secure fields |
-| Datasource health | GET | `/api/datasources/uid/{uid}/health` | Some plugins do not implement it; fall back to a minimal query |
+| Datasource health | GET | `/api/datasources/uid/{uid}/health` | Some plugins do not implement it; fall back to a minimal query. **jaeger-type gotcha (live-confirmed):** the plugin's own health/minimal-query probes the backend root `/api/services`, which a VictoriaTraces backend serves at `/select/jaeger/api/services` — a health `500`/`400 "unsupported path"` there is a GRAF-001 **datasource-URL-misconfig finding** (the backend is up; the datasource URL is missing the `/select/jaeger` prefix), not a dead backend |
 | Dashboard index | GET | `/api/search?type=dash-db&limit=1000&page={n}` | Paginated; loop until a short page |
 | Dashboard JSON | GET | `/api/dashboards/uid/{uid}` | Live JSON, the object the QA gate judges |
 | Alert rules | GET | `/api/v1/provisioning/alert-rules` | Grafana-managed rules with full definitions |

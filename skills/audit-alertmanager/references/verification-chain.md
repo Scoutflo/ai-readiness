@@ -292,17 +292,27 @@ PROM_TOKEN="${PROM_TOKEN:-}"                # value of the var named by promethe
 AUTH="Authorization: Bearer ${PROM_TOKEN}"
 [ -n "$PROM_TOKEN" ] || AUTH="Accept: application/json"
 
+# CRITICAL: these query Prometheus for Alertmanager self-metrics — but many clusters DON'T scrape
+# Alertmanager, so all three return HTTP 200 with `result: []`. An empty vector is NOT zero
+# failures; do not read it as healthy. When Prometheus has no `alertmanager_notifications_*`
+# series, read them straight from Alertmanager's own endpoint (read-only, GET, confirmed live on
+# AM 0.34.0): `curl -s "${AM_URL}/metrics" | grep '^alertmanager_notifications'`. That carries the
+# same counters (lifetime-only: a pod restart truncates them), and is how ALR-005/006 are assessed
+# when Prom doesn't scrape AM. NOTE: AM 0.34.0 emits `alertmanager_notifications_total{integration=...}`
+# with NO `receiver` label, so aggregate `by (integration)` only — a `by (...,receiver)` grouping
+# yields one empty-keyed row and the per-receiver climb/flat verdict is achievable per-integration.
+
 # Lifetime total (context only — a cumulative counter's instant value is all-time, so a
 # now-dead receiver keeps a large number long after it stopped delivering).
 TOTAL_CODE=$(curl -s -o /tmp/alr-notif-total.json -w '%{http_code}' --max-time 10 -H "$AUTH" \
-  "${PROM_URL}/api/v1/query?query=sum%20by%20(integration%2Creceiver)%20(alertmanager_notifications_total)")
+  "${PROM_URL}/api/v1/query?query=sum%20by%20(integration)%20(alertmanager_notifications_total)")
 # Windowed success — this is the series the ALR-006 climb-vs-flat verdict is judged from.
 # Without it, a channel migration N days ago leaves the dead receiver's lifetime total high
 # and the intended receiver's low, inverting which receiver reads as "active right now".
 TOTAL_WIN_CODE=$(curl -s -o /tmp/alr-notif-total-win.json -w '%{http_code}' --max-time 10 -H "$AUTH" \
-  "${PROM_URL}/api/v1/query?query=sum%20by%20(integration%2Creceiver)%20(increase(alertmanager_notifications_total%5B${RECENT_WINDOW}%5D))")
+  "${PROM_URL}/api/v1/query?query=sum%20by%20(integration)%20(increase(alertmanager_notifications_total%5B${RECENT_WINDOW}%5D))")
 FAILED_CODE=$(curl -s -o /tmp/alr-notif-failed.json -w '%{http_code}' --max-time 10 -H "$AUTH" \
-  "${PROM_URL}/api/v1/query?query=sum%20by%20(integration%2Creceiver)%20(increase(alertmanager_notifications_failed_total%5B${RECENT_WINDOW}%5D))")
+  "${PROM_URL}/api/v1/query?query=sum%20by%20(integration)%20(increase(alertmanager_notifications_failed_total%5B${RECENT_WINDOW}%5D))")
 echo "notifications_total (lifetime): ${TOTAL_CODE}"
 echo "notifications_total (${RECENT_WINDOW}): ${TOTAL_WIN_CODE}"
 echo "notifications_failed (${RECENT_WINDOW}): ${FAILED_CODE}"
@@ -312,10 +322,10 @@ if [ "$TOTAL_CODE" = "401" ] || [ "$TOTAL_CODE" = "403" ] \
   echo "auth problem reading dispatch counters; ALR-005/ALR-006 are blocked, not failed, until the token works"
 else
   echo "lifetime totals (context only):"
-  jq -r '.data.result[] | "\(.metric.receiver)/\(.metric.integration): \(.value[1])"' /tmp/alr-notif-total.json
+  jq -r '.data.result[] | "integration \(.metric.integration): \(.value[1])"' /tmp/alr-notif-total.json
   echo "increase() over ${RECENT_WINDOW} — judge ALR-006 climb/flat from THIS:"
-  jq -r '.data.result[] | "\(.metric.receiver)/\(.metric.integration): \(.value[1])"' /tmp/alr-notif-total-win.json
-  jq -r '.data.result[] | "\(.metric.receiver)/\(.metric.integration): \(.value[1])"' /tmp/alr-notif-failed.json
+  jq -r '.data.result[] | "integration \(.metric.integration): \(.value[1])"' /tmp/alr-notif-total-win.json
+  jq -r '.data.result[] | "integration \(.metric.integration): \(.value[1])"' /tmp/alr-notif-failed.json
 fi
 ```
 
@@ -595,11 +605,15 @@ PROM_TOKEN="${PROM_TOKEN:-}"
 AUTH="Authorization: Bearer ${PROM_TOKEN}"
 [ -n "$PROM_TOKEN" ] || AUTH="Accept: application/json"
 
-# Notification volume per receiver over the window (which receivers absorb the most pages).
+# Notification volume per integration over the window (which delivery channels absorb the most
+# pages). NOTE: `alertmanager_notifications_total` carries an `integration` label (webhook/slack/
+# pagerduty/...), NOT a `receiver` label on AM 0.34.0 (live-confirmed) — group by integration, or
+# every row collapses to one empty key. If Prometheus does not scrape Alertmanager, this returns
+# an empty vector (NOT zero volume) — read the counter from `${AM_URL}/metrics` directly instead.
 curl -s -H "$AUTH" -G \
-  --data-urlencode "query=sum by (receiver) (increase(alertmanager_notifications_total[${LOOKBACK}]))" \
+  --data-urlencode "query=sum by (integration) (increase(alertmanager_notifications_total[${LOOKBACK}]))" \
   "${PROM_URL}/api/v1/query" \
-  | jq -r '.data.result[]? | "\(.metric.receiver) \(.value[1] | tonumber | floor)"' | sort -k2 -nr
+  | jq -r '.data.result[]? | "\(.metric.integration) \(.value[1] | tonumber | floor)"' | sort -k2 -nr
 
 # Firing volume per rule over the window (the top-talker rules).
 curl -s -H "$AUTH" -G \
