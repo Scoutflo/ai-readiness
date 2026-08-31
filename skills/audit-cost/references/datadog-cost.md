@@ -146,8 +146,11 @@ mkdir -p "$RAW_DIR"
 
 # COST-DD-004: top custom metrics by average hourly cardinality. avg_metric_hour is the
 # billed dimension for custom metrics — the ranking IS the cost driver, but it is a COUNT.
+# `month` (or `day`) is REQUIRED — without it the API returns HTTP 400 (confirmed live), so the
+# check would always degrade to blocked. Use the current month.
+DD_MONTH="$(date -u +%Y-%m)"
 curl -fsS --max-time 30 -H "DD-API-KEY: ${DATADOG_API_KEY}" -H "DD-APPLICATION-KEY: ${DATADOG_APP_KEY}" \
-  "https://${DD_HOST}/api/v1/usage/top_avg_metrics?limit=50" \
+  "https://${DD_HOST}/api/v1/usage/top_avg_metrics?limit=50&month=${DD_MONTH}" \
   | tee "${RAW_DIR}/top-avg-metrics.json" \
   | jq -r '.usage[]? | [.metric_name, .avg_metric_hour, .max_metric_hour, (.metric_category // "custom")] | @tsv' \
   | sort -t"$(printf '\t')" -k2 -nr | head -20 \
@@ -214,7 +217,10 @@ START_HR="$(date -u -v-30d +%Y-%m-%dT%H:00:00 2>/dev/null || date -u -d '30 days
 END_HR="$(date -u +%Y-%m-%dT%H:00:00)"
 curl -fsS --max-time 30 -H "DD-API-KEY: ${DATADOG_API_KEY}" -H "DD-APPLICATION-KEY: ${DATADOG_APP_KEY}" \
   "https://${DD_HOST}/api/v1/usage/logs_by_index?start_hr=${START_HR}&end_hr=${END_HR}" \
-  | jq -r '.usage[]? | [.index_name, .index_id, .event_count, .retention] | @tsv' \
+  | jq -r '[.usage[]?] | group_by(.index_name)
+      | map({index_name: .[0].index_name, index_id: .[0].index_id,
+             event_count: (map(.event_count // 0) | add), retention: (.[-1].retention)})
+      | .[] | [.index_name, .index_id, .event_count, .retention] | @tsv' \
   | sort -t"$(printf '\t')" -k3 -nr \
   || echo "COST-DD-007 blocked: logs_by_index not readable (usage_read missing)"
 ```

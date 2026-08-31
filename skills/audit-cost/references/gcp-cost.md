@@ -25,7 +25,7 @@ One permanent ID per check; IDs never change or get reused. "Savings figure" is 
 | COST-GCP-007 | Committed-use discount (CUD) purchase opportunities | Recommender `google.compute.commitment.UsageCommitmentRecommender` | Native — `costProjection.cost`, verbatim |
 | COST-GCP-008 | Idle Cloud SQL instances | Recommender `google.cloudsql.instance.IdleRecommender` | Native — `costProjection.cost`, verbatim |
 | COST-GCP-009 | Over-provisioned Cloud SQL instances | Recommender `google.cloudsql.instance.OverprovisionedRecommender` | Native — `costProjection.cost`, verbatim |
-| COST-GCP-010 | Any other COST-category recommender surfaced in the project (GKE, Cloud Run, BigQuery slots, etc.) | Recommender API sweep (`gcloud recommender recommenders list`) | Native — `costProjection.cost`, verbatim |
+| COST-GCP-010 | Any other COST-category recommender surfaced in the project (GKE, Cloud Run, BigQuery slots, etc.) | Explicit Recommender sweep (`gcloud recommender recommendations list --recommender=<id>` over the known cost recommenders — there is no `recommenders list` subcommand) | Native — `costProjection.cost`, verbatim |
 | COST-GCP-020 | Aged Compute Engine snapshots vs the team's stated retention | Compute `gcloud compute snapshots list` | None (presence fact) |
 | COST-GCP-021 | Reserved-but-unused static external IPs | Compute `gcloud compute addresses list` | None (presence fact) |
 | COST-GCP-022 | Unattached / detached persistent disks | Compute `gcloud compute disks list` | None (presence fact) |
@@ -195,12 +195,25 @@ New COST-category recommenders appear over time (GKE cost optimization, Cloud Ru
 ```bash
 set -eu
 GCP_PROJECT="your-project-id"   # gcp.project
-# List the recommenders available for this project, then run section 5's extraction against any
-# COST-category recommender not already handled above (e.g. a GKE or Cloud Run cost recommender when present).
-gcloud recommender recommenders list --format='value(name)' 2>/dev/null | grep -Ei 'cost|idle|commitment|machinetype|overprovision' || true
+LOC="asia-south1"   # gcp region/zone for the recommender's location kind; sweep the ones you use
+# There is NO `gcloud recommender recommenders list` subcommand (it errors "Invalid choice") — the
+# Recommender API has no discovery endpoint, so sweep an EXPLICIT list of the COST-category
+# recommenders section 5 did not already cover (GKE, Cloud Run, BigQuery, etc.). Each has its own
+# location kind (regional vs zonal vs global); skip a 403/404 as "not enabled here", never as a finding.
+for R in \
+  google.container.DiagnosisRecommender \
+  google.run.service.CostRecommender \
+  google.cloudsql.instance.IdleRecommender \
+  google.cloudsql.instance.OverprovisionedRecommender \
+  google.bigquery.capacityCommitments.Recommender ; do
+  gcloud recommender recommendations list \
+    --project="$GCP_PROJECT" --location="$LOC" --recommender="$R" \
+    --filter='stateInfo.state=ACTIVE' --format=json 2>/dev/null \
+    | jq -e 'length > 0' >/dev/null 2>&1 && echo "ACTIVE cost recs from $R (extract per section 5)" || true
+done
 ```
 
-Expected: the printed list is the set of recommender IDs to sweep for this project; run the section 5 extraction against each, in each recommender's correct location kind, and emit any ACTIVE COST recommendation with its verbatim figure. This keeps GKE and other emerging cost recommenders in scope **only when GCP actually surfaces a costed recommendation for them** — the honest alternative to inventing a GKE idle-node dollar the platform has not produced. A recommender that returns no COST recommendations is not a finding; a recommender the project does not expose is simply absent from the list, not an error.
+Expected: run the section 5 extraction against each recommender that returned ACTIVE recommendations, in each recommender's correct location kind, and emit any ACTIVE COST recommendation with its verbatim figure. This keeps GKE and other emerging cost recommenders in scope **only when GCP actually surfaces a costed recommendation for them** — the honest alternative to inventing a GKE idle-node dollar the platform has not produced. A recommender that returns no COST recommendations is not a finding; a recommender the project does not expose is simply absent from the list, not an error.
 
 ## 10. Spend breakdown by service and SKU — context only (COST-GCP-023)
 
