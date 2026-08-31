@@ -182,7 +182,7 @@ EOF
     jq -r '(.score.excluded // [] | map(.name)) as $excluded
       | .score.categories[]?
       | select(.name as $name | ($excluded | index($name)) == null)
-      | "\(.name)\t\(.weight)\t\(.score)\t\(.maturity)\t\(.checks_passed)\t\(.checks_total)\t\(.checks_blocked // 0)\t\(.checks_suppressed // 0)"' "$F" \
+      | "\(.name)\t\(.weight)\t\(.score)\t\(.maturity // "-")\t\(.checks_passed)\t\(.checks_total)\t\(.checks_blocked // 0)\t\(.checks_suppressed // 0)"' "$F" \
     | while IFS="$(printf '\t')" read -r nm wt sc mat cp ct cb cs; do
         echo "| ${nm} | ${wt} | ${sc}/100 | \`$(viz_bar "$sc" 100 10)\` | ${mat} | ${cp}/${ct} | ${cb} | ${cs} |"
       done
@@ -316,7 +316,7 @@ HTMLMID
     jq -r '(.score.excluded // [] | map(.name)) as $excluded
       | .score.categories[]?
       | select(.name as $name | ($excluded | index($name)) == null)
-      | [.name,(.weight|tostring),(.score|tostring),.maturity,(.checks_passed|tostring),(.checks_total|tostring),((.checks_blocked//0)|tostring),((.checks_suppressed//0)|tostring)] | @tsv' "$F" \
+      | [.name,(.weight|tostring),(.score|tostring),(.maturity // "-"),(.checks_passed|tostring),(.checks_total|tostring),((.checks_blocked//0)|tostring),((.checks_suppressed//0)|tostring)] | @tsv' "$F" \
     | while IFS="$(printf '\t')" read -r nm wt sc mat cp ct cb cs; do
         if [ "$sc" -ge "$GATE" ]; then bc="#2f855a"; elif [ "$sc" -ge 50 ]; then bc="#b7791f"; else bc="#c53030"; fi
         enm="$(printf '%s' "$nm" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g')"

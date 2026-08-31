@@ -118,7 +118,7 @@ curl -sS --max-time 10 -H "$AUTH" "${METRICS_URL}/metrics" | grep -c '^vm_'     
 curl -sS --max-time 10 -H "$AUTH" "${METRICS_URL}/metrics" | grep -c '^cortex_' || true  # >0: Mimir
 ```
 
-Read it as: `/-/healthy` 200 means Prometheus; `/health` returning `OK` means VictoriaMetrics family; `/ready` 200 with `cortex_` self-metrics means Mimir. The `/api/v1/status/buildinfo` version string is not reliable for detection; VictoriaMetrics emulates Prometheus there.
+Read it as — **in this precedence, because a live vmsingle answers `/-/healthy` 200, `/health` OK, AND `/ready` 200 all at once** (confirmed live on VM v1.142, so a first-match-wins "`/-/healthy` 200 ⇒ Prometheus" misclassifies VM and files a phantom LGTM-002): **(1) if `/metrics` has ≥1 `^vm_` line ⇒ VictoriaMetrics family** (the decisive signal); (2) else `/ready` 200 with `cortex_` self-metrics ⇒ Mimir; (3) else `/-/healthy` 200 with neither `vm_` nor `cortex_` ⇒ Prometheus. The `/health`-returns-`OK` signal corroborates the VM family but is not sufficient alone. The `/api/v1/status/buildinfo` version string is never reliable for detection; VictoriaMetrics emulates Prometheus there (v1.142 reports a fake "2.24.0").
 
 Log engine:
 
@@ -492,7 +492,7 @@ curl -fsS --max-time 15 -H "$AUTH" --get \
   "${VTRACES_URL}/select/jaeger/api/traces" | jq '.data | length'
 ```
 
-Expected: `OK`, a service list matching your workloads, and at least one trace per active service. Verify the exact query parameters against the docs for your deployed VictoriaTraces version; the product is young and its API surface moves.
+Expected: `OK`, a service list matching your workloads, and at least one trace per active service. **An empty `/select/jaeger/api/services` is NOT proof of "nothing instrumented"** (LGTM-043): Jaeger `/services` lists only services with spans inside its default lookback window, so a store holding millions of older spans whose ingestion has stopped returns `[]` (confirmed live: 1.93M stored spans, `[]` services, 0 rows/24h). Before filing "no traces", check span *presence* and *freshness* independently — the LogsQL-style count/last-timestamp read against the store is how ingestion-stopped (LGTM-042, a freshness fail) is distinguished from never-instrumented (LGTM-043). Verify the exact query parameters against the docs for your deployed VictoriaTraces version; the product is young and its API surface moves.
 
 ## 9. Alertmanager (LGTM-010, LGTM-011, LGTM-013, LGTM-014, LGTM-015, LGTM-016, LGTM-017, LGTM-018)
 
@@ -798,7 +798,7 @@ curl -fsS --max-time 10 -H "$AUTH" "${VM_URL}/flags" \
   | grep -E 'dedup\.minScrapeInterval' || echo "-dedup.minScrapeInterval not set (0 = no dedup)"
 ```
 
-Read it as: a paging-severity rule with `keep_firing_for=0s` **and** a flap history (from LGTM-018 / the firing-alert churn) is LGTM-070. `group_limit=0` on a high-cardinality expression is LGTM-071 — remember exceeding a set `limit` discards the whole rule's results, so neither `0` nor a too-tight value is automatically right. `-rule.resendDelay` far below `MIN_RESEND_S`, or `-remoteWrite.url`/`-remoteRead.url` absent (so `for` state is in-memory only and resets every restart), is LGTM-072. `-rule.maxResolveDuration` defaults to 4x the group's evaluation interval; record the value, do not assume a fixed number. Record counter and flag values only, never the notifier or remote-write URL.
+Read it as: a paging-severity rule with `keep_firing_for=0s` **and** a flap history (from LGTM-018 / the firing-alert churn) is LGTM-070. `group_limit=0` on a high-cardinality expression is LGTM-071 — remember exceeding a set `limit` discards the whole rule's results, so neither `0` nor a too-tight value is automatically right. `-rule.resendDelay` far below `MIN_RESEND_S`, or `-remoteWrite.url`/`-remoteRead.url` absent (so `for` state is in-memory only and resets every restart), is LGTM-072. `-rule.maxResolveDuration` defaults to 4x the group's evaluation interval; record the value, do not assume a fixed number. **`/flags` lists only flags explicitly SET at launch (confirmed live): `-rule.resendDelay`/`-rule.maxResolveDuration`/`-rule.resultsLimit` are simply ABSENT when left at default, and a set flag's value prints as `"secret"` (vmalert redacts it).** So absence means "at default", NOT "not exposed" — do not conflate the two, and when a flag is absent judge against its documented default rather than reporting a gap; the "no matching vmalert flags exposed" fallback fires only when NONE of them were set (all at default), which is itself the common healthy case. Record counter and flag values only, never the notifier or remote-write URL.
 
 ### 13.2 Loki ruler: for, group limit, resend and restart timing, sharding dedup (LGTM-071, LGTM-072, LGTM-073)
 

@@ -212,6 +212,8 @@ Two lanes — the SigNoz query API (always available with the Service Account to
 sig_query body.json | jq '.'   # inspect the live response shape once, then extract per-service counts
 ```
 
+**When :8123 is not reachable, `query_range` still censuses via its `clickhouse_sql` queryType (confirmed live on v0.138).** The builder lane cannot count metrics without already knowing a metric name (an empty `aggregateAttribute` returns a series-less result), so for the API-only census set the body's `queryType` to `clickhouse_sql` and pass a read `SELECT` over `signoz_logs`/`signoz_traces`/`signoz_metrics` — it returns server-side. Two live gotchas to guard: a Nullable/non-numeric value column is silently dropped from `series[].values` (wrap counts as `toUInt64(coalesce(count(),0))`), and a zero-row result is a bare `{"queryName":"A"}` with **no `series` key** (guard `.series? // []`). Security note for SIG-050: this means a `signoz-viewer` service-account token can run arbitrary read SQL against ClickHouse (including `system.*`) through `query_range` — the deep-lane ClickHouse credential is a heavier *write/DDL-capable* posture, but read access to the backend is already reachable via the API token, so a scoped read-only ClickHouse user is still the right posture and SIG-050 should note the API token's read reach.
+
 **ClickHouse lane.** Resolve the service column and timestamp column FIRST (never assume `serviceName` / `timestamp`):
 
 ```bash

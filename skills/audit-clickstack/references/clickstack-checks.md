@@ -374,14 +374,20 @@ HyperDX endpoints are auth-gated: run them only when the section-1 helper resolv
 hdx_get /alerts | jq .
 ```
 
-Field names are confirm-live, so inspect the raw JSON once, confirm which field carries the destination, then follow each alert to its receiver. **Receiver resolution (confirmed live against v2.35):** an alert's channel carries `{type: "webhook", webhookId: "<id>"}` — the id alone says nothing about the destination. Resolve it with `GET /api/webhooks` (same auth as the alerts call): match the `webhookId` to the webhook object's id and read its `url`. Record only the **host class** of that url (loopback / private / public / placeholder — e.g. a `webhook.site` or `example.com` host is a placeholder, a real finding), never the full URL. A defensive scan that does not assume a single field name:
+Field names are confirm-live, so inspect the raw JSON once, confirm which field carries the destination, then follow each alert to its receiver. **Receiver resolution (confirmed live against v2.35):** a *healthy* alert's channel carries `{type: "webhook", webhookId: "<id>"}` — and the broken case observed live is a channel of just `{type: "webhook"}` with **no `webhookId` at all**: that alert evaluates and pages nobody, and it is exactly the CS-040 fail. Test for a **resolvable id**, never for keyword presence — a `tostring | test("webhook")` scan marks the id-less channel "wired" because the word "webhook" appears in it, scoring the estate's core failure as a pass (a real false-green, caught live). Resolve each id with `GET /api/webhooks?service=<kind>` — on v2.35 the `service` query param is **required** (a bare `GET /api/webhooks` returns 400 ZodError) and the enum is lowercase `slack | generic | incidentio`; enumerate all three and concatenate. Match the `webhookId` to the webhook object's id and read its `url`. Record only the **host class** of that url (loopback / private / public / placeholder — e.g. a `webhook.site` or `example.com` host is a placeholder, a real finding), never the full URL (v2.35 itself masks webhook URL paths in the API response).
 
 ```bash
-# Does each alert reference SOME live channel/receiver? Confirm the real key names against the raw JSON above.
+# Per alert: does the channel carry a RESOLVABLE receiver id? (id presence, not keyword match)
 hdx_get /alerts \
   | jq -r '(if type=="array" then . else (.data // .alerts // []) end)[]
-           | tostring | test("webhook|slack|pagerduty|channel|destination|receiver";"i") as $wired
-           | "\($wired)"' | sort | uniq -c
+           | {id: (.id // ._id // "?"),
+              channel_type: (.channel.type // "none"),
+              receiver_id: (.channel.webhookId // .channel.slackId // .channel.id // null)}
+           | "\(.id)\tchannel=\(.channel_type)\treceiver_id=\(.receiver_id // "MISSING")"'
+# Any MISSING row = CS-040 fail (the alert routes to nobody). Then resolve the ids:
+for svc in slack generic incidentio; do
+  hdx_get "/webhooks?service=${svc}"
+done | jq -s 'map(if type=="array" then . else (.data // []) end) | add | map({id: (.id // ._id), host_class: "inspect .url host class, never record the full URL"})'
 ```
 
 - **Healthy target:** at least one alert exists **and** every alert resolves to a live receiver — a webhook, Slack, or PagerDuty destination that is real (not empty, not a loopback/placeholder host).

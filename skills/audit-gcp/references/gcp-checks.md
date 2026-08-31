@@ -245,7 +245,10 @@ set -eu
 RUN_DATE="$(date -u +%Y-%m-%d)"
 RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/gcp/${RUN_DATE}/raw"
 # GCP-010: hosts served (forwarding rules, VM public IPs, your topology list) vs hosts checked.
-jq -r '.[].host // empty' "${RAW_DIR}/uptime-checks.json" | sort -u
+# Read BOTH the projected `.host` and the raw `.monitoredResource.labels.host` (live-confirmed:
+# raw gcloud nests it there and a bare `.host` is null — reading only `.host` false-FAILS every
+# serving host when the read sees raw output instead of the projection).
+jq -r '.[] | (.host // .monitoredResource.labels.host) // empty' "${RAW_DIR}/uptime-checks.json" | sort -u
 # GCP-011: check ids that have a check_passed alert policy.
 jq -r '.[].name | sub(".*/"; "")' "${RAW_DIR}/uptime-checks.json" | sort -u
 jq -r '.conditions[]?.conditionThreshold.filter // empty
@@ -256,7 +259,11 @@ jq -r 'select([.conditions[]?.conditionThreshold.filter // ""] | any(contains("t
   "${RAW_DIR}/alert-policies.jsonl"
 # GCP-016: disabled uptime checks (evaluate nothing) and checks with failure logging off.
 jq -r '.[] | select(.disabled == true) | .name | sub(".*/"; "")' "${RAW_DIR}/uptime-checks.json"
-jq -r '.[] | select(.log_check_failures == false) | .name | sub(".*/"; "")' "${RAW_DIR}/uptime-checks.json"
+# camelCase `logCheckFailures` is the raw key, and proto3 JSON OMITS it entirely when false — so
+# a `== false` on either the raw camel or the (absent) snake key never matches. Coalesce both to
+# false, so a check with failure-logging off (the field present-and-true is the only healthy case)
+# is caught whether the read sees the projection or raw gcloud output (live-confirmed on all 12).
+jq -r '.[] | select(((.log_check_failures // .logCheckFailures) // false) == false) | .name | sub(".*/"; "")' "${RAW_DIR}/uptime-checks.json"
 ```
 
 Expected: every serving host appears in the checked list (`GCP-010`); every check id from the second list appears inside a `check_id="..."` capture from the third (`GCP-011`); at least one SSL-expiry policy covers your HTTPS estate or per-check SSL validation is on (`GCP-012`). **An uptime check with no alert policy notifies nobody; it only draws a graph.** That distinction is the whole point of `GCP-011`.
