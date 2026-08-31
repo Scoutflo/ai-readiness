@@ -34,16 +34,16 @@ One permanent ID per check; IDs never change or get reused. Severity listed is t
 | AZR-002 | Alert coverage (metric, log, activity) | Every serving resource class has a metric alert on its saturation/error signals | `Microsoft.Insights/metricAlerts` (**2018-03-01**) | high |
 | AZR-003 | Alert coverage (metric, log, activity) | Log-based signals metrics can't express are covered by scheduled-query rules wired to an action group | `Microsoft.Insights/scheduledQueryRules` (**2022-06-15**) | high |
 | AZR-004 | Alert coverage (metric, log, activity) | Service Health, Resource Health, and critical admin/security operations page someone | `Microsoft.Insights/activityLogAlerts` (**2020-10-01**) | medium |
-| AZR-005 | Alert routing and delivery | No enabled alert-processing (suppression) rule with `RemoveAllActionGroups` mutes a live critical scope | `az monitor alert-processing-rule list` / `Microsoft.AlertsManagement/actionRules` (**2021-08-08, verify-pending**) | critical |
+| AZR-005 | Alert routing and delivery | No enabled alert-processing (suppression) rule with `RemoveAllActionGroups` mutes a live critical scope | `az monitor alert-processing-rule list` / `Microsoft.AlertsManagement/actionRules` (2021-08-08, read path live-confirmed) | critical |
 | AZR-007 | Alert routing and delivery | 0 action groups AND 0 metric alerts despite a readable 200 is `blocked` (visibility/scope gap), not a confident 0 | actionGroups + metricAlerts | critical |
 | AZR-010 | Compute VM/VMSS coverage | Serving VMs/VMSS carry CPU metric alerts; guest memory/disk claimed only with agent proof; diagnostic settings route to Log Analytics | `Microsoft.Compute/virtualMachines`, `…/virtualMachineScaleSets` (**2024-07-01**) + diagnostic-settings CLI | high |
 | AZR-030 | AKS coverage | `addonProfiles.omsagent.enabled == true` on serving clusters | `az aks show` (control plane) | high |
 | AZR-031 | AKS coverage | `azureMonitorProfile.metrics.enabled` matches where workload alerting is expected | `az aks show` (control plane) | medium |
 | AZR-032 | AKS coverage | AKS control-plane logs routed to Log Analytics via a diagnostic setting | diagnostic-settings CLI on the cluster ID | high |
-| AZR-033 | AKS coverage | A managed-Prometheus cluster (`azureMonitorProfile.metrics.enabled`) has ≥1 `prometheusRuleGroups` referencing its Azure Monitor workspace — metrics collected but zero rule groups means nothing alerts on them | `Microsoft.AlertsManagement/prometheusRuleGroups` (**2023-03-01, verify-pending**) | medium |
+| AZR-033 | AKS coverage | A managed-Prometheus cluster (`azureMonitorProfile.metrics.enabled`) has ≥1 `prometheusRuleGroups` referencing its Azure Monitor workspace — metrics collected but zero rule groups means nothing alerts on them | `Microsoft.AlertsManagement/prometheusRuleGroups` (2023-03-01, read path live-confirmed) | medium |
 | AZR-040 | Log Analytics coverage | A workspace exists, receives critical-service logs, and its retention is a deliberate decision | `Microsoft.OperationalInsights/workspaces` (**2022-10-01**) | high |
 | AZR-041 | Log Analytics coverage | A workspace that is a diagnostic destination is still ingesting (newest `Heartbeat`/critical tables within the staleness window) — a configured-but-dead sink invalidates every downstream diagnostic setting | `az monitor log-analytics query` (Log Analytics data plane, **verify-pending**) | high |
-| AZR-042 | Log Analytics coverage | Subscription-scope diagnostic settings export `Administrative`/`Security`/`Policy` activity-log categories to a workspace, so control-plane events are retained and queryable | `az monitor diagnostic-settings subscription list` (**verify-pending**) | medium |
+| AZR-042 | Log Analytics coverage | Subscription-scope diagnostic settings export `Administrative`/`Security`/`Policy` activity-log categories to a workspace, so control-plane events are retained and queryable | `az monitor diagnostic-settings subscription list` (read path live-confirmed) | medium |
 | AZR-050 | Load balancer / App Gateway coverage | Every serving App Gateway/Load Balancer has backend health probes and diagnostic settings enabled | `Microsoft.Network/applicationGateways`, `…/loadBalancers` (**2024-05-01**) + diagnostic-settings CLI | high |
 | AZR-060 | Alert quality | Every alert rule carries a severity, a responder-ready description, and a retest window | actionGroups + metric/scheduled/activity rules | medium |
 
@@ -160,7 +160,7 @@ Forbidden mutations (AZR-001/AZR-004): `az monitor action-group create|update|de
 
 ### 5.1 Alert-processing (suppression) rules (AZR-005)
 
-> **Verify-pending.** Drafted against Azure's documented `az monitor alert-processing-rule` / `Microsoft.AlertsManagement/actionRules` surface and adversarially reviewed, but NOT run against a live tenant — status unproven until a first live run with a read-only token (see the doctor gate). No Azure estate exists in the benchmark, so the `actionRules` api-version (**2021-08-08**), the `RemoveAllActionGroups` action type, and the property paths below are from Azure's public API docs, not confirmed against a live subscription here; carry the caveat and record the check `blocked` until the api-version returns a live 200.
+> **Read path live-confirmed; emit-path unobserved.** Run read-only against a live Scoutflo-internal Azure subscription: both `az monitor alert-processing-rule list` and the ARM `Microsoft.AlertsManagement/actionRules?api-version=2021-08-08` GET returned **200** (`{value:[]}`) — the api-version and read path are confirmed. The estate carried no alert-processing rule, so the `RemoveAllActionGroups` **emit** condition and its property paths were not exercised against a real rule (they remain from Azure's public API docs); treat a match as verify-pending on the property shape until a live rule exhibits it, but the read no longer needs to be recorded `blocked`.
 
 **AZR-005** — an *enabled* alert-processing rule whose action is `RemoveAllActionGroups` suppresses delivery for every alert in its scope. This is the exact failure AZR-001 cannot see: the action groups have receivers and the rules reference them (AZR-001 passes), but a suppression rule silently swallows the notification between "rule fires" and "page leaves Azure". A rule scoped at a subscription or a production resource group, enabled, with no end schedule, is a permanent estate-wide mute.
 
@@ -171,7 +171,7 @@ SUB="${AZ_SUBSCRIPTION_CFG:-$(az account show --query id -o tsv)}"
 RUN_DATE="$(date -u +%Y-%m-%d)"
 RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/azure/${RUN_DATE}/raw"
 # List alert-processing rules; capture enabled state, action types, scopes, and schedule only.
-# If the CLI extension is absent, the ARM GET below is the equivalent read (api-version verify-pending).
+# If the CLI extension is absent, the ARM GET below is the equivalent read (api-version 2021-08-08, live-confirmed 200).
 az monitor alert-processing-rule list --subscription "$SUB" -o json 2>/tmp/apr-err \
   | jq '[.[] | {name, enabled: .properties.enabled,
       actionTypes: [.properties.actions[]?.actionType],
@@ -320,7 +320,7 @@ Forbidden mutations (AZR-030/031/032): `az aks create|update|delete|scale|upgrad
 
 ### 9.1 Managed Prometheus with no consuming rule groups (AZR-033)
 
-> **Verify-pending.** Drafted against Azure's documented `Microsoft.AlertsManagement/prometheusRuleGroups` surface and adversarially reviewed, but NOT run against a live tenant — status unproven until a first live run with a read-only token (see the doctor gate). No Azure estate exists in the benchmark, so the `prometheusRuleGroups` api-version (**2023-03-01**) is NOT in the confirmed set and the property paths below are from Azure's public API docs; carry the caveat and record the check `blocked` until the api-version returns a live 200.
+> **Read path live-confirmed; emit-path unobserved.** Run read-only against a live Scoutflo-internal Azure subscription: `Microsoft.AlertsManagement/prometheusRuleGroups?api-version=2023-03-01` returned **200** (`{value:[]}`) — the api-version and read path are confirmed. The one live cluster had managed Prometheus off, so a rule-group-less-but-metrics-on cluster (the AZR-033 emit condition) and the property paths below were not exercised against a real rule group; treat those as verify-pending on the property shape until a live estate exhibits them, but the read no longer needs to be recorded `blocked`.
 
 **AZR-033** — a cluster with `azureMonitorProfile.metrics.enabled == true` (AZR-031 pass) is collecting and being billed for managed-Prometheus metrics; if **zero** `prometheusRuleGroups` reference that cluster's Azure Monitor workspace, not a single alert or recording rule evaluates them. Metrics collected ≠ metrics alerted-on — this is the alerting-plane extension AZR-031 never performs.
 
@@ -332,7 +332,7 @@ ARM="https://management.azure.com"
 ARM_TOKEN="$(az account get-access-token --resource https://management.azure.com --query accessToken -o tsv)"
 RUN_DATE="$(date -u +%Y-%m-%d)"
 RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/azure/${RUN_DATE}/raw"
-# List Prometheus rule groups (api-version verify-pending: 2023-03-01, not in the confirmed set).
+# List Prometheus rule groups (api-version 2023-03-01 — live-confirmed 200 on a real subscription).
 curl -fsS --max-time 30 -H "Authorization: Bearer ${ARM_TOKEN}" \
   "${ARM}/subscriptions/${SUB}/providers/Microsoft.AlertsManagement/prometheusRuleGroups?api-version=2023-03-01" 2>/tmp/prg-err \
   | jq '[.value[]? | {name, enabled: .properties.enabled, scopes: .properties.scopes,

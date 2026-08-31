@@ -260,9 +260,13 @@ kubectl --context "$KUBE_CONTEXT" top nodes --no-headers 2>/dev/null || echo "ku
 # Cluster-wide reservation ratio over WINDOW (Prometheus): total pod CPU requests / total allocatable CPU.
 curl -sG "$PROM_URL/api/v1/query" \
   --data-urlencode "query=
-    sum(kube_pod_container_resource_requests{resource=\"cpu\"})
+    sum(kube_pod_container_resource_requests{resource=\"cpu\", node!=\"\"})
     / sum(kube_node_status_allocatable{resource=\"cpu\"})" \
   | jq -r '.data.result[] | "cluster cpu requests/allocatable = \(.value[1]|tonumber|.*1000|round/1000)"'
+# node!="" is load-bearing: kube_pod_container_resource_requests includes PENDING/unschedulable
+# pods (node="") whose requests are not actually reserved on any node. Counting them (confirmed
+# live: 64 cores of pending requests made the ratio 6.08 > 1) inverts the surplus-node formula
+# below to a negative node count. Only scheduled-pod requests reserve real capacity.
 ```
 
 Expected: a reservation ratio near 1.0 means the pool is well-packed. A low ratio (much of the allocatable CPU/memory is neither requested nor used across the pool) is the finding — report the ratio, the total node count, and how many nodes' worth of allocatable capacity is idle (`(1 - ratio) x node_count`, as a **node count**, not dollars), listing the candidate under-utilized nodes by name and instance type. No dollar: the node price belongs to the cloud provider's catalog (AWS/GCP), reached through correlation.json, not invented here. Respect anti-affinity, DaemonSet, and taint constraints before claiming a node is removable — a node kept for a GPU/spot/zonal constraint is not surplus.

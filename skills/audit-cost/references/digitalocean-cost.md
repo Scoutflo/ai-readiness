@@ -246,7 +246,7 @@ Expected: a `storage_usage_bytes` at or above `included_storage_bytes` on a tier
 
 ## 10. Looking up a size slug's DO-published list price
 
-For the checks that may carry a `list_price_monthly_usd` context field (COST-DO-001, 002, 005, and the node slug behind 007), the price is a verbatim lookup from DigitalOcean's public size catalog, matched on the resource's `size_slug`. This is a published price, not a recompute, and it is the only price this catalog reads for a compute/DB resource:
+For the checks that may carry a `list_price_monthly_usd` context field (COST-DO-001, 002, 005, and the node slug behind 007), the price is a verbatim lookup from DigitalOcean's public catalog, matched on the resource's `size_slug`. This is a published price, not a recompute, and it is the only price this catalog reads for a compute/DB resource. **Droplet/node slugs come from `doctl compute size list`; managed-DB slugs (`db-s-*`, `gd-*`) are NOT in that catalog — they live in `doctl databases options` (confirmed live). Look up a DB cluster's (COST-DO-005) list price there, not in `compute size list`, or the context is silently omitted:**
 
 ```bash
 set -eu
