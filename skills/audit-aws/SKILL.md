@@ -210,8 +210,11 @@ BATCH_SIZE="10"           # resources per batch on the large path; example, tune
 EC2="$(aws_cli ec2 describe-instances --filters 'Name=instance-state-name,Values=running' --query 'Reservations[].Instances[].InstanceId' --output json | jq 'length')"
 RDS="$(aws_cli rds describe-db-instances --query 'DBInstances[].DBInstanceIdentifier' --output json | jq 'length')"
 RDS_CLUSTERS="$(aws_cli rds describe-db-clusters --query 'DBClusters[].DBClusterIdentifier' --output json | jq 'length')"
-DOCDB_INSTANCES="$(aws_cli docdb describe-db-instances --query 'DBInstances[].DBInstanceIdentifier' --output json | jq 'length')"
-DOCDB_CLUSTERS="$(aws_cli docdb describe-db-clusters --query 'DBClusters[].DBClusterIdentifier' --output json | jq 'length')"
+# docdb describe-* is a façade over the shared RDS control plane and returns ALL RDS-family
+# objects (live-proven: it returned aurora-mysql clusters too) — filter by engine or every
+# Aurora/RDS object is COUNTED TWICE and the size-path selection skews.
+DOCDB_INSTANCES="$(aws_cli docdb describe-db-instances --query 'DBInstances[?Engine==`docdb`].DBInstanceIdentifier' --output json | jq 'length')"
+DOCDB_CLUSTERS="$(aws_cli docdb describe-db-clusters --query 'DBClusters[?Engine==`docdb`].DBClusterIdentifier' --output json | jq 'length')"
 ECS_SERVICES="$(aws_cli ecs list-clusters --query 'clusterArns' --output json \
   | jq -r '.[]' | while read -r c; do aws_cli ecs list-services --cluster "$c" --query 'serviceArns' --output json | jq 'length'; done \
   | awk '{s+=$1} END {print s+0}')"

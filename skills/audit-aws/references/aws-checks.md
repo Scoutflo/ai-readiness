@@ -125,12 +125,15 @@ aws_cli rds describe-db-clusters --output json \
       status: .Status, backup_retention_days: .BackupRetentionPeriod,
       members: [.DBClusterMembers[]? | {id: .DBInstanceIdentifier, writer: .IsClusterWriter,
         promotion_tier: .PromotionTier}]}]' > "${RAW_DIR}/rds-clusters.json"
+# docdb describe-* is a façade over the shared RDS control plane and returns ALL RDS-family
+# objects (live-proven: aurora-mysql came back too) — select the docdb engine, or Aurora/RDS
+# objects land in the docdb evidence files and Phase 6 classifies them twice.
 aws_cli docdb describe-db-instances --output json \
-  | jq '[.DBInstances[] | {id: .DBInstanceIdentifier, engine: .Engine,
+  | jq '[.DBInstances[] | select(.Engine == "docdb") | {id: .DBInstanceIdentifier, engine: .Engine,
       cluster_id: .DBClusterIdentifier, availability_zone: .AvailabilityZone,
       status: .DBInstanceStatus}]' > "${RAW_DIR}/docdb-instances.json"
 aws_cli docdb describe-db-clusters --output json \
-  | jq '[.DBClusters[] | {id: .DBClusterIdentifier, engine: .Engine, status: .Status,
+  | jq '[.DBClusters[] | select(.Engine == "docdb") | {id: .DBClusterIdentifier, engine: .Engine, status: .Status,
       backup_retention_days: .BackupRetentionPeriod,
       members: [.DBClusterMembers[]? | {id: .DBInstanceIdentifier, writer: .IsClusterWriter,
         promotion_tier: .PromotionTier}]}]' > "${RAW_DIR}/docdb-clusters.json"
