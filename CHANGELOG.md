@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.172
+
+**Reachability lifecycle: DNS-truth classification for unreachable targets, and sharper credential-rejection guidance.** When the toolkit config outlives the infrastructure (a decommissioned estate, a rotated token), the first thing a returning user hits is a blocked audit — this makes that failure name its own cause instead of reading as a generic outage.
+
+- **DNS-truth classification (audit-prometheus PROM-001 + audit-alertmanager ALR-010).** On a resolution failure, the reachability finding no longer stops at "unreachable." It queries the zone's **authoritative nameserver** directly (read-only `dig`) and classifies the result into distinct fix lanes — **`NXDOMAIN` + resolving zone apex = a DECOMMISSIONED target** (retarget/remove the config, do not wait for a server), **`SERVFAIL` = broken zone delegation/DNSSEC**, **`NOERROR` at the authoritative NS but a failing local path = an ingress/LB/network problem** (the name exists), and **`NXDOMAIN` with the apex also failing = a possible resolver failure** (re-run from a working resolver first). A known-good sibling (the zone apex) rules out resolver failure before any decommission verdict. Mechanism verified live against a real zone whose records were deleted (authoritative `NXDOMAIN` on the dead record, `NOERROR` on the apex). New pressure scenario: unreachable-host-is-decommissioned-not-a-transient-outage.
+- **doctor: sharper 401-vs-403 credential guidance.** A 401 (endpoint up, credential rejected — expired/revoked/malformed) now explicitly reads as "re-mint the same token type; widening scopes will not help," and a 403 (authenticated but under-scoped) as "widen the existing token, do not re-mint" — so two dead tokens no longer produce the same generic message with different fixes.
+
+**Deferred (documented, not silently dropped):** the reachability-lifecycle doc also proposed config↔doctor parity, a doctor-state staleness banner, and a target-disappearance delta. All three depend on doctor keeping **reachability persistence**, which was deliberately removed in v0.1.98–99 for a HIGH false-green bug (a month-old green checkmark misleading a returning user). Re-introducing it would revive that exact bug class, so these need a persistence-design decision (how to persist without false-green) rather than a blind re-add; default-config liveness (probe the default config's targets when an override is in force) is feasible without persistence and is queued behind that decision.
+
+**Verified:** all four repo gates green (`leak-scan` CLEAN, `structure-check` 23, `run-tests` 30/0, `plugin validate --strict`) + self-test lock for the DNS-truth classifier. The classifier and both hint changes are read-only.
+
 ## 0.1.171
 
 **audit-datadog gains 10 new alert-hygiene checks, live-verified read-only.** Extends the existing four scorecard categories (denominators grow, weights unchanged, still sum to 100) with the missing measured-behavior evidence layer and several config-shape defects a bare "has a handle" or "count exists" check cannot see.
