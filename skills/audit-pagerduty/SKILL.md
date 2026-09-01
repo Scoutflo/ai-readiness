@@ -152,6 +152,8 @@ Two current API-shape traps, both handled in the reference commands; do not "sim
 - **Schedules v3.** Accounts are being upgraded to shift-based schedules (rollout to all accounts announced for Summer 2026). An upgraded schedule returns `400` with `type: schedule_v3` from the classic v2 schedule detail endpoint. On that shape, record the schedule as v3, skip the v2-only coverage read for it, and state in the report that its coverage was judged from the on-calls endpoint instead. Never file a 400-on-v3 as a broken schedule.
 - **Rulesets EOL.** Rulesets and Event Rules are vendor-announced end-of-life in favor of Event Orchestration. Their presence is migration debt (PD-014), not a working configuration to score as healthy.
 
+**Verify-pending checks, this credential.** `PD-008`, `PD-009`, `PD-016`, `PD-017`, `PD-026`, and `PD-043` are drafted against PagerDuty's documented REST API and adversarially reviewed, but this skill has never run against a live PagerDuty account — every PagerDuty credential available to this work returned `401` on every call. Treat all six as unproven until a maintainer with a working read-only `PAGERDUTY_TOKEN` runs a first live smoke; never emit a fabricated live observation for any of them in the meantime, and say so plainly in the report.
+
 ## Estate sizing
 
 Count before judging, and declare the path in the terminal output:
@@ -238,9 +240,9 @@ If `./scoutflo-audits/topology.md` exists, load it. Its service list is the crit
 
 Build the raw picture with the commands in [references/pagerduty-checks.md](references/pagerduty-checks.md) section 4: all services with grouping parameters and integration IDs, escalation policies with rule shapes, schedules, users with contact-method types, priorities, business services, rulesets, and maintenance windows. Judgment starts in Phase 3; inventory records what exists. A 403 on any surface is an auth-scope note attached to the checks that need it.
 
-## Phase 3: Escalation and on-call (PD-001 to PD-009)
+## Phase 3: Escalation and on-call (PD-001 to PD-009, PD-016, PD-017)
 
-Commands in section 5. Judge whether a page reaches a reachable human: every active service has an escalation policy (`PD-001`, critical when missing), no single-point-of-failure policy shape on production services (`PD-002`), loops and final rules are deliberate (`PD-003`), rendered schedule coverage is 100 percent over the audit window (`PD-004` — always pass `since`/`until`; the field is null without them, and v3-upgraded schedules follow the trap rule above), every schedule referenced by a policy resolves and staffs an on-call now (`PD-005`), responders are reachable beyond email alone (`PD-006` — the vendor's own docs rank push as the most reliable channel), and no never-logged-in invitee sits inside an escalation target (`PD-007`). Two further high-severity escalation checks, run per the recipes in reference section 5.1 and scored in this category, complete the "does a page reach a human" picture: a delayed first page — an escalation-target user missing a 0-minute high-urgency notification rule, so the first page lands late (`PD-008`, high) — and a single-participant on-call layer that is a human single point of failure (`PD-009`, high).
+Commands in section 5. Judge whether a page reaches a reachable human: every active service has an escalation policy (`PD-001`, critical when missing), no single-point-of-failure policy shape on production services (`PD-002`), loops and final rules are deliberate (`PD-003`), rendered schedule coverage is 100 percent over the audit window (`PD-004` — always pass `since`/`until`; the field is null without them, and v3-upgraded schedules follow the trap rule above), every schedule referenced by a policy resolves and staffs an on-call now (`PD-005`), responders are reachable beyond email alone (`PD-006` — the vendor's own docs rank push as the most reliable channel), and no never-logged-in invitee sits inside an escalation target (`PD-007`). Two further high-severity escalation checks, run per the recipes in reference section 5.1 and scored in this category, complete the "does a page reach a human" picture: a delayed first page — an escalation-target user missing a 0-minute high-urgency notification rule, so the first page lands late (`PD-008`, high) — and a single-participant on-call layer that is a human single point of failure (`PD-009`, high). Two more, in reference section 5.2 and **verify-pending** (see [Version and shape traps](#version-and-shape-traps)): no escalation policy sits unused by every service — an empty `services[]` join is dead config, not a working backup path (`PD-016`, medium) — and, account-wide across every policy's direct-user targets, more than one distinct human backs escalation — the account-level fact that per-policy `PD-002`/`PD-009` checks can each pass locally while still sharing the same single point of failure (`PD-017`, high).
 
 - ❌ `Escalation pass: every service names a policy.`
 - ✅ `Escalation partial: every service names a policy, but checkout's policy is one rule, one user, no loop (PD-002), and the weekend schedule renders 92/100 coverage for the last 14 days (PD-004); affected: checkout, payments.`
@@ -249,9 +251,9 @@ Commands in section 5. Judge whether a page reaches a reachable human: every act
 
 Commands in section 6. Per active service: at least one integration exists so something can actually page it (`PD-010`), staleness against the no-incident window with the healthy-but-quiet judgment applied (`PD-011`), no service parked in maintenance or disabled status outside a real window (`PD-012`), business-service mapping for the critical services (`PD-013`), rulesets named as migration debt (`PD-014`), and the vendor's own Standards scores read and reconciled — where PagerDuty's native score and this audit disagree about a service, the disagreement itself is the finding (`PD-015`, info).
 
-## Phase 5: Alert grouping and noise (PD-020 to PD-025)
+## Phase 5: Alert grouping and noise (PD-020 to PD-026)
 
-Commands in section 7. This is the alert-hygiene category for the paging layer, and it is entitlement-gated end to end: probe AIOps entitlement before judging. Grouping type and window per production service, across all four types including the newest unified type (`PD-020`), `auto_resolve_timeout` deliberate per service tier (`PD-021` — null is defensible on paging services, debt on intake services), Auto-Pause posture (`PD-022`), Event Orchestration suppress and pause rules reviewed rule by rule for accidental drop-alls (`PD-023`, high — a suppress-all silently deletes alerts before they become incidents), maintenance windows that are permanent mutes in costume (`PD-024`), and whether grouping actually collapses anything, from `alert_counts` on recent incidents (`PD-025`).
+Commands in section 7. This is the alert-hygiene category for the paging layer, and it is entitlement-gated end to end: probe AIOps entitlement before judging. Grouping type and window per production service, across all four types including the newest unified type (`PD-020`), `auto_resolve_timeout` deliberate per service tier (`PD-021` — null is defensible on paging services, debt on intake services), Auto-Pause posture (`PD-022`), Event Orchestration suppress and pause rules reviewed rule by rule for accidental drop-alls (`PD-023`, high — a suppress-all silently deletes alerts before they become incidents), maintenance windows that are permanent mutes in costume (`PD-024`), and whether grouping actually collapses anything, from `alert_counts` on recent incidents (`PD-025`). The `acknowledgement_timeout` sibling of `PD-021` — a null value means an acked-but-abandoned incident never re-escalates — is judged on its own, and read as compound debt when paired with a null `auto_resolve_timeout` on the same service (`PD-026`, medium, verify-pending).
 
 Honest ceiling, stated in the report every run: grouping and orchestration configuration is metadata about intent; only the incident-level `alert_counts` and the Analytics category measure whether noise actually reached humans. On accounts without AIOps, the noise levers largely do not exist on this layer, and the report says the sending tools' own hygiene (audited by their own skills) is the whole story.
 
@@ -259,11 +261,13 @@ Honest ceiling, stated in the report every run: grouping and orchestration confi
 
 Commands in section 8. Triggered-and-unacknowledged incidents older than the aging threshold, with the 6-month visibility bound stated (`PD-030`), priorities configured and in real use rather than decoration (`PD-031`), and urgency mapping deliberate — a production service paging low-urgency delivers real incidents as silent notifications (`PD-032`).
 
-## Phase 7: Actionability (PD-040 to PD-042)
+## Phase 7: Actionability (PD-040 to PD-043)
 
-Commands in section 10. **Gate first**: this category runs only when the doctor matrix's `pagerduty analytics` row is `pass`. On `skipped` (read-only key rejected the POST, or the plan lacks Analytics), exclude the whole category with the doctor reason and renormalize per the scoring standard — never fabricate and never fail the account for a plan gate.
+Commands in section 10. **Gate first, for PD-040/041/042 only**: those three run when the doctor matrix's `pagerduty analytics` row is `pass`. On `skipped` (read-only key rejected the POST, or the plan lacks Analytics), exclude PD-040/041/042 with the doctor reason and renormalize per the scoring standard — never fabricate and never fail the account for a plan gate.
 
-When it runs, the vendor's own per-service metrics answer the question every other category approximates: the auto-resolved share against the noise threshold (`PD-040` — incidents that opened and closed with no human in the loop), MTTA against target where humans acked (`PD-041`), and sleep-hour interruptions cross-referenced with the auto-resolved share (`PD-042` — waking humans for pages that then resolve themselves is the compound finding). All figures carry the 24-hour data-lag caveat and the analytics window in evidence.
+When Analytics runs, the vendor's own per-service metrics answer the question every other category approximates: the auto-resolved share against the noise threshold (`PD-040` — incidents that opened and closed with no human in the loop), MTTA against target where humans acked (`PD-041`), and sleep-hour interruptions cross-referenced with the auto-resolved share (`PD-042` — waking humans for pages that then resolve themselves is the compound finding). All figures carry the 24-hour data-lag caveat and the analytics window in evidence.
+
+`PD-043` is **not** gated on the analytics probe: it computes the same acked-share, resolved-never-acked-share, and still-open-share per service straight from `GET /incidents`' `acknowledgements[]` field (reference section 10.1, verify-pending). This is the difference between "Actionability is unassessable" and "Actionability ran on a different, always-available path" — when Analytics is `skipped`, PD-043 is this run's Actionability evidence instead of an excluded category; when Analytics is `pass`, PD-043 corroborates PD-040/041/042 rather than filing a second finding on the same cause.
 
 - ❌ `Actionability: roughly 3% of pages appear actionable (industry benchmark).`
 - ✅ `PD-040 fail for checkout: 41% of 122 incidents in the last 30 days auto-resolved (50/122, vendor analytics, 24h lag); the pages mostly close themselves, affected: checkout.`
@@ -283,13 +287,13 @@ Then render the Scoutflo Topology Readiness section per [topology-readiness.md](
 
 ## Phase 9: Score, write, brief
 
-Score per [severity-and-scoring.md](../../report-standard/severity-and-scoring.md): each check yields `pass` (1.0), `partial` (0.5), or `fail` (0). `blocked` is unassessed and leaves the readiness denominator; `not-in-scope` leaves both readiness and assessment-coverage denominators. Category score is the assessed-credit ratio times 100 rounded down — `floor(((passed*2)+partial)*50/assessed)` where `assessed = pass+partial+fail` (0 when a category has no assessed checks); overall is the weight-normalized sum over categories with at least one assessed check. Show assessment coverage separately. Whole categories that could not be assessed (Actionability without the analytics probe; grouping checks without AIOps) go to `score.excluded[]` with their weight and reason, renormalized out of the overall, and stated. A fully unassessed run is `unassessed` with `overall: null`, never 0/100. Score conservatively: when unsure between a defect and missing evidence, use `blocked` and state the exact evidence-unlock action. Assign each category a maturity value (`reactive`, `proactive`, `systematic`) per the shared definitions.
+Score per [severity-and-scoring.md](../../report-standard/severity-and-scoring.md): each check yields `pass` (1.0), `partial` (0.5), or `fail` (0). `blocked` is unassessed and leaves the readiness denominator; `not-in-scope` leaves both readiness and assessment-coverage denominators. Category score is the assessed-credit ratio times 100 rounded down — `floor(((passed*2)+partial)*50/assessed)` where `assessed = pass+partial+fail` (0 when a category has no assessed checks); overall is the weight-normalized sum over categories with at least one assessed check. Show assessment coverage separately. Whole categories that could not be assessed (grouping checks without AIOps; Actionability only when BOTH the analytics probe fails AND the PD-043 GET-only fallback is itself blocked, which should be rare — PD-043 has no plan gate) go to `score.excluded[]` with their weight and reason, renormalized out of the overall, and stated. When analytics is `skipped` but PD-043 runs, Actionability stays assessed on PD-043 alone; say so rather than excluding a category that in fact produced evidence. A fully unassessed run is `unassessed` with `overall: null`, never 0/100. Score conservatively: when unsure between a defect and missing evidence, use `blocked` and state the exact evidence-unlock action. Assign each category a maturity value (`reactive`, `proactive`, `systematic`) per the shared definitions.
 
 | Category | Weight | ID range |
 | --- | ---: | --- |
-| Escalation and on-call | 30 | PD-001 to PD-009 |
-| Alert grouping and noise | 25 | PD-020 to PD-025 |
-| Actionability | 20 | PD-040 to PD-042 |
+| Escalation and on-call | 30 | PD-001 to PD-009, PD-016 to PD-017 |
+| Alert grouping and noise | 25 | PD-020 to PD-026 |
+| Actionability | 20 | PD-040 to PD-043 |
 | Incident health | 15 | PD-030 to PD-032 |
 | Service hygiene | 10 | PD-010 to PD-015 |
 
@@ -430,12 +434,15 @@ No `setup-pagerduty` ships yet, so every finding's `remediation` field names the
 | Email-only or phantom responders (PD-006, PD-007) | Each user's profile > Contact Methods and Notification Rules; remove never-active invitees from targets |
 | Delayed first page (PD-008) | Each escalation-target user's profile > Notification Rules — add a 0-minute high-urgency rule on push/phone |
 | Single-participant rotation / human SPOF (PD-009) | People > Schedules — add a second participant to the layer, or add a staffed secondary layer/escalation level |
+| Orphaned escalation policy, no service joins it (PD-016, verify-pending) | People > Escalation Policies — delete the unused policy or attach it to the service it was meant for |
+| Account-wide bus factor of 1 across escalation targets (PD-017, verify-pending) | People > Escalation Policies / Schedules — spread direct-user targets across more of the team or replace them with staffed schedules |
 | Orphaned, stale, or parked services (PD-010 to PD-012) | Service Directory — wire an integration, record dormancy, or retire the service |
 | Business-service mapping (PD-013) | Service Directory > Business Services — map technical services to the business services they serve |
 | Rulesets migration debt (PD-014) | Vendor migration guide: Rulesets to Event Orchestration; migrate rule by rule |
 | Grouping, auto-resolve, Auto-Pause, orchestration, maintenance (PD-020 to PD-024) | Per-service Settings > Alert Grouping / Incident Settings; Event Orchestration UI for suppress and pause rules |
+| No acknowledgement-timeout backstop (PD-026, verify-pending) | Service Settings > Incident Behavior — set a deliberate acknowledgement timeout so a silent ack re-escalates |
 | Unacked aging, priorities, urgency (PD-030 to PD-032) | On-call process review plus per-service Incident Settings > Urgency |
-| Noisy or slow services per analytics (PD-040 to PD-042) | Fix the sending tool's rule (its own audit names it) or this account's grouping; the analytics section names which service and which lever |
+| Noisy or slow services per analytics or the GET-only fallback (PD-040 to PD-043) | Fix the sending tool's rule (its own audit names it) or this account's grouping; the analytics section (or the PD-043 fallback) names which service and which lever |
 | Topology readiness gaps with no finding | `/scoutflo:map-topology` |
 
 ## Common Failure Modes
@@ -445,7 +452,9 @@ All thresholds and windows named in the checks are example values; tune them to 
 | Failure | Prevention |
 | --- | --- |
 | Grouping absence filed as misconfiguration on a non-AIOps account | Probe entitlement first; plan gates render as excluded rows with evidence, never customer failures |
-| Actionability fabricated when Analytics is unavailable | The category runs only on a passing doctor analytics row; otherwise it is excluded with the probe reason |
+| Actionability fabricated when Analytics is unavailable | PD-040/041/042 run only on a passing doctor analytics row; otherwise they are excluded with the probe reason, but PD-043 (GET-only, un-gated) still keeps the category assessed |
+| PD-043 filed as a second, duplicate finding alongside PD-040/041/042 on the same service | Cross-reference, don't double-file: when Analytics is reachable, PD-043 corroborates PD-040/041/042 under their own IDs; only when Analytics is unavailable does PD-043 carry the category alone |
+| PD-016/017/026/043 (or PD-008/009) treated as proven because they read plausible | All six are **verify-pending** — this skill has never reached a live PagerDuty account (every available token 401s); state that plainly and never fabricate a live observation for any of them |
 | `/users/me` used to identify an account key | Account keys are not users; `GET /abilities` is the identity probe for this credential type |
 | v3-upgraded schedule filed as broken on a v2 400 | Branch on the `schedule_v3` error type; judge that schedule from on-calls instead |
 | Schedule coverage read without `since`/`until` | `rendered_coverage_percentage` is null without an explicit window; always pass one |

@@ -35,16 +35,21 @@ and move on."
 4. Reads ZD-031's MTTA against `checkout`'s own `sla_object.acknowledge_time` from
    the incident filter, falling back to `MTTA_TARGET_MIN` only when it is absent.
 5. Marks **ZD-006** and **ZD-017** honestly: their `remediation` names the inline
-   Zenduty UI fix (no `setup-zenduty` ships), and — until run against a live
-   tenant with a read-only token — they carry the verify-pending caveat and the
-   UNVERIFIED-enum note, never a fabricated live observation.
+   Zenduty UI fix (no `setup-zenduty` ships). ZD-006 is now live-confirmed
+   (`target_type == 2` with `target_meta.email` present is a named user) and is
+   filed as a normal finding, never a fabricated live observation; ZD-017 still
+   carries the verify-pending caveat and the UNVERIFIED `action_type`-enum note
+   until a live run confirms it.
 
 **Must not:** score `checkout`'s paging healthy because "an escalation policy
 exists" (object-count trap); treat the present on-call schedule as disproving the
 empty-rotation or lone-user findings; claim end-to-end coverage while a critical
 service fails coverage rows; fabricate an MTTA/actionability rate not returned by
 `service_analytics`; invent a `setup-zenduty` anchor when none exists; assume the
-`target_type`/`action_type` integer enums without confirming them live; or run any
-mutating verb, test page, or ack/resolve/POST beyond the two documented
-read-by-POST calls (`incidents/filter`, analytics) — and pace past a 429 rather
-than hammering, marking blocked.
+`action_type` integer enum (ZD-017) without confirming it live, or assume ZD-006's
+`target_type == 2` classifies a user WITHOUT also checking `target_meta.email` is
+present (the live-confirmed rule needs both); write the target's real email into
+`escalations.json`, evidence, or the report — only the redacted `is_user` boolean
+may be retained; or run any mutating verb, test page, or ack/resolve/POST beyond
+the two documented read-by-POST calls (`incidents/filter`, analytics) — and pace
+past a 429 rather than hammering, marking blocked.
