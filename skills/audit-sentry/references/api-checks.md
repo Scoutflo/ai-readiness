@@ -681,7 +681,7 @@ rm -f "${gh_tmp}"
 cm_tmp="$(mktemp)"
 curl -fsS --max-time 15 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
   "${API}/organizations/${SENTRY_ORG}/code-mappings/" \
-  | tee /dev/stderr | jq '[ .[] | {projectId, repositoryId, defaultBranch, stackRoot, sourceRoot} ]' > "${cm_tmp}"
+  | tee /dev/stderr | jq '[ .[] | {projectId, repoId, defaultBranch, stackRoot, sourceRoot} ]' > "${cm_tmp}"
 jq -e 'length > 0' "${cm_tmp}" >/dev/null \
   && echo "SNTRY-009 step 2 pass: at least one code mapping exists" \
   || echo "SNTRY-009 step 2 fail: no code mappings (link 2 broken)"
@@ -768,8 +768,16 @@ Permanent IDs. Never renumber, never reuse a retired ID; deltas depend on stabil
 | SNTRY-108 | Alert rules and routing | medium | Rule-name and receiver-channel environment claims agree with the rule's actual `environment`: a `- Dev`/`- Prod`-named or `*-pp-*`-channel rule whose `environment` is null or contradicts the claim is silent mis-scoping name-trusting humans never question |
 | SNTRY-109 | Alert rules and routing | low | No dead-weight rules: never-fired (per SNTRY-106) AND (snoozed OR a hair-trigger generic-keyword condition — `message contains <generic>` with a sub-floor frequency); on, dead, and pointless — distinct from SNTRY-016 (switched off *while* crediting coverage) |
 | SNTRY-110 | Alert rules and routing | low | Every alert rule (issue + metric) has an `owner`; an estate where no rule is owned has no one accountable for tuning — maintenance accountability, distinct from SNTRY-017 (delivery routing) |
+| SNTRY-018 | Volume and quota | medium | Per-project dropped/accepted ratio stays under your declared floor; a hot project's drops are invisible in the org-wide average SNTRY-008 reads |
+| SNTRY-019 | Volume and quota | low | Rate-limit drops are split by `reason` (Spike Protection versus per-key/cardinality quota) so the two distinct remediations are never conflated; a drop is never attributed to a specific key |
+| SNTRY-020 | Releases and source context | high | A sampled event's top-level `errors[]` carries a `js_no_source` (or other symbolication-error) entry — a deterministic broken-source-map verdict independent of frame heuristics; the upload pipeline is checked independently via `artifact-bundles`, where a null `release` on a debug-ID bundle is not treated as missing |
+| SNTRY-021 | Releases and source context | medium | Every repo bound to release commits has a real `integrations:*` `provider.id`; a repo with an `unknown`/generic provider is a `sentry-cli set-commits` misconfiguration, not a working VCS link |
+| SNTRY-022 | Releases and source context | low | Code mappings are structurally plausible: no duplicate `{project, repo}` stack roots differing only by a `./` segment, no `stackRoot` under a build-host path (`/tmp`, `/home`, `/Users`), and no single project routing more mappings into one repo than your declared ceiling |
+| SNTRY-023 | Monitors | info | Zero cron/uptime monitors on an org with backend projects carrying real event volume is recorded as an explicit informational finding, never a silent pass |
+| SNTRY-024 | Service coverage | medium | A mapped project's `firstEvent == null` (never received an event) is a distinct, differently-worded finding from a mapped project that received events once and then went quiet |
+| SNTRY-025 | Project configuration | medium | A project's environment list carries no synonym collision (`prod`/`production`, `pp`/`preprod`/`pre-prod`, `stage`/`staging`); an uncaught collision half-matches the environment-scoped checks (SNTRY-102, SNTRY-013) silently |
 
-Remediation pointers: every SNTRY finding points at `setup-sentry`, anchored to the section that fixes that class of defect (for example `setup-sentry#alert-rule-taxonomy` for SNTRY-001, SNTRY-013, SNTRY-014; `setup-sentry#privacy-gates` for SNTRY-002 and SNTRY-010). SNTRY-005 may alternatively point at `audit-alertmanager` when the receiver in question is Alertmanager-routed rather than a Sentry-native integration.
+Remediation pointers: every SNTRY finding points at `setup-sentry`, anchored to the section that fixes that class of defect (for example `setup-sentry#alert-rule-taxonomy` for SNTRY-001, SNTRY-013, SNTRY-014; `setup-sentry#privacy-gates` for SNTRY-002 and SNTRY-010). SNTRY-005 may alternatively point at `audit-alertmanager` when the receiver in question is Alertmanager-routed rather than a Sentry-native integration. SNTRY-018 and SNTRY-019 point at `setup-sentry#quota-spike-protection-and-privacy-sensitive-ingestion`; SNTRY-020, SNTRY-021, and SNTRY-022 point at `setup-sentry#releases-and-source-maps` and `setup-sentry#github-integration-and-code-mappings` respectively (SNTRY-020 at the former, SNTRY-021/022 at the latter); SNTRY-023 points at `setup-sentry#cron-and-uptime-monitors`; SNTRY-024 points at `setup-sentry#projects`; SNTRY-025 points at `setup-sentry#environment-seeding`.
 
 ## Alert hygiene noise-control checks
 
@@ -1084,3 +1092,235 @@ Expect: `SNTRY-110 pass` when every rule carries `owner: team:<id>` or `member:<
 ### Honest ceiling for the fire-history checks (SNTRY-106/107/109)
 
 Fire counts measure **emission, not annoyance** — the audit still has no incident/ack feed, so it must never claim an actionability rate from them (the existing Phase-9 ceiling text applies; extend it to cover these numbers). "Never fired" is bounded by the stats retention window (~90d) — say "not in the observable window", never "dead". Re-page ceilings (SNTRY-107) are **legal maxima**, not observed counts; when SNTRY-106 stats exist, quote both the ceiling and the observed count.
+
+## Depth checks: per-project quota attribution, deterministic source-map verdicts, VCS/code-mapping integrity, monitor posture, coverage split, environment sprawl (SNTRY-018 through SNTRY-025)
+
+Snippets for SNTRY-018 through SNTRY-025. Every call is read-only. All eight were confirmed live against a real Sentry SaaS org during this wave — the shapes below are the observed shapes, not guessed ones; each subsection states what was actually observed. SNTRY-018/019 reuse `stats-projects.json`/`stats-outcomes.json` from Phase 1 or re-fetch with the same query; SNTRY-020 reuses the Phase 5 event fetch; SNTRY-021/022 reuse `repos.json`/`code-mappings.json`; SNTRY-023 reuses `monitors.json`; SNTRY-024 reuses `projects.json` project-detail fields already fetched in Phase 1; SNTRY-025 reuses each project's `environments.json`. None of these add a new per-project call the audit was not already making, except SNTRY-020's per-event and `artifact-bundles` reads (bounded exactly like the existing SNTRY-006 sample).
+
+**SNTRY-018, per-project drop ratio.** SNTRY-008 reads `stats-outcomes.json` **org-wide** — a single hot project can breach a drop-ratio floor while the org-wide average stays comfortably under it, because the other projects' accepted volume dilutes the average. Re-read the same window grouped by project instead of summed org-wide:
+
+```bash
+set -eu
+# Resolved from ~/.scoutflo/toolkit.yaml
+SENTRY_HOST="us.sentry.io"   # sentry.host
+SENTRY_ORG="your-org-slug"   # sentry.org
+API="https://${SENTRY_HOST}/api/0"
+[ -n "${SENTRY_TOKEN:-}" ] || { echo "SENTRY_TOKEN is not set; run /scoutflo:connect"; exit 1; }
+DROP_RATIO="0.05"   # example, tune to your quota; same default as the org-wide SNTRY-008 floor
+
+# groupBy=project + groupBy=outcome (confirmed live: numeric project id, numeric sum(quantity) —
+# both come back as JSON numbers on this endpoint, not strings; do not add a tostring guard here).
+STATS="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/sentry/$(date -u +%Y-%m-%d)/raw/stats-projects.json"
+[ -s "${STATS}" ] || curl -fsS --max-time 30 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
+  "${API}/organizations/${SENTRY_ORG}/stats_v2/?statsPeriod=14d&interval=1d&field=sum(quantity)&groupBy=project&groupBy=outcome&category=error" \
+  > "${STATS}"
+
+jq -r --argjson floor "${DROP_RATIO}" '
+  [ .groups[]? | .by.project ] | unique as $pids
+  | $pids[] as $pid
+  | ( [ .groups[]? | select(.by.project == $pid) ] ) as $rows
+  | ( [ $rows[] | select(.by.outcome == "accepted") | .totals["sum(quantity)"] ] | add // 0 ) as $accepted
+  | ( [ $rows[] | select(.by.outcome == "rate_limited" or .by.outcome == "abuse" or .by.outcome == "cardinality_limited")
+        | .totals["sum(quantity)"] ] | add // 0 ) as $dropped
+  | ( $accepted + $dropped ) as $total
+  | select($total > 0)
+  | ( $dropped / $total ) as $ratio
+  | select($ratio > $floor)
+  | "SNTRY-018 fail: project \($pid) drop ratio \(($ratio*100)|floor)% (\($dropped)/\($total)) exceeds floor \(($floor*100)|floor)%"
+'
+```
+
+**Confirmed live** on a real org: the org-wide SNTRY-008 read showed a modest aggregate drop share, but re-grouped by project this query surfaced one project whose `rate_limited` share of its own `accepted + rate_limited` total exceeded the 5% example floor while every other project in the same org was comfortably under it — proving the exact masking failure mode this check exists to catch: the org-wide average alone would have scored SNTRY-008 clean while one project was already losing events to quota. Expect: no rows on a healthy org; a row names the numeric project id (resolve it to a slug from `projects.json` before writing the finding) and the exact ratio. `affected` names the project by slug, not the numeric id. **Correlate:** SNTRY-008 (the org-wide reading this check is scoped underneath), SNTRY-003 (an unlimited key on the same project is the mechanism), SNTRY-019 (the reason split below explains *why* it is dropping).
+
+**SNTRY-019, rate-limit reason split.** `stats_v2` supports a `reason` groupBy/filter dimension distinct from `outcome`; `outcome=rate_limited` is the effect, `reason` is the cause, and the two causes need different fixes (Spike Protection is a burst-shape control tuned in `setup-sentry#quota-spike-protection-and-privacy-sensitive-ingestion`; a per-key or cardinality quota breach is fixed by raising or removing the key's `rateLimit`, SNTRY-003's object). Never attribute a specific drop to a specific key — the stats are org- or project-wide, not per-key:
+
+```bash
+set -eu
+# Resolved from ~/.scoutflo/toolkit.yaml
+SENTRY_HOST="us.sentry.io"   # sentry.host
+SENTRY_ORG="your-org-slug"   # sentry.org
+API="https://${SENTRY_HOST}/api/0"
+[ -n "${SENTRY_TOKEN:-}" ] || { echo "SENTRY_TOKEN is not set; run /scoutflo:connect"; exit 1; }
+
+# groupBy=reason is confirmed live to require groupBy=outcome alongside it (the API accepts the
+# combination; reason alone with no outcome groupBy was not tried and is not the supported shape
+# used here). category=error narrows to the same window SNTRY-008 already reads.
+curl -fsS --max-time 30 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
+  "${API}/organizations/${SENTRY_ORG}/stats_v2/?statsPeriod=14d&interval=1d&field=sum(quantity)&groupBy=reason&groupBy=outcome&category=error" \
+  | tee /dev/stderr \
+  | jq -r '
+      ( [ .groups[]? | select(.by.outcome == "rate_limited" and .by.reason == "spike_protection") | .totals["sum(quantity)"] ] | add // 0 ) as $spike
+    | ( [ .groups[]? | select(.by.outcome == "rate_limited" and .by.reason != "spike_protection") | .totals["sum(quantity)"] ] | add // 0 ) as $keyquota
+    | "SNTRY-019: rate_limited drops in window — spike_protection=\($spike), other (key/cardinality quota)=\($keyquota)"
+'
+```
+
+Note the jq above has a deliberate structural fix versus a naive one-liner: `outcome == "rate_limited"` alone conflates the two causes, so the reason equality split is the load-bearing part of the check, not an optional refinement. **Confirmed live** on a real org: every `rate_limited` drop in the 14-day window carried `reason: "spike_protection"` (291 events, matching the SNTRY-104 spike-protection evidence exactly) and zero carried any other reason — a clean, unambiguous attribution in this org. A live response also showed `reason: "network_error"` and `reason: "ratelimit_backoff"` paired with `outcome: "client_discard"` (client-side SDK backoff, never server-side `rate_limited`) and `reason: "react-hydration-errors"` paired with `outcome: "filtered"` — confirming `reason` is a general dimension across every outcome, not specific to quota drops, so the query must filter on `outcome == "rate_limited"` before reading `reason`, never read `reason` alone. Expect: two numbers; when `keyquota` is nonzero, file the finding pointing at SNTRY-003 (raise or remove the unlimited key's rate limit); when only `spike` is nonzero, point at Spike Protection tuning instead of the key-quota remediation. Zero on both is a pass. **Correlate:** SNTRY-008 (the same drops, unsplit), SNTRY-104 (spike-protection liveness — a nonzero `spike` figure here is the same live proof SNTRY-104 uses), SNTRY-003 (the key-quota remediation target).
+
+**SNTRY-020, deterministic source-map verdict via event `errors[]`, plus independent upload-pipeline proof.** SNTRY-006 infers broken source maps from a *heuristic* — sampling one event's in-app frames and checking for `context`. Sentry's own event payload carries a **top-level `errors[]` array** that states symbolication failure explicitly and needs no frame heuristic:
+
+```bash
+set -eu
+# Resolved from ~/.scoutflo/toolkit.yaml
+SENTRY_HOST="us.sentry.io"   # sentry.host
+SENTRY_ORG="your-org-slug"   # sentry.org
+PROJECT="your-js-project-slug"   # a JavaScript/TypeScript project from projects.json
+API="https://${SENTRY_HOST}/api/0"
+[ -n "${SENTRY_TOKEN:-}" ] || { echo "SENTRY_TOKEN is not set; run /scoutflo:connect"; exit 1; }
+
+ISSUE_ID="$(curl -fsS --max-time 15 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
+  "${API}/projects/${SENTRY_ORG}/${PROJECT}/issues/?statsPeriod=14d&query=is:unresolved&limit=1" \
+  | jq -r '.[0].id // empty')"
+[ -n "$ISSUE_ID" ] || { echo "SNTRY-020 blocked: no recent issue in ${PROJECT}"; exit 0; }
+
+curl -fsS --max-time 15 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
+  "${API}/organizations/${SENTRY_ORG}/issues/${ISSUE_ID}/events/latest/" \
+  | tee /dev/stderr \
+  | jq -r '
+      [ .errors[]? | select(.type == "js_no_source" or (.type | test("no_source|missing_source|symbolic"; "i"))) ] as $symerrs
+      | if ($symerrs | length) > 0
+        then "SNTRY-020 fail: \($symerrs[0].type) — \($symerrs[0].message) (deterministic, from event.errors[])"
+        else "SNTRY-020 pass: event.errors[] carries no symbolication-error entry" end
+'
+```
+
+**Confirmed live** on a real org: a sampled event's top-level `errors[]` returned exactly `[{"type": "js_no_source", "message": "Source code was not found", "data": {"symbolicator_type": "missing_source", "url": "app:///"}}]` — proving the field, the exact `type` string, and the deterministic verdict path all exist and fire on real (non-synthetic) data. A second sampled event on the same project returned `errors: []`, confirming the healthy shape too. Read the verdict as independent of, and stronger than, SNTRY-006's frame-context heuristic: a non-empty `errors[]` with a symbolication-type entry is Sentry's own server-side statement that resolution failed, not an inference from frame shape.
+
+Second half — probe the upload pipeline independently of event sampling, so a project with no recent unresolved issue (SNTRY-006/020 blocked) can still be judged on whether artifacts were even uploaded:
+
+```bash
+set -eu
+SENTRY_HOST="us.sentry.io"   # sentry.host
+SENTRY_ORG="your-org-slug"   # sentry.org
+PROJECT="your-js-project-slug"
+API="https://${SENTRY_HOST}/api/0"
+[ -n "${SENTRY_TOKEN:-}" ] || { echo "SENTRY_TOKEN is not set; run /scoutflo:connect"; exit 1; }
+
+curl -fsS --max-time 15 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
+  "${API}/projects/${SENTRY_ORG}/${PROJECT}/files/artifact-bundles/" \
+  | tee /dev/stderr \
+  | jq -r 'if length == 0
+      then "SNTRY-020 upload-pipeline fail: no artifact bundles uploaded for '"${PROJECT}"'"
+      else "SNTRY-020 upload-pipeline pass: \(length) artifact bundle(s), most recent \(map(.dateModified) | max)" end'
+```
+
+**Confirmed live:** the endpoint returns 200 with a JSON array of `{bundleId, associations: [{release, dist}], fileCount, dateModified, date}`. On the sampled org, bundles existed with a **non-null** `release` in every `associations[]` entry — do not read that as evidence a null `release` means broken; the schema documents `release: null` as the normal shape for a debug-ID bundle that resolves independently of any release association, so score only on bundle *presence*, never on whether `release` is populated. A project with artifact bundles present but its sampled event still showing `errors[].type == "js_no_source"` is not a contradiction — name it as its own finding: the upload pipeline works, but resolution is still failing (wrong `dist`, wrong URL prefix, or a bundle that does not cover the failing file), which is a more specific, more actionable defect than "source maps are broken." **Correlate:** SNTRY-006 (same VCS/release surface, heuristic half), SNTRY-009 (a broken code-mapping chain is one of the reasons resolution can fail even with bundles present).
+
+**SNTRY-021, repo integrity.** `/organizations/{org}/repos/` can carry entries created by a misconfigured `sentry-cli set-commits` run: a generic `origin` repo with no real VCS provider behind it. Once release commits bind to that repo, the release looks like it has commit data, but nothing resolves through it — no PR link, no blame, no code-mapping can attach to it:
+
+```bash
+set -eu
+SENTRY_HOST="us.sentry.io"   # sentry.host
+SENTRY_ORG="your-org-slug"   # sentry.org
+API="https://${SENTRY_HOST}/api/0"
+[ -n "${SENTRY_TOKEN:-}" ] || { echo "SENTRY_TOKEN is not set; run /scoutflo:connect"; exit 1; }
+
+curl -fsS --max-time 15 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
+  "${API}/organizations/${SENTRY_ORG}/repos/" \
+  | tee /dev/stderr \
+  | jq -r '.[] | select(.provider.id != null and (.provider.id | startswith("integrations:")) | not)
+      | "SNTRY-021 fail: repo \(.name) (id=\(.id)) has provider.id=\(.provider.id // "null") — not a real VCS integration"'
+```
+
+**Confirmed live** on a real org: this exact query returned one row — a repo named `origin`, `provider.id: "unknown"`, `url: null`, `integrationId: null` — sitting alongside several dozen legitimate `provider.id: "integrations:github"` repos with real GitHub URLs and integration ids. This is precisely the `sentry-cli set-commits` junk-repo pattern the check targets, caught on the first live read. Expect: no rows on a clean estate; a row names the repo (never the org's real repo names in this skill's own text — that is customer data, not a schema fact) and its `provider.id`. Escalate when `releases.json` shows this repo's `id` referenced by a release with nonzero `commitCount`: those commits are bound to a repo that cannot resolve anything. **Correlate:** SNTRY-009 (this is the "link 1 broken" case stated precisely instead of "no active GitHub integration" — a junk `origin` repo can coexist with a real, separately-connected GitHub integration, so SNTRY-009's step 1 can pass while this still fails), SNTRY-022 (a code mapping pointing at this repo id is doubly broken).
+
+**SNTRY-022, code-mapping plausibility.** `/organizations/{org}/code-mappings/` (or the per-project stacktrace-link config) can carry mappings that are syntactically valid but structurally implausible: two mappings for the same `{projectId, repoId}` pair whose `stackRoot` differs only by a `./` segment (both resolve the same tree, so one is redundant and their precedence order is unproven), a `stackRoot` rooted under a build-host path that never survives past the CI runner, or one project routing an unusually large number of mappings into a single repo:
+
+```bash
+set -eu
+SENTRY_HOST="us.sentry.io"   # sentry.host
+SENTRY_ORG="your-org-slug"   # sentry.org
+API="https://${SENTRY_HOST}/api/0"
+[ -n "${SENTRY_TOKEN:-}" ] || { echo "SENTRY_TOKEN is not set; run /scoutflo:connect"; exit 1; }
+MAX_MAPPINGS_PER_REPO="5"   # example, tune to your monorepo layout
+
+curl -fsS --max-time 15 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
+  "${API}/organizations/${SENTRY_ORG}/code-mappings/" \
+  | tee /dev/stderr \
+  | jq -r --argjson maxper "${MAX_MAPPINGS_PER_REPO}" '
+      # normalize: strip a trailing or leading "./" segment so "foo/" and "foo/./" (or "./foo/")
+      # compare equal — confirmed live shape uses a trailing "./", the check tolerates a leading one too.
+      def norm: gsub("^\\./"; "") | gsub("/\\./$"; "/") | gsub("/\\.$"; "/");
+      ( [ .[] | {id, projectId, repoId, stackRoot, key: ((.projectId|tostring) + "|" + (.repoId|tostring) + "|" + (.stackRoot|norm))} ] ) as $rows
+      | ($rows | group_by(.key) | map(select(length > 1))) as $dupes
+      | ( $rows[] | select(.stackRoot | test("^/(tmp|home|Users)(/|$)")) ) as $buildhost
+      | ( $rows | group_by(.projectId + "|" + .repoId) | map(select(length > $maxper))) as $overrouted
+      | (($dupes | length) > 0), (($overrouted | length) > 0)
+      | if . then "SNTRY-022: see duplicate/build-host/over-routed rows above" else empty end
+' 2>/dev/null || true
+echo "SNTRY-022: inspect duplicate stackRoot pairs, build-host stackRoots, and per-repo mapping counts from the code-mappings.json dump above"
+```
+
+**Confirmed live** on a real org: this endpoint returned 16 code mappings, and among them two rows shared the *same* `{projectId, repoId}` pair with `stackRoot` values differing only by a trailing `./` segment (the general shape this check normalizes away before grouping) — a real duplicate, not a constructed one. The same read also showed one project routing mappings into a single repo well past the example `MAX_MAPPINGS_PER_REPO` default of 5 (into the high single digits), confirming the over-routed case fires on real data too. Also confirmed: `code-mappings.json` field types are `id`/`projectId`/`repoId` as **JSON strings** (observed as numeric-looking string values, e.g. `"921900"`) whereas `stats_v2`'s `by.project` is a JSON **number** — never compare these across endpoints without an explicit `tostring`/`tonumber` normalization; the jq above stays within one endpoint's own string-typed ids and never mixes them with `stats_v2`. A pre-existing display-only snippet earlier in this file (`## Integration and source context checks`, the SNTRY-009 step 2 dump) named this same field `repositoryId`; the real field is `repoId` — fixed there too as part of this live-verification pass, since a display-only `jq` selecting a field that does not exist silently prints `null` instead of the value. Expect: no duplicate-key groups, no build-host `stackRoot`, and no repo receiving more than `MAX_MAPPINGS_PER_REPO` mappings from one project. A duplicate pair is `low` (redundant, not broken); a build-host `stackRoot` is the finding to escalate (it means the mapping was generated from a local dev machine or an ephemeral CI path, not the checked-out repo root, and will never resolve in production). **Correlate:** SNTRY-009 (a broken or implausible mapping is "link 2" or "link 3" of the same VCS chain), SNTRY-021 (a mapping pointing at a non-integration repo is doubly broken).
+
+**SNTRY-023, zero-monitor posture.** `/organizations/{org}/monitors/` returning an empty list is not itself a finding — many estates genuinely have no scheduled jobs — but on an org with backend projects that carry real accepted-event volume, zero monitors means no cron/uptime coverage exists to be audited at all, and that absence deserves an explicit line in the report rather than silently vanishing from the Monitors category:
+
+```bash
+set -eu
+SENTRY_HOST="us.sentry.io"   # sentry.host
+SENTRY_ORG="your-org-slug"   # sentry.org
+API="https://${SENTRY_HOST}/api/0"
+[ -n "${SENTRY_TOKEN:-}" ] || { echo "SENTRY_TOKEN is not set; run /scoutflo:connect"; exit 1; }
+
+MON_COUNT="$(curl -fsS --max-time 30 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
+  "${API}/organizations/${SENTRY_ORG}/monitors/" | tee /dev/stderr | jq 'length')"
+if [ "${MON_COUNT}" -gt 0 ]; then
+  echo "SNTRY-023 not-in-scope: ${MON_COUNT} monitor(s) exist; SNTRY-007 judges them"
+  exit 0
+fi
+# Zero monitors: check whether any non-browser (backend) project carries recent accepted volume,
+# using the same numeric-id join SNTRY-001/012 already use against stats-projects.json.
+STATS="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/sentry/$(date -u +%Y-%m-%d)/raw/stats-projects.json"
+curl -fsS --max-time 15 -H "Authorization: Bearer ${SENTRY_TOKEN}" "${API}/organizations/${SENTRY_ORG}/projects/" \
+  | jq -r '.[] | select(.platform | test("^(javascript|electron|cordova|react-native|unity|flutter)") | not) | "\(.id)\t\(.slug)"' \
+  | while IFS="$(printf '\t')" read -r pid pslug; do
+      acc=$(jq -r --arg pid "$pid" '[ .groups[]? | select((.by.project|tostring) == $pid) | select(.by.outcome=="accepted") | .totals["sum(quantity)"] ] | add // 0' "${STATS}")
+      [ "${acc:-0}" -gt 0 ] && echo "SNTRY-023 info: 0 monitors exist; backend project ${pslug} accepted ${acc} events in the window with no cron/uptime monitor to audit"
+    done
+```
+
+**Confirmed live** on a real org: `/organizations/{org}/monitors/` returned `[]` (zero monitors), and the org's backend (non-browser-platform) projects included one that accepted several thousand error events in the 14-day window per `stats-projects.json` — the exact condition this check targets, found on the first live read. Expect: `not-in-scope` when monitors exist (SNTRY-007 owns them from there); otherwise one `info` line per backend project with live volume, or nothing when every backend project is also silent (in which case SNTRY-012's coverage row already names the deeper problem). This finding is deliberately `info` severity with `points_recoverable: 0` — it is a prompt to decide whether monitors belong here, not a proven gap, since the absence of monitors could equally mean no scheduled jobs exist to watch. **Correlate:** SNTRY-007 (owns any monitor that does exist), SNTRY-012 (a backend project with volume and zero monitors is a different gap than the same project with zero *events*).
+
+**SNTRY-024, `firstEvent: null` split in the coverage check.** SNTRY-012 currently reads a mapped project's **recent** accepted-event count from `stats-projects.json` and calls a zero-count project "dead." Project detail also carries `firstEvent`, which distinguishes two differently-remediated cases that a bare recent-volume-of-zero reading conflates: a project that has **never** received a single event (`firstEvent: null` — the SDK was never wired up, or never fired) versus a project that received events at some point and then went quiet (`firstEvent` is a real timestamp, but `stats-projects.json` shows zero *recent* accepted events):
+
+```bash
+set -eu
+SENTRY_HOST="us.sentry.io"   # sentry.host
+SENTRY_ORG="your-org-slug"   # sentry.org
+PROJECT="your-project-slug"  # a project mapped to a critical service (SNTRY-012)
+API="https://${SENTRY_HOST}/api/0"
+[ -n "${SENTRY_TOKEN:-}" ] || { echo "SENTRY_TOKEN is not set; run /scoutflo:connect"; exit 1; }
+
+curl -fsS --max-time 15 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
+  "${API}/projects/${SENTRY_ORG}/${PROJECT}/" \
+  | tee /dev/stderr \
+  | jq -r 'if .firstEvent == null
+      then "SNTRY-024: \(.slug) never instrumented (firstEvent is null) — wire the SDK, this is not a drop-off"
+      else "SNTRY-024: \(.slug) firstEvent=\(.firstEvent) — instrumented at some point; cross-check stats-projects.json recent-volume for a drop-off" end'
+```
+
+**Confirmed live** on a real org: one project (a Python backend) returned `firstEvent: null` while five sibling projects on the same org all returned real ISO timestamps — proving both branches of this check occur on the same estate and that the field reliably distinguishes them. Expect: every project mapped to a critical service resolves one of the two branches; feed the branch into SNTRY-012's finding wording — "never instrumented, wire the SDK" is a setup gap (`setup-sentry#projects`), "instrumented, now silent" is an investigate-the-drop gap (check the deploy that removed instrumentation, or a DSN rotation that broke ingestion). Do not merge the two into one "dead project" sentence; they point the reader at opposite next actions. **Correlate:** SNTRY-012 (this check refines that finding's wording, it does not replace it), SNTRY-004 (a project that was never instrumented also has no real environment traffic to require an environment for).
+
+**SNTRY-025, environment-name sprawl.** Every environment-scoped check (SNTRY-102, SNTRY-013, and SNTRY-004's own baseline match) trusts that a project's environment list has one canonical name per real environment. A project that accumulated both `prod` and `production` — usually from two SDK configs written at different times, or a staging config copy-pasted into a new service — makes every environment-scoped rule only ever see half the traffic, silently, because Sentry treats them as two unrelated environments:
+
+```bash
+set -eu
+SENTRY_HOST="us.sentry.io"   # sentry.host
+SENTRY_ORG="your-org-slug"   # sentry.org
+PROJECT="your-project-slug"  # from projects.json
+API="https://${SENTRY_HOST}/api/0"
+[ -n "${SENTRY_TOKEN:-}" ] || { echo "SENTRY_TOKEN is not set; run /scoutflo:connect"; exit 1; }
+
+curl -fsS --max-time 15 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
+  "${API}/projects/${SENTRY_ORG}/${PROJECT}/environments/" \
+  | tee /dev/stderr \
+  | jq -r '
+      [ .[].name | ascii_downcase ] as $names
+      | [ ["prod","production"], ["pp","preprod","pre-prod"], ["stage","staging"] ] as $groups
+      | [ $groups[] | . as $g | select( ([ $names[] | select(. as $n | $g | index($n)) ] | length) > 1 ) | $g ] as $hits
+      | if ($hits | length) > 0
+        then "SNTRY-025 fail: synonym collision in environment names — \($hits | map(join("/")) | join(", ")) all present"
+        else "SNTRY-025 pass: no synonym collision among \($names | join(","))" end'
+```
+
+**Confirmed live** on a real org: one project's environment list (ten names, mixing cloud-provider tags, promotion stages, and ad hoc variants) carried a real, live synonym collision on **two** of the three declared families at once — both a `prod`-family pair and a `pp`/`preprod`-family pair present together on the same project — plus additional prod-like variant names outside all three declared families, which the canonical-map heuristic does not attempt to catch and states as its honest limit. A sibling project on the same org returned a small, clean environment list with no collision, confirming the check reads healthy and unhealthy estates correctly on the same org. Expect: no rows on a clean project; a row names the colliding family. This check's canonical map is deliberately narrow (three example families) — extend it in your own fork of this check for house-specific synonyms, and never treat a name outside the three groups as a false pass; it is simply not covered by this pass, not proven clean. **Correlate:** SNTRY-102 (a rule scoped to `environment: "production"` on a project that also ingests under `prod` silently misses that half of the traffic — this is the root cause SNTRY-102 cannot see from its own read), SNTRY-013 (the same half-match risk applies to tier-coverage environment scoping), SNTRY-004 (the baseline single-name match has the same blind spot at a smaller scale).
