@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.1.171
+
+**audit-datadog gains 10 new alert-hygiene checks, live-verified read-only.** Extends the existing four scorecard categories (denominators grow, weights unchanged, still sum to 100) with the missing measured-behavior evidence layer and several config-shape defects a bare "has a handle" or "count exists" check cannot see.
+
+- **DD-006 (high) — measured alert-event volume.** Counts `sources=alert`/`source:alert` events over a trailing window per monitor; fails only when the count is zero AND the monitor's own `overall_state_modified` shows a real transition in the same window (proof of a suppressed paging plane, not an inferred one). Also yields a noisiest-monitor ranking feeding DD-016.
+- **DD-007 (high) — placeholder/template artifacts.** Catches `@your-team-handle`-shaped placeholder handles, un-filled `__..._placeholder__` query fragments, and literal `$service`/`$env` template tag values — closing the gap where DD-001's bare `test("@")` passes a monitor whose only real target is a template artifact. Folded into the DD-033 effective-coverage flagship as an additional suppressor.
+- **DD-008 (medium) — over-broad `@all`/`@everyone`.**
+- **DD-018 (medium) — ratio query with no volume floor.** An `errors.as_count()/hits.as_count()`-shaped query with a bare percentage threshold and no minimum-denominator guard.
+- **DD-019 (medium) — impossible/tautological threshold.** `> 0`/`>= 0` on a structurally non-negative metric, or a negative critical with `>` — frequently the real root cause behind a DD-017 stuck-in-Alert monitor.
+- **DD-023 (high) — downtime intent decay.** An active, open-ended (`end: null`) downtime older than the decay window whose message reads as temporary ("test", "temp", "safe to delete", "debug").
+- **DD-035 (medium) — tag-vs-query scope mismatch.** A monitor's query scope names one value for a key (env/service/cluster) while its own tag for that key names another.
+- **DD-036 (low) — duplicate monitors.** Same normalized expression + scope, published more than once.
+- **DD-037 (medium) — never-evaluated monitors.** `No Data` with `overall_state_modified == null` well past the proving window since creation — distinct from DD-030 (evaluated fine, then went stale): this monitor never started.
+- **DD-038 (high) — paused Synthetic behind a live monitor.** A Synthetic test's own `status` is independent of its linked monitor's `overall_state`; a paused test freezes the monitor on its last real result while nothing checks the real target.
+
+**Live-caught and fixed, all re-verified against the real org:** `fromdateiso8601` rejects Datadog's real `"+00:00"` timestamp suffix (added a normalize-to-`Z` helper used everywhere a timestamp is parsed); a jq `|`-then-`or` precedence trap that indexed a string instead of the monitor object; a bare `0\b` regex that matched inside `"0.8"` and would have misflagged a real threshold; a per-matching-tag duplicate-row bug; an unbalanced-paren syntax error in the DD-033 flagship (rewritten as a named `has_real_handle` def). The live run also surfaced a real three-way correlation: a single `scope:"*"`, open-ended downtime tripped DD-021/DD-022, DD-023, and zeroed out DD-033's effective-coverage for every critical service at once — named as one root cause, not three.
+
+**Verified:** all four repo gates green (`leak-scan` CLEAN on a clean export, `structure-check` 23, `run-tests` 30/0, `plugin validate --strict`) + self-test locks for the new IDs and the live-caught jq-fix guards. Four new pressure scenarios. Every new check run read-only against a real Datadog org (the one read-only POST is `events/search`, classified by effect); no check shipped verify-pending.
+
 ## 0.1.170
 
 **Alert-hygiene depth for audit-elk and audit-digitalocean — 5 new checks, 2 live-caught bugs fixed.** Live-verified read-only against real Kibana and DigitalOcean estates.

@@ -11,6 +11,8 @@ Runnable, read-only checks for every surface the [audit-datadog](../SKILL.md) wo
 - `curl -fsS --max-time 30` is the default. Where the status code is the evidence, `-f` is dropped and `-w '%{http_code}'` captures it; those blocks say so.
 - Rate limits are per-endpoint and returned in `X-RateLimit-*` headers; on 429, sleep for the `X-RateLimit-Reset` seconds once and retry, then record `blocked` on a second 429.
 - Thresholds and windows are examples; tune to your workloads. Named defaults live in section 12.
+- `POST /api/v2/events/search` (DD-006) is a query endpoint, not a mutation: classify it by effect, not verb, exactly as [skill-authoring-conventions.md](../../../docs/skill-authoring-conventions.md) directs. It is the only POST this skill sends; it searches events and creates nothing.
+- DD-038 (Synthetics) needs an app key scoped `synthetics_read` in addition to the scopes in the doctor table; a 403 there is a scope gap on that one check, not the whole audit.
 
 ## 2. Check catalog
 
@@ -23,6 +25,9 @@ One permanent ID per check. IDs never change or get reused; retired checks keep 
 | DD-003 | Monitor delivery | No monitor left in `draft` status (drafts never notify) | high |
 | DD-004 | Monitor delivery | Notification rules and config policies reviewed where the org uses them | medium |
 | DD-005 | Monitor delivery | Critical-service monitors carry a `priority` (P1-P5) so paging can be tiered, not flat | medium |
+| DD-006 | Monitor delivery | Measured alert-event volume: `sources=alert`/`source:alert` events exist over the trailing window when a monitor's state actually transitioned in it | high |
+| DD-007 | Monitor delivery | No monitor's only notification target is a placeholder/template artifact (`@your-team-handle`, `__..._placeholder__` query fragment, literal `$service`/`$env` tag) | high |
+| DD-008 | Monitor delivery | No monitor pages the whole org via `@all`/`@everyone` without a stated reason | medium |
 | DD-010 | Monitor noise | Recovery thresholds set where a monitor has a warning/critical threshold (`critical_recovery`) | medium |
 | DD-011 | Monitor noise | No-data handling deliberate (`notify_no_data`, `no_data_timeframe`, `on_missing_data`) | medium |
 | DD-012 | Monitor noise | Renotification bounded, not unlimited (`renotify_interval`, `renotify_occurrences`) | low |
@@ -31,14 +36,21 @@ One permanent ID per check. IDs never change or get reused; retired checks keep 
 | DD-015 | Monitor noise | Datadog's own `quality_issues[]` reviewed and reconciled with this audit | info |
 | DD-016 | Monitor noise | Receiver noise concentration: the real pages share a handle with many noisy monitors | high |
 | DD-017 | Monitor noise | No monitor stuck in `Alert` state so long it can never re-page a new breach | medium |
+| DD-018 | Monitor noise | Ratio queries (`errors/hits`-shaped) carry a composite volume floor, not just a bare percentage threshold | medium |
+| DD-019 | Monitor noise | No comparator/threshold pair that is impossible or tautological (`> 0`/`>= 0` on a non-negative metric, or a negative critical value with `>`) | medium |
 | DD-020 | Muting and downtime | No monitor muted indefinitely (`options.silenced` with no end) | high |
 | DD-021 | Muting and downtime | No always-on / broad-scope downtime masking real alerts (`/api/v2/downtime`) | high |
 | DD-022 | Muting and downtime | Downtimes scoped tightly, not muting whole environments open-ended | medium |
+| DD-023 | Muting and downtime | No active, open-ended downtime whose age has outlived its own stated temporary intent | high |
 | DD-030 | Coverage and staleness | No stale monitors: `last_triggered_ts` recent or a recorded reason | low |
 | DD-031 | Coverage and staleness | Composite monitors resolve all constituent monitor IDs | medium |
 | DD-032 | Coverage and staleness | SLOs have an error-budget or burn-rate monitor attached | high |
 | DD-033 | Coverage and staleness | Critical services from topology have monitor coverage | high |
 | DD-034 | Coverage and staleness | Monitor tag hygiene: service/team tags present for routing | low |
+| DD-035 | Coverage and staleness | A monitor's tags agree with its query's own scope terms for the same key (env, service, cluster, …) | medium |
+| DD-036 | Coverage and staleness | No duplicate published monitors on the same normalized expression and scope | low |
+| DD-037 | Coverage and staleness | No monitor stuck in `No Data` with `overall_state_modified == null` since well past its `created` date (never evaluated once) | medium |
+| DD-038 | Coverage and staleness | No paused Synthetic test still backing an unmuted, live-reporting monitor | high |
 
 Cost & Resource (non-scored, `DDOPT-NNN`, `points_recoverable: 0`): estimated/historical cost trend, top custom-metric contributors, and unused dashboards. Sourced only from Datadog's own usage endpoints; see section 11.
 
@@ -46,10 +58,10 @@ Cost & Resource (non-scored, `DDOPT-NNN`, `points_recoverable: 0`): estimated/hi
 
 What 100/100 means per category; the checks above are this profile made executable.
 
-- **Monitor delivery**: every monitor routes to a live target, no drafts masquerading as coverage, dead `@handles` caught, and org-level notification rules/config policies reviewed where used.
-- **Monitor noise**: recovery thresholds, no-data handling, bounded renotification, evaluation delay, and auto-resolve all set deliberately per monitor, and Datadog's own quality signals reconciled with this audit's findings.
-- **Muting and downtime**: no indefinite mutes, no open-ended broad-scope downtimes masking live alerts, downtimes scoped to what they mean to suppress.
-- **Coverage and staleness**: no stale or draft monitors counted as coverage, composite monitors intact, every SLO paired with a burn-rate monitor, critical services covered, and monitor tags present for routing.
+- **Monitor delivery**: every monitor routes to a live target, no drafts masquerading as coverage, dead `@handles` caught, no target is a placeholder never filled in, no monitor pages the whole org without reason, measured alert-event volume backs up the configuration, and org-level notification rules/config policies reviewed where used.
+- **Monitor noise**: recovery thresholds, no-data handling, bounded renotification, evaluation delay, and auto-resolve all set deliberately per monitor, every ratio query carries a volume floor, no threshold is impossible or tautological, and Datadog's own quality signals reconciled with this audit's findings.
+- **Muting and downtime**: no indefinite mutes, no open-ended broad-scope downtimes masking live alerts, no downtime has outlived its own stated temporary intent, downtimes scoped to what they mean to suppress.
+- **Coverage and staleness**: no stale, draft, duplicate, or never-evaluated monitors counted as coverage, composite monitors intact, every SLO paired with a burn-rate monitor, monitor tags agree with what their own query actually evaluates, no live monitor is fed by a paused Synthetic, critical services covered, and monitor tags present for routing.
 
 ## 4. Inventory (all categories)
 
@@ -72,7 +84,8 @@ DD_AUTH="-H DD-API-KEY:${DATADOG_API_KEY} -H DD-APPLICATION-KEY:${DATADOG_APP_KE
 curl -fsS --max-time 60 -H "DD-API-KEY: ${DATADOG_API_KEY}" -H "DD-APPLICATION-KEY: ${DATADOG_APP_KEY}" \
   "https://${DD_HOST}/api/v1/monitor?page_size=1000" \
   | jq '[.[] | {id, name, type, message, query, priority, draft_status: (.draft_status // "published"),
-      overall_state, last_triggered_ts: (.overall_state_modified // null),
+      overall_state, overall_state_modified: (.overall_state_modified // null),
+      last_triggered_ts: (.overall_state_modified // null), created,
       tags,
       options: (.options // {} | {silenced, notify_no_data, no_data_timeframe, on_missing_data,
         renotify_interval, renotify_occurrences, evaluation_delay, new_group_delay,
@@ -83,8 +96,12 @@ curl -fsS --max-time 60 -H "DD-API-KEY: ${DATADOG_API_KEY}" -H "DD-APPLICATION-K
 # NOTE: `priority` is captured for DD-005 (paging-tier hygiene). The monitor object
 # exposes a top-level `priority` (integer 1-5, i.e. P1-P5, or null when unset); it is
 # a plain read, no extra call. The overall_state transition time is aliased here as
-# `last_triggered_ts` — DD-017 reads that key (there is NO `overall_state_modified`
-# key retained in this projection, so any check must read `last_triggered_ts`).
+# `last_triggered_ts` — DD-017 reads that key. This projection ALSO keeps the
+# unaliased `overall_state_modified` (verified live: both keys read the identical
+# ISO-8601 string or null) because DD-037 needs to distinguish "never transitioned"
+# (null) from "transitioned a long time ago" (a real timestamp) — the aliasing alone
+# collapsed that distinction in earlier runs. `created` (a plain top-level field,
+# confirmed live as an ISO-8601 string) is captured for DD-037's age gate; no extra call.
 
 # Datadog's OWN monitor quality signals (native corroboration anchor).
 curl -fsS --max-time 60 -H "DD-API-KEY: ${DATADOG_API_KEY}" -H "DD-APPLICATION-KEY: ${DATADOG_APP_KEY}" \
@@ -106,7 +123,13 @@ curl -gfsS --max-time 30 -H "DD-API-KEY: ${DATADOG_API_KEY}" -H "DD-APPLICATION-
       status: .attributes.status,
       start: .attributes.schedule.start, end: (.attributes.schedule.end // null),
       recurrences: (.attributes.schedule.recurrences // null),
-      monitor_identifier: .attributes.monitor_identifier}]' > "${RAW_DIR}/downtimes.json"
+      monitor_identifier: .attributes.monitor_identifier,
+      message: (.attributes.message // ""), created: .attributes.created}]' > "${RAW_DIR}/downtimes.json"
+# NOTE: `message` and `created` are added for DD-023 (downtime intent decay) — both are
+# plain top-level fields under `.attributes` (confirmed live alongside `status`/`schedule`
+# in the same object), no extra call. `message` is a downtime's own annotation, distinct
+# from a monitor message; it carries no secret in normal use, same disclosure profile as
+# a monitor message (do not write it verbatim if it embeds a secret-shaped value).
 
 # SLOs
 curl -fsS --max-time 30 -H "DD-API-KEY: ${DATADOG_API_KEY}" -H "DD-APPLICATION-KEY: ${DATADOG_APP_KEY}" \
@@ -114,12 +137,52 @@ curl -fsS --max-time 30 -H "DD-API-KEY: ${DATADOG_API_KEY}" -H "DD-APPLICATION-K
   | jq '[.data[]? | {id, name, type, monitor_ids: (.monitor_ids // [])}]' > "${RAW_DIR}/slos.json" \
   || echo '[]' > "${RAW_DIR}/slos.json"
 
+# Alert-sourced events, trailing 30d (DD-006). v1 `sources=alert` events carry `monitor_id`
+# directly on each event (confirmed live — this is the ONLY events surface that does; the
+# general v1 events feed with no source filter does not). This is the load-bearing capture.
+EVT_WINDOW_DAYS="30"   # example, tune to your paging cadence; see section 12
+EVT_TO="$(date -u +%s)"
+EVT_FROM="$(( EVT_TO - EVT_WINDOW_DAYS * 24 * 3600 ))"
+curl -fsS --max-time 30 -H "DD-API-KEY: ${DATADOG_API_KEY}" -H "DD-APPLICATION-KEY: ${DATADOG_APP_KEY}" \
+  "https://${DD_HOST}/api/v1/events?start=${EVT_FROM}&end=${EVT_TO}&sources=alert" \
+  | jq '[.events[]? | {id, monitor_id, alert_type, date_happened}]' > "${RAW_DIR}/alert-events.json" \
+  || echo '[]' > "${RAW_DIR}/alert-events.json"
+# NOTE: on a live org with zero alert-sourced events in the window, `sources=alert` still
+# returns 200 with `events: []` (confirmed live) — an empty array is a real zero count, not
+# a failure signal; DD-006 reads it as such and cross-checks it against monitor state
+# transitions (section 5.2) before deciding whether the zero is a fail or a quiet window.
+
+# v2 corroboration for DD-006: events/search is a read-only QUERY sent as POST (classify by
+# effect, not verb — see section 1). Confirmed live: 200 with a `data`/`meta` envelope; an
+# empty `data` array on a real org with zero alert events matched the v1 zero exactly.
+EVT_FROM_ISO="$(date -u -r "${EVT_FROM}" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d "@${EVT_FROM}" +%Y-%m-%dT%H:%M:%SZ)"
+EVT_TO_ISO="$(date -u -r "${EVT_TO}" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d "@${EVT_TO}" +%Y-%m-%dT%H:%M:%SZ)"
+EVT_BODY="$(jq -n --arg from "$EVT_FROM_ISO" --arg to "$EVT_TO_ISO" \
+  '{filter:{query:"source:alert", from:$from, to:$to}, page:{limit:1000}}')"
+printf '%s' "$EVT_BODY" > "${RAW_DIR}/.alert-events-v2-request.json"
+curl -fsS --max-time 30 -X POST -H "DD-API-KEY: ${DATADOG_API_KEY}" -H "DD-APPLICATION-KEY: ${DATADOG_APP_KEY}" \
+  -H "Content-Type: application/json" -d @"${RAW_DIR}/.alert-events-v2-request.json" \
+  "https://${DD_HOST}/api/v2/events/search" \
+  | jq '{count: (.data | length)}' > "${RAW_DIR}/alert-events-v2-count.json" \
+  || echo '{"count":null}' > "${RAW_DIR}/alert-events-v2-count.json"
+
+# Synthetic tests (DD-038): `status` (live/paused) is independent of the linked monitor's
+# own state. Confirmed live: 200 with a `tests[]` array; `status` and `monitor_id` are both
+# plain top-level fields on each test object, no extra call per test.
+curl -fsS --max-time 30 -H "DD-API-KEY: ${DATADOG_API_KEY}" -H "DD-APPLICATION-KEY: ${DATADOG_APP_KEY}" \
+  "https://${DD_HOST}/api/v1/synthetics/tests" \
+  | jq '[.tests[]? | {public_id, status, monitor_id: (.monitor_id // null)}]' > "${RAW_DIR}/synthetics.json" \
+  || echo '[]' > "${RAW_DIR}/synthetics.json"
+# NOTE: this projection deliberately drops `creator`, `name`, `config.request.url`, and
+# `message` — the full test object carries the creator's name/email and target hostnames,
+# none of which any finding needs; DD-038 only ever needs `status` joined to `monitor_id`.
+
 wc -c "${RAW_DIR}"/*.json
 ```
 
 Expected: one JSON file per surface. A 403 on any endpoint is an auth/scope finding for the checks that need it (record which scope: monitor reads need `monitors_read`, downtime reads `monitors_downtime`, SLO reads `slos_read`), never a clean pass.
 
-## 5. Monitor delivery (DD-001 to DD-005)
+## 5. Monitor delivery (DD-001 to DD-008)
 
 ```bash
 set -eu
@@ -249,7 +312,96 @@ jq '[.[] | select(.priority == null)
 ```
 Blast radius: when critical-service monitors leave `priority` null, every monitor on a given receiver pages at the same urgency — "all 47 monitors on @pagerduty-oncall are un-prioritized, so a P5 disk-space warning and a payments-down page are indistinguishable to the responder". Compute it by joining `priority == null` to the `service:` tag/criticality and the shared handle. Judgment: DD-005 is only a finding on *critical-service* monitors (topology.md) or monitors sharing a paging handle with them; a lone P-less low-severity monitor is a note. Correlation: amplifies DD-016 (without priority the noisy and the real monitors on one handle are indistinguishable) and feeds DD-004 tiered routing. Remediation is inline (no `setup-datadog` ships): Monitor edit — set a priority (P1-P5) on critical-service monitors so the receiver can tier.
 
-## 6. Monitor noise (DD-010 to DD-017)
+### 5.2 Measured alert-event volume, placeholder artifacts, and over-broad targets (DD-006 to DD-008)
+
+> **Live-verified (read-only).** All three ran against a real Datadog org. DD-006's `sources=alert`/`source:alert` event queries both returned 200 with a real (empty, on that run) result set, cross-checked against zero monitor state transitions in the same window — proving the check does not false-positive on a genuinely quiet period. DD-007 matched real monitors carrying a literal `@your-team-handle`-shaped placeholder handle, a literal `$service`/`$env` tag value, and a query containing a `__..._placeholder__` fragment — on the SAME live org, at least one of these placeholder monitors also carried a legitimate-looking `@slack-`/`@pagerduty-` handle elsewhere in its message, confirming DD-001's bare `test("@")` cannot tell the two apart. DD-008 matched real monitors whose message contained a literal `@all`.
+
+```bash
+set -eu
+RUN_DATE="$(date -u +%Y-%m-%d)"
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/datadog/${RUN_DATE}/raw"
+EVT_WINDOW_DAYS="30"   # example, tune to your paging cadence; matches the section-4 capture
+
+# DD-006: total measured alert-event volume in the window (from the section-4 capture; NO
+# extra call here). An empty array is a real zero (confirmed live — sources=alert 200s with
+# events:[] on a genuinely quiet org), not a failure signal on its own.
+TOTAL_EVENTS="$(jq 'length' "${RAW_DIR}/alert-events.json")"
+echo "alert-sourced events in the last ${EVT_WINDOW_DAYS}d: ${TOTAL_EVENTS}"
+
+# Noisiest-monitor ranking (feeds DD-016) — grouped straight from the section-4 capture.
+jq '[.[] | select(.monitor_id != null)] | group_by(.monitor_id)
+    | map({monitor_id: .[0].monitor_id, event_count: length}) | sort_by(-.event_count)' \
+  "${RAW_DIR}/alert-events.json"
+
+# DD-006 fail condition: total is zero AND at least one monitor's own overall_state_modified
+# falls inside the SAME window — something transitioned, but no alert event was recorded for
+# it. This is the measured, not inferred, proof of a suppressed paging plane.
+# NOTE: `fromdateiso8601` REQUIRES the literal "...SSZ" shape and rejects Datadog's real
+# "+00:00" offset suffix outright (confirmed live: "does not match format %Y-%m-%dT%H:%M:%SZ"
+# on a real timestamp) — every timestamp read in this skill must go through the same
+# sub()-normalize-to-Z step before fromdateiso8601, or the comparison silently errors/aborts
+# under `set -eu`. Datadog's own timestamps are always UTC, so "+00:00" -> "Z" is exact, not
+# an approximation; fractional seconds (seen on `created`) are stripped first.
+CUTOFF_EPOCH="$(( $(date -u +%s) - EVT_WINDOW_DAYS * 24 * 3600 ))"
+jq --argjson cutoff "$CUTOFF_EPOCH" '
+  def to_epoch: sub("\\.[0-9]+"; "") | sub("\\+00:00$"; "Z") | fromdateiso8601;
+  [.[] | select(.overall_state_modified != null)
+   | select((.overall_state_modified | to_epoch) >= $cutoff)
+   | {id, overall_state, overall_state_modified}]' "${RAW_DIR}/monitors.json"
+# If TOTAL_EVENTS==0 and this list is non-empty: DD-006 fails high, naming the transitioned
+# monitor(s) as evidence a page should have fired and did not. If TOTAL_EVENTS==0 and this
+# list IS empty: the window was quiet on both sides — record DD-006 as partial ("no alert
+# activity to measure this window; re-run after a known state change, or widen the window"),
+# never as a pass and never as a fail with no supporting transition.
+```
+
+```bash
+set -eu
+RUN_DATE="$(date -u +%Y-%m-%d)"
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/datadog/${RUN_DATE}/raw"
+
+# DD-007a: placeholder-shaped @handle anywhere in the message. PLACEHOLDER_HANDLES is the
+# example set; extend it to whatever generic template your org's monitor packs ship with.
+jq -r '[.[] | (.message // "") | scan("@[A-Za-z0-9._-]+")] | flatten | unique
+    | map(select(test("(?i)^@(your|example|replace-?me|team-?name)[-_a-z0-9]*handle$|^@handle$")))
+    | .[]' "${RAW_DIR}/monitors.json"
+jq '[.[] | select((.message // "") | test("(?i)@(your|example|replace-?me|team-?name)[-_a-z0-9]*handle|@handle\\b"))
+    | {id, name,
+       only_handle_is_placeholder: (([(.message // "") | scan("@[A-Za-z0-9._-]+")] | unique
+         | map(select(test("(?i)^@(your|example|replace-?me|team-?name)[-_a-z0-9]*handle$|^@handle$") | not)) | length) == 0),
+       service: [((.tags // [])[] | select(startswith("service:")))]}]' "${RAW_DIR}/monitors.json"
+# Severity: `only_handle_is_placeholder == true` is the DD-001 blind spot — this monitor
+# passes DD-001's bare "@" test and delivers nothing; critical on a critical-service monitor,
+# high otherwise. `only_handle_is_placeholder == false` (a placeholder alongside a real
+# handle) is still a finding — Datadog will try to notify the placeholder too — but the real
+# handle keeps delivery alive, so it is a hygiene fix, not a blind spot: medium.
+
+# DD-007b: a query containing an un-filled template fragment (the metric name was never
+# substituted, so the query can never match real data). PLACEHOLDER_QUERY_RE is the example
+# pattern most monitor-pack templates use; adjust to your own template convention.
+jq '[.[] | select((.query // "") | test("__[A-Za-z0-9_]*placeholder[A-Za-z0-9_]*__"))
+    | {id, name, query}]' "${RAW_DIR}/monitors.json"
+
+# DD-007c: a tag value that is a literal unsubstituted template variable, not a real value.
+# `any(test(...))` in the select — NOT a bare `.tags[] | test(...)` — is required: the latter
+# emits one row PER MATCHING TAG (a monitor with two "$"-tags prints twice, confirmed live),
+# which double-counts the finding; `any(...)` collapses back to one row per monitor.
+jq '[.[] | select((.tags // []) | any(test("^\\$")))
+    | {id, name, template_tags: [((.tags // [])[] | select(test("^\\$")))]}]' "${RAW_DIR}/monitors.json"
+# Blast radius for DD-007b/c: a literal "$service"/"$env" tag or an un-filled query breaks
+# every routing/topology join that key feeds (DD-034, DD-035, the coverage matrix) — the
+# monitor LOOKS tagged and configured, but the value it carries is not a real one.
+
+# DD-008: over-broad @all/@everyone.
+jq '[.[] | select((.message // "") | test("@all\\b|@everyone\\b"))
+    | {id, name, service: [((.tags // [])[] | select(startswith("service:")))]}]' "${RAW_DIR}/monitors.json"
+# Judgment: a deliberate incident-bridge or SEV1-only monitor naming @all is a documented
+# choice, not a defect; the finding is the ABSENCE of any narrower handle alongside @all on a
+# routine (non-incident-tier) monitor, which pages the whole org for something ordinary.
+```
+Expect (all three): the listed monitors are real config, joined to their `service:` tag exactly like the other Phase-3 checks — never a bare count. Remediation is inline (no `setup-datadog` ships): DD-006 → trigger a controlled test breach and confirm an event appears; DD-007 → replace the placeholder handle/query fragment/tag value with the real one; DD-008 → replace `@all` with the owning team's handle, or record why the breadth is deliberate.
+
+## 6. Monitor noise (DD-010 to DD-019)
 
 ```bash
 set -eu
@@ -364,7 +516,55 @@ jq '[.[] | select((.quality_issues | tostring) | test("alerted_too_long")) | {id
 
 Healthy: no notification handle concentrates many noisy monitors alongside the monitors that page for a critical service; no monitor sits in `Alert` long enough that a fresh breach cannot re-page. Fail (DD-016, high): a handle carrying the real critical-service pages is dominated by flap-prone/renotify-heavy monitors — name the handle, the monitor_count, the noisy count, and the buried critical monitors. Fail (DD-017, medium): a monitor stuck in `Alert` on a critical service — name the monitor, the service, and how long (from `last_triggered_ts`). Remediation is inline (no `setup-datadog` ships): DD-016 → split the noisy monitors onto a separate ticket/low-urgency route or tune them (recovery threshold, renotify cap) so the real page is not buried; DD-017 → fix the stuck monitor's query or thresholds so it can recover and re-alert (Monitor edit > Advanced options).
 
-## 7. Muting and downtime (DD-020 to DD-022)
+### 6.2 Ratio volume floor and impossible thresholds (DD-018, DD-019)
+
+> **Live-verified (read-only).** Both matched the SAME real query on a live org: an `errors.as_count() / hits.as_count() > 0.1` ratio with no volume floor (DD-018), on a monitor that also, separately, is one of a set of duplicate monitors on the same base metric (DD-036) — and a sibling monitor on that same base metric carried `> 0`/`> -100` thresholds against a structurally non-negative percentage metric (DD-019), one of which was observed live sitting in `overall_state == "Alert"` — the exact stuck-in-Alert symptom DD-017 flags, with DD-019 supplying its root cause.
+
+```bash
+set -eu
+RUN_DATE="$(date -u +%Y-%m-%d)"
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/datadog/${RUN_DATE}/raw"
+
+# DD-018: a ratio of two .as_count() terms with a bare threshold and no composite AND
+# clause enforcing a minimum denominator. The character class between the two as_count()
+# calls must be permissive (a Datadog scope segment carries `{`, `}`, `*`, digits — a
+# narrower class silently never matches a real scoped query, confirmed live).
+jq '[.[] | select((.query // "") | test("as_count\\(\\)\\s*/\\s*.*as_count\\(\\)"))
+    | select((.query // "") | test("(?i)\\band\\b.*(count|hits|requests|total)\\s*(>=|>)\\s*[0-9]") | not)
+    | {id, name, query, service: [((.tags // [])[] | select(startswith("service:")))]}]' \
+  "${RAW_DIR}/monitors.json"
+# Blast radius: name the threshold and the missing floor, e.g. "the checkout error-rate
+# monitor pages at 10% with no minimum hits — 1 error in 9 hits crosses it exactly as
+# confidently as 1,000 errors in 9,000, but the two mean very different things at 3am."
+
+# DD-019: comparator/threshold pairs that can never recover, or are structurally guaranteed
+# true. NONNEG_METRIC_HINTS is an example list of metric-name fragments this audit treats as
+# "structurally non-negative" (a percentage, a count, a rate); extend it to your own naming.
+# Both disjuncts of the `select` MUST be independently parenthesized around their own
+# `(.query // "") | test(...)` — jq's `|` binds looser than `or`, so `X | test(A) or Y` is
+# `X | (test(A) or Y)`, and Y's own `.query` reference then indexes the STRING `X` piped in,
+# not the monitor object (confirmed live: "Cannot index string with string \"query\"" —
+# every branch needs its own `(.query // "") | test(...)` wrapped in parens, never chained
+# through a shared pipe into an `or`). The zero-threshold test also requires a trailing
+# `(\.0+)?(\s*$|[^.0-9])` guard: a bare `0\b` matches inside "0.8" (word boundary sits
+# between "0" and "."), which would misflag a real 80% threshold as tautological — confirmed
+# live and fixed with the guard below.
+NONNEG_METRIC_HINTS="cpu|disk|memory|mem\\.|pct|percent|usage|count|rate|util"   # example, tune
+jq --arg hints "$NONNEG_METRIC_HINTS" '[.[]
+    | select(.type == "metric alert" or .type == "query alert")
+    | select( ((.query // "") | test("(>=?)\\s*(-[0-9]+(\\.[0-9]+)?)"))
+        or (((.query // "") | test("(?i)(\($hints))"))
+            and ((.query // "") | test(">=?\\s*0(\\.0+)?(\\s*$|[^.0-9])"))) )
+    | {id, name, query, overall_state, since: .last_triggered_ts}]' "${RAW_DIR}/monitors.json"
+# Blast radius: an impossible/tautological threshold is a monitor that CANNOT signal a new
+# breach — join to overall_state=="Alert" (DD-017) to show it is not just theoretically
+# unrecoverable but observably stuck right now. Judgment: `hints` is a heuristic on the
+# metric name, not a guarantee; a metric that legitimately can go negative (a delta, a
+# forecast residual) is a false positive worth excluding by name, not by disabling the rule.
+```
+Expect: DD-018 lists ratio queries with no accompanying volume guard, joined to the affected service. DD-019 lists queries whose comparator/threshold pair cannot be satisfied in the healthy direction, joined to the CURRENT `overall_state` so a reader can see whether it is already manifesting as a stuck monitor. Remediation is inline (no `setup-datadog` ships): DD-018 → add a composite `AND` clause on a minimum denominator; DD-019 → set a threshold the metric can actually recover past — check DD-017 for any monitor this also unblocks.
+
+## 7. Muting and downtime (DD-020 to DD-023)
 
 ```bash
 set -eu
@@ -420,7 +620,37 @@ jq --slurpfile mons "${RAW_DIR}/monitors.json" '
 # maintenance target (host/service), not env:prod or *.
 ```
 
-## 8. Coverage and staleness (DD-030 to DD-034)
+### 7.1 Downtime intent decay (DD-023)
+
+> **Live-verified (read-only).** Matched a real downtime on a live org: `status: "active"`, `end: null`, `created` well over `DOWNTIME_DECAY_DAYS` in the past, and a `message` reading as a temporary note that asked for its own deletion — every field this check reads (`status`, `schedule.end`, `attributes.created`, `attributes.message`) came back exactly as captured in section 4, no extra call.
+
+```bash
+set -eu
+RUN_DATE="$(date -u +%Y-%m-%d)"
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/datadog/${RUN_DATE}/raw"
+DOWNTIME_DECAY_DAYS="30"   # example, tune to your change-management cadence
+
+# DD-023: active, open-ended downtimes whose age has outlived a temporary-sounding message.
+jq --arg re '(?i)test|temp|safe to delete|debug' '
+  def to_epoch: sub("\\.[0-9]+"; "") | sub("\\+00:00$"; "Z") | fromdateiso8601;
+  [.[] | select(.status == "active" and .end == null and .created != null)
+     | select(((.created | to_epoch)) as $c | (now - $c) > (30 * 24 * 3600))
+     | select((.message // "") | test($re))
+     | {id, status, end, created, message, age_days: (((now - (.created | to_epoch)) / 86400) | floor)}]' \
+  "${RAW_DIR}/downtimes.json"
+# Judgment: the age threshold and the message regex are both examples — tune DOWNTIME_DECAY_DAYS
+# to your own change-management cadence, and extend the word list if your team uses a different
+# convention for "this is temporary" (e.g. "WIP", "revert me"). A downtime that says "temporary"
+# and is still active well past the decay window did not stay temporary; someone meant to
+# clean it up and did not. This is the SAME permanent-blind-spot shape DD-021/DD-022 already
+# score — DD-023 adds the evidence of intent (the message) and the evidence of neglect (the
+# age), so the finding names WHY it happened, not just that it did. Correlation: shares its
+# downtime set with DD-021's tag-join; a DD-023 hit on a downtime that also silences a
+# critical service is the same row DD-033 already subtracts, just with the decay context added.
+```
+Expect: `[]` on a healthy estate — every open-ended downtime either has a non-temporary-sounding message, or is younger than `DOWNTIME_DECAY_DAYS`. A non-empty result names the downtime's age and its own message as the evidence. Remediation is inline (no `setup-datadog` ships): Downtimes list — cancel it now if the maintenance is over, or replace it with a properly scoped, time-bound downtime if the suppression is genuinely still needed.
+
+## 8. Coverage and staleness (DD-030 to DD-038)
 
 ```bash
 set -eu
@@ -511,7 +741,8 @@ Per critical service `X` (from topology.md):
 effective_monitors(X) =
     monitors tagged service:X
   − drafts                                   (DD-003 set)
-  − monitors with no @handle                 (DD-001 set)
+  − monitors with no REAL @handle            (DD-001 set, now also excludes a
+                                               placeholder-only handle — DD-007)
   − monitors whose handle no longer resolves (DD-002 / broken_at_handle set)
   − indefinitely-silenced monitors           (DD-020 set)
   − monitors whose tags match an active end=null downtime's scope (DD-021 tag-join)
@@ -528,6 +759,16 @@ jq -n --argjson crit "$CRIT_SERVICES" \
   --slurpfile mons "${RAW_DIR}/monitors.json" \
   --slurpfile downtimes "${RAW_DIR}/downtimes.json" \
   --slurpfile quality "${RAW_DIR}/monitor-quality.json" '
+  # A REAL @handle: at least one @-token, AND at least one of those tokens is not
+  # placeholder-shaped (folds DD-001s bare "has an @" test together with DD-007s
+  # placeholder detection, so a monitor whose only handle is `@your-team-handle` no
+  # longer counts as delivering — confirmed live this is a real gap DD-001 alone misses).
+  def has_real_handle:
+    ([.message // "" | scan("@[A-Za-z0-9._-]+")]) as $h
+    | ($h | length) > 0
+      and (($h | map(select(
+            test("(?i)^@(your|example|replace-?me|team-?name)[-_a-z0-9]*handle$|^@handle$") | not
+          ))) | length) > 0;
   ($mons[0] // []) as $M
   | ($downtimes[0] // []) as $D
   | ($quality[0] // []) as $Q
@@ -542,7 +783,7 @@ jq -n --argjson crit "$CRIT_SERVICES" \
     # term-list, so the monitor must be referenced as $mon, never `.`.
     | ($svcMons | map(. as $mon | select(
         ($mon.draft_status != "draft")                               # not a draft
-        and (($mon.message // "") | test("@"))                       # has an @handle
+        and ($mon | has_real_handle)                                 # DD-001 + DD-007
         and (([$mon.id] | inside($deadHandle)) | not)                # handle resolves
         and ((($mon.options.silenced // {}) | to_entries | any(.value==null or .value==0)) | not)  # not indefinitely muted
         and (($dtScopes | any(. as $terms                            # not under an open-ended downtime
@@ -562,6 +803,82 @@ jq -n --argjson crit "$CRIT_SERVICES" \
 ```
 
 This is the direct Datadog analog of audit-kubernetes's external→cluster-secrets path (K8S-010): a single computed chain the customer's own console cannot show, because the UI shows 8 green monitors and gives no way to see the service is effectively unmonitored. Remediation is inline (no setup-datadog ships): restore at least one live-delivering, unmuted, un-downtimed, non-draft monitor per critical service (add/repair an @handle, publish the draft, unmute, or scope the downtime — whichever suppressors this join named). Verification: recompute `effective_monitors` from a fresh raw pull; every critical service must be `>= 1`.
+
+**Live-caught interaction (worth stating in the report when it recurs):** the SAME `end == null`, `scope: "*"` downtime that DD-021/DD-022/DD-023 flag on its own also collapses `effective_monitors` to 0 for every critical service in this join, because a `"*"` scope term matches every monitor's tags unconditionally. One suppressor can zero out the whole flagship at once; when it does, name that single downtime as the root cause across all three findings rather than reporting three unrelated-looking gaps.
+
+### 8.2 Scope consistency, duplication, never-evaluated, and paused Synthetics (DD-035 to DD-038)
+
+> **Live-verified (read-only).** DD-035 matched a real monitor on a live org whose query scope named one value for a tag key (e.g. `cluster_name:a`) while the monitor's own tag for that same key carried a different value (`cluster_name:b`) — the query is what actually evaluates; the tag is what this toolkit's own topology join and DD-034 trust. DD-036 matched four real published monitors sharing the identical normalized base metric and scope, differing only in window and threshold. DD-037 matched four real monitors created weeks earlier, still `No Data` with `overall_state_modified == null`. DD-038 matched two real paused Synthetic tests each still linked (via `monitor_id`) to an unmuted monitor whose `overall_state` reflects only its last real evaluation, not the pause.
+
+```bash
+set -eu
+RUN_DATE="$(date -u +%Y-%m-%d)"
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/datadog/${RUN_DATE}/raw"
+NEVER_EVALUATED_DAYS="7"   # example, tune to your rollout cadence
+
+# DD-035: a monitor's query scope names a key:value that its OWN tags contradict.
+# `capture("\\{(?<scope>[^}]*)\\}")` takes the FIRST {...} block in the query — the scope
+# filter immediately after the metric name, never a later `by {...}` grouping clause (the
+# grouping clause has bare keys with no `:value`, so it never produces a spurious term here).
+jq '[.[] | . as $mon
+   | ((.query // "") | capture("\\{(?<scope>[^}]*)\\}").scope) as $scope
+   | ([$scope // "" | scan("([A-Za-z0-9_]+):([A-Za-z0-9_.-]+)")] | map({(.[0]): .[1]}) | add // {}) as $qterms
+   | ($mon.tags // [] | map(split(":")) | map(select(length==2)) | map({(.[0]): .[1]}) | add // {}) as $tterms
+   | ($qterms | to_entries
+      | map(select(.key as $k | $tterms[$k] != null and $tterms[$k] != .value))
+      | map({key: .key, query_value: .value, tag_value: $tterms[.key]})) as $mismatch
+   | select(($mismatch | length) > 0)
+   | {id: $mon.id, name: $mon.name, mismatch: $mismatch}]' "${RAW_DIR}/monitors.json"
+# Blast radius: name the exact key and the two values — "the checkout-latency monitor's query
+# scopes to cluster_name:prod-a but its own cluster_name tag says prod-b" — this is a routing/
+# topology join hazard (DD-034, the coverage matrix, map-topology's service-name join), not a
+# cosmetic label problem: whatever trusts the tag is looking at the wrong resource.
+
+# DD-036: duplicate monitors — normalize by stripping the leading agg(window): prefix and the
+# trailing comparator+threshold, then group by (expression, scope).
+jq '[.[] | select(.type=="metric alert" or .type=="query alert")
+   | . as $mon
+   | ((.query // "")
+      | sub("^[a-z_]+\\([^)]*\\):\\s*"; "")
+      | sub("\\s*[<>=!]+\\s*-?[0-9]+(\\.[0-9]+)?\\s*$"; "")) as $norm
+   | {id: $mon.id, name: $mon.name, norm: $norm}]
+  | group_by(.norm) | map(select(length>1))
+  | map({normalized_expression: .[0].norm, monitor_ids: map(.id), count: length})' \
+  "${RAW_DIR}/monitors.json"
+# Blast radius: name the expression and every id in the group, and check whether their
+# thresholds have drifted apart (a DD-019 tautological threshold hiding next to a healthy
+# duplicate is a documented live pattern, not a hypothetical one).
+
+# DD-037: never-evaluated monitors, distinct from DD-030 (evaluated fine, then went stale).
+NEVER_EVAL_CUTOFF="$(( $(date -u +%s) - NEVER_EVALUATED_DAYS * 24 * 3600 ))"
+jq --argjson cutoff "$NEVER_EVAL_CUTOFF" '
+  def to_epoch: sub("\\.[0-9]+"; "") | sub("\\+00:00$"; "Z") | fromdateiso8601;
+  [.[] | select(.overall_state=="No Data" and .overall_state_modified==null and .created != null)
+     | select((.created | to_epoch) < $cutoff)
+     | {id, name, created, service: [((.tags // [])[] | select(startswith("service:")))]}]' \
+  "${RAW_DIR}/monitors.json"
+# Blast radius: `overall_state_modified == null` means the monitor has NEVER transitioned
+# state even once — it did not go quiet after working, it never started. Join to service
+# criticality: coverage that looked provisioned in the UI and never actually turned on.
+
+# DD-038: a paused Synthetic test still backing an unmuted, live-reporting monitor.
+jq -n --slurpfile mons "${RAW_DIR}/monitors.json" --slurpfile synth "${RAW_DIR}/synthetics.json" '
+  ($mons[0] // []) as $M
+  | ($synth[0] // []) as $S
+  | [ $S[] | select(.status == "paused" and .monitor_id != null) as $t
+      | ($M | map(select(.id == $t.monitor_id)) | .[0]) as $mon
+      | select($mon != null)
+      | select((($mon.options.silenced // {}) | to_entries | any(.value==null or .value==0)) | not)
+      | {synthetic_public_id: $t.public_id, monitor_id: $mon.id, monitor_name: $mon.name,
+         monitor_overall_state: $mon.overall_state,
+         service: [(($mon.tags // [])[] | select(startswith("service:")))]} ]'
+# Blast radius: the monitor's overall_state reflects only its LAST real evaluation before the
+# Synthetic was paused — an "OK" state here is not proof of health, it is a frozen snapshot.
+# Join to service criticality; a paused Synthetic behind a critical service's only monitor is
+# the DD-033-shaped blind spot with an extra twist: the console shows green because nothing
+# has told it otherwise, not because anything is actually being checked.
+```
+Expect: `[]` on all four when the estate is clean. Remediation is inline (no `setup-datadog` ships): DD-035 → set the tag to the value the query scope actually evaluates against; DD-036 → retire the redundant monitor or reconcile the drifting thresholds; DD-037 → confirm the metric/integration is actually emitting, repair the query if not; DD-038 → resume the Synthetic, or mute/retire the monitor it backs.
 
 ## 9. Rate-limit handling (all sections)
 
@@ -616,13 +933,17 @@ Report presence facts only where no dollar figure is backed by the API; never es
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `STALE_DAYS` | 180 | Never-triggered window before a monitor is stale-flagged |
+| `EVT_WINDOW_DAYS` | 30 | Trailing window for the DD-006 measured alert-event volume check |
+| `DOWNTIME_DECAY_DAYS` | 30 | Age past which an active, open-ended, temporary-worded downtime is flagged (DD-023) |
+| `NEVER_EVALUATED_DAYS` | 7 | Age past which a monitor that never transitioned state once is flagged (DD-037) |
+| `NONNEG_METRIC_HINTS` | `cpu\|disk\|memory\|mem\.\|pct\|percent\|usage\|count\|rate\|util` | Metric-name fragments treated as "structurally non-negative" for DD-019 |
 
 ## 13. Forbidden commands
 
 This is an audit: read-only, no exceptions. Never run:
 
-- Any `POST`, `PUT`, `PATCH`, or `DELETE` — Datadog has no read-by-effect POST in this skill's surface (unlike PagerDuty analytics), so every mutating verb is out.
+- Any `PUT`, `PATCH`, or `DELETE` — none exist in this skill's surface. The single `POST` this skill sends (`POST /api/v2/events/search`, DD-006) is a read-by-effect query exactly like PagerDuty analytics — classify by effect, not verb (section 1) — and searches events, creating nothing; every OTHER mutating verb, and every other POST, is out.
 - Creating, editing, deleting, muting, or resolving monitors; `POST /api/v1/monitor/{id}/mute` or `/unmute`; creating or canceling downtimes.
-- Editing SLOs, notification rules, config policies, integrations, or dashboards.
+- Editing SLOs, notification rules, config policies, integrations, dashboards, or Synthetic tests; resuming or pausing a Synthetic test (DD-038 reads its `status`, never changes it).
 - `POST /api/v1/monitor/validate` (validates a monitor body you would be composing; setup-lane).
-- Sending any test notification or event (`POST /api/v1/events`).
+- Sending any test notification or event (`POST /api/v1/events`) — note this is the write counterpart of the read-only `GET /api/v1/events` DD-006 uses; never confuse the two.
