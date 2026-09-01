@@ -27,6 +27,7 @@ One permanent ID per check. IDs never change or get reused; retired checks keep 
 | DO-070 | Alert routing and delivery | No enabled policy pinned at the shortest dwell window without a documented reason | medium |
 | DO-071 | Alert routing and delivery | No disabled alert policy silently muting coverage (DO has no timed silence) | medium |
 | DO-072 | Alert routing and delivery | Near-identical single-entity policies collapsed into one tag-scoped policy | low |
+| DO-073 | Alert routing and delivery | Sibling policies/alerts on the same surface share the same destination signature (no deviant left thinner than its peers) | medium |
 | DO-010 | Uptime and availability | Every active public hostname has an uptime check | high |
 | DO-011 | Uptime and availability | Down alert on every uptime check | high |
 | DO-012 | Uptime and availability | Latency alert on every uptime check | medium |
@@ -34,12 +35,14 @@ One permanent ID per check. IDs never change or get reused; retired checks keep 
 | DO-014 | Uptime and availability | Multi-region checks where regional failure matters | low |
 | DO-015 | Uptime and availability | No checks against dead, archived, or migrated targets | medium |
 | DO-016 | Uptime and availability | Live TLS certificate on a monitored HTTPS hostname is not within the expiry window now | high |
+| DO-017 | Uptime and availability | No uncovered hostname (no uptime check at all) is answering a live 5xx or transport failure right now | high |
 | DO-020 | App Platform alert coverage | Deployment lifecycle alerts, failed and live at minimum | high |
 | DO-021 | App Platform alert coverage | Domain lifecycle alerts | medium |
 | DO-022 | App Platform alert coverage | CPU and memory alerts per active service component | high |
 | DO-023 | App Platform alert coverage | Restart-count alert per active service component | high |
 | DO-024 | App Platform alert coverage | Request-rate and p95-duration alerts from observed baselines | medium |
 | DO-025 | App Platform alert coverage | Alert rule enums recorded as the API returns them; doc mismatches noted | info |
+| DO-026 | App Platform alert coverage | Prod/PP environment siblings carry the same enabled alert rule set (no rule present in PP and absent in prod) | high |
 | DO-030 | App health checks and runtime | Health check configured per service component | high |
 | DO-031 | App health checks and runtime | Health-check path answers 200 live without auth, Origin, or session | high |
 | DO-032 | App health checks and runtime | Single-instance production services identified | medium |
@@ -64,10 +67,10 @@ One permanent ID per check. IDs never change or get reused; retired checks keep 
 
 What 100/100 means per category; the checks above are this profile made executable.
 
-- **Alert routing and delivery**: every enabled alert names a destination a human reads, mapped per service and environment, with at least one observed DO-generated delivery per destination class, and free-text descriptions that tell the responder what to capture.
-- **App Platform alert coverage**: every active app alerts on deploy failure and go-live, domain failure, CPU, memory, and restarts; request-rate and p95 alerts exist where baselines support them, with the baseline recorded.
+- **Alert routing and delivery**: every enabled alert names a destination a human reads, mapped per service and environment, with at least one observed DO-generated delivery per destination class, free-text descriptions that tell the responder what to capture, and every alerting surface's sibling policies share the same destination shape.
+- **App Platform alert coverage**: every active app alerts on deploy failure and go-live, domain failure, CPU, memory, and restarts; request-rate and p95 alerts exist where baselines support them, with the baseline recorded; and a prod app never has fewer enabled rules than its PP sibling.
 - **Managed databases**: every production cluster has two-tier CPU, memory, and disk policies, no duplicate or 50-percent-style noise, listed recent backups, an HA decision, a restricted firewall, a logsink decision, and a recorded view of engine signals beyond the big three.
-- **Uptime and availability**: every live public hostname has a multi-region check with down, latency, and SSL-expiry alerts, and no check watches a dead target.
+- **Uptime and availability**: every live public hostname has a multi-region check with down, latency, and SSL-expiry alerts, no check watches a dead target, and no hostname with zero coverage is quietly failing right now.
 - **App health checks and runtime**: every service component has a verified, dependency-free health-check path; single-instance production services and autoscaling posture are named facts, not surprises.
 - **Log forwarding**: runtime and database logs land in one owned backend with retention, redaction, and naming decided, or the absence is a written decision.
 - **Ownership and hygiene**: monitoring watches only what DO actually serves, and no secret lives in a plaintext env var.
@@ -249,6 +252,76 @@ Expected: every hostname in the first list appears in the second (`DO-010`), and
 
 **Deepen `DO-010` from "hostname X has no uptime check" to the outage that goes undetected.** Name the specific public hostname (from `apps.json` `domains` / `live_url`) that is absent from `uptime-checks.json` targets, then state what its absence removes: with no synthetic check, the *only external backstop* for that hostname is gone — a hung-but-still-503ing app produces no in-band alert either, so detection depends entirely on a customer reporting it. Correlation: DO-010 is the **detection leg of the flagship silent-outage cascade** (see section 16) — the synthetic is the last line of defense once the liveness (DO-030) and restart-alert (DO-023) legs are also missing. Verification: `doctl monitoring uptime list` shows a check whose target matches the hostname, and its `doctl monitoring uptime alert list` carries down/latency/ssl_expiry rules with destinations. Fix: `setup-digitalocean#fix-uptime-coverage` (create a down + latency + ssl-expiry check for the DNS-verified target — non-disruptive write).
 
+### 6.0.1 Uncovered hostname failing live (DO-017, the flagship join)
+
+> **Live-verified (read-only).** Run against a live DigitalOcean account: the uncovered-hostname
+> join below (the same set DO-010 already computes, joined against the same live probe DO-015
+> already runs) surfaced real hostnames with zero uptime coverage that were answering `503` at
+> probe time; two of them belonged to apps whose `active_deployment.phase` was `ACTIVE` at the same
+> moment — the exact silent-outage verdict this check exists to produce, observed on real output.
+
+This is the highest-value check in the DO domain: it does not add a new API call, it **joins two
+sets DO-010 and DO-015 already compute** and turns a coverage gap into a live-incident finding. A
+hostname with no uptime check at all (DO-010's uncovered set) that is *also* answering a `>=500` or
+a transport failure (`000`) *right now* (DO-015's live probe) is not "a monitoring gap" — it is an
+outage in progress with zero detection anywhere: App Platform's own `active_deployment.phase` can
+read `ACTIVE` the entire time (the platform considers the deployment healthy; a 5xx from inside a
+healthy-looking deployment is invisible to it), and with no uptime check there is no second reader
+to disagree. Only the live probe below catches it.
+
+```bash
+set -eu
+# Resolve THIS target's segment so RAW_DIR matches where section 4 wrote the capture (stateless block).
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+DO_KIND=$(sh "$TT" "$CFG" digitalocean kind); DO_N=$(sh "$TT" "$CFG" digitalocean count)
+DO_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$DO_N" ]; do [ "$(sh "$TT" "$CFG" digitalocean label "$_i")" = "$SCOUTFLO_TARGET" ] && { DO_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+DO_LABEL=$(sh "$TT" "$CFG" digitalocean label "$DO_IDX")
+if [ "$DO_KIND" = seq ]; then DO_SEG="digitalocean/${DO_LABEL}"; else DO_SEG="digitalocean"; fi
+RUN_DATE="$(date -u +%Y-%m-%d)"
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${DO_SEG}/${RUN_DATE}/raw"
+
+# The same two sets DO-010 already builds: app hostnames, and enabled uptime-check targets.
+jq -r '.[] | .domains[]?, (.live_url | sub("^https?://"; "") | sub("/$"; ""))' "${RAW_DIR}/apps.json" | sort -u \
+  > "${RAW_DIR}/do-017-app-hostnames.txt"
+jq -r '.[] | select(.enabled) | .target | sub("^https?://"; "") | sub("/$"; "")' "${RAW_DIR}/uptime-checks.json" | sort -u \
+  > "${RAW_DIR}/do-017-covered-hostnames.txt"
+comm -23 "${RAW_DIR}/do-017-app-hostnames.txt" "${RAW_DIR}/do-017-covered-hostnames.txt" \
+  > "${RAW_DIR}/do-017-uncovered-hostnames.txt"
+echo "uncovered hostnames (no uptime check at all):"
+cat "${RAW_DIR}/do-017-uncovered-hostnames.txt"
+
+# For each UNCOVERED hostname, probe it live (the same status-code-is-the-evidence pattern DO-015
+# uses; -f is dropped on purpose). A >=500 or a transport failure on a hostname nothing watches is
+# the join's positive verdict.
+while IFS= read -r host; do
+  [ -n "$host" ] || continue
+  code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 "https://${host}/")" || code="000"
+  case "$code" in
+    5??|000)
+      echo "DO-017 fail: ${host} has NO uptime check and answered ${code} just now — an outage in progress with zero detection" ;;
+    *)
+      echo "ok (for now): ${host} is uncovered but answered ${code} at probe time" ;;
+  esac
+done < "${RAW_DIR}/do-017-uncovered-hostnames.txt"
+```
+
+Expect: every line from the uncovered set answers `2xx`/`3xx`/`4xx` (uncovered but not currently
+failing — still a `DO-010` gap, not yet a `DO-017` fail). A `5??`/`000` line is `DO-017` fail: name
+the exact hostname and the exact code observed; do not average or round it away. Cross-reference the
+hostname back to `apps.json` to name the owning app and its `active_deployment.phase` — when the
+phase reads `ACTIVE` while the probe reads `5??`/`000`, say so explicitly: *"`<app>`'s hostname
+`<host>` has no uptime check and is answering 503 right now; App Platform's own deployment status
+still reads ACTIVE, so the platform itself will not tell you this is down."* Blast radius: the
+hostname's owning app and, via `topology.md`, its dependents. Correlation: this is `DO-010`'s
+detection-gap set escalated from hypothetical to **validated-live** the moment the probe hits;
+cross-reference `DORT-001` (section 16) — if the same app's `active_deployment.phase` is also
+`ERROR`/`CANCELED` this run, the two together prove the outage two independent ways. Verification
+(read-only): re-run the probe after a fix lands; it must answer `2xx`/`3xx`/`4xx`, and a real uptime
+check must now exist for the hostname (closing the underlying `DO-010` gap, not just the symptom).
+Fix: `setup-digitalocean#fix-uptime-coverage` (create the missing check first; the live failure
+itself is an application/infra issue outside this toolkit's write scope).
+
 ### 6.1 Live TLS certificate expiry on a monitored HTTPS hostname (DO-016)
 
 > **Live-verified (read-only).** Run against a live DigitalOcean account: the account/apps APIs answer 200, and the passive TLS handshake below was executed against a real App Platform app hostname and returned a valid certificate expiry date — the openssl mechanic works end to end. The finding reflects the app's real cert state each run.
@@ -323,6 +396,74 @@ Expected shape: lifecycle rules (`DEPLOYMENT_FAILED`, `DEPLOYMENT_LIVE`, `DOMAIN
 `DO-024`: request-rate and p95-duration alerts earn credit only when their thresholds trace to an observed baseline (App Platform Insights history, a load-test record, or the team's stated traffic numbers). A guessed threshold is `partial` even when the rule exists, because it pages on normal traffic or never fires.
 
 `DO-025`: record rule names exactly as `list-alerts` returns them. Documented enum names and API-accepted names have diverged before; when the audit sees a rule name the current docs do not list, or the docs list a rule no live app carries, note both spellings so setup automation uses the accepted one. Validation via `doctl apps propose` belongs to the setup lane.
+
+### 7.1 Prod/PP alert parity (DO-026)
+
+> **Live-verified (read-only).** Run against a live DigitalOcean account: the base-name pairing
+> below correctly grouped two real prod/PP app pairs (distinct services) by stripping either
+> environment suffix from the name; each pair's `list-alerts` rule sets were diffed and matched in
+> this run (no gap on this estate). A synthetic single-rule injection into one PP-side rule set was
+> then diffed against the same prod-side set and correctly surfaced as a PP-only rule, proving the
+> diff mechanic flags a real gap when one exists, not only when one does not.
+
+Where app names encode environment via a recognized suffix (`checkout-prod` / `checkout-pp`), the
+prod and PP apps are environment siblings watching the same logical service at different stages. A
+rule present on the PP sibling but absent from the prod sibling is a coverage regression that
+shipped to production without its alert — exactly the gap a promotion checklist is supposed to
+catch and did not. This reuses the section 4 per-app `alerts.json` captures already pulled for
+DO-020 to DO-025; no new API call.
+
+```bash
+set -eu
+# Resolve THIS target's segment so RAW_DIR matches where section 4 wrote the capture (stateless block).
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+DO_KIND=$(sh "$TT" "$CFG" digitalocean kind); DO_N=$(sh "$TT" "$CFG" digitalocean count)
+DO_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$DO_N" ]; do [ "$(sh "$TT" "$CFG" digitalocean label "$_i")" = "$SCOUTFLO_TARGET" ] && { DO_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+DO_LABEL=$(sh "$TT" "$CFG" digitalocean label "$DO_IDX")
+if [ "$DO_KIND" = seq ]; then DO_SEG="digitalocean/${DO_LABEL}"; else DO_SEG="digitalocean"; fi
+RUN_DATE="$(date -u +%Y-%m-%d)"
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${DO_SEG}/${RUN_DATE}/raw"
+# PROD_SUFFIXES/PP_SUFFIXES are examples; tune to your own naming convention. This check is a no-op
+# (never a false pass, never a false fail) when no recognized pair exists in the estate.
+PROD_SUFFIXES="prod|production"                 # example, tune to your naming convention
+PP_SUFFIXES="pp|preprod|staging|stage"          # example, tune to your naming convention
+
+jq -r --arg p "$PROD_SUFFIXES" --arg n "$PP_SUFFIXES" '
+  [ .[] | {id, name,
+      base: (.name | ascii_downcase | sub("[-_](" + $p + "|" + $n + ")$"; "")),
+      env: (if (.name | ascii_downcase | test("[-_](" + $p + ")$")) then "prod"
+            elif (.name | ascii_downcase | test("[-_](" + $n + ")$")) then "pp"
+            else "unmatched" end) } ]
+  | map(select(.env != "unmatched"))
+  | group_by(.base)
+  | map(select(length == 2 and ((map(.env) | sort) == ["pp","prod"])))
+' "${RAW_DIR}/apps.json" > "${RAW_DIR}/do-026-env-pairs.json"
+cat "${RAW_DIR}/do-026-env-pairs.json"
+
+# For each pair from do-026-env-pairs.json, diff enabled rule names between the prod app's and the
+# PP app's alerts.json (already captured in section 4). PROD_ID/PP_ID come from one pair above.
+PROD_ID="prod-app-id"   # .id of the env=="prod" entry in a pair
+PP_ID="pp-app-id"       # .id of the env=="pp" entry in the SAME pair
+jq -r '.[] | select(.disabled|not) | .rule' "${RAW_DIR}/apps/${PP_ID}/alerts.json" | sort -u > "${RAW_DIR}/do-026-pp-rules.txt"
+jq -r '.[] | select(.disabled|not) | .rule' "${RAW_DIR}/apps/${PROD_ID}/alerts.json" | sort -u > "${RAW_DIR}/do-026-prod-rules.txt"
+comm -23 "${RAW_DIR}/do-026-pp-rules.txt" "${RAW_DIR}/do-026-prod-rules.txt"
+```
+
+Expect: `do-026-env-pairs.json` is `[]` when no recognized environment pair exists (this check is
+then `not-in-scope` for the estate, never a fabricated pass or fail); when a pair exists, the final
+`comm` line is empty (every enabled PP rule also exists, enabled, in prod). A non-empty line names a
+rule the PP sibling enforces that the prod sibling does not — the exact coverage regression, not an
+adjective. Blast radius: name the prod app, the missing rule, and — via `topology.md` — the service
+it protects; "checkout-prod is missing the RESTART_COUNT rule that checkout-pp already enforces; a
+restart storm in production will page nobody until this parity gap closes." Correlation: a PP-only
+`DEPLOYMENT_FAILED`/`RESTART_COUNT`/`CPU_UTILIZATION` rule missing from prod directly weakens the
+`DO-020`/`DO-022`/`DO-023` legs of the flagship silent-outage cascade for that same prod app — cite
+both. Deterministic; this never judges whether PP's rule set was itself correct, only whether prod
+regressed relative to it. Verification (read-only): re-run the `comm` diff after the fix; it must be
+empty. Fix: `setup-digitalocean#add-app-platform-alerts` (add the missing rule to the prod app spec
+— controlled rollout: the spec edit redeploys prod; roll it deliberately, not as a side effect of
+an unrelated change).
 
 `DO-030`/`DO-031`: a `health_check` object with an `http_path` exists per service, and that exact path answers `200` live with no auth header, no Origin requirement, no session redirect. Probe it with the section 6 status-code block against the app's public URL plus the path. A path that 404s or redirects to a login page would mark a healthy app unhealthy the moment it ships; that is a finding against the configured path, filed with the captured code.
 
@@ -667,9 +808,9 @@ Any of these appearing in an audit transcript is a lane violation, whatever the 
 - Any `curl` POST, PUT, PATCH, or DELETE against `api.digitalocean.com`
 - Any POST to any webhook, including a smoke test; the toolkit Slack brief in the skill's final phase is the single exception and posts only to the brief webhook from `slack.webhook_env`
 
-## 15. Alert hygiene: dwell window, mute state, and duplicate coverage (DO-070 to DO-072)
+## 15. Alert hygiene: dwell window, mute state, duplicate coverage, and destination parity (DO-070 to DO-073)
 
-Serves Phase 3's [Alert hygiene](../SKILL.md#alert-hygiene-do-070-to-do-072) subsection. Every block is read-only and reuses the redacted `alert-policies.json` written by the section 4 inventory; nothing here calls a new endpoint. Honest ceiling, repeated because it belongs in the evidence: DO Monitoring has no grouping, deduplication, inhibition, resolve-hold, timed silence, or maintenance window, so there is no config to read for any of them and this section never scores their absence as a fail. The `window` enum is fixed at `5m|10m|30m|1h`; the only field a resolve-notification churn signal can key off is that window (there is no per-policy resolve toggle in `GET /v2/monitoring/alerts`). A `401`/`403` while refreshing the policy list blocks these checks; it is never a clean result.
+Serves Phase 3's [Alert hygiene](../SKILL.md#alert-hygiene-do-070-to-do-073) subsection. Every block is read-only and reuses the redacted `alert-policies.json` written by the section 4 inventory; nothing here calls a new endpoint. Honest ceiling, repeated because it belongs in the evidence: DO Monitoring has no grouping, deduplication, inhibition, resolve-hold, timed silence, or maintenance window, so there is no config to read for any of them and this section never scores their absence as a fail. The `window` enum is fixed at `5m|10m|30m|1h`; the only field a resolve-notification churn signal can key off is that window (there is no per-policy resolve toggle in `GET /v2/monitoring/alerts`). A `401`/`403` while refreshing the policy list blocks these checks; it is never a clean result. `DO-073` is not part of that "nothing to read" ceiling — destination fields (`emails`/`slack_channels`) are fully readable; it is a consistency check across siblings, not a check for a control DO Monitoring lacks.
 
 ### 15.1 Dwell window pinned at the shortest option (DO-070)
 
@@ -750,6 +891,60 @@ jq -r '
 ```
 
 Expected: no output when the estate uses tag-scoped policies. Each line names one collapsible group with its policy UUIDs as the affected objects. This is the fleet-shape duplicate only; threshold-value duplicates and 50-percent-style pages on the same entity and metric stay with DO-043 in the Managed databases category, so the two checks never double-count the same policy.
+
+### 15.4 Destination-set consistency across sibling policies (DO-073)
+
+> **Live-verified (read-only).** Run against a live DigitalOcean account carrying 24 enabled
+> monitoring policies (cpu/memory/disk alert types, 8 each): the mode-signature mechanic below
+> returned `[]` — every sibling within each type shared the same `{emails_count, slack_count}`
+> shape, so this real estate has no deviant. Injecting a synthetic single-policy destination change
+> (`slack_count: 0` on one cpu-type policy) and re-running the identical command correctly surfaced
+> that one policy as the deviant against the group's mode signature, proving the mechanic flags a
+> real gap when one exists, not only when one does not.
+
+Deterministic; this never judges whether a destination is the *right* one (that judgment stays with
+`DO-003`) — only whether policies watching the same signal (`type`) are wired the same way as their
+siblings. Reuses the section 4 redacted `alert-policies.json`; no new API call.
+
+```bash
+set -eu
+# Resolve THIS target's segment so RAW_DIR matches where section 4 wrote the capture (stateless block).
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+DO_KIND=$(sh "$TT" "$CFG" digitalocean kind); DO_N=$(sh "$TT" "$CFG" digitalocean count)
+DO_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$DO_N" ]; do [ "$(sh "$TT" "$CFG" digitalocean label "$_i")" = "$SCOUTFLO_TARGET" ] && { DO_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+DO_LABEL=$(sh "$TT" "$CFG" digitalocean label "$DO_IDX")
+if [ "$DO_KIND" = seq ]; then DO_SEG="digitalocean/${DO_LABEL}"; else DO_SEG="digitalocean"; fi
+RUN_DATE="$(date -u +%Y-%m-%d)"
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${DO_SEG}/${RUN_DATE}/raw"
+# DO-073: within each alerting surface (policy .type), compute each enabled policy's destination
+# signature (emails_count, slack_count), find the MODE signature for that surface (the shape most
+# siblings share), and flag every policy whose signature deviates from it.
+jq '
+  [ .[] | select(.enabled) | {type, emails_count: .emails, slack_count: (.slack_channels | length), uuid} ]
+  | group_by(.type)
+  | map(
+      . as $siblings
+      | ($siblings | map({emails_count, slack_count}) | group_by(.) | max_by(length) | .[0]) as $mode
+      | { type: $siblings[0].type, mode_signature: $mode,
+          deviants: [ $siblings[] | select({emails_count, slack_count} != $mode) ] }
+    )
+  | map(select((.deviants | length) > 0))
+' "${RAW_DIR}/alert-policies.json"
+```
+
+Expect: `[]`. A hit names the surface `type`, the `mode_signature` every sibling shares, and the
+deviant `uuid`(s) whose signature differs — e.g. *"within `v1/dbaas/alerts/cpu_alerts`, 7 of 8
+policies carry email+Slack; policy `<uuid>` carries email only — this database pages one fewer
+channel than every one of its siblings, for the same metric."* A surface with only one policy never
+flags (there is no sibling to deviate from, so a lone policy trivially matches its own mode). Blast
+radius: name the affected entity (`entities[]` joined to `databases.json`/`apps.json`, per DO-002's
+join pattern) and the specific missing channel class. Correlation: chains with `DO-003`'s MTTA-tax
+count — a deviant policy on a shared channel is doubly thin; and with `DO-070` (shortest dwell
+window) when the same deviant policy is also the noisiest one. Verification (read-only): re-run this
+exact jq; the deviant's signature must equal its surface's `mode_signature`. Fix:
+`setup-digitalocean#fix-alert-routing` (bring the deviant policy's destinations to parity with its
+siblings — non-disruptive write).
 
 ## 16. Live-runtime snapshot (DORT — evidence, not scored)
 
