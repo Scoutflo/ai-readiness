@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.1.169
+
+**Paging tools (audit-zenduty + audit-pagerduty): doc-truth fixes, ZD-006 un-gated, and GET-only actionability that survives a plan-gated analytics API.** The recurring live-pass lesson — measure history, don't just check structure — applied to the two paging providers.
+
+### audit-zenduty — doc-truth fixes + ZD-006 un-gated + 5 new checks (ZD-007/008/025/033/034)
+- Fixed three doc-truth errors, all live-verified against a real tenant: `GET /api/incidents/` is **WAF-blocked (HTTP 209 "Blocked")**, not create-only; the working incident-list read is the paginated `GET /api/v2/incidents/` (fixed page size of 10, `page_size` ignored); `/api/account/teams/{team}/priorities/` can 404 per tenant and that is not-in-scope, not a failure. (Teams live under `/api/account/teams/`; `/api/teams/` is 404.)
+- **Un-gated ZD-006:** `target_type == 2` with a `target_meta.email` present is a live-confirmed named-user target (a schedule target carries no personal email). The escalation capture derives a **redacted `is_user` boolean** at capture time so the real email is never written to disk, evidence, or the report.
+- New: **ZD-007** (orphaned escalation policy, `connections == 0`), **ZD-008** (account-wide escalation bus factor — the account-level SPOF that per-policy checks each pass locally while sharing one human), **ZD-025** (account dormancy, informational), **ZD-033** (GET-only per-service actionability ratios — acked / resolved-never-acked / still-open from `/api/v2/incidents/`, the fallback when the plan-gated analytics POST is unavailable), **ZD-034** (ack/auto-resolve timeout posture — how a pile of never-acked triggered incidents forms). Scorecard ID ranges grown; weights unchanged.
+
+### audit-pagerduty — 4 new checks (PD-016/017/026/043), all verify-pending
+- **PD-016** (orphaned escalation policy), **PD-017** (account-wide escalation bus factor), **PD-026** (acknowledgement-timeout posture, sibling of PD-021), **PD-043** (GET-only ack-ratio fallback from `GET /incidents` `acknowledgements[]`, independent of the plan-gated Analytics probe). All four are **verify-pending** — no live PagerDuty account was reachable (every available token returned 401); flagged for a maintainer smoke with a fresh read-only General Access key.
+
+**Verified:** all four repo gates green (`leak-scan` CLEAN on a clean export, `structure-check` 23, `run-tests` 30/0, `plugin validate --strict`) + self-test locks for the new IDs. Zenduty checks live-verified read-only against a real tenant (209/v2-pagination/target_type/connections/timeout fields/per-service ratios all confirmed); PagerDuty checks await a maintainer smoke. 6 new pressure scenarios. All calls read-only.
+
 ## 0.1.168
 
 **audit-sentry: 8 new depth checks (SNTRY-018 through SNTRY-025), all live-verified.** A second pass over gaps the existing catalog structurally cannot see, grown into existing scorecard categories (no re-weighting).
