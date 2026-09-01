@@ -26,11 +26,13 @@ One permanent ID per check. IDs never change or get reused; retired checks keep 
 | ELK-004 | Rule delivery | Alerting framework health is green (`is_sufficiently_secure`, permanent encryption key) | high |
 | ELK-005 | Rule delivery | No critical rule whose only action is a non-paging sink connector (`.server-log`/`.index`) — *verify-pending* | high |
 | ELK-006 | Rule delivery | No connector fan-in single point of failure (one connector every critical rule depends on) — *verify-pending* | high |
+| ELK-007 | Rule delivery | The estate has at least one live connector when enabled rules exist (zero connectors estate-wide is its own finding, distinct from a per-rule missing action) | critical |
 | ELK-010 | Rule health | No rule stuck in `execution_status: error` | critical |
 | ELK-011 | Rule health | No rule in `execution_status: warning` (timeout, maxAlerts, maxQueuedActions) | high |
 | ELK-012 | Rule health | `last_run.outcome` is `succeeded` for every enabled rule | high |
 | ELK-013 | Rule health | No disabled rule that was meant to be a live control | medium |
 | ELK-014 | Rule health | No enabled rule that has stopped executing — stale `execution_status.last_execution_date` (scheduler/task-manager stall) — *verify-pending* | high |
+| ELK-015 | Rule health | No enabled rule that is unedited since creation, past its minimum proving age, and has never produced an alert (config-stale detector, unproven not just quiet) | medium |
 | ELK-020 | Alert noise | Flapping detection on where a rule can toggle (`flapping` object or space default) | medium |
 | ELK-021 | Alert noise | `alert_delay.active` set where a rule needs FOR-like debounce | medium |
 | ELK-022 | Alert noise | Actions throttled or `onActionGroupChange`, not `onActiveAlert` every interval | medium |
@@ -47,7 +49,7 @@ One permanent ID per check. IDs never change or get reused; retired checks keep 
 What 100/100 means per category; the checks above are this profile made executable.
 
 - **Rule delivery**: every enabled rule fires to at least one live connector, no connector has missing secrets or is deprecated, no orphaned connectors, and the alerting framework itself is healthy and securely configured.
-- **Rule health**: no rule in error or warning execution state, every enabled rule's last run succeeded, and no rule that should be live sits disabled.
+- **Rule health**: no rule in error or warning execution state, every enabled rule's last run succeeded, no rule that should be live sits disabled, and no long-lived, never-edited rule has gone this long with zero alerts to show its detection actually works.
 - **Alert noise**: flapping detection on, FOR-like debounce where needed, actions throttled or status-change-gated rather than re-notifying every interval, summaries on high-cardinality rules, no indefinite snoozes or permanent maintenance windows.
 - **Coverage**: spaces are discovered live (not assumed), rules are visible in at least one discovered space, rule types and rules actually cover the critical services, and any legacy Watcher coverage is identified rather than silently trusted or missed.
 
@@ -98,7 +100,7 @@ Complete per-space artifacts are `rules.json`, `connectors.json`, and `rule-type
 
 Only normal-name complete artifacts may drive estate totals, coverage denominators, or pass results. A partial artifact can support a named object finding but cannot prove that no other failing object exists. A 401/403/404, transport error, malformed 200, or pagination failure blocks the checks that depend on that surface while the audit continues across readable surfaces and still writes its report.
 
-## 5. Rule delivery (ELK-001 to ELK-006)
+## 5. Rule delivery (ELK-001 to ELK-007)
 
 ```bash
 set -eu
@@ -165,6 +167,45 @@ jq '{secure: .is_sufficiently_secure, key: .has_permanent_encryption_key,
 # ==true and is_sufficiently_secure==true.
 ```
 
+### 5.0.1 Zero connectors estate-wide (ELK-007)
+
+> **Live-verified (read-only).** Run against a live Kibana tenant (8.19): the audited space had
+> `connectors=0` and `enabled_rules=4` (all four with `actions_count: 0`), so this exact condition
+> was observed, not hypothesized — a Kibana instance can run enabled rules for months with no
+> connector ever created.
+
+This is a DISTINCT, higher-order finding from ELK-001 (a per-rule "no action" gap): ELK-001
+presupposes at least one connector exists somewhere for a rule to point at; ELK-007 catches the
+case where NOTHING has ever been wired up in the entire audited estate, which reorders the fix —
+create a connector FIRST, then attach actions to rules — rather than "add an action to rule X"
+(there is nothing to add it to).
+
+```bash
+set -eu
+RUN_DATE="$(date -u +%Y-%m-%d)"
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/elk/${RUN_DATE}/raw"
+SPACE="default"; sdir="${RAW_DIR}/spaces/${SPACE}"   # per-space; sum across every audited space
+
+# ELK-007: zero connectors across the ENTIRE audited estate while enabled rules exist.
+CONNECTOR_COUNT=$(jq 'length' "${sdir}/connectors.json")
+ENABLED_RULE_COUNT=$(jq '[.rules[] | select(.enabled)] | length' "${sdir}/rules.json")
+echo "space=${SPACE} connectors=${CONNECTOR_COUNT} enabled_rules=${ENABLED_RULE_COUNT}"
+# Expect: CONNECTOR_COUNT (summed across every audited space) > 0 whenever ENABLED_RULE_COUNT
+# (summed the same way) > 0. A hit (0 connectors, >=1 enabled rule, estate-wide) means this Kibana
+# instance has never had a single connector configured anywhere the key can see, yet rules are
+# enabled and evaluating — every one of them fires into the void with nothing to notify even if
+# one were attached today.
+# Blast radius: name the enabled rules and, via the ELK-031 mapping, the critical services they
+# claim to detect for — "4 enabled rules (including the sole rules for checkout and payments)
+# exist in a Kibana instance with zero connectors; nothing here can page a human until at least one
+# connector is created." Correlation: ELK-007 is the ROOT of the delivery chain — cite it ahead of
+# per-rule ELK-001/ELK-002/ELK-005 findings when it holds, since fixing an individual rule's action
+# is impossible until a connector exists to target; do not file both as if they were independent
+# fixes with the same next step.
+# Verification (read-only): re-GET /api/actions/connectors; confirm length > 0, then re-check that
+# the previously flagged enabled rules now have a live action (ELK-001).
+```
+
 ### 5.1 Deep delivery — sink-only rules and connector fan-in (ELK-005, ELK-006)
 
 > **Verify-pending.** These two checks are drafted against Kibana's documented Alerting/Actions REST API and adversarially reviewed, but have **not** been run against a live Kibana tenant — no Kibana Alerting API with a `KIBANA_API_KEY` is wired into the benchmark estate (it is LGTM/VictoriaMetrics/ClickStack/Grafana/Alertmanager). Treat their status as unproven until a first live run against a real deployment with a read-only `KIBANA_API_KEY` and a `topology-export.json` to join against. The `.server-log`/`.index` connector type ids, the fan-in grouping, and the fields below are from Kibana's public API docs, not confirmed against a live tenant here.
@@ -215,7 +256,7 @@ jq '[.[] | {id, name, connector_type_id, is_missing_secrets, is_deprecated, refe
 
 Healthy: no enabled critical-service rule routes only to a sink type, and no single connector is the sole delivery path for the whole critical-rule set. Fail (ELK-005, high): a critical service's only rule delivers only to `.server-log`/`.index` — name the service and the rule. Fail (ELK-006, high): one connector carries every (or nearly every) critical-service rule — name the connector, the fan-in count, and the services. Remediation is inline (no `setup-elk` ships): ELK-005 → *Kibana > Stack Management > Rules > the rule > Actions*, add an action targeting a live paging connector (PagerDuty/Opsgenie/Slack) and remove or keep the sink alongside it; ELK-006 → *Kibana > Connectors* + the critical rules' *Actions* tabs, add a second independent paging connector so a single connector failure cannot dark every critical service.
 
-## 6. Rule health (ELK-010 to ELK-014)
+## 6. Rule health (ELK-010 to ELK-015)
 
 ```bash
 set -eu
@@ -290,6 +331,66 @@ jq -r --argjson now "$(date -u +%s)" --argjson stale "$STALE_SECONDS" \
 ```
 
 Healthy: every enabled rule's `last_execution_date` is recent relative to its `schedule.interval`. Fail (ELK-014, high): an enabled rule's last execution is far older than its interval — name the rule, its interval, and the staleness. Remediation is inline (no `setup-elk` ships): *Kibana > Stack Management > Rules > the rule > execution log* to confirm the gap, then investigate Kibana task-manager health / capacity (`xpack.task_manager` settings, task-manager health API) — a fleet-wide stall is a task-manager capacity problem, a single stale rule is usually a stuck task.
+
+### 6.2 Config-stale, never-alerted detector (ELK-015)
+
+> **Live-verified (read-only).** Run against a live Kibana tenant (8.19): all four enabled rules in
+> the audited space had `created_at == updated_at`, an age of 136 days (`> STALE_PROVING_DAYS`),
+> and `last_run.alerts_count` all zero (`active`/`new`/`recovered`/`ignored`) — the exact ELK-015
+> shape, observed on real output, not hypothesized.
+
+**Honest ceiling — state the proxy basis explicitly whenever this check's evidence is quoted.** True
+fire history (every time a rule has ever alerted, not just its most recent evaluations) lives in
+Kibana's alerting **event log**, and the only route that exposes it is an internal, undocumented
+`/internal/...` API — internal at every currently released Kibana version, including 9.x, not a
+"below 9.x" limitation this audit will outgrow. This audit never calls internal routes (only
+documented `/api/...` surfaces), so ELK-015 does **not** read a lifetime fire count. It reads a
+GET-only proxy that needs no event log at all: `last_run.alerts_count`, which Kibana's public rules
+API already returns and which reflects only the **most recent evaluation's** alert counts, not a
+history. ELK-015 combines that proxy with two config facts (unedited since creation, past a minimum
+proving age) to build the strongest *documented-API-only* signal available: a rule nobody has
+touched, running long enough to have plausibly fired by chance if it worked, that has never shown a
+single alert in its own most-recent-run summary. State this bound every time: the finding says
+"unproven by every documented signal this audit can read," never "has never fired" — that stronger
+claim would require the internal event log this audit does not and will not call.
+
+```bash
+set -eu
+RUN_DATE="$(date -u +%Y-%m-%d)"
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/elk/${RUN_DATE}/raw"
+SPACE="default"; sdir="${RAW_DIR}/spaces/${SPACE}"   # per-space; loop over spaces.txt in the real run
+STALE_PROVING_DAYS="90"   # example, tune to your slowest legitimate detection cadence
+
+# created_at/updated_at are ISO8601 WITH milliseconds, same as last_execution_date (section 6.1);
+# strip the fractional seconds before fromdateiso8601 or the command aborts on real Kibana output.
+jq -r --argjson now "$(date -u +%s)" --argjson stale_days "$STALE_PROVING_DAYS" \
+  '[.rules[]
+    | select(.enabled == true)
+    | select(.created_at == .updated_at)
+    | select(((($now - (.created_at | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601)) / 86400) | floor) > $stale_days)
+    | select((.alerts_count.active // 0) == 0 and (.alerts_count.new // 0) == 0
+        and (.alerts_count.recovered // 0) == 0 and (.alerts_count.ignored // 0) == 0)
+    | {id, name, rule_type_id, age_days: ((($now - (.created_at | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601)) / 86400) | floor)}]' \
+  "${sdir}/rules.json"
+# Expect: []. A hit is an enabled rule nobody has edited since it was created, old enough to have
+# plausibly fired by now if its detection logic is sound, whose own last-run summary shows zero
+# alerts of every kind. This is DISTINCT from ELK-010/ELK-012 (an errored or failed-outcome rule):
+# ELK-015's rule can show execution_status=='ok' and last_run.outcome=='succeeded' the entire time
+# — it evaluates cleanly and simply never trips, which is indistinguishable from "correctly quiet"
+# using only this proxy. Say so; do not claim the rule is broken, only that it is unproven.
+# Blast radius: name the rule and, via the ELK-031 mapping, the critical service it is the sole
+# detector for — "payments-error-rate has run unedited for 136 days and has never shown an alert in
+# any recorded run; payments has no other rule covering the same signal, so this detector's
+# correctness has never been demonstrated by any evidence this audit can read." When the rule is a
+# critical service's ONLY rule for its signal class, escalate the finding's practical severity from
+# medium to high in the same way ELK-010 escalates a sole-detector error — an unproven sole detector
+# carries the same blast radius as a broken one, even though its configuration passes every other
+# check. Correlation: complements ELK-010/ELK-012 (execution-state proof) and ELK-031 (presence);
+# a rule can pass all three and still be ELK-015 because none of them asks "has this ever worked."
+# Verification (read-only): re-GET the rule after a known-good trigger or a documented test event;
+# confirm last_run.alerts_count shows a nonzero count, or record the last-verified-firing date once
+# a genuine trigger is observed in a later run.
+```
 
 ## 7. Alert noise (ELK-020 to ELK-025)
 
@@ -482,6 +583,7 @@ For each critical service from `./scoutflo-audits/topology.md`, resolve its rule
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `HIGH_CARDINALITY` | 10 | alerts_count above which per-alert fan-out (no summary) is flagged (ELK-023) |
+| `STALE_PROVING_DAYS` | 90 | minimum unedited age before a never-alerted rule is flagged as unproven rather than merely young (ELK-015) |
 
 ## 12. Forbidden commands
 

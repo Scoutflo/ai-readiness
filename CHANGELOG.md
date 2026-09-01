@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.170
+
+**Alert-hygiene depth for audit-elk and audit-digitalocean — 5 new checks, 2 live-caught bugs fixed.** Live-verified read-only against real Kibana and DigitalOcean estates.
+
+- **audit-elk** gains **ELK-007** (zero connectors estate-wide — distinct root cause from ELK-001, reorders remediation to "create a connector first") and **ELK-015** (an enabled rule unedited since creation, past a minimum proving age, with zero alerts in its own last-run summary — worded as "unproven," never "broken," with an explicit honest-ceiling statement that true fire history lives only behind Kibana's internal, undocumented event-log route at every version). Category weights unchanged; the new checks only grow their denominators.
+- **audit-digitalocean** gains **DO-017** (the flagship join: an uncovered hostname from DO-010's gap set that is also answering a live `5xx`/timeout right now — App Platform's own deployment status stays `ACTIVE`; only the probe catches it), **DO-026** (prod/PP alert-rule parity for environment-paired apps), and **DO-073** (destination-set consistency across sibling alerting policies, deterministic, no channel-correctness judgment).
+- **Live-caught and fixed:** `scripts/elk-audit.sh`'s rule projection was missing `created_at`/`updated_at` (needed for ELK-015); the DO-026 base-name regex only stripped the `prod` suffix, so a PP-suffixed app's base name never matched its prod sibling's, and the pair never grouped.
+
+**Verified:** all four repo gates green (`leak-scan` CLEAN on a clean export, `structure-check` 23, `run-tests` 30/0, `plugin validate --strict`) + self-test locks for the new IDs. On the real DO estate the DO-017 join fired for real (uncovered hostnames answering 503 while their deployment phase read ACTIVE); ELK-007/015 fired on the real Kibana tenant. Two new pressure scenarios. All calls read-only; the two synthetic-injection proofs (DO-073, DO-026) ran against copies of captured JSON, never the live API.
+
 ## 0.1.169
 
 **Paging tools (audit-zenduty + audit-pagerduty): doc-truth fixes, ZD-006 un-gated, and GET-only actionability that survives a plan-gated analytics API.** The recurring live-pass lesson — measure history, don't just check structure — applied to the two paging providers.

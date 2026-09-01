@@ -158,6 +158,7 @@ sanitize_page() {
       ;;
     rules)
       jq '[.data[] | {id,name,rule_type_id,enabled,mute_all,muted_alert_ids,
+          created_at,updated_at,
           snooze_schedule,execution_status:(.execution_status.status // null),
           last_execution_date:(.execution_status.last_execution_date // null),
           schedule_interval:(.schedule.interval // null),
