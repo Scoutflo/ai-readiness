@@ -78,6 +78,26 @@ pq "/api/v1/status/buildinfo" | jq '.data.version'
 ```
 
 - **Healthy target:** `/-/healthy` returns `Prometheus ... Healthy`, `vector(1)` returns `"success"`, buildinfo returns a version.
+- **DNS-truth classification (on a resolution failure, sharpens the PROM-001 evidence).** When the host does not resolve, do not stop at "unreachable": a *decommissioned* server (the DNS record was deleted) and a *broken ingress* (the name exists, the path is down) read identically at the socket but need opposite responses — retarget/remove the config vs fix the network. Query the zone's authoritative nameserver directly, read the DNS `status`, and rule out a local resolver failure with a known-good sibling (the zone apex). All read-only `dig` lookups:
+
+```bash
+HOST="$(printf '%s' "$PROM_URL" | sed -E 's#^https?://([^/]+).*#\1#')"   # PROM_URL is prometheus.url
+if [ -z "$(dig +short A "$HOST"; dig +short CNAME "$HOST")" ]; then
+  ZONE="$(echo "$HOST" | awk -F. '{print $(NF-1)"."$NF}')"   # last two labels; tune for multi-label TLDs (e.g. co.uk needs three)
+  NS="$(dig +short NS "$ZONE" | head -1)"
+  STATUS="$(dig ${NS:+@$NS} +noall +comment "$HOST" | grep -oE 'status: [A-Z]+' | head -1 | awk '{print $2}')"
+  SIB="$(dig ${NS:+@$NS} +noall +comment "$ZONE"    | grep -oE 'status: [A-Z]+' | head -1 | awk '{print $2}')"   # zone apex = known-good sibling
+  case "$STATUS" in
+    NXDOMAIN) [ "$SIB" = NOERROR ] \
+      && echo "PROM-001 evidence: NXDOMAIN-authoritative — the record is GONE (apex resolves, not a resolver failure). DECOMMISSIONED server: the config outlived the infrastructure. Retarget or remove this block in toolkit.yaml." \
+      || echo "PROM-001 evidence: NXDOMAIN but the zone apex also failed (${SIB:-no-answer}) — cannot rule out a resolver/network failure; re-run from a working resolver before concluding decommission." ;;
+    SERVFAIL) echo "PROM-001 evidence: SERVFAIL — the zone delegation/DNSSEC is broken, not one missing record; fix the zone upstream." ;;
+    NOERROR)  echo "PROM-001 evidence: resolves at the authoritative NS but the local path failed — an ingress/LB/network-path problem (the name exists), not a decommission; check VPN/port-forward/ingress." ;;
+    *)        echo "PROM-001 evidence: no authoritative answer for ${HOST} (NS=${NS:-none}); classify manually: dig NS ${ZONE}; dig @<ns> ${HOST}" ;;
+  esac
+fi
+```
+
 - **Finding (PROM-001, critical):** an unreachable Prometheus is the root of a cascade, not a yes/no. Pull `/api/v1/rules` and `/api/v1/targets` first and state what goes dark — "this server loads N alerting rules (M at `severity=page`) and scrapes K critical services; while it is down every rule evaluates to no-data and pages nothing, and every service is unmonitored." This is an availability incident (restore/scale/failover the server), then close the HA gap that let one instance take the plane down.
 - **Forbidden:** GET only; see section 9.
 

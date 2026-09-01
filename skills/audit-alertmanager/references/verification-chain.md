@@ -85,6 +85,26 @@ rm -f "$PROM_BODY" "$AM_BODY"
 [ "$PROM_OK" = "1" ] && [ "$AM_OK" = "1" ] && echo "ALR-010: pass"
 ```
 
+**DNS-truth classification (on a resolution failure, sharpens the ALR-010 evidence).** When the host does not resolve, do not stop at "unreachable" — a *decommissioned* target (the record was deleted) and a *broken ingress* (the name exists, the path is down) read identically at the socket but need opposite responses: retarget/remove the config vs fix the network. Query the zone's authoritative nameserver directly and read the DNS `status`, ruling out a local resolver failure with a known-good sibling (the zone apex). All read-only `dig` lookups:
+
+```bash
+HOST="$(printf '%s' "$PROM_URL" | sed -E 's#^https?://([^/]+).*#\1#')"   # or AM_URL
+if [ -z "$(dig +short A "$HOST"; dig +short CNAME "$HOST")" ]; then
+  ZONE="$(echo "$HOST" | awk -F. '{print $(NF-1)"."$NF}')"   # last two labels; tune for multi-label TLDs (e.g. co.uk needs three)
+  NS="$(dig +short NS "$ZONE" | head -1)"
+  STATUS="$(dig ${NS:+@$NS} +noall +comment "$HOST"  | grep -oE 'status: [A-Z]+' | head -1 | awk '{print $2}')"
+  SIB="$(dig ${NS:+@$NS} +noall +comment "$ZONE"     | grep -oE 'status: [A-Z]+' | head -1 | awk '{print $2}')"   # known-good sibling: the zone apex
+  case "$STATUS" in
+    NXDOMAIN) [ "$SIB" = NOERROR ] \
+      && echo "ALR-010 evidence: NXDOMAIN-authoritative — the record is GONE from the zone (apex resolves, so not a resolver failure). DECOMMISSIONED target: the config outlived the infrastructure. Retarget or remove this block in toolkit.yaml." \
+      || echo "ALR-010 evidence: NXDOMAIN but the zone apex also failed (${SIB:-no-answer}) — cannot rule out a resolver/network failure; re-run from a working resolver before concluding decommission." ;;
+    SERVFAIL) echo "ALR-010 evidence: SERVFAIL — the zone delegation/DNSSEC is broken, not one missing record; fix the zone upstream." ;;
+    NOERROR)  echo "ALR-010 evidence: resolves at the authoritative NS but the local path failed — an ingress/LB/network-path problem (the name exists), not a decommission; check VPN/port-forward/ingress." ;;
+    *)        echo "ALR-010 evidence: no authoritative answer for ${HOST} (NS=${NS:-none}); classify manually: dig NS ${ZONE}; dig @<ns> ${HOST}" ;;
+  esac
+fi
+```
+
 Expect: a resolvable A/CNAME record, and both probes returning `200` **with a real API body** — Prometheus `buildinfo` carrying `.data.version` and Alertmanager `/api/v2/status` carrying `.cluster` or `.versionInfo`. The final assertion prints `ALR-010: pass` only then. A `200` whose body is not that JSON is an ALR-010 **fail**, flagged as a fronting SSO/login/SPA/proxy page rather than the API. Because these endpoints are typically UNAUTHENTICATED, a JSON-shaped `200` is proof of *reachability*, not of authorized access. Anything else means the check failed and the reader must classify why, per this table:
 
 | Observed code | Diagnosis | Not this |

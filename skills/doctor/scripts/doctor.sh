@@ -347,8 +347,8 @@ transport_hint() {
 
 http_hint() {
   case "$1" in
-    401) echo "HTTP 401: token missing, invalid, or expired; recreate it per connect references/providers.md and re-export" ;;
-    403) echo "HTTP 403: token authenticated but scope or role too low; raise to the tier scopes in connect references/providers.md" ;;
+    401) echo "HTTP 401: the endpoint is UP but rejected the credential — the token is missing, malformed, expired, or revoked (this is NOT a scope problem; that is 403). A well-formed token that still 401s is expired/revoked: re-mint a fresh token of the SAME type per connect references/providers.md and re-export — widening scopes will not fix a 401" ;;
+    403) echo "HTTP 403: the token authenticated (so it is valid, distinct from a 401 bad/expired token) but its scope or role is too low; widen the EXISTING token's permissions to the tier scopes in connect references/providers.md — do not re-mint" ;;
     404) echo "HTTP 404: wrong path, wrong region host, or a path prefix; verify the endpoint against your deployment" ;;
     *)   echo "HTTP $1: unexpected status; inspect the endpoint manually" ;;
   esac
