@@ -34,28 +34,32 @@ One permanent ID per check. IDs never change or get reused; retired checks keep 
 | PD-013 | Service hygiene | Business services exist and technical services map to them | low |
 | PD-014 | Service hygiene | Rulesets/Event Rules migration debt named (EOL toward Event Orchestration) | medium |
 | PD-015 | Service hygiene | PagerDuty native Standards score read and disagreements with this audit named | info |
+| PD-016 | Escalation and on-call | No escalation policy is orphaned (referenced by no service) — **verify-pending** | medium |
+| PD-017 | Escalation and on-call | Account-level bus factor: more than one distinct human backs escalation across all policies — **verify-pending** | high |
 | PD-020 | Alert grouping and noise | Alert grouping configured per production service, type and window recorded | high |
 | PD-021 | Alert grouping and noise | `auto_resolve_timeout` set deliberately, not defaulted to never | medium |
 | PD-022 | Alert grouping and noise | Auto-Pause Incident Notifications (transient-alert pause) posture recorded | medium |
 | PD-023 | Alert grouping and noise | Event Orchestration suppress/pause rules reviewed; no accidental drop-alls | high |
 | PD-024 | Alert grouping and noise | Maintenance windows: none permanent, none stale | medium |
 | PD-025 | Alert grouping and noise | Dedup posture: incidents show `alert_counts` grouping actually working | medium |
+| PD-026 | Alert grouping and noise | `acknowledgement_timeout` set deliberately, not defaulted to never — **verify-pending** | medium |
 | PD-030 | Incident health | No triggered incidents older than the acknowledgement-aging threshold | high |
 | PD-031 | Incident health | Priorities configured and actually used on recent incidents | low |
 | PD-032 | Incident health | Urgency mapping deliberate: production services page high-urgency | medium |
 | PD-040 | Actionability | Auto-resolved share of incidents below the noise threshold per service | high |
 | PD-041 | Actionability | MTTA within target on paging services | medium |
 | PD-042 | Actionability | Sleep-hour interruptions reviewed per service | medium |
+| PD-043 | Actionability | GET-only per-service ack-ratio fallback from `GET /incidents` `acknowledgements[]`, used when the Analytics POST is unavailable — **verify-pending** | high |
 
 ## 3. Target profile
 
 What 100/100 means per category; the checks above are this profile made executable.
 
-- **Escalation and on-call**: every active service escalates to a policy with at least two distinct human targets or a deliberate loop, schedules covering 100 percent of the audit window, every referenced schedule live with participants, and every responder reachable by push, SMS, or phone in addition to email.
+- **Escalation and on-call**: every active service escalates to a policy with at least two distinct human targets or a deliberate loop, schedules covering 100 percent of the audit window, every referenced schedule live with participants, every responder reachable by push, SMS, or phone in addition to email, no escalation policy sits unused by any service, and more than one distinct human backs escalation account-wide.
 - **Service hygiene**: every service carries a live integration, activity or a recorded dormancy reason, a business-service mapping, no ruleset migration debt, and the vendor's own Standards score read and reconciled with this audit's view.
-- **Alert grouping and noise**: grouping enabled and tuned per production service (or its absence recorded as a plan-gate fact), auto-resolve deliberate, transient-alert pause posture recorded, orchestration suppression reviewed rule by rule, and no permanent or stale maintenance windows.
+- **Alert grouping and noise**: grouping enabled and tuned per production service (or its absence recorded as a plan-gate fact), auto-resolve AND acknowledgement-timeout posture both deliberate, transient-alert pause posture recorded, orchestration suppression reviewed rule by rule, and no permanent or stale maintenance windows.
 - **Incident health**: nothing triggered and unacknowledged past the aging threshold, priorities in real use, urgency deliberate per service tier.
-- **Actionability**: the auto-resolved share, MTTA, and sleep-hour interruption counts per service read from the Analytics API and judged against stated thresholds — or the whole category excluded with the doctor-probe reason when Analytics is unavailable to this key or plan.
+- **Actionability**: the auto-resolved share, MTTA, and sleep-hour interruption counts per service read from the Analytics API and judged against stated thresholds — or, when Analytics is unavailable to this key or plan, the same acked/resolved-never-acked/still-open ratios computed straight from the plain `GET /incidents` `acknowledgements[]` field, so the category is never silently lost to a plan gate.
 
 ## 4. Inventory (all categories)
 
@@ -229,6 +233,51 @@ curl -fsS --max-time 30 -H "Authorization: Token token=${PAGERDUTY_TOKEN}" \
 
 Healthy: no escalation-target user delays their high-urgency first page; every critical-service schedule has ≥2 distinct participants (or a documented, staffed secondary layer). Fail (PD-008, high): a delayed first-page path on a critical service — state the minutes and the service. Fail (PD-009, high): a single-participant rotation on a critical service's escalation target — name the schedule, the service, and the sole participant (name only, never contact details). Remediation is inline (no `setup-pagerduty` ships): PD-008 → *User Profile > Notification Rules*, add a 0-minute high-urgency push/phone rule; PD-009 → *People > Schedules*, add a second participant or a staffed secondary layer/escalation level.
 
+### 5.2 Orphaned escalation policy and account bus factor (PD-016, PD-017)
+
+> **Verify-pending.** Both drafted against the documented PagerDuty REST API and adversarially reviewed, but **not** run against a live PagerDuty account (the PagerDuty credential available to this work is a stale/401 token; no live PagerDuty estate was reachable). Treat their status as unproven until a first live run against a real account with a read-only `PAGERDUTY_TOKEN` — the endpoints and fields below are from PagerDuty's public API docs and the shapes this skill already captures, not confirmed live here.
+
+PD-016 is the Zenduty-ZD-007 parallel: `escalation-policies.json` (section 4) already retains each policy's `services: [.services[]?.id]`, so an orphaned policy — one no service references — is computable with no new call. PD-017 is the account-wide sibling of PD-002/PD-009: neither check, run per policy, can see that the *same* person is the human target across most of the account.
+
+```bash
+set -eu
+RUN_DATE="$(date -u +%Y-%m-%d)"
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/pagerduty/${RUN_DATE}/raw"
+
+# PD-016: an escalation policy with an empty services[] join — nothing routes through it.
+jq '[.[] | select((.services | length) == 0) | {id, name}]' "${RAW_DIR}/escalation-policies.json"
+# Expect: []. Each hit is dead config: a policy that exists, is not shaped like a SPOF, and pages
+# nobody because no service points at it. Distinct from PD-001 (a service with NO policy) and
+# PD-002 (a policy real services depend on, shaped as a SPOF) — this is a policy real services do
+# NOT depend on. State it: "escalation policy 'legacy-oncall' has services:[] — it is unused dead
+# config, not a working backup path; either wire a service to it or delete it." Remediation is
+# inline (no setup-pagerduty ships): People > Escalation Policies — delete the unused policy or
+# attach it to the service it was meant for. Verification: re-pull /escalation_policies and confirm
+# the policy is gone, or its services[] is non-empty.
+
+# PD-017: distinct humans across ALL escalation policies' targets, account-wide (not just the
+# policies backing one service). type == "user_reference" identifies a direct user target (as
+# opposed to "schedule_reference"); id is an opaque PagerDuty object id, never a name or contact
+# value, so this aggregation is safe to retain and compare for uniqueness.
+jq -s '
+  add
+  | [.[] | .id as $ep | .rules[]?.targets[]? | select(.type == "user_reference") | {ep: $ep, id}]
+  | group_by(.id)
+  | {distinct_humans: length,
+     coverage: (map({id: .[0].id, ep_count: (map(.ep) | unique | length)}) | sort_by(-.ep_count))}' \
+  "${RAW_DIR}/escalation-policies.json"
+# Expect: distinct_humans > 1, with no single id's ep_count equal to the total policy count. A
+# distinct_humans of 1, or one id's ep_count matching (or nearly matching) the total, means one
+# human is the de facto escalation backstop for the whole account — the account-level bus factor is
+# 1, even though every individual policy's own PD-002/PD-009 checks might pass in isolation. State
+# it as a count, never an adjective: "4 distinct humans back escalation across 11 policies, but one
+# (opaque id, not named) is a direct target on 9 of them — the account's real bus factor is 1."
+# Remediation is inline (no setup-pagerduty ships): People > Escalation Policies / Schedules —
+# spread direct-user targets across more of the team, or replace them with staffed schedules so no
+# one human backs most of the account's paging. Verification: re-run the aggregation and confirm
+# distinct_humans grew or no id's ep_count approaches the total.
+```
+
 ## 6. Service hygiene (PD-010 to PD-015)
 
 ```bash
@@ -277,7 +326,7 @@ jq 'length' "${RAW_DIR}/standards-scores.json"
 # reverse), name the disagreement in PD-015 — disagreement is itself a finding (info).
 ```
 
-## 7. Alert grouping and noise (PD-020 to PD-025)
+## 7. Alert grouping and noise (PD-020 to PD-026)
 
 ```bash
 set -eu
@@ -347,6 +396,32 @@ curl -fsS --max-time 30 -H "Authorization: Token token=${PAGERDUTY_TOKEN}" \
 # means grouping is configured but not collapsing; pair with PD-020's config to say why.
 ```
 
+### 7.1 Acknowledgement-timeout posture (PD-026)
+
+> **Verify-pending.** Drafted against the documented PagerDuty REST API and adversarially reviewed, but not run against a live PagerDuty account (the credential available to this work is stale/401; see section 5.2's banner). Treat as unproven until a first live run.
+
+PD-021 already judges `auto_resolve_timeout` (does an incident ever close itself). `acknowledgement_timeout` is the other half of the same posture question — does an *acknowledged-but-not-worked* incident ever re-escalate — and the `services.json` capture (section 4) already retains the raw field; today's skill reads it for PD-021 but never judges it on its own.
+
+```bash
+set -eu
+RUN_DATE="$(date -u +%Y-%m-%d)"
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/pagerduty/${RUN_DATE}/raw"
+
+jq '[.[] | select(.status == "active" and (.acknowledgement_timeout // null) == null)
+    | {name, auto_resolve_timeout, acknowledgement_timeout}]' "${RAW_DIR}/services.json"
+# A null acknowledgement_timeout means an acked incident never automatically re-triggers if the
+# acker goes silent — the escalation loop (PD-003) never gets a second chance to fire. Judgment,
+# same as PD-021: null is DEFENSIBLE on some paging services (a human ack is trusted); it is debt
+# when PAIRED with auto_resolve_timeout ALSO null (PD-021) on the same service — that combination
+# means an acked-then-abandoned incident has no timeout on either side and can sit open forever.
+# State it: "checkout has acknowledgement_timeout:null AND auto_resolve_timeout:null — an
+# acknowledged-but-abandoned incident on checkout has no timeout backstop of any kind." Correlation:
+# joins PD-021 (the sibling timeout) and PD-030 (the live proof: aging incidents on the same
+# service). Remediation is inline (no setup-pagerduty ships): Service Settings > Incident Behavior
+# — set a deliberate acknowledgement timeout so a silent ack re-escalates. Verification: re-pull the
+# service and confirm acknowledgement_timeout is set, or the null is a reviewed, deliberate choice.
+```
+
 ## 8. Incident health (PD-030 to PD-032)
 
 ```bash
@@ -405,9 +480,9 @@ fi
 [ "$RESP_CODE" = "200" ] || echo "still ${RESP_CODE} after one retry: record the affected check as blocked with this code"
 ```
 
-## 10. Actionability via Analytics (PD-040 to PD-042)
+## 10. Actionability via Analytics (PD-040 to PD-043)
 
-POST endpoints, read-only by effect (filter body, no mutation). **Gated**: run only when the doctor matrix's `pagerduty analytics` row is `pass`; on `skipped`, exclude the whole Actionability category with the doctor reason. Data lags up to 24 hours; state that in the report.
+POST endpoints, read-only by effect (filter body, no mutation). PD-040/041/042 are **gated**: run only when the doctor matrix's `pagerduty analytics` row is `pass`. Data lags up to 24 hours; state that in the report. PD-043 (10.1 below) is the un-gated GET-only fallback — it runs regardless of the analytics gate and keeps the category assessable when analytics is `skipped`.
 
 ```bash
 set -eu
@@ -458,6 +533,52 @@ jq '[.[] | select(.sleep_hour_interruptions > 0)
 # (cross-reference PD-040) — waking humans for noise.
 ```
 
+### 10.1 GET-only per-service ack-ratio fallback (PD-043)
+
+> **Verify-pending.** Drafted against the documented PagerDuty REST API and adversarially reviewed, but not run against a live PagerDuty account (the credential available to this work is stale/401; see section 5.2's banner). Treat as unproven until a first live run.
+
+PD-040/041/042 lose the whole Actionability category when the Analytics endpoint is plan-gated or the read-only key can't reach it. `GET /incidents` (already used for PD-025/PD-030) carries an `acknowledgements[]` array per incident, so the same acked/resolved-never-acked/still-open shape ZD-033 computes for Zenduty is computable here too, with no Analytics call — a **fallback**, not a duplicate: when Analytics is reachable, PD-040/041/042 stay primary and PD-043 is corroborating evidence, cited alongside them rather than filed as a second finding on the same cause.
+
+```bash
+set -eu
+PD_API="https://api.pagerduty.com"   # pagerduty.region
+FALLBACK_WINDOW_DAYS="30"   # example, tune to your review cadence
+SINCE="$(date -u -v-${FALLBACK_WINDOW_DAYS}d +%Y-%m-%dT00:00:00Z 2>/dev/null || date -u -d "${FALLBACK_WINDOW_DAYS} days ago" +%Y-%m-%dT00:00:00Z)"
+
+# Page /incidents since the window; acknowledgements[] is empty when nobody ever acked.
+# limit/offset pages the same way as the pd_get_all helper in section 4.
+pd_offset=0; OUT="$(mktemp)"; > "$OUT"
+while :; do
+  PAGE="$(curl -fsS --max-time 30 -H "Authorization: Token token=${PAGERDUTY_TOKEN}" \
+    "${PD_API}/incidents?since=${SINCE}&limit=100&offset=${pd_offset}")"
+  printf '%s' "$PAGE" | jq -c '.incidents[] | {service: .service.id, status,
+      acked: ((.acknowledgements // []) | length > 0),
+      resolved: (.status == "resolved")}' >> "$OUT"
+  printf '%s' "$PAGE" | jq -e '.more == true' >/dev/null || break
+  pd_offset=$((pd_offset + 100))
+done
+
+jq -s '
+  group_by(.service) | map({
+    service_id: .[0].service,
+    total: length,
+    acked_share: ((map(select(.acked)) | length) * 100 / length | floor),
+    resolved_never_acked_share: ((map(select(.resolved and (.acked|not))) | length) * 100 / length | floor),
+    still_open_share: ((map(select(.status == "triggered" and (.acked|not))) | length) * 100 / length | floor)
+  }) | sort_by(-.total)' "$OUT"
+rm -f "$OUT"
+# Expect (healthy): acked_share high, resolved_never_acked_share and still_open_share low.
+# PD-043 fails a service whose resolved_never_acked_share or still_open_share is high — incidents
+# created but never touched by a human either way, the same signal PD-040/041 read from Analytics.
+# State it: "service <id>: 340 incidents in the sample (GET /incidents, ${FALLBACK_WINDOW_DAYS}d,
+# N pages), 12% acked, 81% resolved without ever being acknowledged — computed without the
+# Analytics endpoint, so Actionability is not lost when Analytics is plan-gated or unreachable."
+# Remediation is inline (no setup-pagerduty ships): same as PD-040/041 — fix the sending tool's
+# grouping/thresholds or the on-call rotation; this check only changes where the evidence came
+# from. Verification: none beyond re-running the same pull after the fix and confirming the shares
+# improved.
+```
+
 ## 11. Per-service coverage queries (coverage matrix)
 
 For each critical service from `./scoutflo-audits/topology.md`, resolve the PagerDuty service by name match (record unmatched names honestly), then fill the matrix row from the section 5 to 10 captures: escalation (PD-001/002), on-call now (PD-005), grouping (PD-020), unacked aging (PD-030), actionability (PD-040 when the category runs). Name affected services in findings; "three services lack grouping" is not a finding, "checkout, payments, and search lack grouping" is.
@@ -472,6 +593,7 @@ For each critical service from `./scoutflo-audits/topology.md`, resolve the Page
 | `ANALYTICS_WINDOW_DAYS` | 30 | Analytics aggregation window |
 | `AUTO_RESOLVE_NOISE_PCT` | 30 | Auto-resolved share that flags a service as noisy |
 | `MTTA_TARGET_SECONDS` | 300 | Acknowledgement target for paging services |
+| `FALLBACK_WINDOW_DAYS` | 30 | Window for the PD-043 GET-only ack-ratio fallback |
 
 ## 13. Forbidden commands
 

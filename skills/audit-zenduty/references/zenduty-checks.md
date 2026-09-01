@@ -6,12 +6,16 @@ Runnable, read-only checks for every surface the [audit-zenduty](../SKILL.md) wo
 
 - Base is `https://www.zenduty.com/api`. Zenduty is now branded Xurrent IMR (branding-only; the API host is unchanged).
 - Auth is `Authorization: Token <key>` — the **literal word `Token`**, not `Bearer`. Presence-check `ZENDUTY_TOKEN` only; never echo, log, or write it. There is no read-only key scope; a Bot Token (Beta) with view-only permissions is the least-privilege credential.
-- Versioning is mixed and per-resource: teams, services, integrations, alert rules (`transformers`), escalation policies, schedules, and maintenance are unversioned under `/api/account/...`; incidents are under `/api/incidents/...`; **analytics, global routing (`events/router`), and on-call are `/api/v2/account/...`**. On-call has both a v1 and a v2 path — this audit uses v2 (richer shape).
+- Versioning is mixed and per-resource: teams, services, integrations, alert rules (`transformers`), escalation policies, schedules, and maintenance are unversioned under `/api/account/...`; incidents are under `/api/incidents/...` and `/api/v2/incidents/...`; **analytics, global routing (`events/router`), and on-call are `/api/v2/account/...`**. On-call has both a v1 and a v2 path — this audit uses v2 (richer shape).
 - **Rate limits are tight and per-endpoint-class — pace every call.** Section 9 has the published table and the retry rule. This is the defining operational constraint; a large audit is paced, not fast.
 - Every command here is read-only: GET, plus two documented read-by-POST calls — `POST /api/incidents/filter/` (lists incidents by filter, changes nothing) and the `POST /api/v2/account/analytics/*` endpoints (server-side aggregation). The forbidden-verb list is section 13.
 - `curl -fsS --max-time 30 -H "Authorization: Token ${ZENDUTY_TOKEN}"` is the default. Where the status code is the evidence, `-f` is dropped and `-w '%{http_code}'` captures it.
 - A team's scope key is its **`unique_id`** (a UUID); use it as `{team_id}` in per-team calls. A list response may be a bare array or a paginated `{results: [...]}` — the commands handle both.
 - Thresholds and windows are examples; tune to your workloads. Named defaults live in section 12.
+- **`GET /api/incidents/` is WAF-blocked, not create-only.** Live-confirmed (2026-09-01): this path returns `HTTP 209` with body `Blocked` from the edge WAF, regardless of method intent — it is not a documented "create-only" endpoint, it simply never answers a read. Never call it and never describe it as create-only in a finding or a doc; the incident list read is `GET /api/v2/incidents/` below.
+- **`GET /api/v2/incidents/` is a working, paginated incident list — no analytics POST required.** Live-confirmed (2026-09-01): it returns `200` with `{count, next, previous, results:[...]}` (follow `next` to page). The page size is **fixed at 10 and ignores a `page_size` query param** (confirmed live: `?page_size=50` still returns 10 results per page) — budget the page count accordingly on a large incident stream and pace per section 9's incident-GET class. Each result carries `status` (the same triggered/acked/resolved integer ZD-030 already reads), `acknowledged_date`, `resolved_date`, `service_object` (`{unique_id, name, team, team_name}`), and `sla_object` (`{unique_id, name, is_active, acknowledge_time, resolve_time}`, minutes). This is the GET-only path ZD-033 uses as a fallback when the analytics POST is plan-gated or otherwise unavailable.
+- **Teams live at `/api/account/teams/` (confirmed `200`); `/api/teams/` is a plain `404`.** There is no unversioned `/api/teams/` collection — always resolve teams through the account-scoped path this skill already uses.
+- **`GET /api/account/teams/{team}/priorities/` can `404` per tenant.** Live-confirmed: a tenant without the team-priorities feature 404s on this path. Treat that `404` as `not-in-scope` (the feature is absent for this tenant), never as a failed check or a broken API call.
 
 ## 2. Check catalog
 
@@ -24,7 +28,9 @@ One permanent ID per check. IDs never change or get reused; retired checks keep 
 | ZD-003 | Escalation and on-call | Every escalation policy's on-call resolves to a staffed rotation now (no empty `oncalls`) | high |
 | ZD-004 | Escalation and on-call | Schedules referenced are non-empty and cover the window | high |
 | ZD-005 | Escalation and on-call | No integration on a live ingestion path is `is_enabled: false` | critical |
-| ZD-006 | Escalation and on-call | No escalation level targets a named individual instead of a schedule/rotation (single-human dependency) — **verify-pending** | high |
+| ZD-006 | Escalation and on-call | No escalation level targets a named individual instead of a schedule/rotation (single-human dependency) | high |
+| ZD-007 | Escalation and on-call | No escalation policy is orphaned (`connections == 0`, used by no service) | medium |
+| ZD-008 | Escalation and on-call | Account-level bus factor: more than one distinct human backs escalation across all teams | high |
 | ZD-010 | Alert noise | Per-service `collation` on where a service is chatty (time-based dedup) | medium |
 | ZD-011 | Alert noise | Suppress alert rules present and not over-broad (no always-true drop-all) | high |
 | ZD-012 | Alert noise | "Seconds Since Last Similar Incident" flapping guard where a source re-fires | medium |
@@ -38,18 +44,21 @@ One permanent ID per check. IDs never change or get reused; retired checks keep 
 | ZD-022 | Coverage and hygiene | Teams audited named; teams not audited named as uncovered, not silently dropped | medium |
 | ZD-023 | Coverage and hygiene | No integration on the deprecated "API-Integration" ingestion type (stopped 2025-05-15) | medium |
 | ZD-024 | Coverage and hygiene | Teams are visible in the account (zero teams visible to this key is `blocked`, not a plain fail — a likely token permission/visibility gap: the paging config lives in teams the key cannot see; widen the token to a Bot Token with view-only team access) | high |
+| ZD-025 | Coverage and hygiene | Account is not dormant: at least one incident within the dormancy window | info |
 | ZD-030 | Actionability | Unacknowledged incidents older than the aging threshold | high |
 | ZD-031 | Actionability | MTTA against target from analytics `mtta_seconds` where humans acked | medium |
 | ZD-032 | Actionability | MTTR against target from `mttr_seconds`, with the acked/resolved share | medium |
+| ZD-033 | Actionability | GET-only per-service actionability ratios (acked, resolved-never-acked, still-open) from `/api/v2/incidents/`, the fallback when analytics is unavailable | high |
+| ZD-034 | Actionability | Ack/auto-resolve timeout posture: no service with `auto_resolve_timeout:0` and ack-timeout disabled | medium |
 
 ## 3. Target profile
 
 What 100/100 means per category; the checks above are this profile made executable.
 
-- **Escalation and on-call**: every audited team has a multi-level escalation with a repeat, every escalation's on-call resolves to a staffed rotation, referenced schedules cover the window, no live-path integration is disabled, and every escalation level targets a rotation/schedule rather than a lone named individual — a page always reaches a reachable human, not a single phone.
+- **Escalation and on-call**: every audited team has a multi-level escalation with a repeat, every escalation's on-call resolves to a staffed rotation, referenced schedules cover the window, no live-path integration is disabled, every escalation level targets a rotation/schedule rather than a lone named individual, no escalation policy is orphaned dead config, and more than one distinct human backs escalation account-wide — a page always reaches a reachable human, not a single phone, and not the same single phone everywhere.
 - **Alert noise**: chatty services have time-based collation on, suppress and flapping-guard rules are present and narrow, delay is scoped, sources set a stable `entity_id` and emit resolve events, no maintenance window is an open-ended recurring blackout, and no alert rule silently downgrades a critical-service incident's urgency below the paging threshold.
-- **Coverage and hygiene**: global routing is unambiguous with a default route, every critical service has a team/service/escalation path, every team is audited or named as uncovered, and no integration sits on the dead API-Integration ingestion type.
-- **Actionability**: few incidents age unacknowledged, and the vendor's own MTTA/MTTR are within target with a healthy acked/resolved share — pages are worth taking, from Zenduty's own analytics.
+- **Coverage and hygiene**: global routing is unambiguous with a default route, every critical service has a team/service/escalation path, every team is audited or named as uncovered, no integration sits on the dead API-Integration ingestion type, and the account shows recent incident activity (not dormant).
+- **Actionability**: few incidents age unacknowledged, and the vendor's own MTTA/MTTR are within target with a healthy acked/resolved share — pages are worth taking, from Zenduty's own analytics or, when analytics is unavailable, from the same ratios computed straight off the plain incident-list GET; and no service is left to pile up triggered incidents forever behind a disabled ack/auto-resolve timeout.
 
 ## 4. Inventory (all categories)
 
@@ -89,9 +98,10 @@ while IFS="$(printf '\t')" read -r TID TNAME; do
   [ -n "$TID" ] || continue
   tdir="${RAW_DIR}/teams/${TID}"; mkdir -p "$tdir"
   curl -fsS --max-time 30 -H "$AUTH" "${ZD_API}/account/teams/${TID}/escalation_policies/" | norm \
-    | jq '[.[] | {unique_id, name, repeat_policy, move_to_next,
+    | jq '[.[] | {unique_id, name, repeat_policy, move_to_next, connections,
         rules: [.rules[]? | {position, delay, target_count: ((.targets // []) | length),
-          targets: [.targets[]? | {target_type, target_id}]}]}]' > "${tdir}/escalations.json"; sleep 1
+          targets: [.targets[]? | {target_type, target_id,
+            is_user: ((.target_meta.email // null) != null)}]}]}]' > "${tdir}/escalations.json"; sleep 1
   curl -fsS --max-time 30 -H "$AUTH" "${ZD_API}/v2/account/teams/${TID}/oncall/" | norm \
     | jq '[.[] | {ep: .unique_id, name,
         oncall_user_count: ([.oncalls[]?.oncalls[]?] | length)}]' > "${tdir}/oncall.json"; sleep 1
@@ -99,7 +109,8 @@ while IFS="$(printf '\t')" read -r TID TNAME; do
     | jq '[.[] | {unique_id, name}]' > "${tdir}/schedules.json"; sleep 1
   curl -fsS --max-time 30 -H "$AUTH" "${ZD_API}/account/teams/${TID}/services/" | norm \
     | jq '[.[] | {unique_id, name, collation, collation_time, status, under_maintenance,
-        auto_resolve_timeout, escalation_policy}]' > "${tdir}/services.json"; sleep 1
+        auto_resolve_timeout, acknowledgement_timeout, acknowledgement_timeout_enabled,
+        escalation_policy}]' > "${tdir}/services.json"; sleep 1
   curl -fsS --max-time 30 -H "$AUTH" "${ZD_API}/account/teams/${TID}/maintenance/" | norm \
     | jq '[.[] | {unique_id, name, start_time, end_time, repeat_interval, repeat_until,
         service_count: ((.services // []) | length),
@@ -117,8 +128,9 @@ Per-service integrations and their alert rules are pulled in section 6 (they are
 - `maintenance.json` keeps the full `services[]` (each `unique_id` and `name`), not just `service_count`, so **ZD-016** can resolve *which* covered services are critical rather than only how many.
 - `services.json` keeps `escalation_policy` (the EP `unique_id` each service routes through), so **ZD-001/ZD-002/ZD-006/ZD-030** can join a service to the escalation policy that pages for it.
 - The incident-filter capture (section 8) keeps per-incident `service`/`service_ids` and `sla_object`, so **ZD-030** can join each aging incident to its service's escalation policy and **ZD-031** can read the service's own acknowledge SLA — **when they are populated.** Integration-created incidents often return `service` AND `service_ids` as `null` (live-confirmed); when they do, the aging COUNT (ZD-030) and the `sla_object` still stand, but the per-service escalation-policy attribution degrades to the account/EP level — say so in the finding rather than dropping it. The old shape (unacked count + oldest only) discarded both and could not compute the per-service cause even when present — section 8 now retains them.
+- `escalations.json` keeps `connections` (the count of services/objects wired to that EP, live-confirmed field) so **ZD-007** can name an EP nothing routes through without a second call, and derives `is_user` per target as a **redacted boolean** — `(target_meta.email // null) != null` computed at capture time — so **ZD-006** and **ZD-008** can classify a target as a named user without ever writing the target's real email to disk, evidence, or the report; only the boolean and the (already-present) `target_id`/`target_type` are retained.
 
-## 5. Escalation and on-call (ZD-001 to ZD-006)
+## 5. Escalation and on-call (ZD-001 to ZD-008)
 
 ```bash
 set -eu
@@ -173,7 +185,7 @@ jq 'length as $n | {schedule_count: $n}' "${tdir}/schedules.json"
 
 ### ZD-006 — Escalation level targets a named individual, not a rotation (single-human dependency)
 
-> **Live-verified (read-only), enum-semantics residual.** Run against a live Zenduty account: escalation-policy rule targets carry an integer `target_type` alongside a `target_id` (observed `target_type=2` with a real target id), confirming the field structure ZD-006 reads. **Residual:** the exact `target_type` integer→`{user, schedule}` semantic mapping needs a second sample (a schedule-typed target) or the vendor doc before flagging user-vs-schedule specifically; the structure and the presence of the field are proven live.
+> **Live-confirmed (read-only), 2026-09-01.** Run against a live Zenduty account: an escalation-policy rule target with `target_type == 2` carries a `target_meta` object containing `{name, email}` — a schedule/rotation target does not carry a personal `email` in `target_meta`. `target_type == 2` **with `target_meta.email` present** is therefore a confirmed **named USER** target, not a rotation. This is no longer verify-pending.
 
 An escalation level whose every target is a specific user (rather than an on-call schedule/rotation) pages nobody the moment that individual is on leave, changes phone, or leaves — there is no rotation to fall back to. This is distinct from ZD-003 (a rotation exists but is empty *now*) and ZD-001 (count-based SPOF: one rule / one target of any kind).
 
@@ -183,25 +195,83 @@ RUN_DATE="$(date -u +%Y-%m-%d)"
 RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/zenduty/${RUN_DATE}/raw"
 TID="TEAM"; tdir="${RAW_DIR}/teams/${TID}"
 
-# Enumerate each escalation level's target kinds from the section-5 capture (read-only).
+# Enumerate each escalation level's target kinds from the section-4 capture (read-only). is_user
+# is a REDACTED boolean computed at capture time from target_meta.email presence — the real
+# email is never retained on disk, in evidence, or in the report.
 jq '[.[] | {ep: .name, unique_id,
     rules: [.rules[]? | {position,
-        targets: [.targets[]? | {target_type, target_id}]}]}]' "${tdir}/escalations.json"
-# target_type is an integer; the int -> {user, schedule} mapping is UNVERIFIED (see the
-# verify-pending banner). Once the enum is confirmed live, filter to rules whose EVERY target is
-# the USER value (no schedule anywhere on the level): that level is a single-human dependency.
+        targets: [.targets[]? | {target_type, is_user}]}]}]' "${tdir}/escalations.json"
+# Flag any rule/level whose EVERY target has is_user:true and NONE has is_user:false (no schedule
+# anywhere on the level): that level is a single-human dependency (ZD-006 high).
 
 # BLAST RADIUS: same services.json join as ZD-001 — count who depends on the offending EP.
 EP_ID="EP_UNIQUE_ID"   # the user-targeting policy's unique_id
 jq -s --arg ep "$EP_ID" 'add | map(select(.escalation_policy == $ep)) | {ep:$ep,
     services_routing: length, service_names: [.[].name]}' "${tdir}"/services.json 2>/dev/null
-# State it: "the payments EP level 1 targets user U directly (not a schedule); 6 services route
-# through it (join), 2 critical — when U is off, all 6 lose level-1 paging with no rotation
-# backstop." Chains with ZD-001 (both single-point escalation failures; different root: shape vs
-# target-kind) and ZD-030 (aging incidents on the affected services when U is unavailable).
+# State it: "the payments EP level 1 targets a named user directly (not a schedule); 6 services
+# route through it (join), 2 critical — when that person is off, all 6 lose level-1 paging with no
+# rotation backstop." Chains with ZD-001 (both single-point escalation failures; different root:
+# shape vs target-kind) and ZD-030 (aging incidents on the affected services when the user is
+# unavailable). Remediation is inline (no setup-zenduty ships): Zenduty > Teams > (team) >
+# Escalation Policies — repoint the level at an On-Call Schedule instead of a user. Verification:
+# re-pull GET .../escalation_policies/ and confirm each level names a schedule target, not a lone user.
+```
+
+### ZD-007 — Orphaned escalation policy (`connections == 0`)
+
+An escalation policy with `connections == 0` (a real, live-confirmed field on the escalation-policy object) is wired to nothing: no service routes through it. It is dead config that inflates the "every team has a policy" count without paging anyone — the opposite failure mode from ZD-001 (a policy that exists but is shaped as a SPOF), this is a policy that exists and is used by *nobody*.
+
+```bash
+set -eu
+RUN_DATE="$(date -u +%Y-%m-%d)"
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/zenduty/${RUN_DATE}/raw"
+TID="TEAM"; tdir="${RAW_DIR}/teams/${TID}"   # per-team; loop over teams.tsv in the real run
+
+jq '[.[] | select(.connections == 0) | {unique_id, name}]' "${tdir}/escalations.json"
+# Expect: []. Each hit is an escalation policy nothing routes through — confirm against
+# services.json (no service's .escalation_policy equals this unique_id) before naming it dead:
+EP_ID="EP_UNIQUE_ID"   # a flagged policy's unique_id from the query above
+jq -s --arg ep "$EP_ID" 'add | map(select(.escalation_policy == $ep)) | length' "${tdir}"/services.json 2>/dev/null
+# Expect: 0, corroborating connections==0. State it: "the 'legacy-oncall' EP on the platform team
+# has connections:0 and zero services join it — it is dead config, not a working paging path;
+# either wire a service to it or remove it so the team's real policy count is not overstated."
 # Remediation is inline (no setup-zenduty ships): Zenduty > Teams > (team) > Escalation Policies —
-# repoint the level at an On-Call Schedule instead of a user. Verification: re-pull
-# GET .../escalation_policies/ and confirm each level names a schedule target, not a lone user.
+# delete the unused policy or wire it to the service it was meant for. Verification: re-pull
+# .../escalation_policies/ and confirm the policy is gone, or connections > 0.
+```
+
+### ZD-008 — Account-level bus factor (distinct humans backing escalation)
+
+Every ZD-001/ZD-006 check is per-EP: it can tell you "this policy's level 1 is a lone user." None of them tell you the account-wide fact — that the *same* lone user is the level-1 target on every EP across every team, so the account's real bus factor is 1 even though each individual EP check might pass in isolation (e.g. an EP with two rules that both target the same person). This check counts **distinct humans** across every audited team's escalation targets, using the redacted `is_user` boolean from the capture (never the underlying email/identity value).
+
+```bash
+set -eu
+RUN_DATE="$(date -u +%Y-%m-%d)"
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/zenduty/${RUN_DATE}/raw"
+
+# Across ALL audited teams' escalations.json, count distinct user-typed target_ids (an opaque
+# id, never an email) and how many EPs each one appears on. target_id is a Zenduty object id,
+# not a contact value, so it is safe to retain and compare for uniqueness.
+find "${RAW_DIR}/teams" -name escalations.json -print0 2>/dev/null \
+  | xargs -0 cat 2>/dev/null | jq -s '
+    add
+    | [.[] | .unique_id as $ep | .rules[]?.targets[]? | select(.is_user == true) | {ep: $ep, target_id}]
+    | group_by(.target_id)
+    | {distinct_humans: length,
+       coverage: (map({target_id: .[0].target_id, ep_count: (map(.ep) | unique | length)})
+                  | sort_by(-.ep_count))}'
+# Expect: distinct_humans > 1, with no single target_id's ep_count equal to the total EP count.
+# distinct_humans == 1 (or one target_id's ep_count == every audited EP) means one human is the
+# de facto escalation backstop for the whole account — the account-level bus factor is 1. State
+# it as a count, never an adjective: "3 distinct humans back escalation across 7 audited EPs, but
+# one of them (opaque target_id, not named) is a level-1 or level-2 target on 6 of the 7 — the
+# account's real bus factor is 1, even though no single EP's own ZD-006 check fails in isolation."
+# Correlation: the account-wide sibling of ZD-006 (per-EP) and ZD-003 (per-EP on-call emptiness);
+# a low distinct_humans count means ZD-003/ZD-006 hitting on different EPs may still be the same
+# person going on leave once. Remediation is inline (no setup-zenduty ships): spread escalation
+# targets across more of the team, or add staffed schedules/rotations so no one human backs most
+# of the account's paging. Verification: re-run the aggregation and confirm distinct_humans grew
+# or no target_id's ep_count approaches the total.
 ```
 
 ## 6. Alert noise (ZD-010 to ZD-017)
@@ -320,7 +390,7 @@ jq --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '[.[]
 # the previously-covered critical services.
 ```
 
-## 7. Coverage and hygiene (ZD-020 to ZD-024)
+## 7. Coverage and hygiene (ZD-020 to ZD-025)
 
 ```bash
 set -eu
@@ -368,7 +438,41 @@ done
 
 **ZD-021 (critical-service coverage)** is a judgment cross-map: for each critical service from `topology.md`, confirm a Zenduty team and service exist and an escalation path reaches a staffed on-call. Name affected services; "three services have no paging path" is not a finding, "checkout, payments, and search have no Zenduty escalation path" is. **ZD-022** is the honesty row: state the teams audited (from `zenduty.teams`) and name every team from `/api/account/teams/` not audited as uncovered in the denominators.
 
-## 8. Actionability (ZD-030 to ZD-032)
+### ZD-025 — Account dormancy (informational)
+
+An account whose most-recent incident is old scores like a live paging account on every other check, but "escalation is configured and nobody has had an incident in months" is a different fact than "escalation is configured and tested weekly" — a dormant tenant's green scorecard is not proof the live path works, it just hasn't been asked to. This check is informational: it never lowers another category's score, it names the dormancy as its own fact so a reader does not over-trust the rest of the scorecard.
+
+```bash
+set -eu
+ZD_API="https://www.zenduty.com/api"
+AUTH="Authorization: Token ${ZENDUTY_TOKEN}"
+DORMANCY_DAYS="30"   # example, tune to your expected incident cadence
+
+# GET /api/v2/incidents/ (section 1) — page size is fixed at 10; page via next. Dates are
+# ISO 8601 UTC strings, which sort correctly as plain text, so collecting each page's max into
+# a file and sorting at the end avoids any per-page comparison logic.
+NEXT="${ZD_API}/v2/incidents/"
+DATES_FILE="$(mktemp)"
+i=0
+while [ -n "$NEXT" ] && [ "$NEXT" != "null" ] && [ "$i" -lt 15 ]; do
+  PAGE="$(curl -fsS --max-time 30 -H "$AUTH" "$NEXT")"
+  printf '%s' "$PAGE" | jq -r '.results[].creation_date' >> "$DATES_FILE"
+  NEXT="$(printf '%s' "$PAGE" | jq -r '.next // "null"')"
+  i=$((i + 1))
+done
+MAXDATE="$(sort "$DATES_FILE" | tail -1)"; rm -f "$DATES_FILE"
+echo "most recent incident creation_date: ${MAXDATE:-none found}"
+# Judge dormancy from MAXDATE vs now - DORMANCY_DAYS. An empty MAXDATE (zero incidents ever) is
+# the same finding with "no incidents at all", not a separate code path.
+# State it: "no Zenduty incident since 2026-07-15 (48 days as of this run, DORMANCY_DAYS=30) —
+# this audit's scorecard reflects a configured-but-dormant tenant; a green escalation/on-call
+# category here is unverified by any recent real page." Remediation is inline (no setup-zenduty
+# ships): none required — this is informational; if dormancy is unexpected, confirm upstream
+# monitoring tools are still sending events (their own audits name that). Verification: none; the
+# finding retires itself the next time an incident lands inside the window.
+```
+
+## 8. Actionability (ZD-030 to ZD-034)
 
 Zenduty exposes server-side analytics, so MTTA/MTTR are the vendor's own measured statistics. Unacked aging comes from the incident filter (a read-by-POST).
 
@@ -437,6 +541,85 @@ curl -fsS --max-time 30 -H "$AUTH" -H "Content-Type: application/json" \
 # fix collation/entity_id; staffing-driven -> fix the rotation/escalation delays.
 ```
 
+### ZD-033 — GET-only per-service actionability ratios (analytics-unavailable fallback)
+
+ZD-031/032 read the vendor's own server-side analytics. When that plan-gated endpoint is unavailable — a read-only key that can't reach it, a plan without it, a transient failure — the existing checks lose the whole category rather than degrading. ZD-033 proves the same actionability signal is computable straight from `GET /api/v2/incidents/` (section 1: `{count,next,previous,results}`, live-confirmed working, no analytics POST). It is a **fallback**, not a duplicate: when analytics is reachable, ZD-030/031/032 remain the primary, higher-fidelity findings and ZD-033 is cross-referenced, never separately filed on the same cause.
+
+```bash
+set -eu
+ZD_API="https://www.zenduty.com/api"
+AUTH="Authorization: Token ${ZENDUTY_TOKEN}"
+ANALYTICS_AVAILABLE="false"   # set from whether the ZD-031/032 analytics POST above succeeded this run
+
+# Page GET /api/v2/incidents/ via next (fixed page_size=10, live-confirmed; page_size query params
+# are ignored). Pace per section 9's incident-GET class (3/s, 30/min) — this is the same class as
+# the incidents/filter POST, so the same throttle budget applies; on a large stream cap pages and
+# say so rather than hammering.
+NEXT="${ZD_API}/v2/incidents/"
+OUT="$(mktemp)"; > "$OUT"
+i=0; MAX_PAGES=200   # example, tune to your incident volume; 200 pages = 2000 incidents
+while [ -n "$NEXT" ] && [ "$NEXT" != "null" ] && [ "$i" -lt "$MAX_PAGES" ]; do
+  PAGE="$(curl -fsS --max-time 30 -H "$AUTH" "$NEXT")"
+  printf '%s' "$PAGE" \
+    | jq -c '.results[] | {sid: .service_object.unique_id, status,
+        acked: (.acknowledged_date != null), resolved: (.resolved_date != null)}' >> "$OUT"
+  NEXT="$(printf '%s' "$PAGE" | jq -r '.next // "null"')"
+  i=$((i + 1))
+done
+echo "pages pulled: ${i} (capped at ${MAX_PAGES}); incidents read: $(wc -l < "$OUT" | tr -d ' ')"
+
+# Per-service ratios: acked-share, resolved-never-acked-share (an "ignored alert": it closed
+# without anyone ever acknowledging it — resolved_date set, acknowledged_date null), and
+# still-open-share (status still triggered, never acked).
+jq -s '
+  group_by(.sid) | map({
+    service_id: .[0].sid,
+    total: length,
+    acked_share: ((map(select(.acked)) | length) * 100 / length | floor),
+    resolved_never_acked_share: ((map(select(.resolved and (.acked|not))) | length) * 100 / length | floor),
+    still_open_share: ((map(select(.status == 1 and (.acked|not))) | length) * 100 / length | floor)
+  }) | sort_by(-.total)' "$OUT"
+rm -f "$OUT"
+# Expect (healthy): acked_share high, resolved_never_acked_share and still_open_share low.
+# ZD-033 fails a service whose resolved_never_acked_share or still_open_share is high — incidents
+# are being created but never touched by a human either way. Cross-reference: when ANALYTICS_AVAILABLE
+# is true, this is corroborating evidence for ZD-030/031/032 (cite both, file the finding once under
+# ZD-030/031/032 and note "confirmed by the GET-only fallback, ZD-033"); when analytics is unavailable,
+# ZD-033 is the primary Actionability evidence and the report says the analytics category ran on the
+# fallback path, not the vendor analytics. State it: "service <id>: 126 incidents in the sample, 8%
+# acked, 91% still open/never-acknowledged (GET /api/v2/incidents/, N pages) — computed without the
+# analytics POST, so this category is not lost when analytics is plan-gated or unreachable."
+# Remediation is inline (no setup-zenduty ships): same as ZD-030/031 — staff the rotation, fix
+# collation/noise, or repoint escalation; this check only changes where the evidence came from.
+```
+
+### ZD-034 — Ack/auto-resolve timeout posture
+
+A service with `auto_resolve_timeout == 0` (never auto-resolves) **and** `acknowledgement_timeout_enabled == false` (no forced re-escalation on a silent ack) has no backstop of any kind: a triggered incident that nobody acks sits open forever, and one that gets acked but never worked also sits open forever. This is the mechanism behind a 90-day pile of triggered incidents — not a vague "aging is high," but the exact posture that lets aging grow unbounded with nothing timing it out. `auto_resolve_timeout`, `acknowledgement_timeout`, and `acknowledgement_timeout_enabled` are all live-confirmed fields on the service object (section 4's `services.json` capture already retains `auto_resolve_timeout`).
+
+```bash
+set -eu
+RUN_DATE="$(date -u +%Y-%m-%d)"
+RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/zenduty/${RUN_DATE}/raw"
+TID="TEAM"; tdir="${RAW_DIR}/teams/${TID}"
+
+# services.json needs acknowledgement_timeout_enabled added alongside the existing
+# auto_resolve_timeout capture (section 4) — both are live-confirmed fields on the service object.
+jq '[.[] | select(.auto_resolve_timeout == 0 and (.acknowledgement_timeout_enabled // false) == false)
+    | {unique_id, name}]' "${tdir}/services.json"
+# Expect: []. Each hit is a service with no automatic backstop on either side: an unacked
+# incident is never re-escalated on a timeout, AND nothing ever auto-resolves it. State it:
+# "checkout has auto_resolve_timeout:0 and acknowledgement_timeout_enabled:false — a triggered
+# incident nobody acks stays open indefinitely; this is the exact mechanism ZD-030's aging count
+# keeps growing under, not just a symptom of noise or an empty rotation." Correlation: joins
+# ZD-030 (the live proof — aging incidents on this same service) and ZD-003/ZD-010 (why they went
+# unacked in the first place); this check names WHY nothing times them out once they do.
+# Remediation is inline (no setup-zenduty ships): Service > Basic Settings — set a deliberate
+# acknowledgement timeout (so an unacked page re-escalates) or an auto-resolve timeout appropriate
+# to the service's incident lifecycle; null/0 is a defensible choice only when reviewed, not a
+# default. Verification: re-pull the service and confirm at least one of the two is set.
+```
+
 ## 9. Rate-limit handling (all sections) — the defining constraint
 
 Zenduty publishes tight, per-endpoint-class limits. Pace every call and back off on `429`; there is no documented `Retry-After` header, so use a fixed wait (about a minute) plus exponential backoff, and on a second `429` record the affected checks as `blocked` with the reason rather than hammering.
@@ -466,6 +649,8 @@ For each critical service from `./scoutflo-audits/topology.md`, resolve its Zend
 | `AGING_HOURS` | 4 | hours a triggered incident may sit unacknowledged before ZD-030 flags it |
 | `MTTA_TARGET_MIN` | 15 | fallback target mean-time-to-acknowledge (minutes) for ZD-031, used only when the incident `sla_object.acknowledge_time` is absent; prefer the service's own SLA |
 | `MTTR_TARGET_MIN` | 120 | target mean-time-to-resolve in minutes for ZD-032 |
+| `DORMANCY_DAYS` | 30 | days since the most recent incident before ZD-025 flags the account as dormant |
+| `MAX_PAGES` | 200 | page cap on the ZD-033 `GET /api/v2/incidents/` walk (page_size fixed at 10 live); a capped run says so rather than silently truncating |
 
 ## 13. Forbidden commands
 
@@ -488,4 +673,4 @@ The one traversal of the paging graph no free Zenduty view assembles — Zenduty
 6. an alert rule downgrades urgency to non-paging (**ZD-017**) →
 7. and the LIVE PROOF the path is already broken is **ZD-030**'s aging unacked incidents joined to that exact escalation policy's empty on-call.
 
-The single differentiating sentence to assemble as one named finding-chain (each leg naming the others in its evidence): *"checkout is critical; its page routes to the payments EP, which is one rule / one user with an empty rotation now, and 9 checkout incidents have already sat triggered >4h unacknowledged — this specific critical service's page is dying at this specific link, and here are the incidents that already proved it."* Rank it by `points_recoverable` and lead the executive summary with it. Every scored leg's blast radius is a service/incident count from a real join, never an adjective; ZD-006 and ZD-017 are **verify-pending** legs (their enum mappings are unproven live), so mark them so and never fabricate a live observation.
+The single differentiating sentence to assemble as one named finding-chain (each leg naming the others in its evidence): *"checkout is critical; its page routes to the payments EP, which is one rule / one user with an empty rotation now, and 9 checkout incidents have already sat triggered >4h unacknowledged — this specific critical service's page is dying at this specific link, and here are the incidents that already proved it."* Rank it by `points_recoverable` and lead the executive summary with it. Every scored leg's blast radius is a service/incident count from a real join, never an adjective; ZD-006 is now live-confirmed (see its section) and ZD-017 remains a **verify-pending** leg (its `action_type` enum mapping is unproven live), so mark ZD-017 so and never fabricate a live observation for it. When ZD-007/ZD-008/ZD-025/ZD-034 apply to the same service, name them too: an orphaned sibling EP (ZD-007) or an account-wide bus factor of 1 (ZD-008) explain *why* the cascade's escalation leg has no real fallback, and ZD-034's disabled timeouts explain why ZD-030's aging count never self-corrects.
