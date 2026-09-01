@@ -158,12 +158,15 @@ Interval values: `1m`, `5m`, `15m`, `1h`, `1d`, `1w`.
 | Error is unhandled | `sentry.rules.filters.event_attribute.EventAttributeFilter` | `attribute: "error.unhandled"`, `match: "is"` |
 | HTTP status code starts with 5 | `sentry.rules.filters.event_attribute.EventAttributeFilter` | `attribute: "http.status_code"`, `match: "sw"`, `value: 5` (integer, not string) |
 | Issue category | `sentry.rules.filters.issue_category.IssueCategoryFilter` | `value: "<category name>"` |
+| Issue age comparison | `sentry.rules.filters.age_comparison.AgeComparisonFilter` | `comparison_type: "newer"/"older"`, `value` (integer), `time: "minute"/"hour"/"day"/"week"` |
 
 **Environment scoping is not a filter.** Sentry rules take environment scope on the rule object itself, as a top-level `environment` field alongside `conditions`/`filters`/`actions`: not through `sentry.rules.filters.latest_adopted_release.LatestAdoptedReleaseFilter`, which filters by release-adoption stage and will silently let dev and staging events through a rule you intended to be production-only.
 
 **`error.unhandled` gotcha:** use `match: "is"` (is set), not `match: "eq"` with a value.
 
 **`http.status_code` starts-with gotcha:** `value` must be an integer (`5`), not a string (`"5"`).
+
+**Age-gate gotcha:** an "issue newer than N days" `AgeComparisonFilter` (`comparison_type: "newer"`) on a rule that also carries `RegressionEventCondition` suppresses exactly the old-issue regressions the rule exists to catch. Never combine the two; slow a regression rule with `frequency` alone, per [../SKILL.md#slow-noisy-tiers-keep-fast-tiers-fast-never-age-gate-regressions](../SKILL.md#slow-noisy-tiers-keep-fast-tiers-fast-never-age-gate-regressions).
 
 ### Actions (`actions` array: where to send the notification)
 
@@ -329,6 +332,183 @@ curl -fsS --max-time 10 "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/${RULE_I
 ```
 
 Expect: exit 0.
+
+## Rule-set backup and restore
+
+The mandatory pre-mutation snapshot for a bulk alert-rule cleanup, driven from [../SKILL.md#back-up-the-whole-rule-set-before-the-first-mutation](../SKILL.md#back-up-the-whole-rule-set-before-the-first-mutation). One file per project of its issue-alert rules, plus one for the org's metric-alert rules, in a dated home-anchored directory.
+
+```bash
+set -eu
+SENTRY_HOST="us.sentry.io"; SENTRY_ORG="your-org-slug"; API="https://${SENTRY_HOST}/api/0"
+[ -n "${SENTRY_TOKEN:-}" ] || { echo "SENTRY_TOKEN is not set; run /scoutflo:connect"; exit 1; }
+
+# One dated dir for the whole rule-set snapshot, home-anchored like the config store.
+BACKUP_DIR="$HOME/.scoutflo/sentry-rules-backup-$(date -u +%F)"
+mkdir -p "$BACKUP_DIR"
+
+# One file per project of its issue-alert rules.
+for PROJECT in $(curl -fsS --max-time 10 "${API}/organizations/${SENTRY_ORG}/projects/" \
+  -H "Authorization: Bearer ${SENTRY_TOKEN}" | jq -r '.[].slug'); do
+  curl -fsS --max-time 10 "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/" \
+    -H "Authorization: Bearer ${SENTRY_TOKEN}" > "${BACKUP_DIR}/issue-rules-${PROJECT}.json"
+  test -s "${BACKUP_DIR}/issue-rules-${PROJECT}.json" && echo "backed up issue rules: ${PROJECT}"
+done
+
+# One file for the org's metric-alert rules.
+curl -fsS --max-time 10 "${API}/organizations/${SENTRY_ORG}/alert-rules/" \
+  -H "Authorization: Bearer ${SENTRY_TOKEN}" > "${BACKUP_DIR}/metric-alert-rules.json"
+test -s "${BACKUP_DIR}/metric-alert-rules.json" && echo "backed up metric-alert rules"
+echo "rule-set backup: ${BACKUP_DIR}"
+```
+
+Expect: one `issue-rules-<project>.json` per project and one `metric-alert-rules.json`, each non-empty. Restore a single issue rule from the per-project file: a PUT for a rule you updated, a POST for one you deleted (the POST assigns a fresh id and sets `createdBy` to the setup identity, per [../SKILL.md#delete-the-auto-created-default-rule](../SKILL.md#delete-the-auto-created-default-rule)).
+
+```bash
+set -eu
+SENTRY_HOST="us.sentry.io"; SENTRY_ORG="your-org-slug"; API="https://${SENTRY_HOST}/api/0"
+[ -n "${SENTRY_TOKEN:-}" ] || { echo "SENTRY_TOKEN is not set"; exit 1; }
+PROJECT="checkout"; RULE_ID="12345678"
+BACKUP_DIR="$HOME/.scoutflo/sentry-rules-backup-$(date -u +%F)"   # the dir from the backup step
+BACKUP_FILE="${BACKUP_DIR}/issue-rules-${PROJECT}.json"
+
+# Restore an UPDATED rule: PUT the saved body back (full object).
+jq --arg id "$RULE_ID" \
+  '.[] | select(.id == $id) | {name, actionMatch, filterMatch, environment, frequency, conditions, filters, actions}' \
+  "$BACKUP_FILE" \
+  | curl -fsS --max-time 10 -X PUT "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/${RULE_ID}/" \
+      -H "Authorization: Bearer ${SENTRY_TOKEN}" -H "Content-Type: application/json" -d @-
+
+# Restore a DELETED rule: POST the saved body as a new rule (a new id is assigned).
+jq --arg id "$RULE_ID" \
+  '.[] | select(.id == $id) | {name, actionMatch, filterMatch, environment, frequency, conditions, filters, actions}' \
+  "$BACKUP_FILE" \
+  | curl -fsS --max-time 10 -X POST "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/" \
+      -H "Authorization: Bearer ${SENTRY_TOKEN}" -H "Content-Type: application/json" -d @-
+```
+
+Expect: the PUT (or POST) returns the restored rule as JSON. A restore is itself a change: announce, confirm, and record it like any other.
+
+## Bulk verify: PUT and DELETE
+
+The per-rule verify shapes for a bulk cleanup, driven from [../SKILL.md#get-verify-after-every-put-and-every-delete](../SKILL.md#get-verify-after-every-put-and-every-delete). Report one verify line per rule, never a batch total.
+
+```bash
+set -eu
+SENTRY_HOST="us.sentry.io"; SENTRY_ORG="your-org-slug"; API="https://${SENTRY_HOST}/api/0"
+[ -n "${SENTRY_TOKEN:-}" ] || { echo "SENTRY_TOKEN is not set"; exit 1; }
+PROJECT="checkout"; RULE_ID="12345678"
+
+# After a PUT: re-fetch and assert the changed field (example: frequency now 1440).
+EXPECT_FREQ="1440"   # example; the value you PUT
+curl -fsS --max-time 10 "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/${RULE_ID}/" \
+  -H "Authorization: Bearer ${SENTRY_TOKEN}" \
+  | jq -e --argjson f "$EXPECT_FREQ" '.frequency == $f' \
+  && echo "rule ${RULE_ID}: verified"
+
+# After a DELETE (which returns 202 Accepted, not 200): confirm the rule is gone.
+code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 \
+  -H "Authorization: Bearer ${SENTRY_TOKEN}" "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/${RULE_ID}/")"
+echo "rule ${RULE_ID} post-delete: ${code}"
+```
+
+Expect: the PUT verify prints `rule <id>: verified`, and the post-delete code is `404` (a 202 on the DELETE call means only that the delete was queued, so the follow-up GET is what proves removal).
+
+## Slow a noisy issue-alert rule
+
+Env-scope, age-gate, and slow re-notify for a burst or spike rule, driven from [../SKILL.md#slow-noisy-tiers-keep-fast-tiers-fast-never-age-gate-regressions](../SKILL.md#slow-noisy-tiers-keep-fast-tiers-fast-never-age-gate-regressions). Do not apply the age gate to a `RegressionEventCondition` rule. The rules endpoint replaces the whole object on write, so this backs up, patches, and PUTs the full body back.
+
+```bash
+set -eu
+SENTRY_HOST="us.sentry.io"; SENTRY_ORG="your-org-slug"; API="https://${SENTRY_HOST}/api/0"
+[ -n "${SENTRY_TOKEN:-}" ] || { echo "SENTRY_TOKEN is not set"; exit 1; }
+PROJECT="checkout"; RULE_ID="12345678"
+TARGET_ENV="production"          # from the rule's receiver channel, not its name
+RULE_AGE_GATE_DAYS="7"           # example, tune to your volume; NEVER apply to a regression rule
+SLOW_RENOTIFY_MIN="1440"         # example, 24h re-notify; the fast tier stays at 15 minutes
+BACKUP_DIR="$HOME/.scoutflo/sentry-rules-backup-$(date -u +%F)"
+mkdir -p "$BACKUP_DIR"
+BACKUP_FILE="${BACKUP_DIR}/issue-rule-${PROJECT}-${RULE_ID}.json"
+
+# 1. Backup (GET-before-write):
+curl -fsS --max-time 10 "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/${RULE_ID}/" \
+  -H "Authorization: Bearer ${SENTRY_TOKEN}" > "$BACKUP_FILE"
+test -s "$BACKUP_FILE" && echo "backup: ${BACKUP_FILE}"
+
+# 2. Env-scope + age-gate + slow re-notify, full-object PUT:
+UPDATED="$(jq --arg env "$TARGET_ENV" --argjson days "$RULE_AGE_GATE_DAYS" --argjson freq "$SLOW_RENOTIFY_MIN" \
+  '.environment = $env
+   | .frequency = $freq
+   | .filters = ((.filters // []) + [{
+       id: "sentry.rules.filters.age_comparison.AgeComparisonFilter",
+       comparison_type: "newer", time: "day", value: $days
+     }])
+   | {name, actionMatch, filterMatch, environment, frequency, conditions, filters, actions}' "$BACKUP_FILE")"
+
+curl -fsS --max-time 10 -X PUT "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/${RULE_ID}/" \
+  -H "Authorization: Bearer ${SENTRY_TOKEN}" -H "Content-Type: application/json" -d "$UPDATED"
+
+# 3. Verify env scope, frequency, and the age gate all landed:
+curl -fsS --max-time 10 "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/${RULE_ID}/" \
+  -H "Authorization: Bearer ${SENTRY_TOKEN}" \
+  | jq -e --arg env "$TARGET_ENV" --argjson freq "$SLOW_RENOTIFY_MIN" \
+      '.environment == $env and .frequency == $freq
+       and (.filters | any(.id == "sentry.rules.filters.age_comparison.AgeComparisonFilter"))'
+```
+
+Expect: exit 0. Restore by PUTting the backed-up body: `jq '{name, actionMatch, filterMatch, environment, frequency, conditions, filters, actions}' "$BACKUP_FILE"` piped into the same `PUT`.
+
+## Silence a metric-alert warning tier
+
+Remove the warning trigger from a metric alert (keep the critical trigger), driven from [../SKILL.md#a-metric-alert-trigger-cannot-exist-without-an-action](../SKILL.md#a-metric-alert-trigger-cannot-exist-without-an-action). Stripping the trigger's action instead is rejected by the API.
+
+```bash
+set -eu
+SENTRY_HOST="us.sentry.io"; SENTRY_ORG="your-org-slug"; API="https://${SENTRY_HOST}/api/0"
+[ -n "${SENTRY_TOKEN:-}" ] || { echo "SENTRY_TOKEN is not set"; exit 1; }
+ALERT_RULE_ID="your-metric-alert-id"   # from GET /organizations/${SENTRY_ORG}/alert-rules/
+BACKUP_DIR="$HOME/.scoutflo/sentry-rules-backup-$(date -u +%F)"
+mkdir -p "$BACKUP_DIR"
+BACKUP_FILE="${BACKUP_DIR}/metric-alert-${ALERT_RULE_ID}.json"
+
+# 1. Backup this metric alert's full body:
+curl -fsS --max-time 10 "${API}/organizations/${SENTRY_ORG}/alert-rules/${ALERT_RULE_ID}/" \
+  -H "Authorization: Bearer ${SENTRY_TOKEN}" > "$BACKUP_FILE"
+test -s "$BACKUP_FILE" && echo "backup: ${BACKUP_FILE}"
+
+# 2. Remove the WARNING trigger entirely (keep critical). Stripping its action
+#    instead is rejected: "Each trigger must have an associated action for this
+#    alert to fire." Record the removed trigger so it can be restored.
+jq '.triggers |= map(select(.label != "warning"))' "$BACKUP_FILE" \
+  | curl -fsS --max-time 10 -X PUT "${API}/organizations/${SENTRY_ORG}/alert-rules/${ALERT_RULE_ID}/" \
+      -H "Authorization: Bearer ${SENTRY_TOKEN}" -H "Content-Type: application/json" -d @-
+
+# 3. Verify the warning trigger is gone:
+curl -fsS --max-time 10 "${API}/organizations/${SENTRY_ORG}/alert-rules/${ALERT_RULE_ID}/" \
+  -H "Authorization: Bearer ${SENTRY_TOKEN}" \
+  | jq -e '[.triggers[] | select(.label == "warning")] | length == 0'
+```
+
+Expect: exit 0. Restore the removed trigger by merging the backed-up `triggers` back onto the current body:
+
+```bash
+set -eu
+SENTRY_HOST="us.sentry.io"; SENTRY_ORG="your-org-slug"; API="https://${SENTRY_HOST}/api/0"
+[ -n "${SENTRY_TOKEN:-}" ] || { echo "SENTRY_TOKEN is not set"; exit 1; }
+ALERT_RULE_ID="your-metric-alert-id"
+BACKUP_FILE="$HOME/.scoutflo/sentry-rules-backup-$(date -u +%F)/metric-alert-your-metric-alert-id.json"  # the step-1 backup
+
+CURRENT="$(curl -fsS --max-time 10 "${API}/organizations/${SENTRY_ORG}/alert-rules/${ALERT_RULE_ID}/" \
+  -H "Authorization: Bearer ${SENTRY_TOKEN}")"
+printf '%s' "$CURRENT" | jq --slurpfile b "$BACKUP_FILE" '.triggers = $b[0].triggers' \
+  | curl -fsS --max-time 10 -X PUT "${API}/organizations/${SENTRY_ORG}/alert-rules/${ALERT_RULE_ID}/" \
+      -H "Authorization: Bearer ${SENTRY_TOKEN}" -H "Content-Type: application/json" -d @-
+
+curl -fsS --max-time 10 "${API}/organizations/${SENTRY_ORG}/alert-rules/${ALERT_RULE_ID}/" \
+  -H "Authorization: Bearer ${SENTRY_TOKEN}" \
+  | jq -e --slurpfile b "$BACKUP_FILE" '.triggers == $b[0].triggers'
+```
+
+Expect: exit 0, the triggers byte-equal to the backup. A restore is itself a change; announce and record it like any other.
 
 ## Code mappings
 
