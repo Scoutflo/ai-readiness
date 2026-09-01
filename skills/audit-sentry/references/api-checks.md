@@ -514,7 +514,7 @@ Expect: exit 0 and `SNTRY-014 pass: <project>`. A fail is either an unfiltered e
 
 A rule migrated to Sentry's newer workflow-engine model can come back from `/rules/` with both `conditions: []` and `filters: []` yet carry a non-empty `errors` array (for example `"Filter not supported: issue_priority_greater_or_equal"`) — confirmed live. Read as literally empty conditions/filters, this jq would flag it as an unconditioned catch-all every time; check for a populated `errors` array first and treat that case as "condition present but not representable in this API view," not proven noise, before scoring SNTRY-014 fail on it.
 
-**SNTRY-015, orphaned detectors (workflow-engine orgs, capability-gated).** Probe the org-level detectors endpoint once. It 404s on classic-model orgs — that is `not-in-scope`, not a fail. On a 200, a detector with an empty `workflowIds` array detects a condition but drives no automation, so it notifies nobody (the new-model equivalent of SNTRY-001/SNTRY-005's no-receiver case):
+**SNTRY-015, orphaned detectors (workflow-engine orgs, capability-gated).** Probe the org-level detectors endpoint once. It 404s on classic-model orgs — that is `not-in-scope`, not a fail. On a 200, a *non-built-in* detector with an empty `workflowIds` array detects a condition but drives no automation, so it notifies nobody (the new-model equivalent of SNTRY-001/SNTRY-005's no-receiver case). **Exclude the built-in `error` and `issue_stream` detector types (grounded live):** every org carries ~6 `error` and ~6 `issue_stream` detectors whose empty `workflowIds` is *by design* (they pair with the issue-stream/metric automation, not their own workflowIds) — counting them flags ~7 phantom orphans against the one real orphan (e.g. an enabled `uptime_domain_failure` with no workflow). Capture `config.mode` (3 = auto-detected) for remediation framing:
 
 ```bash
 set -eu
@@ -530,8 +530,15 @@ code=$(curl -s -o "$det" -w '%{http_code}' --max-time 30 \
 if [ "$code" = "404" ]; then
   echo "SNTRY-015 not-in-scope: workflow-engine detectors endpoint absent (classic-model org); SNTRY-001/005 cover the no-receiver case"
 elif [ "$code" = "200" ]; then
-  jq -r '[.[] | select(((.workflowIds // []) | length) == 0) | {id, name, type}]' "$det"
-  echo "SNTRY-015: each listed detector has workflowIds == [] — connected to no automation, notifies nobody (high)"
+  jq -r '[.[]
+       # exclude built-in per-project detectors whose empty workflowIds is BY DESIGN:
+       # every org carries 6 `error` + N `issue_stream` detectors that pair with the
+       # issue-stream/metric automation, not their own workflowIds. Counting them flags
+       # ~7 phantom orphans against the 1 real one (e.g. an enabled uptime_domain_failure).
+       | select(.type != "error" and .type != "issue_stream")
+       | select(((.workflowIds // []) | length) == 0)
+       | {id, name, type, mode: (.config.mode // null)}]' "$det"
+  echo "SNTRY-015: each listed detector (built-in error/issue_stream types excluded) has workflowIds == [] — connected to no automation, notifies nobody (high); config.mode 3 = auto-detected, frame remediation accordingly"
 else
   echo "SNTRY-015 blocked: detectors read returned ${code}; record as blocked evidence, not a pass"
 fi
@@ -711,14 +718,14 @@ curl -fsS --max-time 15 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
   "${API}/organizations/${SENTRY_ORG}/issues/${ISSUE_ID}/events/latest/" \
   | tee /dev/stderr \
   | jq -e '[ .entries[]? | select(.type == "exception")
-        | .data.values[]?.stacktrace.frames[]? | select(.in_app == true)
+        | .data.values[]?.stacktrace.frames[]? | select((.inApp // .in_app) == true)
         | (.context != null and (.context | length) > 0) ] as $ctx
       | ($ctx | length) > 0 and ($ctx | all)' >/dev/null \
   && echo "SNTRY-006 pass: ${PROJECT} (every in_app frame carries context)" \
   || echo "SNTRY-006 fail-or-blocked: ${PROJECT} (see failure shapes below; confirm filenames are source paths by eye)"
 ```
 
-Expect: exit 0 and `SNTRY-006 pass: <project>`. The assertion checks that every `in_app: true` frame has non-empty `context`; still confirm by eye that `filename` values are readable source paths, not bundle output, since a hashed chunk name can carry `context` from an unrelated map. Failure shapes:
+Expect: exit 0 and `SNTRY-006 pass: <project>`. The assertion checks that every in-app frame has non-empty `context`. **Field-name note (grounded live):** `/organizations/{org}/issues/{id}/events/latest/` returns the frame flag as camelCase **`inApp`**, not snake_case `in_app` — selecting on `.in_app` alone matches zero frames and the check can never pass (it fails closed on every org). The select reads `(.inApp // .in_app)` so both shapes work; do not narrow it back to `.in_app`. Still confirm by eye that `filename` values are readable source paths, not bundle output, since a hashed chunk name can carry `context` from an unrelated map. Failure shapes:
 
 | Shape | Meaning |
 | --- | --- |
@@ -748,7 +755,7 @@ Permanent IDs. Never renumber, never reuse a retired ID; deltas depend on stabil
 | SNTRY-012 | Service coverage | medium | Every critical service maps to a project with recent accepted events, or the mapping is explicitly `not-in-scope` by decision |
 | SNTRY-013 | Alert rules and routing | high | Every production project has at least one immediate-tier and one review-tier rule, correctly environment-scoped by the rule's own `environment` field |
 | SNTRY-014 | Alert rules and routing | medium | No rule pages on unfiltered every-event conditions or re-pages below your frequency floor |
-| SNTRY-015 | Alert rules and routing | high | Workflow-engine orgs (capability-gated): no detector with an empty `workflowIds` array — a detector connected to no automation notifies nobody; `not-in-scope` on classic-model orgs where the endpoint 404s |
+| SNTRY-015 | Alert rules and routing | high | Workflow-engine orgs (capability-gated): no *non-built-in* detector with an empty `workflowIds` array — a detector connected to no automation notifies nobody. Excludes the built-in `error`/`issue_stream` detectors every org carries (their empty `workflowIds` is by design); `not-in-scope` on classic-model orgs where the endpoint 404s |
 | SNTRY-016 | Alert rules and routing | high | No disabled or muted alert rule is silently crediting tier coverage: a `status != active` issue rule still satisfies SNTRY-013 today, so a service reads covered while its immediate-tier rule fires nothing *(issue-rule half live-verified; metric-alert half verify-pending on the disabled-enum value)* |
 | SNTRY-017 | Alert rules and routing | medium | Rules that route to issue owners (`targetType: IssueOwners`) have real ownership rules behind them; empty ownership with fallthrough off notifies nobody, fallthrough on pages everyone |
 | SNTRY-101 | Alert rules and routing | medium | Every notifying issue rule gates with a non-empty `filters` set; a broad trigger with an empty `filters` array fires un-tuned (every-event/frequency subset stays owned by SNTRY-014) |
@@ -910,16 +917,33 @@ PROJECT="your-project-slug"  # from projects.json
 API="https://${SENTRY_HOST}/api/0"
 [ -n "${SENTRY_TOKEN:-}" ] || { echo "SENTRY_TOKEN is not set; run /scoutflo:connect"; exit 1; }
 
+# The project platform decides which junk filters even apply: browser-only filters
+# (browser-extensions, legacy-browsers) are N/A on backend platforms, so their absence
+# there is not a finding and their presence must not credit a pass on a backend.
+PLATFORM="$(curl -fsS --max-time 15 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
+  "${API}/projects/${SENTRY_ORG}/${PROJECT}/" | jq -r '.platform // "unknown"')"
+
 curl -fsS --max-time 15 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
   "${API}/projects/${SENTRY_ORG}/${PROJECT}/filters/" \
   | tee /dev/stderr \
-  | jq -e '[ .[] | select((.active == true)
-        or (((.active | type) == "array") and ((.active | length) > 0))) ] | length > 0' >/dev/null \
-  && echo "SNTRY-105 pass: ${PROJECT} (at least one inbound data filter active)" \
-  || echo "SNTRY-105 fail: ${PROJECT} (no inbound data filters active; bot/localhost/extension noise ingests unfiltered)"
+  | jq -e --arg platform "$PLATFORM" '
+      def is_active: (.active == true)
+        or (((.active | type) == "array") and ((.active | length) > 0));
+      def is_browser_only: (.id == "browser-extensions" or .id == "legacy-browsers");
+      ($platform | test("^(javascript|electron|cordova|react-native|unity|flutter)")) as $browser
+      | [ .[]
+          # filtered-transaction is a default-on transaction sampler present on every modern
+          # project — it is NOT junk-error filtering, so it must never credit a pass:
+          | select(.id != "filtered-transaction")
+          # browser-only filters count toward a pass only on browser platforms:
+          | select($browser or (is_browser_only | not))
+          | select(is_active) ]
+      | length > 0' >/dev/null \
+  && echo "SNTRY-105 pass: ${PROJECT} (a real junk-event inbound filter is active for platform=${PLATFORM})" \
+  || echo "SNTRY-105 fail: ${PROJECT} (only the default-on filtered-transaction is active; no applicable bot/crawler/localhost/extension filtering — platform=${PLATFORM})"
 ```
 
-Expect: exit 0 and `SNTRY-105 pass: <project>`. The `/filters/` list carries one entry per inbound filter (web crawlers, browser-extension errors, localhost, legacy browsers, health-check transactions, and filters by error message, release, or IP). Most are opt-in and off by default, so an un-configured project fails. `active` is a boolean for most filters and a non-empty subfilter array for legacy browsers; treat either shape as active. Filtered events do not consume quota, so a fail here also feeds the quota-pressure reading in SNTRY-008; cross-reference rather than double-file the same dropped-event story.
+Expect: exit 0 and `SNTRY-105 pass: <project>`. The `/filters/` list carries one entry per inbound filter (web crawlers, browser-extension errors, localhost, legacy browsers, `filtered-transaction`, and filters by error message, release, or IP). **Two corrections that prevent a false pass and a false fail (grounded live):** (1) `filtered-transaction` is **default-on on every modern project** — it is a transaction sampler, not junk-error filtering, so crediting it makes the check pass vacuously on essentially every org; the jq **excludes it** and only a *real* junk filter (web-crawlers, localhost, browser-extensions, legacy-browsers, or a custom message/release/IP filter) can credit a pass. (2) `browser-extensions` and `legacy-browsers` only apply to **browser platforms** — flagging a `python`/`go`/`node` backend for lacking browser filters is a false positive, so those two count toward a pass (and toward the finding) only when the project `platform` is browser-family; on a backend the applicable filters are web-crawlers, localhost, and custom filters. `active` is a boolean for most filters and a non-empty subfilter array for legacy browsers; treat either shape as active. Filtered events do not consume quota, so a fail here also feeds the quota-pressure reading in SNTRY-008; cross-reference rather than double-file the same dropped-event story.
 
 **SNTRY-106, rule fire-history inventory.** The fire-count blast radius behind every noise finding, and never-fired detection. `lastTriggered` and `owner` are already on the rules list (no extra call); the fire *count* is one GET per rule against `/rules/{id}/stats/` — run it only for rules a structural check already flagged, never the whole estate:
 
