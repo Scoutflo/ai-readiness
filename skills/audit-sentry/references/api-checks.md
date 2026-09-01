@@ -753,15 +753,22 @@ Permanent IDs. Never renumber, never reuse a retired ID; deltas depend on stabil
 | SNTRY-017 | Alert rules and routing | medium | Rules that route to issue owners (`targetType: IssueOwners`) have real ownership rules behind them; empty ownership with fallthrough off notifies nobody, fallthrough on pages everyone |
 | SNTRY-101 | Alert rules and routing | medium | Every notifying issue rule gates with a non-empty `filters` set; a broad trigger with an empty `filters` array fires un-tuned (every-event/frequency subset stays owned by SNTRY-014) |
 | SNTRY-102 | Alert rules and routing | medium | On a multi-environment project, every notifying issue rule sets its own `environment`; a null `environment` runs the rule across all environments and pages on dev/staging noise |
-| SNTRY-103 | Alert rules and routing | medium | Every metric alert sets `resolveThreshold`, pairs a `warning` trigger with `critical`, and uses a `timeWindow` (or `comparisonDelta`/`detectionType`) wide enough not to flap on transients |
+| SNTRY-103 | Alert rules and routing | medium | Every metric alert sets `resolveThreshold` (and not hugging the trigger, e.g. 0.5 vs 1.0), pairs a `warning` trigger with `critical`, uses a flap-safe `timeWindow`; a percent/rate aggregate also needs a minimum-volume guard (else it reads 100% on a tiny overnight denominator), and `warning`+`critical` must not resolve to the *same* channel (double-post) |
 | SNTRY-104 | Alert rules and routing | low | Spike Protection is live per production project; readable only indirectly from a `spike_protection` drop reason in stats outcomes, and OFF by default per project on new orgs |
 | SNTRY-105 | Alert rules and routing | low | Inbound Data Filters are active on production projects, discarding known-junk events (bots, extensions, localhost) at ingest before they create issues |
+| SNTRY-106 | Alert rules and routing | low | Rule fire-history inventory: each notifying rule's measured fire count (`/rules/{id}/stats/`) and last-fired (`lastTriggered`), so every noise finding quotes real blast radius and never-fired rules surface — bounded by the ~90d stats window, so "never fired" means "not in the observable window" |
+| SNTRY-107 | Alert rules and routing | high | No chronically-open issue can legally re-page without bound: an `ongoing` issue older than the age floor, matched by an un-gated frequency/every-event notifying rule, yields a re-page ceiling (`matching_rules × 1440/frequency_min` pages/day) — the "why is my channel unusable" join |
+| SNTRY-108 | Alert rules and routing | medium | Rule-name and receiver-channel environment claims agree with the rule's actual `environment`: a `- Dev`/`- Prod`-named or `*-pp-*`-channel rule whose `environment` is null or contradicts the claim is silent mis-scoping name-trusting humans never question |
+| SNTRY-109 | Alert rules and routing | low | No dead-weight rules: never-fired (per SNTRY-106) AND (snoozed OR a hair-trigger generic-keyword condition — `message contains <generic>` with a sub-floor frequency); on, dead, and pointless — distinct from SNTRY-016 (switched off *while* crediting coverage) |
+| SNTRY-110 | Alert rules and routing | low | Every alert rule (issue + metric) has an `owner`; an estate where no rule is owned has no one accountable for tuning — maintenance accountability, distinct from SNTRY-017 (delivery routing) |
 
 Remediation pointers: every SNTRY finding points at `setup-sentry`, anchored to the section that fixes that class of defect (for example `setup-sentry#alert-rule-taxonomy` for SNTRY-001, SNTRY-013, SNTRY-014; `setup-sentry#privacy-gates` for SNTRY-002 and SNTRY-010). SNTRY-005 may alternatively point at `audit-alertmanager` when the receiver in question is Alertmanager-routed rather than a Sentry-native integration.
 
 ## Alert hygiene noise-control checks
 
-Snippets for SNTRY-101, SNTRY-102, SNTRY-103, SNTRY-104, SNTRY-105 (Phase 9). Every call is read-only. SNTRY-101, 102, 105 read per project; SNTRY-103, 104 read once at the org level. Each block redeclares `SENTRY_HOST`, `SENTRY_ORG`, `API`, and the token check at its own top and relies on no earlier block. These join the Alert rules and routing category and grow its denominator; they never re-weight it, and they never re-check the re-page `frequency` floor (SNTRY-014) or DSN client-key rate limits (SNTRY-003).
+Snippets for SNTRY-101 through SNTRY-110 (Phase 9). Every call is read-only. SNTRY-101, 102, 105, 106, 108, 109 read per project; SNTRY-103, 104, 110 read once at the org level; SNTRY-107 joins per-project issues with per-project rules. Each block redeclares `SENTRY_HOST`, `SENTRY_ORG`, `API`, and the token check at its own top and relies on no earlier block. These join the Alert rules and routing category and grow its denominator; they never re-weight it, and they never re-check the re-page `frequency` floor (SNTRY-014) or DSN client-key rate limits (SNTRY-003).
+
+**Fire-history is the shared data source for SNTRY-106/107/109 (grounded live).** The project rules list (`/projects/{org}/{proj}/rules/`) already returns `lastTriggered` (an ISO timestamp, or `null` = never fired in the observable window) and `owner` on each rule — so never-fired and ownerless are FREE from the inventory the audit already fetched, no extra call. The *magnitude* (fire count) needs one more GET per rule: `/projects/{org}/{proj}/rules/{ruleId}/stats/` returns an array of `{date, count}` buckets (confirmed live: ~2160 hourly buckets over ~90d); the fire count is `[.[].count] | add`. Cost discipline: fetch `/stats/` only for rules that already tripped a structural check (SNTRY-011/014/101/102) or that you are ranking as noisiest — never for every rule on the large path (respect the estate scope checkpoint).
 
 **SNTRY-101, un-tuned issue rules.** A notifying rule with an empty `filters` array fires on every event its trigger matches. The every-event and frequency subset is owned by SNTRY-014, so exclude `EveryEventCondition` here:
 
@@ -845,6 +852,29 @@ curl -fsS --max-time 30 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
 
 Expect: exit 0 and `SNTRY-103 pass`. A `resolveThreshold` of null means recovery falls back to the inverse of the critical threshold and the alert flaps across the boundary; a `triggers` array with no `warning` label means single-threshold paging with no severity tiering; a `timeWindow` below the floor on a fixed static threshold fires on transient spikes. `comparisonDelta` (percent-vs-previous mode) or a non-static `detectionType` (dynamic anomaly, with `sensitivity`) each count as flap resistance and satisfy `flap_safe`. Name each failing rule and which of the three it missed.
 
+Two further flap modes a live estate showed (extend the same read, don't add an ID): (a) **percent/rate aggregate with no throughput floor** — a `failure_rate()`/`percentage(...)` aggregate on a static threshold reads `100%` on a 2-transaction overnight hour; flag a percent-aggregate rule whose `timeWindow` is under a wider floor (e.g. 120 min) or that carries no minimum-volume guard, using org overnight volume from `stats_v2` as supporting evidence. (b) **warning + critical posting to the same target** — when both triggers' actions resolve to the *same* channel/integration id, every incident double-posts; flag identical trigger targets. Also treat a `resolveThreshold` that hugs the trigger (e.g. resolve 0.5 vs trigger 1.0) as flap-prone, not just a null one.
+
+```bash
+set -eu
+SENTRY_HOST="us.sentry.io"; SENTRY_ORG="your-org-slug"; API="https://${SENTRY_HOST}/api/0"
+[ -n "${SENTRY_TOKEN:-}" ] || { echo "SENTRY_TOKEN is not set; run /scoutflo:connect"; exit 1; }
+PCT_WINDOW_FLOOR_MIN="120"   # example, tune: percent/rate aggregate below this flaps on tiny overnight denominators
+curl -fsS --max-time 30 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
+  "${API}/organizations/${SENTRY_ORG}/alert-rules/" \
+  | jq -r --argjson pf "$PCT_WINDOW_FLOOR_MIN" '.[]
+      | { name, aggregate,
+          is_pct: ((.aggregate // "") | test("failure_rate|percentage|percent";"i")),
+          window: (.timeWindow // 0),
+          targets: [ .triggers[]?.actions[]? | (.targetIdentifier // .targetType // "?") ] }
+      | select(
+          (.is_pct and .window < $pf)                                  # (a) percent aggregate, sub-floor window
+          or ((.targets | length) > (.targets | unique | length))      # (b) warning+critical share a target
+        )
+      | "SNTRY-103 flap-risk: \(.name) — \(if .is_pct and .window < $pf then "percent aggregate, \(.window)m window (no throughput floor)" else "warning+critical share a channel target" end)"'
+# No rows printed = pass on both extended modes. A row names the rule and which mode; for (a) join
+# org overnight sum(quantity) from stats_v2 as the "reads 100% on N transactions" evidence.
+```
+
 **SNTRY-104, Spike Protection posture.** The weakest read here, stated plainly: project detail exposes no per-project enabled flag, so infer live activity from stats drop outcomes. A `spike_protection` drop reason proves protection is on and firing:
 
 ```bash
@@ -890,3 +920,143 @@ curl -fsS --max-time 15 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
 ```
 
 Expect: exit 0 and `SNTRY-105 pass: <project>`. The `/filters/` list carries one entry per inbound filter (web crawlers, browser-extension errors, localhost, legacy browsers, health-check transactions, and filters by error message, release, or IP). Most are opt-in and off by default, so an un-configured project fails. `active` is a boolean for most filters and a non-empty subfilter array for legacy browsers; treat either shape as active. Filtered events do not consume quota, so a fail here also feeds the quota-pressure reading in SNTRY-008; cross-reference rather than double-file the same dropped-event story.
+
+**SNTRY-106, rule fire-history inventory.** The fire-count blast radius behind every noise finding, and never-fired detection. `lastTriggered` and `owner` are already on the rules list (no extra call); the fire *count* is one GET per rule against `/rules/{id}/stats/` — run it only for rules a structural check already flagged, never the whole estate:
+
+```bash
+set -eu
+# Resolved from ~/.scoutflo/toolkit.yaml
+SENTRY_HOST="us.sentry.io"   # sentry.host
+SENTRY_ORG="your-org-slug"   # sentry.org
+PROJECT="your-project-slug"  # from projects.json
+API="https://${SENTRY_HOST}/api/0"
+[ -n "${SENTRY_TOKEN:-}" ] || { echo "SENTRY_TOKEN is not set; run /scoutflo:connect"; exit 1; }
+
+# never-fired is FREE from the rules list (lastTriggered null == not fired in the observable window):
+curl -fsS --max-time 15 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
+  "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/" \
+  | tee /dev/stderr \
+  | jq -r '.[] | "\(.id)\t\(.name)\tlastTriggered=\(.lastTriggered // "never-in-window")"'
+
+# fire COUNT for one rule (run ONLY for a rule already flagged by SNTRY-011/014/101/102, or the
+# noisiest you are ranking): /stats/ returns [{date,count}] hourly buckets over the ~90d window.
+RULE_ID="16700000"   # a rule id from a tripped structural finding
+curl -fsS --max-time 20 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
+  "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/${RULE_ID}/stats/" \
+  | jq '[ .[].count ] | add // 0'   # total fires in the stats window — the number to quote as blast radius
+```
+
+Expect: a rule→last-fired list, and for a flagged rule its summed fire count. `lastTriggered == null` means *never fired in the observable window* — state it that way, never "dead forever" (the window is bounded, ~90d). This is inventory, not a scored pass/fail on its own; its value is that SNTRY-011/014/101/102 findings now read "rule X fired N times / 0 times" instead of "rule X is structurally noisy". Cap the per-rule `/stats/` calls under the estate scope checkpoint.
+
+**SNTRY-107, chronic-issue re-page ceiling (the flagship noise join).** Joins two surfaces the audit already touches separately: long-open `ongoing` issues × un-gated notifying rules that still match them. It answers "why is my channel unusable", not "which field is null":
+
+```bash
+set -eu
+# Resolved from ~/.scoutflo/toolkit.yaml
+SENTRY_HOST="us.sentry.io"   # sentry.host
+SENTRY_ORG="your-org-slug"   # sentry.org
+PROJECT="your-project-slug"  # a production project from projects.json
+API="https://${SENTRY_HOST}/api/0"
+[ -n "${SENTRY_TOKEN:-}" ] || { echo "SENTRY_TOKEN is not set; run /scoutflo:connect"; exit 1; }
+AGE_FLOOR_DAYS="30"   # example, tune it: an ongoing issue older than this that still re-pages is chronic
+
+# 1) chronic issues: unresolved + ongoing + older than the age floor, most events first.
+#    The age floor is applied server-side via the `age:+Nd` search token (grounded live:
+#    `age:+30d` = older than 30d). Do NOT pass `statsPeriod=90d` here — the issues endpoint
+#    only accepts '', '24h', '14d' for stats_period and 400s on 90d; the `age:` token is
+#    what filters for chronic issues. URL-encoding: `:` = %3A, the leading `+` = %2B.
+curl -fsS --max-time 20 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
+  "${API}/projects/${SENTRY_ORG}/${PROJECT}/issues/?query=is%3Aunresolved+is%3Aongoing+age%3A%2B${AGE_FLOOR_DAYS}d&sort=freq" \
+  | tee /dev/stderr \
+  | jq -r '.[] | "\(.shortId)\tevents=\(.count)\tfirstSeen=\(.firstSeen)\tsubstatus=\(.substatus // "?")"' | head
+
+# 2) un-gated re-paging rules: a frequency/every-event condition, an action, and NO age /
+#    times-seen / new-issue gate in filters (so a permanently-open issue keeps matching)
+curl -fsS --max-time 15 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
+  "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/" \
+  | jq -r '[ .[]
+      | select((.actions // []) | length > 0)
+      | select([ .conditions[]?.id ] | any(test("EventFrequencyCondition|EventFrequencyPercentCondition|EveryEventCondition")))
+      | select([ .filters[]?.id ] | any(test("AgeComparison|IssueOccurrences|FirstSeenEvent|latest")) | not)
+      | { name, freq: (.frequency // 30) } ]
+      | "un-gated re-paging rules: \(length); re-page ceiling/day per matching issue = sum over rules of (1440 / freq_min)"'
+```
+
+Expect: the chronic-issue list and the count of un-gated re-paging rules. The finding (high) is the **legal re-page ceiling**: for one permanently-`ongoing` issue matched by those rules, `Σ (1440 / rule.frequency_min)` pages/day/channel (the classic result: one 117-day-old issue × two 15-min burst rules ≈ 96 pages/day). Quote it as a *ceiling*, not an observed count — and when SNTRY-106 stats exist, quote both ("ceiling 96/day; observed 278 last week"). Name the issue(s) and the rules in `affected`. This is the check that explains an unusable channel; it degrades to a structural finding (un-gated rules exist) when the issues endpoint is not readable.
+
+**SNTRY-108, name / scope / receiver coherence.** A rule whose *name* or *receiver channel* claims an environment while its actual `environment` field is null or contradicts the claim is silent mis-scoping — name-trusting humans never question a "- Prod" rule that is really firing on everything:
+
+```bash
+set -eu
+# Resolved from ~/.scoutflo/toolkit.yaml
+SENTRY_HOST="us.sentry.io"   # sentry.host
+SENTRY_ORG="your-org-slug"   # sentry.org
+PROJECT="your-project-slug"  # from projects.json
+API="https://${SENTRY_HOST}/api/0"
+[ -n "${SENTRY_TOKEN:-}" ] || { echo "SENTRY_TOKEN is not set; run /scoutflo:connect"; exit 1; }
+
+curl -fsS --max-time 15 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
+  "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/" \
+  | tee /dev/stderr \
+  | jq -r '.[]
+      | (.name | ascii_downcase) as $nm
+      | ([ .actions[]? | (.channel // .targetIdentifier // "") ] | join(",") | ascii_downcase) as $chan
+      | (if ($nm|test("prod")) or ($chan|test("-prod|_prod|prod-")) then "production"
+         elif ($nm|test("- ?dev|staging|pre-?prod|-pp|_pp|pp-")) or ($chan|test("-pp-|pre-?prod|staging|dev")) then "non-prod"
+         else null end) as $claim
+      | select($claim != null and ((.environment == null) or ((.environment|ascii_downcase|test($claim[0:4])) | not)))
+      | "SNTRY-108: \(.name) claims \($claim) (name/channel) but environment=\(.environment // "null")"'
+```
+
+Expect: no rows on a coherent estate. A row is a rule whose stated env (from its name or the channel it posts to) disagrees with its `environment` field — the clearest case being a claim with `environment: null` (fires on all envs while looking scoped). This is deliberately conservative: it only fires when there is an explicit claim to contradict. SNTRY-102 owns the plain "env is null" gap; SNTRY-108 owns the *lie in the name* and the set-but-contradicting case. Regex is heuristic — record the claimed-vs-actual pair as the evidence and let the reader judge non-standard names.
+
+**SNTRY-109, dead-weight rules.** Never-fired AND (snoozed OR a hair-trigger generic-keyword condition) — on, dead, and safe to delete. Distinct from SNTRY-016 (switched off *while crediting* coverage):
+
+```bash
+set -eu
+# Resolved from ~/.scoutflo/toolkit.yaml
+SENTRY_HOST="us.sentry.io"   # sentry.host
+SENTRY_ORG="your-org-slug"   # sentry.org
+PROJECT="your-project-slug"  # from projects.json
+API="https://${SENTRY_HOST}/api/0"
+[ -n "${SENTRY_TOKEN:-}" ] || { echo "SENTRY_TOKEN is not set; run /scoutflo:connect"; exit 1; }
+
+curl -fsS --max-time 15 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
+  "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/" \
+  | tee /dev/stderr \
+  | jq -r '.[]
+      | select(.lastTriggered == null)                                   # never fired in window (SNTRY-106)
+      | select((.snooze != null)                                         # snoozed, OR ...
+        or ([ .conditions[]? | select(.id|test("EventFrequencyCondition")) | (.value // 999) ] | any(. < 60))  # hair-trigger freq
+        or ([ .filters[]?.value // .filters[]?.key // empty ] | any(test("timeout|memory|error|exception";"i"))))  # generic keyword
+      | "SNTRY-109 dead-weight: \(.name) (never fired; snoozed or hair-trigger keyword)"'
+```
+
+Expect: no rows on a lean estate. Rows are rules that never fired in the window AND are either snoozed or gated only by a generic keyword with a sub-60 frequency — review surface that inflates coverage counts and deletes with no loss. Cross-reference SNTRY-106 (the never-fired signal) and honor its window ceiling; a rule "never fired" only within the observable window is a review candidate, not an automatic delete — the fix is a confirmed deletion via `setup-sentry`, never by this read-only audit.
+
+**SNTRY-110, ownerless rules.** Maintenance accountability across the whole rule estate — issue rules and metric alerts. An estate where no rule has an `owner` has no one accountable for tuning, which is how a rule set rots:
+
+```bash
+set -eu
+# Resolved from ~/.scoutflo/toolkit.yaml
+SENTRY_HOST="us.sentry.io"   # sentry.host
+SENTRY_ORG="your-org-slug"   # sentry.org
+PROJECT="your-project-slug"  # from projects.json
+API="https://${SENTRY_HOST}/api/0"
+[ -n "${SENTRY_TOKEN:-}" ] || { echo "SENTRY_TOKEN is not set; run /scoutflo:connect"; exit 1; }
+
+# issue rules (per project) + metric alerts (org-level) with no owner
+ISSUE_UNOWNED="$(curl -fsS --max-time 15 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
+  "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/" | jq '[ .[] | select(.owner == null) ] | length')"
+METRIC_UNOWNED="$(curl -fsS --max-time 30 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
+  "${API}/organizations/${SENTRY_ORG}/alert-rules/" | jq '[ .[] | select(.owner == null) ] | length')"
+echo "SNTRY-110: ${PROJECT} unowned issue rules=${ISSUE_UNOWNED}; org unowned metric alerts=${METRIC_UNOWNED}"
+[ "${ISSUE_UNOWNED}" -eq 0 ] && [ "${METRIC_UNOWNED}" -eq 0 ] \
+  && echo "SNTRY-110 pass" || echo "SNTRY-110 fail (ownerless rules: no one accountable for tuning)"
+```
+
+Expect: `SNTRY-110 pass` when every rule carries `owner: team:<id>` or `member:<id>`. Ownerless rules are low severity but high explanatory value — an all-ownerless estate is the root of alert rot. This is distinct from SNTRY-017 (which is about delivery routing to issue owners); SNTRY-110 is about who maintains the rule. The fix (assign owners) is a `setup-sentry` mutation, not this audit's job.
+
+### Honest ceiling for the fire-history checks (SNTRY-106/107/109)
+
+Fire counts measure **emission, not annoyance** — the audit still has no incident/ack feed, so it must never claim an actionability rate from them (the existing Phase-9 ceiling text applies; extend it to cover these numbers). "Never fired" is bounded by the stats retention window (~90d) — say "not in the observable window", never "dead". Re-page ceilings (SNTRY-107) are **legal maxima**, not observed counts; when SNTRY-106 stats exist, quote both the ceiling and the observed count.

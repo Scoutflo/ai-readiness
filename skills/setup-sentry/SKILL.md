@@ -490,6 +490,67 @@ curl -fsS --max-time 10 "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/${RULE_I
 
 Expect: exit 0. A rule that lists a Slack action is `configured`; only a delivered test notification proves the receiver is live. Send one low-risk test event once wiring is approved and re-confirmed (`POST /projects/${SENTRY_ORG}/${PROJECT}/rules/${RULE_ID}/tasks/` or the rule's test-fire endpoint on your API version), and record who confirmed receipt in the change log; do not mark SNTRY-005/SNTRY-011 fixed on the `jq -e` above alone.
 
+## Alert-rule remediation playbook
+
+For a bulk cleanup of an org's existing alert rules (slowing noisy tiers, deleting dead rules, rescoping rules by environment) rather than a single new-rule fix. It extends [Alert rule taxonomy](#alert-rule-taxonomy) and [Receiver wiring](#receiver-wiring): the taxonomy decides what each tier should be; this playbook moves a live, historically-grown rule set onto it without going dark. Every step still runs under [The change protocol](#the-change-protocol) (announce, confirm, execute, verify, record) and nothing here auto-mutates. This is a real cleanup shape: dozens of rule updates and a handful of deletions across several projects, every one GET-verified.
+
+### Back up the whole rule set before the first mutation
+
+Mandatory before the first PUT or DELETE, no exceptions. Dump the full current JSON of every rule you might touch into a dated local directory `~/.scoutflo/sentry-rules-backup-<date>/`: one file per project for its issue-alert rules, plus one file for the org's metric-alert rules. Restore is a PUT of the saved body for a rule you updated, or a POST for one you deleted. A single wrong bulk edit across dozens of rules is unrecoverable without this snapshot, and a sentence claiming a backup exists is not a backup. The runnable backup-all and restore commands are in [references/api-cookbook.md#rule-set-backup-and-restore](references/api-cookbook.md#rule-set-backup-and-restore).
+
+### GET-verify after every PUT and every DELETE
+
+The change protocol's verify step is per-rule here, and its evidence is reported per rule, never as a batch total. After a PUT, re-fetch the rule and assert the field you changed holds the new value with `jq -e`. After a DELETE, note that Sentry returns `202 Accepted`, not `200`: a 202 means the delete was queued, not that the rule is gone. Confirm removal with a follow-up GET and expect `404`. Report a per-rule verify line (`rule <id>: verified`, or `gone (404)`) for every rule touched. The verify snippets are in [references/api-cookbook.md#bulk-verify-put-and-delete](references/api-cookbook.md#bulk-verify-put-and-delete).
+
+- ❌ Reported "57 rules updated, 14 deleted" from the write commands' exit codes, treating the 202 on each delete as done.
+- ✅ Re-fetched each of the 57 with a passing `jq -e` on the changed field, and each of the 14 with a follow-up GET returning 404, and reported the 71 per-rule verify lines.
+
+### A metric-alert trigger cannot exist without an action
+
+Discovered live, and it changes how you quiet a metric-alert tier. Sentry's metric-alert API (`/organizations/${SENTRY_ORG}/alert-rules/`, distinct from the issue-alert `/projects/.../rules/` endpoint) rejects a PUT that leaves any trigger with an empty `actions` array:
+
+> Each trigger must have an associated action for this alert to fire.
+
+So you cannot silence a warning tier by stripping its action and keeping the trigger. To silence a warning tier, remove the whole trigger from the `triggers` array (keep the critical trigger), and record in the change log the exact trigger you removed (its `label`, `alertThreshold`, and `actions`) so it can be restored by PUTting it back into the array. Restoring a removed trigger is a change like any other: announce, confirm, verify. Payload shape in [references/api-cookbook.md#silence-a-metric-alert-warning-tier](references/api-cookbook.md#silence-a-metric-alert-warning-tier).
+
+### Slow noisy tiers, keep fast tiers fast, never age-gate regressions
+
+Slowing every rule is as wrong as slowing none: it buries the fast tier the team relies on. Move each rule family by what it is for, not uniformly. The cadence figures are examples, tune them to your event volume.
+
+| Rule family | Change | Why |
+| --- | --- | --- |
+| Burst, spike, or high-volume rules | Add the rule-level `environment` filter (production or pre-prod), add an "issue newer than `RULE_AGE_GATE_DAYS`" age gate, and slow re-notify from the fast tier's cadence to `SLOW_RENOTIFY_MIN` | These are the noise source; an env scope plus age gate plus long re-notify cut the repeat pages without dropping the first one |
+| New Issue, High Priority, Critical, and Escalating rules | Leave fast and untouched | These are the pages the team actually needs; slowing them defeats the cleanup |
+| Regression rules (`RegressionEventCondition`) | Slow re-notify if needed, but never add an "issue newer than N days" age gate | A regression is by definition an old, previously-resolved issue coming back; a "newer than 7d" gate suppresses exactly the regressions the rule exists to catch |
+
+Named defaults for the block: `RULE_AGE_GATE_DAYS="7"`, `FAST_RENOTIFY_MIN="15"`, `SLOW_RENOTIFY_MIN="1440"` (24 hours), all examples to tune to your volume. The age gate is the `AgeComparisonFilter`; the re-notify cadence is the rule's `frequency` field, in minutes. Payload in [references/api-cookbook.md#slow-a-noisy-issue-alert-rule](references/api-cookbook.md#slow-a-noisy-issue-alert-rule).
+
+- ❌ Added a "newer than 7 days" age gate to every rule in the project, the regression rule included, and reported the whole project "de-noised".
+- ✅ Age-gated only the burst and spike rules, left the regression, escalation, and high-priority rules fast, and named which rules changed and which were deliberately left alone.
+
+### Map rules to environments by receiver channel, not by rule name
+
+When you rescope rules by environment, derive the target environment from the receiver channel the rule routes to, not from the rule's own name. Rule names are historical fiction: a rule called "- Prod" can route to a dev channel after years of edits, and the channel it delivers to is the ground truth.
+
+- A rule routing to a production receiver: scope `environment: production`.
+- A rule whose action posts to a pre-prod channel (for example `sentry-alert-pp-<env>`): scope `environment` to your pre-prod stage, whatever the rule name claims.
+
+Ordering rule for a project that emits no environment tag: never env-scope a rule on a project whose events carry no `environment` tag. An environment-scoped rule matches zero events on such a project and goes permanently silent. Fix the SDK environment config first (see [Environment seeding](#environment-seeding) and the SDK notes in [references/sdk-instrumentation.md](references/sdk-instrumentation.md)), confirm the environment now appears under `GET /projects/${SENTRY_ORG}/<project>/environments/`, and only then scope the rules. SDK env config first, rule scoping second.
+
+- ❌ Scoped every "- Prod" rule to `environment: production` from the names, on a project whose SDK sends no environment tag, silencing all of them.
+- ✅ Read each rule's action channel, mapped `sentry-alert-pp-<env>` channels to the pre-prod environment, and on the one project with no env tag filed an SDK-env fix as a pending item before touching its rule scopes.
+
+### Temporary metric-query masks carry a recorded revert condition
+
+Sometimes the fastest way to quiet a false alert is a temporary exclusion in a metric alert's query, for example appending `!transaction:"<path>"` until a code fix ships. A mask with no recorded exit becomes permanent blindness. Every temporary mask you add must record, in the change log and in durable team memory, its revert condition naming the triggering change: "revert this `!transaction` exclusion when PR #NNNN reaches prod". Record the deploy or PR that clears it, not just "revert later".
+
+- ❌ Added `!transaction:"..."` to the query to stop the page and moved on.
+- ✅ Added the exclusion and logged "revert when PR #NNNN reaches prod" with the PR named, so the mask lifts when the fix lands instead of hiding the signal forever.
+
+### Scope discipline for the executor
+
+Enumerate the full change-set up front as the plan table ([Load findings and build the change plan](#load-findings-and-build-the-change-plan)) and stay inside it. Anything you notice outside the enumerated set (a rule that also looks noisy, a project that also lacks scrubbing) is left untouched and listed as skipped, with the reason, never improvised into the run. If reality forces a change different from what was announced (a trigger that will not PUT, a channel ID that will not resolve), that is a deviation: stop, report it against the plan, and re-announce, per the change protocol's mid-batch failure rule. The run's record names every planned rule as done, skipped-with-reason, or deviated, never a silent extra edit and never a silent omission.
+
 ## GitHub integration and code mappings
 
 For SNTRY-009. A repo integration without code mappings resolves nothing, and a code mapping whose `defaultBranch` differs from the branch you actually deploy resolves the wrong file. Treat the three pieces as a chain:
@@ -727,3 +788,11 @@ End the run with:
 | Replay or AI capture enabled without a privacy decision | Keep masking, PII capture, and prompt/response recording off by default; require an explicit, recorded exception per project |
 | Batch continues past a failed write | Mid-batch failure rule: stop immediately, record what already applied and its backups, re-announce the remainder for a fresh approval |
 | Rollback claimed without a runnable command | Every write section carries its own backup file and a restore/delete command that a reader can paste and run, never a rollback sentence alone |
+| Bulk rule cleanup started with no rule-set backup | Dump every rule's JSON to `~/.scoutflo/sentry-rules-backup-<date>/` (per project, plus org metric rules) before the first PUT or DELETE; restore is a PUT/POST of the saved body |
+| Bulk delete reported done on the 202 | A DELETE returns `202 Accepted` (queued), not proof of removal; confirm each with a follow-up GET expecting `404`, and report a per-rule verify line |
+| Metric-alert PUT rejected: "Each trigger must have an associated action" | Do not strip a trigger's action to quiet it; remove the whole trigger from the `triggers` array and record it for restore |
+| Noisy-rule cleanup slows the fast tier too | Slow only burst, spike, and high-volume rules; leave New Issue, High Priority, Critical, and Escalating rules fast |
+| Age gate suppresses the regressions it should catch | Never add an "issue newer than N days" `AgeComparisonFilter` to a `RegressionEventCondition` rule |
+| Env-scoped rule goes permanently silent | Never env-scope rules on a project that emits no `environment` tag; fix the SDK env config first, then scope the rules |
+| Rule rescoped to the wrong environment from its name | Derive the environment from the receiver channel the rule delivers to, not the rule's name |
+| Temporary query mask becomes permanent | Record a revert condition naming the triggering deploy or PR for every temporary `!transaction` exclusion |
