@@ -5,7 +5,7 @@ returns operator emails in structured fields — a rule's/alert's `createdBy.ema
 an `owner`, release commit-author emails — so a leak-scan of the audit output dir
 (deliverables + `raw/`) trips the email regex on the customer's own operator
 addresses that the API returns in `createdBy.email` and `owner` (observed live on
-org `scoutfloai` in per-project `rules.json` and `metric-alerts.json`). No secret
+org `your-org-slug` in per-project `rules.json` and `metric-alerts.json`). No secret
 leaked (DSNs, tokens,
 and webhook URLs were correctly never written), but the raw dump is not clean.
 

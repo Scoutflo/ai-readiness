@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.1.168
+
+**audit-sentry: 8 new depth checks (SNTRY-018 through SNTRY-025), all live-verified.** A second pass over gaps the existing catalog structurally cannot see, grown into existing scorecard categories (no re-weighting).
+
+- **SNTRY-018 per-project drop ratio** (Volume and quota) — re-groups `stats_v2` by numeric project id so a hot project's drops are never hidden inside a healthy org-wide average SNTRY-008 reads.
+- **SNTRY-019 rate-limit reason split** (Volume and quota) — splits `rate_limited` drops by `reason` (Spike Protection vs per-key/cardinality quota); never attributes a drop to a specific key.
+- **SNTRY-020 deterministic source-map verdict** (Releases and source context) — reads a sampled event's top-level `errors[]` for an explicit `js_no_source`-class entry, independent of SNTRY-006's frame heuristic, plus an independent `artifact-bundles` upload-pipeline probe (a null `release` on a debug-ID bundle is normal, never "missing").
+- **SNTRY-021 repo integrity** (Releases and source context) — flags repos whose `provider.id` is not a real `integrations:*` provider (a `sentry-cli set-commits` misconfiguration that can coexist with a passing SNTRY-009).
+- **SNTRY-022 code-mapping plausibility** (Releases and source context) — duplicate stack roots differing only by a `./` segment, build-host stack roots, over-routed project-to-repo mappings.
+- **SNTRY-023 zero-monitor posture** (Monitors) — an explicit `info` finding when zero monitors exist alongside real backend event volume, never a silent pass.
+- **SNTRY-024 `firstEvent:null` coverage split** (Service coverage) — separates "never instrumented" from "instrumented, now silent" in the SNTRY-012 finding.
+- **SNTRY-025 environment-name sprawl** (Project configuration) — synonym collisions (`prod`/`production`, `pp`/`preprod`, `stage`/`staging`) that half-match the environment-scoped checks SNTRY-102/013 depend on.
+
+All eight were run read-only against a real Sentry org this wave and independently spot-verified (`errors[]`→`js_no_source`, a real non-`integrations:*` repo among 100, `stats_v2?groupBy=project`→200). Also fixed a pre-existing `repositoryId`→`repoId` field-name bug in the adjacent SNTRY-009 display snippet, caught while live-verifying SNTRY-022. Two new pressure scenarios: org-average-masks-a-hot-projects-drop-ratio, source-map-verdict-must-be-deterministic-not-heuristic.
+
+**Governance hygiene:** genericized a real internal org slug that had been committed in a tracked pressure-scenario file (since v0.1.112) and one historical CHANGELOG line — `leak-scan` pattern-matches paths/emails/ids/IPs/token-shapes but not bare org slugs in prose, so this was removed by hand.
+
+**Verified:** all four repo gates green (`leak-scan` CLEAN, `structure-check` 23, `run-tests` 30/0, `plugin validate --strict`) + self-test locks for the new IDs. Read-only throughout.
+
 ## 0.1.167
 
 **Three live-caught audit-sentry bugs fixed — each a check that returned a confidently wrong verdict on every real org.** A second live pass over the non-alert-rule Sentry surfaces (privacy, keys, filters, releases, monitors, detectors) surfaced three checks whose jq was written against a *guessed* API shape, so each ran clean and lied. All three were confirmed against a live Sentry org, fixed, and re-verified live.
@@ -581,7 +600,7 @@ Gates: leak CLEAN, structure-check (13), run-tests (21 suites), plugin validate 
 
 ## 0.1.112
 
-Closes the last item the rigorous test found: **audit-sentry's `raw/` dump left operator emails in it.** On a live run against org `scoutfloai`, a leak-scan of the whole audit dir (deliverables + `raw/`) tripped the email regex on customer-inherent operator addresses the Sentry API returns — `createdBy.email` / `owner` in per-project `rules.json` and `metric-alerts.json`, and commit-author emails in `releases.json`. No secret leaked (0 DSNs, 0 webhook URLs, 0 token/secret assignments; `keys.json` was already reduced to `{name,isActive,rateLimit}`) and every shareable deliverable was individually clean — the gap was structured PII in the intermediate dump.
+Closes the last item the rigorous test found: **audit-sentry's `raw/` dump left operator emails in it.** On a live run against a real Sentry org, a leak-scan of the whole audit dir (deliverables + `raw/`) tripped the email regex on customer-inherent operator addresses the Sentry API returns — `createdBy.email` / `owner` in per-project `rules.json` and `metric-alerts.json`, and commit-author emails in `releases.json`. No secret leaked (0 DSNs, 0 webhook URLs, 0 token/secret assignments; `keys.json` was already reduced to `{name,isActive,rateLimit}`) and every shareable deliverable was individually clean — the gap was structured PII in the intermediate dump.
 
 - **audit-sentry Phase 1** now runs a redaction pass after collection (both the small/medium path and the large-org worklist): `jq 'walk(if type=="object" and has("email") then .email=null else . end)'` across `raw/`. It nulls every operator email while preserving every field a check reads — `createdBy` stays a non-null object so **SNTRY-001**'s `createdBy == null` test is intact, and names/ids/slugs/counts are untouched. Verified: a mock `raw/` with `createdBy.email` goes from leak-scan **FOUND → CLEAN**, SNTRY-001 still fires, rule names survive.
 - **report-standard/secret-redaction.md** gains a *"`raw/` working dir and the scope of `ci/leak-scan.sh`"* section: leak-scan is a repo-hygiene + shareable-deliverable gate (the four deliverables are the leak-clean contract); an audit's local `raw/` holds customer data by design; audits strip **structured** PII at capture (Sentry emails here, GCP `mutatedBy` already), while a value a customer embedded in **free text** — a path inside their own commit message — is their data, not a secret of ours, and is left intact rather than mangled. Pointing leak-scan at a customer's `raw/` will surface such values; that is expected, not a leak.
