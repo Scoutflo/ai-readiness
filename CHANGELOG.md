@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.1.173
+
+**Auditing private / JIT-tunnelled clusters: right guidance when a session tunnel is down, and a documented, credential-free access path.** Customers reach private clusters (and in-cluster backends like ClickHouse/HyperDX) through short-lived access sessions — Cloudanix cdx, Teleport, bastion `ssh -L`, `kubectl port-forward`, VPN — each of which writes an ephemeral kubeconfig whose API server is `https://localhost:<port>` behind a tunnel. The plugin already *rides* such a kubeconfig (kubectl honors `$KUBECONFIG`, which the skills source from `~/.scoutflo/env`); this release fixes the one place it gave wrong advice and documents the workflow.
+
+- **audit-kubernetes + doctor: a closed JIT tunnel is now classified as a dead session, not a private-cluster/RBAC failure.** A `localhost`/`127.0.0.1` API-server `connection refused` now reads: "your JIT/tunnelled access session has expired or was never opened — re-establish it and re-point `KUBECONFIG` in `~/.scoutflo/env`; Scoutflo holds no standing cluster credential by design." Previously this hit the generic private-cluster branch and told the operator to widen authorized IP ranges / run inside the VNet / use `az aks command invoke` — all dead ends for a tunnel user.
+- **`az aks command invoke` is no longer offered as an audit substitute.** Measured against a real AKS cluster: its `kubectl get pods -A -o json` returned **524 KB on a 39-pod cluster — already over its 512 KB output cap** (truncated), while the audit's real inventory pull is **1.28 MB**. The doctor/audit now caveat it as at most a single tiny read, never the audit.
+- **New "Accessing private or JIT-tunnelled clusters" section** in audit-kubernetes (tool-agnostic: keep the session open, add `export KUBECONFIG=<session path>` to `~/.scoutflo/env`, set the stable `kubernetes.context`, run — never hard-code the ephemeral path). **audit-clickstack** documents reaching an in-cluster ClickHouse/HyperDX via `kubectl port-forward` → `http://127.0.0.1:<local-port>` through the same kubeconfig (reusable for lgtm/prometheus/signoz).
+
+**Verified live against a real AKS cluster (read-only, Scoutflo-internal sub):** riding `$KUBECONFIG` set via `~/.scoutflo/env` reads the cluster (39 pods); a dead `localhost` tunnel now hits the JIT-session branch while a private-FQDN failure still hits the VNet branch; `kubectl port-forward` with dynamic-port capture opens the local backend port. New pressure scenario: jit-tunnel-down-is-not-a-private-cluster-or-rbac-failure.
+
+**Verified:** all four repo gates green (`leak-scan` CLEAN, `structure-check` 23, `run-tests` 30/0, doctor integration test, `plugin validate --strict`) + self-test lock. Read-only throughout; no Azure resource was created or modified.
+
 ## 0.1.172
 
 **Reachability lifecycle: DNS-truth classification for unreachable targets, and sharper credential-rejection guidance.** When the toolkit config outlives the infrastructure (a decommissioned estate, a rotated token), the first thing a returning user hits is a blocked audit — this makes that failure name its own cause instead of reading as a generic outage.

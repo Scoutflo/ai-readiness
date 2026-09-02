@@ -99,8 +99,10 @@ if [ "$K_RC" -ne 0 ]; then
   # credential — match its transport signatures FIRST, before the exec-plugin/RBAC branches
   # below misattribute it to "run az login" or "bind the view ClusterRole".
   case "$K_ERR" in
+    *localhost:*|*127.0.0.1:*)
+      echo "context '$KUBE_CONTEXT': its API server is a local tunnel (localhost) that is not answering — your just-in-time / tunnelled access session (Cloudanix cdx, Teleport, a bastion 'ssh -L' tunnel, or 'kubectl port-forward') has expired or was never opened. Re-establish it in another terminal and point KUBECONFIG at the session's kubeconfig by adding one line to the store this audit already reads: echo 'export KUBECONFIG=\"<the session's kubeconfig path>\"' >> ~/.scoutflo/env — then retry. Scoutflo holds no standing cluster credential by design, so it can only audit while your session is live (see 'Accessing private or JIT-tunnelled clusters' below). This is NOT an RBAC, credential, or authorized-IP-range problem."; exit 1 ;;
     *"no such host"*|*"dial tcp"*|*"i/o timeout"*|*"connection refused"*|*"Unable to connect"*|*"TLS handshake timeout"*|*privatelink*)
-      echo "context '$KUBE_CONTEXT': the AKS/API server is private or unreachable from here — run from inside the VNet (jumpbox/VPN/bastion), add your IP to the cluster API-server authorized IP ranges, or use \`az aks command invoke\`; this is NOT an RBAC or credential problem. The cluster monitoring posture is still auditable via /scoutflo:audit-azure over ARM (Container Insights, managed Prometheus, diagnostic settings) with no cluster network access."; exit 1 ;;
+      echo "context '$KUBE_CONTEXT': the AKS/API server is private or unreachable from here — run from inside the VNet (jumpbox/VPN/bastion), add your IP to the cluster API-server authorized IP ranges, or open a tunnel/JIT session and point KUBECONFIG at its kubeconfig (see 'Accessing private or JIT-tunnelled clusters' below). \`az aks command invoke\` only carries a SINGLE tiny read — its 512 KB output cap truncates this audit's inventory pull (measured: a 39-pod cluster's pods-only JSON is already 524 KB), so it is not a substitute. This is NOT an RBAC or credential problem. The cluster monitoring posture is still auditable via /scoutflo:audit-azure over ARM (Container Insights, managed Prometheus, diagnostic settings) with no cluster network access."; exit 1 ;;
   esac
   # Not a network signature: a failed can-i on an exec-plugin context is usually an EXPIRED
   # CREDENTIAL, not a missing RBAC binding — so name the reauth path per exec plugin BEFORE
@@ -117,6 +119,17 @@ echo "doctor gate: pass"
 ```
 
 Never proceed past a failed doctor check and never downgrade one into a finding. `/scoutflo:doctor` runs the same `auth can-i` probe standalone.
+
+### Accessing private or JIT-tunnelled clusters
+
+This audit talks to the cluster only through `kubectl`, which reads whatever kubeconfig `$KUBECONFIG` names. That makes a private cluster reachable through any just-in-time or tunnelled access path — Cloudanix cdx, Teleport, HashiCorp Boundary, a bastion `ssh -L` tunnel, `kubectl port-forward`, or a VPN — with no plugin-specific integration and no stored credential. The plugin rides whatever session is live and holds nothing:
+
+1. In one terminal, open your access session (for example `cdx k8s connect …`) and **leave it running** — the tunnel and the kubeconfig it writes stay alive only while that session is open.
+2. That tool writes a kubeconfig to a temporary path and usually sets `KUBECONFIG` to it. Because the plugin runs in its own shell, tell it where that kubeconfig is by adding one line to the home-anchored store this audit already sources (the same place credentials live): `echo 'export KUBECONFIG="<the session'\''s kubeconfig path>"' >> ~/.scoutflo/env` — find the path with `echo "$KUBECONFIG"` inside the session.
+3. Set `kubernetes.context` in `~/.scoutflo/toolkit.yaml` to the context inside that kubeconfig (`KUBECONFIG=<path> kubectl config get-contexts -o name`). The context name is stable across sessions; the temporary file path and the tunnel port are **not**, so never hard-code the path in the config — always resolve it from `$KUBECONFIG`.
+4. Run the audit. Every `kubectl --context …` call rides the live tunnel. When the session expires the audit simply loses access and says so — Scoutflo retains no token, kubeconfig, or cluster credential.
+
+An in-cluster backend with no external ingress (ClickHouse/HyperDX for `audit-clickstack`, or a store for `audit-lgtm` / `audit-prometheus` / `audit-signoz`) is reached the same way: `kubectl port-forward` it through this kubeconfig and point that audit's URL at `http://127.0.0.1:<local-port>`.
 
 ## Live-safety gate
 

@@ -1512,7 +1512,12 @@ else
         elif [ "$K_LINE" = "no" ]; then
           row "$K_INT" rbac yes - fail - "context reaches the cluster but lacks read RBAC; bind the view ClusterRole per connect references/providers.md"
         else
-          row "$K_INT" rbac yes - fail - "context error: ${K_LINE}; run kubectl config get-contexts and fix kubernetes.context — a GKE/EKS/AKS context failing here often needs exec-plugin reauth (gcloud auth login / aws sso login / az aks get-credentials), not an RBAC change. A private or unreachable API server (no such host, dial tcp, i/o timeout, connection refused) is a NETWORK problem, not RBAC: run from inside the VNet, add your IP to the cluster API-server authorized ranges, or use 'az aks command invoke'"
+          case "$K_OUT" in
+            *localhost:*|*127.0.0.1:*)
+              row "$K_INT" rbac yes - fail - "context '${KUBE_CONTEXT}' API server is a local tunnel (localhost) that is not answering — your JIT / tunnelled access session (Cloudanix cdx, Teleport, a bastion 'ssh -L' tunnel, or 'kubectl port-forward') has expired or was never opened. Re-establish it in another terminal and point KUBECONFIG at its kubeconfig: echo 'export KUBECONFIG=\"<session kubeconfig path>\"' >> ~/.scoutflo/env, then rerun doctor. Scoutflo holds no standing cluster credential by design. NOT an RBAC, credential, or authorized-IP problem" ;;
+            *)
+              row "$K_INT" rbac yes - fail - "context error: ${K_LINE}; run kubectl config get-contexts and fix kubernetes.context — a GKE/EKS/AKS context failing here often needs exec-plugin reauth (gcloud auth login / aws sso login / az aks get-credentials), not an RBAC change. A private or unreachable API server (no such host, dial tcp, i/o timeout, connection refused) is a NETWORK problem, not RBAC: run from inside the VNet, add your IP to the cluster API-server authorized ranges, or open a tunnel/JIT session and point KUBECONFIG at its kubeconfig. 'az aks command invoke' only carries a single tiny read (its 512 KB cap truncates a real inventory pull), so it is not a substitute" ;;
+          esac
         fi
       fi
     fi
