@@ -118,7 +118,7 @@ story when many opportunities have no number.
 | --- | --- | --- | --- |
 | `id` | string | yes | `COST-<PROV>-NNN`, stable, never reused |
 | `title` | string | yes | One line naming the opportunity, no secrets |
-| `provider` | string | yes | Provider slug (`aws`, `gcp`, `kubernetes`, `datadog`, `digitalocean`) |
+| `provider` | string | yes | Provider slug (`aws`, `gcp`, `kubernetes`, `datadog`, `digitalocean`, `signoz`) |
 | `area` | string | yes | Always `cost-optimization` |
 | `signal` | string | yes | Kebab-case class: `rightsizing`, `commitment-coverage`, `idle-resource`, `unattached-storage`, `snapshot-sprawl`, `over-provisioned-requests`, `metric-cardinality`, `log-volume`, etc. |
 | `status` | string | yes | `validated-live`, `configured`, or `blocked` (same vocabulary as the scored schema) |
