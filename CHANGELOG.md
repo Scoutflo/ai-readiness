@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.1.175
+
+**rca gains a quantitative fire-window-vs-baseline correlation phase — cross-provider, and it produces the temporal-precedence signal the confidence rubric always prized but could never generate.** Until now rca proved *state* (kubectl: OOMKilled, CrashLoop) + topology blast radius; it could say "checkout OOMKilled" but not "payments' error rate rose +8900% and p99 +1180% **90s before** checkout restarted" — the difference between a co-occurrence and a ranked cause. Adapted from SigNoz's investigating-alerts method, made cross-provider (our edge).
+
+- **New Phase 4.5 — temporal delta on the telemetry backends.** For the target + top-ranked upstream suspects, pull RED/USE neighbor signals (error rate, p95/p99, throughput, dependency error rate, CPU/mem/restarts) from whichever backend the topology observation edges (`SENDS_METRICS_TO`/`MONITORED_BY`) name — Prometheus / LGTM / SigNoz / ClickStack / Datadog — reusing each provider's existing read path. Compare a fire window to a **same-hour-previous-day baseline** (7-day same-time-of-day median fallback when the baseline is contaminated by another fire or a deploy), rank suspects by delta. New `references/neighbor-signals.md` lists the RED/USE signals per resource scope.
+- **Two early-stop gates** (cost-bounding): a **marginal-fire gate** (breach <10% over threshold + <1 eval window → "threshold may be too tight, tune it," not a manufactured cause) and an **isolated-signal gate** (no neighbor moves ≥25% → instrumentation/data-source/silent-downstream, not a cascade).
+- **Explicit confidence rubric** (borrowed clean articulation): `high` needs ≥2 of {temporal precedence, topology edge, shared entity, correlated metric+log+state evidence, recent deploy}; `medium` = one tier + ≥1; `low` single uncorroborated signal = labelled a **co-occurring signal**, never a cause. New `[delta@<now>]` provenance tag; a delta is emitted only from a real backend read (unreachable backend = honest gap, never fabricated).
+- **Alert-anchored entry (optional):** rca now also answers "why did *this alert* fire" — resolves the alert to its scope + a fire window from the provider's alert history (best-effort, honest when unreadable), which drives Phase 4.5.
+- **Output:** added a TL;DR-first line and an "Investigation trail" (✅ confirmed / ❌ ruled out) so the reader sees what was probed and eliminated.
+
+**Verification:** all four repo gates green (`leak-scan` CLEAN, `structure-check` 23, `run-tests` 30/0, `plugin validate --strict`) + self-test lock. New pressure scenario (co-occurrence-without-precedence ≠ cause; marginal-fire ≠ incident; isolated-signal ≠ cascade). **Live-smoke status:** the phase reuses existing per-provider read paths and preserves the never-invent discipline, but a full live RCA needs a real incident + a reachable backend (none this session — GKE de-authed), so the temporal-delta path is **verify-pending a live run**; the report-only path is unchanged. Read-only throughout.
+
 ## 0.1.174
 
 **SigNoz metric-cardinality health (SIG-070) + a first-class SigNoz ingestion-cost lane — the biggest coverage gap SigNoz's own agent-skills exposed.** We scored SigNoz retention, ClickHouse health, disk and write-path, but had **zero** metric-cardinality coverage and **no** SigNoz cost view. Both are now covered, adopting SigNoz's documented method while keeping our read-only, never-invent-a-dollar discipline.

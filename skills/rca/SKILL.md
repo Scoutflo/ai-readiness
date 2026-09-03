@@ -96,6 +96,8 @@ echo "live-safety gate: pass — read-only probes only; confirm this is the clus
 
 Resolve the user's term (a pod name, service, resource id, or finding id) to two things: the tokens it appears under in findings, and the **concrete object + context to probe**. Use ONLY identity signal for this — topology `DEPLOYED_AS` (service→workload) / `PART_OF`, pod `ownerReferences` (pod→ReplicaSet→Deployment, via `probe_owner`), and the pod-name hash suffix. Pin the context from `kubernetes.context` (never ambient). Report what matched and under which names. If nothing matches and there is no live handle, say so and list the closest names — never proceed on a guess. Identity edges resolve the target; they are **never** treated as a cause.
 
+**Alert-anchored entry (optional).** When the user asks "why did *this alert* fire" (rather than naming a resource), the entry point is the fired alert: resolve it to the service/resource it scopes and to a **fire window**. Read the fire window from the alerting provider's history where the audit already reads it (e.g. Sentry issue/rule fire history, Alertmanager/Prometheus `ALERTS`, Datadog/SigNoz alert history) — best-effort and honest: if the history isn't readable, ask for or assume a window and say so. That window then drives Phase 4.5's baseline comparison. Everything downstream is identical; this only changes how the target + window are derived.
+
 ## Phase 2: Gather the report signal (reference)
 
 Assemble every finding whose `affected[]`/`title`/`id` names the target, grouped by provider, each tagged `[report@<run_date>]`. Compute each report's age from its run date; if the newest is older than the freshness horizon (default **24h**, `business_context`-tunable), treat its facts as *reference, not current truth* and plan to re-probe live. This is the "where to look / what's known" layer, not the verdict.
@@ -167,6 +169,18 @@ fi
 
 Tag every observation `[live@<now>]`. When a live result contradicts a report (e.g. report said 0 restarts, live shows 42), **live wins** and the delta is stated — it is high-value output. The exact fields and the taxonomy (CrashLoopBackOff+terminated reason, OOMKilled/137, ImagePullBackOff, Unhealthy probe, Pending/Unschedulable, benign-rollout) are in [live-evidence/references/k8s-liveness-probes.md](../live-evidence/references/k8s-liveness-probes.md).
 
+## Phase 4.5: Temporal delta on the telemetry backends (what moved, and before what)
+
+Phase 4 establishes the target's *state* (OOMKilled, CrashLoop). This phase answers the question the confidence rubric prizes most but Phase 4 cannot produce: **which neighbor signal moved, by how much, and did it move *before* the symptom** — the single strongest discriminator between a cause and a coincidence. It compares a fire window to a baseline window on whatever metrics/traces backend already holds each service's signal, so it is **cross-provider** by construction (Prometheus / LGTM / SigNoz / ClickStack / Datadog — whichever the topology observation edges point at).
+
+- **Pick the backend from the topology, not a guess.** For the target and each top-ranked upstream suspect from Phase 3, read the `SENDS_METRICS_TO` / `MONITORED_BY` observation edge to find which backend holds its RED/USE signals, and reuse that provider's existing read path (the same queries `audit-prometheus` / `audit-lgtm` / `audit-signoz` / `audit-datadog` already document — do not invent a new query engine). If no observation edge names a backend, say so and skip this phase for that suspect (an honest gap, never a guess).
+- **The neighbor signals to pull** (by resource scope) are in [references/neighbor-signals.md](references/neighbor-signals.md): service scope → error rate, p95/p99 latency, request throughput, dependency error rate; host scope → CPU / memory / disk-io / network / load; k8s scope → pod restarts (surface first — crash loops dominate), CPU-vs-limit (throttling), memory-vs-limit (OOM), node pressure, recent rollout. Cap at ~6 signals per suspect to stay bounded.
+- **Baseline = same hour, previous day** (`fire_start − 24h`, same duration), with a **7-day same-time-of-day median fallback** when the prior-day window overlaps another incident of the same signal or a deploy landed within 24h of it (a contaminated baseline is worse than none — flag and fall back). Compute `delta_pct = (fire − baseline) / max(baseline, epsilon) × 100`, `epsilon = max(baseline × 0.01, a small floor)`; use the fire-window **peak** for an "above" symptom / **trough** for a "below" one, and the baseline **mean**; add a ±5-minute lead-in/cool-down buffer to both windows; clamp displayed deltas at ±10000%. Rank suspects by absolute delta.
+- **Two early-stop gates (cost-bounding — borrowed from SigNoz's tiered method):**
+  - **Marginal-fire gate:** if the anchoring signal's breach is `< 10%` over its threshold **and** lasted `< 1` evaluation window, stop the fan-out and emit the single hypothesis *"the signal barely crossed — the alert/threshold may be too tight; tune it,"* not a hunt for a cause that isn't there.
+  - **Isolated-signal gate:** if **no** neighbor signal moves `≥ 25%` vs baseline, stop and conclude *"the target's own signal moved but nothing around it did"* → focus the hypotheses on the target's own instrumentation / data-source change / a silent downstream, **not** a cascade.
+- **Feed the deltas into the confidence rubric, never fabricate one.** A delta is emitted **only** from a real backend read, carries a new provenance tag `[delta@<now>]`, and supplies the rubric's *temporal-precedence* and *correlated-metric-evidence* signals. A missing or unreachable backend is an honest gap (`verdict=unknown`), never read as "flat/healthy". A signal that moved *with* the symptom but with no temporal ordering is labelled a **co-occurring signal**, never ranked as the cause. When no backend is reachable at all, skip this phase and say so — the report-only path (Phase 4's `else` branch) still stands.
+
 ## Phase 5: Walk the correlation chains (cascades + overlap agreement)
 
 If `correlation.json` exists, use both halves of it: the `cascades` connect the target to cause→effect chains the single-report view can't see, and the `overlaps` (`OVL-*` groups) say whether **two or more audits independently flagged the target service** — multi-stack agreement that corroborates the trouble is real.
@@ -236,13 +250,18 @@ Read `~/.scoutflo/business_context.json`. If the target or a downstream neighbor
 
 ## Phase 7: Assemble the evidence-cited RCA
 
-Open with a one-line **mode banner** so freshness is unmissable: `[live-verified @ <now>]` or `[report-only, as of <date>]`. Every factual clause carries its provenance tag. Confidence is a joint function of source **and** recency: a live-confirmed cause matching a report finding is highest; a report-only inference on a stale report is low. Multi-audit overlap agreement (Phase 5) adjusts this at most one step upward when consistent with the cause; its absence changes nothing.
+Open with a one-line **mode banner** so freshness is unmissable: `[live-verified @ <now>]` or `[report-only, as of <date>]`. Every factual clause carries its provenance tag. Confidence is a joint function of source **and** recency, on an explicit bar: **`high`** requires **≥2 of** {temporal precedence (a `[delta@]` shows the suspect moved *before* the symptom), a topology/dependency edge, a shared entity/service, correlated metric+log+state evidence, a recent deploy/config change}; **`medium`** = one tier's evidence plus ≥1 of those; **`low`** = a single uncorroborated signal — label it a **co-occurring signal**, not a cause. Multi-audit overlap agreement (Phase 5) adjusts this at most one step upward when consistent with the cause; its absence changes nothing. If nothing reaches `medium`, the lead line is "No clear root cause found," never a low-confidence guess dressed up as the answer.
 
 ```markdown
 ## RCA: <target> — <one-line verdict>   [live-verified @ <ts> | report-only, as of <date>]
 
+**TL;DR:** <1–2 sentences an on-call reads first: leading hypothesis + confidence + blast radius + the single most useful next action (name the concrete handle — a pod, a trace, a finding-id).>
+
 **Most likely root cause (confidence: high | medium | low):**
-<1–3 sentences, each clause tagged [live@ts] / [report@date] / [topology@gen] / [correlation] / [coverage] / [hypothesis]>
+<1–3 sentences, each clause tagged [live@ts] / [delta@ts] / [report@date] / [topology@gen] / [correlation] / [coverage] / [hypothesis]>
+
+**Investigation trail:** <a scannable list of what was checked, ✅ confirmed / ❌ ruled out, one line each — so the reader sees the work done and what was eliminated, e.g. "✅ [delta] payments error-rate +8900% vs baseline, 90s before checkout restarts; ❌ CPU/memory flat through the window; ✅ [live] checkout OOMKilled ×4">
+
 
 **How it fails (the chain):** <root → effect walk, each step cited>
 
@@ -250,6 +269,7 @@ Open with a one-line **mode banner** so freshness is unmissable: `[live-verified
 
 **Evidence:**
 - [live@ts] <probe result, e.g. "app container OOMKilled exitCode 137, 4 restarts/20m">
+- [delta@ts] <fire-vs-baseline neighbor-signal move that supports the cause, e.g. "payments dependency error-rate +8900% vs same-hour-yesterday, p99 +1180%, first rose 90s before checkout's restarts (temporal precedence)"; omit when no backend was reachable — never fabricate a delta>
 - [report@date] <finding-id: title (provider, severity)>
 - [topology@gen] <edge, confidence n, observed/asserted>
 - [correlation] <OVL-id: N audits independently flagged <service>: <target>/<finding-id> (<severity>), …  — omit when no overlap group names the target>
