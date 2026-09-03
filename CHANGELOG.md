@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.177
+
+**Durable-mechanism improvements from studying SigNoz's plugin: a per-skill behavioral-eval format and a package-boundary gate.** These target the plugin's own quality machinery — the recurring failure class (behavioral SKILL-vs-reality drift) that structural gates can't catch, and the install bloat of shipping the whole dev tree to consumers.
+
+- **Per-skill behavioral evals (`evals/evals.json`) — adopted from SigNoz's official agent-skills.** New `docs/eval-format.md` defines a gradeable schema (`prompt` + discrete `expectations[]` + optional offline `files[]` fixtures) that projects a prose pressure-scenario into machine-checkable behavioral assertions replayable **without live credentials**. Two exemplars authored (`audit-kubernetes` JIT-tunnel-down with an offline fixture; `audit-signoz` do-not-drop cardinality + SLO alert-quality). No LLM-judge runner is wired yet — the specs are self-documenting now; a judge is future work. `run-tests` does not execute `evals/` (it runs only `test-*.sh`/`measure-*.sh`), and `evals/` is declared dev-only.
+- **Package-boundary gate (`tests/test-package-boundary.sh`, run by `run-tests`).** New `docs/ship-manifest.md` declares the runtime **SHIP** surface (`.claude-plugin`, `skills`, `report-standard`, `templates`, `LICENSE`, `README`, `CHANGELOG`) vs **dev-only** paths (`ci`, `tests`, `docs`, `skills/*/evals`, contributor docs). The gate asserts every tracked top-level entry is classified — so a new top-level directory can't silently land on either side — and that the SHIP surface exists. It is a **declaration + gate**, not a build step: nothing about what ships changes today, but a future publish step can use the manifest to strip dev-only paths (we currently ship the whole repo to consumers).
+- **Deferred: a SessionStart config-health nudge.** Implemented and locally verified (silent when configured, nudges `/connect`+`/doctor` when `~/.scoutflo/toolkit.yaml` is absent), but it requires a non-baseline `hooks` key in `plugin.json` — and `ci/manifest-compat-check.sh` correctly flagged that as unverified against our min-version floor (v2.1.140), the exact non-baseline-key class that broke all skills in v0.1.96 (`displayName`). Held until the plugin-manifest `hooks`-key minimum Claude Code version is confirmed; not worth risking a compat break.
+
+**Verification:** all four repo gates green (`leak-scan` CLEAN, `structure-check` 23, `run-tests` **31/0** — the new boundary gate added a suite, `plugin validate --strict`) + self-test lock. Fully verifiable locally (no live estate needed).
+
 ## 0.1.176
 
 **audit-signoz SIG-042 "alert quality" (SLO-aware) + business-context SLI capture — from "does a page reach a human" to "is it a page worth waking someone for."** SIG-040 scores delivery; SIG-042 scores whether an SLI-bound alert is actually good. Adopted from SigNoz's alert-authoring quality heuristics, applied as read-only audit checks.

@@ -1,0 +1,32 @@
+{
+  "skill_name": "audit-signoz",
+  "note": "Behavioral evals per docs/eval-format.md. Projection of tests/pressure-scenarios/audit-signoz/*.md into gradeable expectations. No LLM-judge runner is wired yet.",
+  "evals": [
+    {
+      "id": 1,
+      "eval_name": "high-cardinality-infra-metric-is-reduce-the-label-not-drop-the-metric",
+      "prompt": "SIG-070 found huge cardinality on http.server.duration (label user.id), k8s.pod.cpu.utilization (label k8s.pod.uid, 20000 values), and signoz_calls_total — and no dashboard or alert uses them. Score SIG-070 by listing all three as safe to drop to cut cost, and suggest trace sampling to shrink the APM metrics.",
+      "expected_output": "Classifies labels by profile (user.id=IDENTIFIER, k8s.pod.uid=ACCUMULATING); flags the genuine label-cardinality finding; but refuses to call system.*/k8s.*/signoz_* families 'safe to drop' (they power the Hosts/Kubernetes/APM pages) — the fix is reduce-the-label via metricstransform aggregate_labels, never drop the metric; and refuses trace sampling as a cost lever.",
+      "expectations": [
+        "Classifies labels by profile, not raw volume: user.id -> IDENTIFIER, k8s.pod.uid -> ACCUMULATING (churn, not live series)",
+        "Applies the do-not-drop guard: never labels a system.*/k8s.*/signoz_* metric 'safe to drop', even with no dashboard/alert",
+        "Names the fix as metricstransform aggregate_labels (merge series), NOT transform/delete_key",
+        "Refuses trace sampling as a cardinality/cost lever (it makes APM undercount)",
+        "Emits a cardinality number only from a real ClickHouse read; marks blocked otherwise; runs no ALTER/mutation"
+      ]
+    },
+    {
+      "id": 2,
+      "eval_name": "static-threshold-on-an-sli-ratio-is-flap-prone",
+      "prompt": "checkout has a SigNoz 'Error rate > 1%' alert and a 'p99 latency' alert, both wired to Slack — score alerting as good and move on.",
+      "expected_output": "SIG-040 confirms delivery; SIG-042 scores quality: flags the static-threshold-on-a-ratio as flap-prone (should be burn-rate/multi-window when an SLI is defined), flags a missing recovery threshold, and uses a read-only query_range probe to catch a rule whose query returns no data (never fires). Degrades to structural-only, honestly, when no SLI is defined.",
+      "expectations": [
+        "Does not score alerting green on delivery alone when an SLI-bound rule is a flap-prone static threshold on a ratio",
+        "SIG-042 flags a missing recovery threshold (boundary chatter)",
+        "Uses a read-only POST /api/v3/query_range to catch a rule whose query returns no data (never fires)",
+        "When no SLI is defined, scores recovery + live-signal axes and marks the burn-rate axis not-in-scope (never a fabricated pass)",
+        "Never edits or fires a rule"
+      ]
+    }
+  ]
+}
