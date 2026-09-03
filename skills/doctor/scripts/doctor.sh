@@ -407,7 +407,7 @@ live_check() {
 # with an explicit hint, NOT a pass. Works with any auth header (Bearer, Token token=, ApiKey,
 # DD-API-KEY, SIGNOZ-API-KEY, Basic via -u done by the caller) and GET or POST.
 authed_json_check() {
-  aj_int="$1"; aj_chk="$2"; aj_url="$3"; aj_env="$4"; aj_jq="$5"; aj_hn="$6"; aj_hv="$7"; aj_method="${8:-GET}"; aj_data="${9:-}"
+  aj_int="$1"; aj_chk="$2"; aj_url="$3"; aj_env="$4"; aj_jq="$5"; aj_hn="$6"; aj_hv="$7"; aj_method="${8:-GET}"; aj_data="${9:-}"; aj_403_extra="${10:-}"
   note "doctor: checking ${aj_int} ${aj_chk}: ${aj_method} ${aj_url}"
   aj_body="$(mktemp)"; aj_rc=0
   if [ "$aj_method" = "POST" ]; then
@@ -434,7 +434,13 @@ authed_json_check() {
         row "$aj_int" "$aj_chk" yes "$aj_env" fail "$aj_code" "200 but Content-Type='${aj_ct}' (not JSON): looks like an HTML login/SPA/proxy page, not the API — verify the URL and that no SSO/reverse proxy fronts it" ;;
     esac
   else
-    row "$aj_int" "$aj_chk" yes "$aj_env" fail "$aj_code" "$(http_hint "$aj_code")"
+    aj_hint="$(http_hint "$aj_code")"
+    # A provider-specific addendum for the 403 (scope-too-low) branch only — e.g. a token
+    # type whose scopes cannot be widened after creation, where the generic "widen the
+    # existing token" advice above is actively wrong. Every other caller leaves this unset
+    # and gets the unmodified generic hint, unchanged from before.
+    [ "$aj_code" = "403" ] && [ -n "$aj_403_extra" ] && aj_hint="${aj_hint}. ${aj_403_extra}"
+    row "$aj_int" "$aj_chk" yes "$aj_env" fail "$aj_code" "$aj_hint"
   fi
   rm -f "$aj_body"
 }
@@ -525,7 +531,8 @@ else
       if [ -z "$SENTRY_ORG" ]; then
         row "$S_INT" config yes "${TOKEN_VAR:-none}" fail - "sentry.org is empty in toolkit.yaml; set your org slug"
       elif token_gate "$S_INT" org; then
-        authed_json_check "$S_INT" org "https://${SENTRY_HOST}/api/0/organizations/${SENTRY_ORG}/" "${TOKEN_VAR:-none}" ".slug==\"${SENTRY_ORG}\"" Authorization "Bearer ${TOKEN}"
+        authed_json_check "$S_INT" org "https://${SENTRY_HOST}/api/0/organizations/${SENTRY_ORG}/" "${TOKEN_VAR:-none}" ".slug==\"${SENTRY_ORG}\"" Authorization "Bearer ${TOKEN}" GET "" \
+          "A Sentry Personal Token's scopes cannot be widened after creation (Sentry's own UI only lets you rename one) — if this token is a Personal Token, create a NEW one with every scope from connect references/providers.md up front rather than trying to edit this one. An Internal Integration token's permissions CAN be edited later."
       fi
     fi
     _si=$((_si+1))

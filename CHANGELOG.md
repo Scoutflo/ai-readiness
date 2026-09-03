@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.178
+
+**Sentry onboarding: warn upfront that a Personal Token's scopes can't be widened after creation.** Observed live during a customer onboarding call: a Sentry Personal Token was missing required scopes, and Sentry's own token-edit UI only allows renaming an existing personal token, not changing its scopes — confirmed against Sentry's docs ("Personal token permissions are customizable but cannot be edited later"). The fix cost a round-trip (create an entirely new token) that a one-line warning would have avoided.
+
+- **`connect/references/providers.md`** — the Sentry "second choice" fallback note for User auth (Personal) tokens now states the scopes-fixed-at-creation fact and points back at the recommended-first internal integration, whose permissions *can* be edited later.
+- **`doctor.sh`** — `authed_json_check` gained an optional, backward-compatible 10th parameter (`aj_403_extra`, defaults to empty — every existing caller is unaffected) that appends a provider-specific addendum to the generic 403 hint. Sentry's org-reachability doctor check is the first (only) caller to use it: a 403 there now names the Personal-Token immutability fact and points at creating a new token with every scope up front, instead of the generic (and, for this token type, actively wrong) "widen the existing token" advice.
+
+**Verification:** all four repo gates green (`leak-scan` CLEAN, `structure-check` 23, `run-tests` 31/0, `plugin validate --strict`). No new pressure scenario — this is prose-only messaging with no new check or agentic decision to lock. Sentry's docs fetched and quoted directly rather than asserted from the call transcript alone; Grafana's two existing `authed_json_check` callers verified unaffected (they don't pass the new param, so their hint text is byte-identical to before).
+
 ## 0.1.177
 
 **Durable-mechanism improvements from studying SigNoz's plugin: a per-skill behavioral-eval format and a package-boundary gate.** These target the plugin's own quality machinery — the recurring failure class (behavioral SKILL-vs-reality drift) that structural gates can't catch, and the install bloat of shipping the whole dev tree to consumers.
