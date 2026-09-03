@@ -161,6 +161,7 @@ One permanent ID per check. IDs never change or get reused; retired checks keep 
 | SIG-020 | Retention | Each signal (traces/metrics/logs) has a deliberate TTL (via `/api/v1/settings/ttl` and/or the ClickHouse table TTL); unbounded = cost/compliance gap, too-short = data-loss gap | high |
 | SIG-030 | ClickHouse health | Part counts sane, replicas in sync, no spiking `system.errors` codes (discount the single `READONLY` (164) row the section-1 probe may add), no stuck mutations | high |
 | SIG-040 | Alerting | Alert rules exist **and** evaluate **and** route to a live channel; a rule wired to no channel, a dead channel, or a placeholder destination is the core failure | critical |
+| SIG-042 | Alerting | Alert *quality*, not just delivery: an SLI-bound rule uses a burn-rate/multi-window design rather than a flap-prone static threshold on a ratio; it has a recovery threshold (hysteresis) so it doesn't chatter at the boundary; and its query targets a signal that actually emits data (the "saves clean, never fires" trap) | medium |
 | SIG-041 | Dashboards | Dashboards exist and their panel queries resolve for the critical services | medium |
 | SIG-050 | Security posture | SigNoz endpoint requires auth (not publicly readable); ClickHouse `default` user requires a password; service users off `plaintext_password`; TLS on the wire; least-privilege read-only CH user + read-role service-account token for audits | high |
 | SIG-060 | ClickHouse health | Disk headroom vs telemetry growth — days-to-read-only before the disk fills and every INSERT is rejected (243 `NOT_ENOUGH_SPACE`) | high |
@@ -393,6 +394,19 @@ sig_get /api/v1/rules \
 - **Healthy target:** every critical service has at least one enabled, evaluating rule **and** every such rule resolves to a live channel.
 - **Finding (SIG-040):** a rule that references no channel, references a channel absent from `/api/v1/channels`, or points at an empty/loopback/placeholder destination is the core failure — the rule evaluates and pages nobody. A rule that is disabled or has no threshold/evaluation window evaluates never. Record the rule name and the channel's host class (e.g. "channel target is a loopback address"), never the full URL. Zero rules entirely routes to SIG-007, not a confident SIG-040 fail. Reading the config proves the path is **configured**, not `validated-live` — the test-fire that would prove delivery is a mutation this audit never performs. Fix inline: SigNoz Alerts → the rule → Notification Channels, and Settings → Alert Channels to create/repair a channel.
 - **Forbidden:** GET only — never `POST`/`PUT`/`PATCH`/`DELETE` on `/api/v1/rules` or `/api/v1/channels` (no test alerts, no "quick fix"); see section 9.
+
+### SIG-042 — alert quality (SLO-aware)
+
+SIG-040 proves a page *reaches a human*; SIG-042 asks whether it is *a page worth waking someone for*. Read the same `/api/v1/rules` config (no extra mutating call) and, when the business-context SSOT defines an SLI for the service (`~/.scoutflo/business_context.md` — the SLA/SLO section, read per the Metadata Load block; degrade to structural-only when no SLI is defined and say so), evaluate three quality axes:
+
+- **Burn-rate vs static-threshold-on-a-ratio.** An SLI-bound alert (error rate / success ratio) driven by a **static threshold** flaps: the ratio crosses the line on any brief spike. A quality rule uses a **burn-rate / multi-window** design — a fast-burn window (e.g. page-now at a high multiple of the error budget) ANDed with a slower confirming window, threshold derived as `burn_rate × (1 − SLO)`. Flag an SLI-bound rule that is a bare static threshold on a ratio with no multi-window/burn-rate structure as flap-prone (medium).
+- **Recovery threshold / hysteresis.** A rule that fires and recovers at the *same* value chatters across the boundary. Confirm a distinct recovery threshold (fire high, recover lower). Its absence on a noisy metric is the finding.
+- **Live-signal probe (the "saves clean, never fires" trap).** A rule can be structurally valid yet query a metric×service×filter that emits **no data** — it will never fire. With a single read-only `POST /api/v3/query_range` over a recent window (server-side aggregation, nothing created), confirm the rule's own query returns a non-empty series. An empty result is a finding: the rule is dead on arrival.
+
+- **Healthy (SIG-042):** SLI-bound rules use burn-rate/multi-window design, carry a recovery threshold, and their queries return live data.
+- **Finding (SIG-042, medium):** name the rule and which axis failed — "static threshold on a success-ratio SLI, no burn-rate/multi-window (flaps on any spike)", "no recovery threshold (chatters at the boundary)", or "query returns no data over the last window (rule never fires)". Where no SLI is defined for the service, score only the recovery-threshold and live-signal axes and record that the burn-rate axis was **not-in-scope** (no SLI to bind to), never a fabricated pass.
+- **Fix inline:** SigNoz Alerts → the rule → convert to a multi-window burn-rate condition / add a recovery threshold / repair the query's metric-service-filter. This is guidance only — SIG-042 never edits a rule (that is a `setup-*` action behind confirmation).
+- **Forbidden:** the `POST /api/v3/query_range` probe is a read (a query body, server-side aggregation); never `POST`/`PUT`/`PATCH`/`DELETE` a rule or fire a test alert; see section 9.
 
 ### SIG-041 — dashboards
 
