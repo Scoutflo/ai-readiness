@@ -33,7 +33,7 @@ Requirements. Configure only the blocks that exist in your environment; delete t
 | SigNoz ClickHouse (optional deep lane) | `signoz.clickhouse_url` (`http(s)://your-clickhouse-host:8123`), `signoz.clickhouse_user` | `signoz.clickhouse_password_env` (the variable named there — e.g. `SIGNOZ_CH_KEY`) | a scoped **read-only** user: `SELECT` on the `signoz_*` databases + `system.*` | read-only |
 | Slack (optional) | `slack.webhook_env` | webhook variable | post to one channel | n/a |
 
-The ClickHouse lane is a deliberately heavier posture than the API Service Account token (a direct database credential) — configure it only when you want SIG-030/SIG-060/SIG-061 (ClickHouse health, capacity, write-path) scored against the backend directly; without it those checks are marked `not-in-scope`, never failed, and retention (SIG-020) is read from the SigNoz settings API instead of the ClickHouse table TTL.
+The ClickHouse lane is a deliberately heavier posture than the API Service Account token (a direct database credential) — configure it only when you want SIG-030/SIG-060/SIG-061/SIG-070 (ClickHouse health, capacity, write-path, metric cardinality) scored against the backend directly; without it those checks are marked `not-in-scope`, never failed, and retention (SIG-020) is read from the SigNoz settings API instead of the ClickHouse table TTL.
 
 Preflight. A failed check stops the audit with the exact failure and the fix (usually `/scoutflo:connect`). Never downgrade a doctor failure into a finding.
 
@@ -90,9 +90,9 @@ SIGNOZ_API_KEY=$(printenv "$SIG_KEY_VAR" 2>/dev/null || true)
 CH_KEY_VAR=$(sh "$TT" "$CFG" signoz get "$SIG_IDX" clickhouse_password_env); [ -n "$CH_KEY_VAR" ] || CH_KEY_VAR="SIGNOZ_CH_KEY"
 SIGNOZ_CH_KEY=$(printenv "$CH_KEY_VAR" 2>/dev/null || true)
 if [ -n "${SIGNOZ_CH_KEY:-}" ]; then
-  echo "SigNoz ClickHouse deep-backend lane configured — SIG-030/SIG-060/SIG-061 will be scored directly against ClickHouse"
+  echo "SigNoz ClickHouse deep-backend lane configured — SIG-030/SIG-060/SIG-061/SIG-070 will be scored directly against ClickHouse"
 else
-  echo "SigNoz ClickHouse lane not configured (signoz.clickhouse_password_env unset); SIG-030/SIG-060/SIG-061 will be marked not-in-scope and retention (SIG-020) read from the SigNoz settings API"
+  echo "SigNoz ClickHouse lane not configured (signoz.clickhouse_password_env unset); SIG-030/SIG-060/SIG-061/SIG-070 will be marked not-in-scope and retention (SIG-020) read from the SigNoz settings API"
 fi
 ```
 
@@ -332,13 +332,14 @@ SigNoz sets retention per signal (traces / metrics / logs), each with a delibera
 
 Read retention; never guess it. A missing TTL is a finding, not an assumption of "probably fine".
 
-## Phase 6: ClickHouse health (SIG-030), capacity/write-path (SIG-060, SIG-061), and security posture (SIG-050)
+## Phase 6: ClickHouse health (SIG-030), capacity/write-path (SIG-060, SIG-061), metric cardinality (SIG-070), and security posture (SIG-050)
 
-These read the SigNoz ClickHouse `system.*` tables directly and therefore run only when the ClickHouse deep lane is configured; without it, SIG-030/SIG-060/SIG-061 are `not-in-scope` (excluded and renormalized) and SIG-050 falls back to the transport/endpoint checks the SigNoz API surface allows. Inspection only (commands in sections 6 and 8); discover any uncertain column via `system.columns` before use — the `signoz_*` schema is versioned and column names differ across builds.
+These read the SigNoz ClickHouse `system.*` and metrics tables directly and therefore run only when the ClickHouse deep lane is configured; without it, SIG-030/SIG-060/SIG-061/SIG-070 are `not-in-scope` (excluded and renormalized) and SIG-050 falls back to the transport/endpoint checks the SigNoz API surface allows. Inspection only (commands in sections 6 and 8); discover any uncertain column via `system.columns` before use — the `signoz_*` schema is versioned and column names differ across builds.
 
 - **SIG-030 (ClickHouse health):** `system.parts` (active part counts and bytes per `signoz_*` table — a runaway part count signals merge pressure), `system.replicas` (replicas in sync, no growing queue — empty on a single-node build, expected), `system.errors` (no spiking codes — read `name`, `code`, `value`, `last_error_time`; discount the single `READONLY` (164) row the section-1 `readonly=1` probe itself may add on a profile-readonly user), `system.mutations` (none stuck / long-running). A spiking error code or a stuck mutation is a health finding.
 - **SIG-060 (capacity headroom):** `system.disks` free/total and per-table `bytes_on_disk` from `system.parts` (columns confirmed via `system.columns` first) yield **days-to-read-only** at the observed growth rate. Blast radius: at **243 `NOT_ENOUGH_SPACE`** *every* `signoz_*` INSERT is rejected at once, not one table.
 - **SIG-061 (write-path failures):** fresh Insert exceptions and spiking write-path codes in `system.errors`/`system.query_log` — **243 `NOT_ENOUGH_SPACE`** (disk full → SIG-060), **252 `TOO_MANY_PARTS`** (merge backlog), **164 `READONLY`** (profile-readonly user or a replica in Keeper-readonly state), **201 `QUOTA_EXCEEDED`**. This distinguishes "collector stopped sending" (SIG-011 stale, no insert exceptions) from "collector still sending, ClickHouse rejecting every write" (fresh exceptions). When reading 164, discount the audit's own `readonly=1` probe row.
+- **SIG-070 (metric cardinality health):** for the top metrics by sample volume, read distinct label-value counts from the metrics store and classify each label (unbounded / identifier / accumulating / high-but-bounded / deployment-dependent — full profiles + attribute lists in [references/signoz-checks.md §6c](references/signoz-checks.md#6c-metric-cardinality-health-sig-070)). An unbounded/identifier label (e.g. `trace_id`, `user.id`, `url.full`) or an accumulating one (`k8s.pod.uid`) is the finding regardless of today's count; the fix names `metricstransform aggregate_labels` (merge series), never a raw drop. **Never** call a `system.*`/`k8s.*`/`signoz_*` metric "safe to drop" (it powers the Hosts/Kubernetes/APM pages) — reduce its label cardinality instead. Series count is the ingestion-cost + query-latency driver; the ranked cost view of the same reads is [audit-cost signoz-cost.md](../../audit-cost/references/signoz-cost.md).
 - **SIG-050 (security posture):** the external `default` ClickHouse user must require a password (probe it with an unauthenticated `SELECT 1` — a `200` means open, critical); service users must not sit on `plaintext_password` (`sha256_password`/`double_sha1_password` are the hardened forms); **the SigNoz API endpoint must require auth** — the confirmed `401` on `/api/v1/rules` without a Service Account token is the good state, a `200` on an authed resource without a header is a critical exposure; TLS on the wire (the audit's own `signoz.url` and `signoz.clickhouse_url` should be `https`); and the audit's ClickHouse user should be least-privilege read-only (`SHOW GRANTS FOR currentUser()` shows only `SELECT`/`SHOW`), and the SigNoz service-account token should hold the **least role that still grants read** — on v0.138 that is **`signoz-viewer`** (read-only; Viewer/Editor/Admin all pass the `ViewAccess` gate, so Viewer is the floor); flag an over-broad **Admin** token where the read-only `signoz-viewer` role would suffice (the role is declared at connect, not self-introspectable).
 
 ## Phase 7: SigNoz alerting (SIG-040) and dashboards (SIG-041)
@@ -362,7 +363,7 @@ Score per [severity-and-scoring.md](../../report-standard/severity-and-scoring.m
 | Telemetry coverage | 20 | SIG-010, SIG-007 |
 | Ingestion freshness | 15 | SIG-011 |
 | Retention | 10 | SIG-020 |
-| ClickHouse health | 15 | SIG-030, SIG-060, SIG-061 |
+| ClickHouse health | 15 | SIG-030, SIG-060, SIG-061, SIG-070 |
 | Alerting | 20 | SIG-040 |
 | Dashboards | 5 | SIG-041 |
 | Security posture | 10 | SIG-050 |

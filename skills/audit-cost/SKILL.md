@@ -33,6 +33,7 @@ This audit reads cost-recommendation and inventory surfaces for every **configur
 | Datadog | `datadog.*`, `datadog.cost_checks` | `usage_read`/`billing_read` | (usage API only; no cheaper fallback) |
 | Kubernetes | `kubernetes.context` | metrics source: metrics-server (`kubectl top`) or Prometheus | `get` on workloads/PVCs/PVs |
 | DigitalOcean | `digitalocean.*` | (none — billing/list only) | `doctl ... list` / monitoring read |
+| SigNoz | `signoz.*` (host/org/token or ClickHouse read user) | Cost Meter (`signoz.meter.*`, `source:meter`) read; falls back to metrics-store reads | `POST /api/v3/query_range` / `SELECT` on the metrics store |
 
 ```bash
 set -eu
@@ -153,6 +154,7 @@ For each **configured and in-scope** provider, run its catalog. Each reference i
 | Kubernetes | [references/kubernetes-cost.md](references/kubernetes-cost.md) | `COST-K8S-NNN` |
 | Datadog | [references/datadog-cost.md](references/datadog-cost.md) | `COST-DD-NNN` |
 | DigitalOcean | [references/digitalocean-cost.md](references/digitalocean-cost.md) | `COST-DO-NNN` |
+| SigNoz | [references/signoz-cost.md](references/signoz-cost.md) | `COST-SIG-NNN` |
 
 For each opportunity, build a finding: the concrete resource(s) in `affected`; `estimated_monthly_savings_usd` **only** when the provider gave one (with `savings_source` naming the API); `utilization` backing rightsizing/idle calls; evidence = the real command + its trimmed output. A provider whose cost scope was missing is added to `providers_excluded` with the doctor's reason; its presence-fact checks still run if plain list permissions exist.
 
