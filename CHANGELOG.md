@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.176
+
+**audit-signoz SIG-042 "alert quality" (SLO-aware) + business-context SLI capture — from "does a page reach a human" to "is it a page worth waking someone for."** SIG-040 scores delivery; SIG-042 scores whether an SLI-bound alert is actually good. Adopted from SigNoz's alert-authoring quality heuristics, applied as read-only audit checks.
+
+- **audit-signoz — new SIG-042** (scored, medium; grows the Alerting category denominator alongside SIG-040 — weight unchanged, categories still sum to 100). Three axes, read from the same `/api/v1/rules` config: (1) **burn-rate/multi-window vs static-threshold-on-a-ratio** — an SLI-bound rule driven by a bare static threshold flaps on any spike; a quality rule uses a fast-burn window ANDed with a slower confirming window, threshold `= burn_rate × (1 − SLO)`; (2) **recovery threshold / hysteresis** so it doesn't chatter at the boundary; (3) a **live-signal probe** — one read-only `POST /api/v3/query_range` confirming the rule's own query returns data (the "saves clean, never fires" trap). When the business-context SSOT defines an SLI it scores all three; when it doesn't, it scores the recovery + live-signal axes and records the burn-rate axis `not-in-scope` (never a fabricated pass). Findings *name* the fix; SIG-042 never edits a rule or fires a test alert.
+- **business-context — SLI formula capture.** The SLAs/SLOs model now optionally captures the SLI *formula* (the `good_events`/`valid_events` definitions), the **exclusion predicate** (health checks / synthetic probes / scanner traffic that aren't valid events), and the SLO target (error budget = `1 − SLO`) — not just the SLA number. Audits that judge alert quality read it from the SSOT; without it they score structural quality only and say so.
+
+**Verification:** all four repo gates green (`leak-scan` CLEAN, `structure-check` 23, `run-tests` 30/0, `plugin validate --strict`) + self-test lock. New pressure scenario (a static threshold on an SLI ratio is flap-prone; a rule querying a dead signal never fires; degrade honestly with no SLI). **Live-smoke status:** grounded on the confirmed `/api/v1/rules` + `/api/v3/query_range` surface, but **verify-pending a live SigNoz** (GKE de-authed this session) — a maintainer smoke should confirm the burn-rate/recovery-field reads against a live rule config. Read-only throughout.
+
 ## 0.1.175
 
 **rca gains a quantitative fire-window-vs-baseline correlation phase — cross-provider, and it produces the temporal-precedence signal the confidence rubric always prized but could never generate.** Until now rca proved *state* (kubectl: OOMKilled, CrashLoop) + topology blast radius; it could say "checkout OOMKilled" but not "payments' error rate rose +8900% and p99 +1180% **90s before** checkout restarted" — the difference between a co-occurrence and a ranked cause. Adapted from SigNoz's investigating-alerts method, made cross-provider (our edge).

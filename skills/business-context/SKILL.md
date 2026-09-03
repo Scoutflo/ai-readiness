@@ -16,7 +16,7 @@ The file follows [templates/business_context_template.md](../../templates/busine
 | Section | What it controls |
 | --- | --- |
 | Environment + **Environment Map** | Per-environment access: which AWS profile / GCP project / kube context / region each environment uses, and each environment's own uptime SLA. A staging gap is judged against staging's SLA, and staging is audited with staging's profile — never production's. |
-| SLAs / SLOs | Per-service SLA + error budget. |
+| SLAs / SLOs | Per-service SLA + error budget, and (optionally) the **SLI formula** that defines the SLO: the `good_events` and `valid_events` definitions (e.g. "successful checkout / total checkout"), the **exclusion predicate** (what is *not* a valid event — health checks, synthetic probes, scanner traffic), and the SLO target (error budget = `1 − SLO`). Audits that judge alert *quality* (e.g. audit-signoz SIG-042) read this to check an SLI-bound alert uses a burn-rate/multi-window design rather than a flap-prone static threshold; without it they score structural alert quality only and say so. |
 | Cost Sensitivity | high = ROI-first, low = impact-first; monthly waste budget. |
 | Critical Services | Services that require explicit approval before any change; setups gate on this. |
 | Exclusions | Regions / accounts / services / resources to never audit or modify. |
