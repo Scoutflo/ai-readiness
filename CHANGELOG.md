@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.179
+
+**SessionStart config-health nudge — the item deferred in 0.1.177, now shipped compat-safely.** A plugin that installs but is never configured is silently useless; this nudges a first-time operator toward setup. The 0.1.177 deferral was because declaring the hook via a `hooks` key in `plugin.json` is a non-baseline manifest key our compat gate couldn't verify against the v2.1.140 floor (the `displayName`-class risk). Resolved by shipping the hook the auto-discovered way instead: Claude Code loads a plugin's `hooks/hooks.json` **without any `plugin.json` manifest key**, so there is no manifest-parse exposure, and an older client that doesn't support plugin hooks simply ignores the file (a silent no-op, never a break).
+
+- **`hooks/hooks.json` + `hooks/scripts/config-nudge.sh` (SessionStart).** When no `~/.scoutflo/toolkit.yaml` exists (resolving override → project-local → home, exactly like every skill), it emits a brief plain-text nudge — injected as SessionStart context — pointing at `/scoutflo:connect` → `/scoutflo:doctor` → an audit. It is **silent when a config exists** (never nags a configured user), reads only for file existence, prints no secret, makes no network/shell call, and exits 0 on any error so it can never disrupt a session. Plain-text output (not a JSON wrapper) is the most portable form across Claude Code versions.
+- `hooks/` added to the runtime SHIP surface in `docs/ship-manifest.md`; the package-boundary gate keeps it classified.
+
+**Verification:** all four repo gates green (`leak-scan` CLEAN, `structure-check` 23, `run-tests` 31/0, `plugin validate --strict`) + self-test lock; `manifest-compat` passes (no non-baseline manifest key). Verified locally: silent when a config is present, plain-text nudge when absent. No live estate needed.
+
 ## 0.1.178
 
 **Sentry onboarding: warn upfront that a Personal Token's scopes can't be widened after creation.** Observed live during a customer onboarding call: a Sentry Personal Token was missing required scopes, and Sentry's own token-edit UI only allows renaming an existing personal token, not changing its scopes — confirmed against Sentry's docs ("Personal token permissions are customizable but cannot be edited later"). The fix cost a round-trip (create an entirely new token) that a one-line warning would have avoided.

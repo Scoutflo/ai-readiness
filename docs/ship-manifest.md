@@ -10,6 +10,7 @@ This is a **declaration + gate**, not a build step: it does not change what ship
 - `skills/` — the skills themselves (**except** each skill's `evals/` and `tests/` subdirectories, which are dev-only)
 - `report-standard/` — schemas, renderers, and validators the skills invoke at runtime
 - `templates/` — `toolkit.yaml.example` and friends that `connect` writes from
+- `hooks/` — the SessionStart config-health nudge (`hooks/hooks.json` auto-discovered by Claude Code; no `plugin.json` manifest key needed, so no compat exposure)
 - `LICENSE`, `README.md`, `CHANGELOG.md` — user-facing
 
 ## Dev-only (STRIP-able from a published artifact — a consumer does not need these)

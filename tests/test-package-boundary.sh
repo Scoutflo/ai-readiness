@@ -12,7 +12,7 @@ ROOT="${1:-.}"
 cd "$ROOT"
 
 # Runtime surface a plugin consumer needs.
-SHIP=".claude-plugin skills report-standard templates LICENSE README.md CHANGELOG.md"
+SHIP=".claude-plugin skills report-standard templates hooks LICENSE README.md CHANGELOG.md"
 # Dev-only paths safe to strip from a published artifact.
 DEV=".claude .github .gitignore .gitleaksignore AGENTS.md CLAUDE.md GEMINI.md CONTRIBUTING.md ENGINEERING.md ci docs tests"
 
