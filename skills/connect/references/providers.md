@@ -140,7 +140,7 @@ Recommended: an internal integration, because it gives exact scope control and i
 Alternatives, and why they are second choice:
 
 - Organization auth tokens (Organization Settings > Auth Tokens) have a fixed, CI-oriented scope set that cannot read events or alert rules, so audit checks will 403. Use them only if an internal integration is not available to you.
-- User auth tokens (personal Settings > Account > API > Auth Tokens) allow custom scopes but are tied to your personal account; fine for a quick trial, wrong for anything your team shares.
+- User auth tokens (personal Settings > Account > API > Auth Tokens) allow custom scopes but are tied to your personal account; fine for a quick trial, wrong for anything your team shares. **Its scopes are fixed at creation** — Sentry's own token-edit page only lets you rename it, never add a scope you missed — so request every scope from the table above up front; discovering a gap later means creating a brand-new token, not editing this one. An internal integration's permissions, by contrast, stay editable after creation, which is one more reason it is the recommended path above.
 
 ### Export and verify
 
