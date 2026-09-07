@@ -353,8 +353,14 @@ names a gate/case that no longer exists, that is itself a defect.
   alerting-noise findings from ≥2 target dirs), and `AF-003` (alert-to-incident
   ratio, computed only from an operator-provided `fatigue.json` signal block, else
   `not-in-scope`).
-- **Consumers:** `audit-all` Phase 3.6 runs it after correlation and its report
-  §7 renders the summary; the file is otherwise terminal (nothing scores it).
+- **Consumers:** `audit-all` Phase 3.6 runs it after correlation; the report
+  renderer `render-report-viz.sh` (`alert-fatigue` + `alert-fatigue-html` modes)
+  turns `alert-fatigue.json` into the report §7 markdown section and a standalone
+  `alert-fatigue-report.html` dashboard — a worst-first "top offenders" view where
+  each noise finding shows problem → exact fix, joined from the home `findings.json`
+  for the `recommendation`/`remediation` (never re-derived or re-scored). The
+  standalone `alert-fatigue` skill renders the same into `alert-fatigue-report.md`.
+  The file is otherwise terminal (nothing scores it).
 - **Invariants:** **zero provider calls** — reads only this run's per-audit
   `findings.json` (same dual-glob + roll-up-dir skip as `correlation-engine`, so
   signoz/kubernetes/multi-target stacks are never dropped); **never mutates a
@@ -366,7 +372,10 @@ names a gate/case that no longer exists, that is itself a defect.
 - **Guards:** `skills/alert-fatigue/tests/test-alert-fatigue.sh` (run by
   `ci/run-tests.sh`: storm detection, noise selection incl. exclusion of
   non-alerting findings, non-scored + cites-source-IDs, and the `fatigue.json`
-  ratio path); `ci/prefix-registry-check.sh` (`AF` registered);
+  ratio path); `tests/test-report-viz.sh` Tests 12–14 (the renderer joins each
+  cited noise finding to its exact fix, orders worst-first, excludes non-cited
+  findings, self-contained/asset-free HTML, and degrades on missing/zero-noise);
+  `ci/prefix-registry-check.sh` (`AF` registered);
   `ci/catalog-consistency-check.sh` (alert-fatigue is a documented internal
   helper). Selftest: `layer_depth` alert-fatigue lock.
 

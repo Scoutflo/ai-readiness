@@ -52,6 +52,8 @@ When the user asks for an alert-noise/fatigue read on **one integration** (or a 
 | `AF-002` | **Cross-source alert storm** — a service that carries alerting-noise findings from **two or more** tools. One real incident on that service pages through every one of them; consolidating the paging path turns N pages back into one. |
 | `AF-003` | **Alert-to-incident ratio** — computed **only** from an operator-supplied signal block (see below). Absent that block it is `not-in-scope`, never a fabricated actionability percentage. |
 
+Plus the **human report** (see §Running it): `alert-fatigue-report.md` and a standalone `alert-fatigue-report.html` dashboard, rendered from `alert-fatigue.json` by [`report-standard/render-report-viz.sh`](../../report-standard/render-report-viz.sh) (`alert-fatigue` / `alert-fatigue-html` modes). The report leads with an at-a-glance line and the three honest tiers, then a **worst-first "top offenders" list where every noise finding shows problem → where → why it matters → the exact fix** (its `recommendation` + `remediation` pointer, joined from the home `findings.json`), where the noise concentrates by tool, the cross-source storms, the alert-to-incident ratio (or an explicit "not measured — needs an incident feed" block), and the cited benchmarks to score against. This is the deliverable a user reads — not the JSON. Same never-fabricate, cites-never-re-scores discipline as the roll-up.
+
 ## How it selects the noise (cites, never re-scores)
 
 A finding is rolled into the fatigue view when its `area` names the alerting/routing/hygiene plane **or** its title carries noise vocabulary (flapping, permanently-firing, missing `for`/debounce, duplicate delivery, re-notify/repeat storms, resolve-noise, missing grouping/inhibition, noisy volume, over-broad mute/silence). Both signals are already in each audit's `findings.json`, so every audit's noise checks aggregate here without a hardcoded ID list that would go stale, and without any change to the audits themselves. The finding keeps its own `id` and `severity`; this roll-up only tags it as a fatigue signal and cites it.
@@ -112,6 +114,23 @@ alert_fatigue_run "$RUN_DATE"
 ```
 
 Expected: `[alert-fatigue] Written <audits-dir>/alert-fatigue.json` plus a one-line summary (`alerting-noise findings: N | cross-source storms: N | tools with noise: N | ratio: computed|not-in-scope`). Zero findings for the date is a clean skip, not an error. It reads only local files, so re-running is free.
+
+**Then render the human report** — a pretty, self-contained deliverable that shows each problem *and its exact fix*, so the user does not read raw JSON. The renderer is deterministic and joins each cited noise finding back to its home `findings.json` for the fix text (`recommendation` + `remediation`); it never re-derives or re-scores:
+
+```bash
+set -eu
+AUDITS_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}"
+RUN_DATE="$(date -u +%F)"
+VIZ="${CLAUDE_PLUGIN_ROOT}/report-standard/render-report-viz.sh"
+AFJ="${AUDITS_DIR}/alert-fatigue.json"
+if [ -f "$AFJ" ]; then
+  sh "$VIZ" alert-fatigue      "$AFJ" "$AUDITS_DIR" "$RUN_DATE" > "${AUDITS_DIR}/alert-fatigue-report.md"
+  sh "$VIZ" alert-fatigue-html "$AFJ" "${AUDITS_DIR}/alert-fatigue-report.html" "$AUDITS_DIR" "$RUN_DATE"
+  echo "[alert-fatigue] report: ${AUDITS_DIR}/alert-fatigue-report.md (+ .html dashboard)"
+fi
+```
+
+Show the operator the rendered `alert-fatigue-report.md` (the worst-first, problem→fix view) and point them at the `alert-fatigue-report.html` dashboard. Both derive only from `alert-fatigue.json` + the per-audit `findings.json` already on disk, so they never disagree with the numbers and re-running is free.
 
 ## Common Failure Modes
 
