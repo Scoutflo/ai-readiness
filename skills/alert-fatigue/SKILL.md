@@ -27,7 +27,7 @@ When the user asks for an alert-noise/fatigue read on **one integration** (or a 
    | Provider block | Run these alerting-lane checks (in its audit's references) |
    | --- | --- |
    | `alertmanager` (+`prometheus`) | `audit-alertmanager` — routing→live-receiver, flapping, permanently-firing, missing `for`, missing grouping/inhibition, duplicate delivery, resolve-noise |
-   | `datadog` | `audit-datadog` — DD-006/007/008/018/019/023/035-038 (measured alert-event volume, placeholder handles, `@all`, no-floor ratio, tautological threshold, downtime decay, dupes, never-evaluated, paused synthetic) |
+   | `datadog` | `audit-datadog` — DD-006/007/008/018/019/023/035-038/039 (measured alert-event volume, placeholder handles, `@all`, no-floor ratio, tautological threshold, downtime decay, dupes, never-evaluated, paused synthetic, partial-window flap) |
    | `sentry` | `audit-sentry` — SNTRY-101/102/103/106/107/108/109/110 + SNTRY-014 (un-gated rules, all-env scope, flap-prone metric, fire-history, chronic re-page, name/scope, dead-weight, ownerless) |
    | `pagerduty` | `audit-pagerduty` — PD-016/017/026/043 (verify-pending: needs a live key) |
    | `zenduty` | `audit-zenduty` — ZD-007/008/025/033/034 (orphaned EP, bus factor, dormancy, GET-only actionability, timeout posture) |
