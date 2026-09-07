@@ -199,5 +199,57 @@ printf '%s' "$IR" | grep -q '`kubernetes/ctx-a` | 5 |' || fail "two-level kubern
 printf '%s' "$IR" | grep -q 'workload: 4' || fail "two-level by-kind counts missing"
 echo "PASS"
 
+echo "Test 12: alert-fatigue markdown joins each cited noise finding to its exact fix, worst-first"
+AFD="$WORK/af"; AFDATE="2026-09-01"
+mkaf() { d="$AFD/$1/$AFDATE"; mkdir -p "$d"; jq -n --arg t "$1" --argjson f "$2" '{schema:"scoutflo-findings/v2",target:$t,findings:$f}' > "$d/findings.json"; }
+mkaf sentry '[
+  {"id":"SNTRY-107","title":"Chronic issues re-page with no age gate","severity":"high","area":"alert-hygiene","affected":["deploy-gateway"],"impact":"62 chronic issues re-page unbounded","recommendation":"Add an age gate to the burst rules","remediation":"setup-sentry#alert-rule-remediation-playbook"},
+  {"id":"SNTRY-106","title":"97 rules re-page un-gated","severity":"high","area":"alert-hygiene","affected":["deploy-client"],"impact":"most rules re-notify with no gate","recommendation":"Gate re-notification on age/frequency","remediation":"setup-sentry#alert-rule-remediation-playbook"},
+  {"id":"SNTRY-110","title":"22 ownerless alert rules","severity":"low","area":"alerting","affected":["kepler"],"impact":"fired alerts route to nobody","recommendation":"Assign an owner to every rule","remediation":"setup-sentry#assign-rule-owners"}
+]'
+mkaf datadog '[
+  {"id":"DD-006","title":"Monitor flaps: static threshold, no recovery","severity":"medium","area":"alerting","affected":["deploy-gateway"],"impact":"flaps ALERT/OK while SLO is met","recommendation":"Switch to a burn-rate monitor","remediation":"setup-datadog#burn-rate-monitors"}
+]'
+# a NON-noise finding that is NOT cited by AF-001 — must never appear in the report
+mkaf aws '[{"id":"AWS-032","title":"RDS single-AZ","severity":"high","area":"reliability","affected":["db"],"impact":"x","recommendation":"y","remediation":"setup-aws#multi-az"}]'
+cat > "$AFD/alert-fatigue.json" <<'EOF'
+{"schema":"scoutflo-alert-fatigue/v1","scoring_scope":"non-scored",
+ "totals":{"alerting_noise_findings":4,"cross_source_storms":1,"tools_with_noise":2},
+ "af_findings":[
+  {"af_id":"AF-001","type":"alerting-noise-concentration",
+   "by_source":[{"target":"sentry","noise_findings":3,"by_severity":{"high":2,"low":1}},{"target":"datadog","noise_findings":1,"by_severity":{"medium":1}}],
+   "source_findings":[{"target":"sentry","finding_id":"SNTRY-107","severity":"high"},{"target":"sentry","finding_id":"SNTRY-106","severity":"high"},{"target":"sentry","finding_id":"SNTRY-110","severity":"low"},{"target":"datadog","finding_id":"DD-006","severity":"medium"}]},
+  {"af_id":"AF-002","type":"cross-source-alert-storm","storms":[{"service":"deploy-gateway","tools":["datadog","sentry"],"tool_count":2}]},
+  {"af_id":"AF-003","type":"alert-to-incident-ratio","status":"not-in-scope","reason":"no fatigue.json signal block"}
+ ]}
+EOF
+AFMD="$(sh "$VIZ" alert-fatigue "$AFD/alert-fatigue.json" "$AFD" "$AFDATE")"
+printf '%s' "$AFMD" | grep -q '## Alert noise & fatigue' || fail "no alert-fatigue heading"
+printf '%s' "$AFMD" | grep -q '4 alerting-noise finding(s) across 2 tool(s)' || fail "at-a-glance totals wrong"
+printf '%s' "$AFMD" | grep -q 'setup-sentry#alert-rule-remediation-playbook' || fail "exact fix (remediation) not joined into the report"
+printf '%s' "$AFMD" | grep -q 'Why it matters: 62 chronic issues re-page unbounded' || fail "impact (why it matters) not rendered"
+printf '%s' "$AFMD" | grep -q '`deploy-gateway` | datadog, sentry | 2' || fail "cross-source storm row missing"
+printf '%s' "$AFMD" | grep -q 'Not measured this run' || fail "honest not-measured block missing"
+printf '%s' "$AFMD" | grep -q 'AWS-032' && fail "a non-cited/non-noise finding leaked into the fatigue report"
+# worst-first: both HIGH sentry rules before the MEDIUM datadog rule before the LOW sentry rule
+printf '%s' "$AFMD" | awk '/SNTRY-106/{h=NR} /DD-006/{m=NR} /SNTRY-110/{l=NR} END{exit !(h<m && m<l)}' || fail "top offenders not ordered worst-first"
+echo "PASS"
+
+echo "Test 13: alert-fatigue-html is a safe, self-contained dashboard with the fix column"
+sh "$VIZ" alert-fatigue-html "$AFD/alert-fatigue.json" "$AFD/af.html" "$AFD" "$AFDATE" >/dev/null
+[ "$(grep -c '<!doctype html>' "$AFD/af.html")" -eq 1 ] || fail "html not a single self-contained document"
+grep -q 'setup-datadog#burn-rate-monitors' "$AFD/af.html" || fail "fix pointer missing from html dashboard"
+grep -q 'deploy-gateway' "$AFD/af.html" || fail "storm service missing from html"
+grep -qi 'keep within your team' "$AFD/af.html" || fail "missing privacy caveat in html footer"
+grep -qE 'src="http|href="http|<link |<img ' "$AFD/af.html" && fail "html references an external asset"
+grep -q 'AWS-032' "$AFD/af.html" && fail "non-cited finding leaked into html"
+echo "PASS"
+
+echo "Test 14: alert-fatigue degrades cleanly (missing file, zero-noise run)"
+printf '%s' "$(sh "$VIZ" alert-fatigue "$WORK/none-af.json" "$AFD" "$AFDATE")" | grep -qi 'No .*alert-fatigue.json' || fail "missing-file degrade wrong"
+jq '.totals.alerting_noise_findings=0 | .af_findings[0].source_findings=[]' "$AFD/alert-fatigue.json" > "$AFD/af-empty.json"
+printf '%s' "$(sh "$VIZ" alert-fatigue "$AFD/af-empty.json" "$AFD" "$AFDATE")" | grep -qi 'No alerting-noise findings' || fail "zero-noise degrade wrong"
+echo "PASS"
+
 echo
 echo "=== report-viz self-test passed ==="

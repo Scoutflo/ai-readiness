@@ -105,6 +105,44 @@ trend_scores() {  # $1 = history.jsonl (optional), $2 = current findings.json
   fi
 }
 
+# --- alert-fatigue: enrich the cited noise findings with their fix text -------
+# The roll-up (alert-fatigue.json) cites WHICH findings are noise by (target, id)
+# — the authoritative selection. The fix text (title / where / why / how-to-fix)
+# stays canonical in each per-audit findings.json. This joins the two so the
+# report can show problem -> exact fix per finding without the roll-up
+# duplicating remediation. Same dual-glob + roll-up-dir skip as the lib, so a
+# single-block signoz/kubernetes or a multi-target label is never dropped.
+af_enriched_noise() {  # $1=alert-fatigue.json  $2=audits-dir  $3=run-date -> JSON array
+  ae_afj="$1"; ae_d="$2"; ae_dt="$3"
+  set --
+  for ae_f in "$ae_d"/*/"$ae_dt"/findings.json "$ae_d"/*/*/"$ae_dt"/findings.json; do
+    [ -e "$ae_f" ] || continue
+    case "$ae_f" in */all/*|*/cost-analysis/*|*/cost/*|*/doctor/*|*/alert-fatigue/*) continue ;; esac
+    set -- "$@" "$ae_f"
+  done
+  if [ "$#" -eq 0 ]; then ae_all='[]'; else
+    ae_all="$(jq -s '[ .[] | (.target // "unknown") as $t | (.findings // [])[] | . + {target: $t} ]' "$@")"
+  fi
+  # A finding target may be a plain string OR a structured object (audit-signoz
+  # records {type,host,version,edition}); tdisp normalizes either to one display
+  # string used as both the join key and the shown value, and s coerces any text
+  # field that is not a string, so the renderer never does object+string.
+  printf '%s' "$ae_all" | jq --slurpfile af "$ae_afj" '
+    def tdisp: if type == "object" then (.host // .name // .type // tojson) else tostring end;
+    def s: if type == "string" then . elif . == null then "" else tojson end;
+    (map({key: ((.target | tdisp) + "\u0001" + (.id // "")), value: .}) | from_entries) as $idx
+    | ([ $af[0].af_findings[]? | select(.af_id == "AF-001") | .source_findings[]? ]) as $sf
+    | [ $sf[] | . as $n
+        | ($idx[($n.target | tdisp) + "\u0001" + $n.finding_id] // {}) as $d
+        | { target: ($n.target | tdisp), id: $n.finding_id,
+            severity: ($d.severity // $n.severity // "info"),
+            title: (($d.title // $n.finding_id) | s),
+            affected: ($d.affected // []),
+            impact: (($d.impact // "") | s),
+            recommendation: (($d.recommendation // "") | s),
+            remediation: (($d.remediation // "") | s) } ]'
+}
+
 # =============================================================================
 case "$MODE" in
   at-a-glance)
@@ -576,8 +614,232 @@ HTMLFOOT
     done
     ;;
 
+  alert-fatigue)
+    # Render alert-fatigue.json (the non-scored roll-up) as a human report: an
+    # at-a-glance line, the honest three-tier framing, a worst-first "top
+    # offenders" list where EACH noise finding shows problem -> exact fix (joined
+    # from the canonical findings.json), where noise concentrates by tool, the
+    # cross-source storms, the alert-to-incident ratio (computed or honestly
+    # not-in-scope), and the cited benchmarks. Renders only structured fields
+    # (never a secret/raw command output). Read-only.
+    AFJ="${1:?alert-fatigue.json}"; D="${2:?audits-dir}"; RD="${3:?run-date}"
+    echo "## Alert noise & fatigue"
+    echo
+    if [ ! -f "$AFJ" ]; then
+      echo "_No \`alert-fatigue.json\` — run \`/scoutflo:audit-all\` (Phase 3.6) or the standalone alert-fatigue skill against a configured alerting provider._"
+      exit 0
+    fi
+    read -r TN TS TT <<EOF
+$(jq -r '.totals | "\(.alerting_noise_findings // 0) \(.cross_source_storms // 0) \(.tools_with_noise // 0)"' "$AFJ")
+EOF
+    RSTATUS="$(jq -r '.af_findings[]? | select(.af_id=="AF-003") | .status // "not-in-scope"' "$AFJ")"
+    if [ "${TN:-0}" -eq 0 ]; then
+      echo "No alerting-noise findings for ${RD} — the configured alerting is clean on the checks that ran, or no alerting provider was audited. (This is a config + fire-history read; a true alert-to-incident ratio needs an incident feed.)"
+      exit 0
+    fi
+    if [ "$RSTATUS" = "computed" ]; then
+      RATIO_LINE="$(jq -r '.af_findings[]? | select(.af_id=="AF-003") | "ratio: \(.alerts_per_incident):1 (\(.alerts_fired) alerts / \(.incidents) incident(s) over \(.window))"' "$AFJ")"
+    else
+      RATIO_LINE="ratio: needs incident feed (not fabricated)"
+    fi
+    echo "**At a glance — ${TN} alerting-noise finding(s) across ${TT} tool(s) · ${TS} cross-source storm(s) · ${RATIO_LINE}.**"
+    echo
+    echo "Read across three honest tiers: **config** (rule hygiene — a real yes/no from the rules), **fire-history** (measured volume/flapping/dead-weight from the alert stream), and **incident-feed** (true precision & alert-to-incident ratio — reported only from your incident data, never fabricated). AF-001/AF-002 below are the config + fire-history picture; the ratio is the incident-feed tier."
+    echo
+    NOISE="$(af_enriched_noise "$AFJ" "$D" "$RD")"
+    read -r SC SH SM SL SI <<EOF
+$(printf '%s' "$NOISE" | jq -r 'reduce .[] as $f ({critical:0,high:0,medium:0,low:0,info:0}; .[$f.severity] += 1) | "\(.critical) \(.high) \(.medium) \(.low) \(.info)"')
+EOF
+    SEVMAX="$(printf '%s\n' "$SC" "$SH" "$SM" "$SL" "$SI" | sort -rn | head -1)"; [ "${SEVMAX:-0}" -gt 0 ] || SEVMAX=1
+    echo "| Severity | Noise findings | |"
+    echo "| --- | ---: | --- |"
+    echo "| 🔴 critical | ${SC} | \`$(viz_bar "$SC" "$SEVMAX" 10)\` |"
+    echo "| 🟠 high | ${SH} | \`$(viz_bar "$SH" "$SEVMAX" 10)\` |"
+    echo "| 🟡 medium | ${SM} | \`$(viz_bar "$SM" "$SEVMAX" 10)\` |"
+    echo "| 🔵 low | ${SL} | \`$(viz_bar "$SL" "$SEVMAX" 10)\` |"
+    echo "| ⚪ info | ${SI} | \`$(viz_bar "$SI" "$SEVMAX" 10)\` |"
+    echo
+    echo "### Start here — noisiest alerting, worst first (problem -> fix)"
+    echo
+    printf '%s' "$NOISE" | jq -r '
+      def rank: {"critical":0,"high":1,"medium":2,"low":3,"info":4}[.] // 5;
+      sort_by([(.severity|rank), .target, .id])
+      | .[]
+      | "- **[" + ((.severity // "info") | ascii_upcase) + "] " + .title + "**  (`" + .id + "` · " + .target + ")\n"
+        + (if ((.affected | length) > 0) then "  - Where: " + (.affected | join(", ")) + "\n" else "" end)
+        + (if (.impact != "") then "  - Why it matters: " + .impact + "\n" else "" end)
+        + (if (.recommendation != "") then "  - Fix: " + .recommendation + (if (.remediation != "") then "  -> `" + .remediation + "`" else "" end) + "\n"
+           elif (.remediation != "") then "  - Fix: `" + .remediation + "`\n" else "" end)'
+    echo
+    echo "### Where the noise concentrates (by tool)"
+    echo
+    echo "| Tool | Noise findings | By severity |"
+    echo "| --- | ---: | --- |"
+    jq -r 'def tdisp: if type=="object" then (.host // .name // .type // tojson) else tostring end;
+      .af_findings[]? | select(.af_id=="AF-001") | .by_source[]?
+      | [ (.target|tdisp), (.noise_findings | tostring),
+          (((.by_severity // {}) | to_entries | map("\(.value) \(.key)") | join(", "))) ] | @tsv' "$AFJ" \
+    | while IFS="$(printf '\t')" read -r t n bs; do
+        echo "| \`${t}\` | ${n} | ${bs:--} |"
+      done
+    echo
+    echo "### Cross-source alert storms"
+    echo
+    if [ "${TS:-0}" -gt 0 ]; then
+      echo "One real incident on these services pages through **every** listed tool at once. Consolidate the paging path so one incident is one page:"
+      echo
+      echo "| Service | Tools | Count |"
+      echo "| --- | --- | ---: |"
+      jq -r 'def tdisp: if type=="object" then (.host // .name // .type // tojson) else tostring end;
+        def esc: tostring | gsub("\\|"; "\\|");
+        .af_findings[]? | select(.type=="cross-source-alert-storm") | .storms[]?
+        | [ (.service | esc), (((.tools // []) | map(tdisp) | join(", ")) | esc), (.tool_count | tostring) ] | @tsv' "$AFJ" \
+      | while IFS="$(printf '\t')" read -r s tl c; do
+          echo "| \`${s}\` | ${tl} | ${c} |"
+        done
+    else
+      echo "No cross-source storms this run — no single service carries alerting-noise findings from two or more tools. This lights up as you audit more than one alerting provider; it is the cross-tool view no single-vendor tool sees."
+    fi
+    echo
+    echo "### Alert-to-incident ratio"
+    echo
+    if [ "$RSTATUS" = "computed" ]; then
+      jq -r '.af_findings[]? | select(.af_id=="AF-003")
+        | "**\(.alerts_per_incident):1** — \(.alerts_fired) alerts fired to \(.incidents) real incident(s) over \(.window). The SRE-canon goal is 1:1 (Google SRE, *Being On-Call*); higher is paging fatigue. " + (.note // "")' "$AFJ"
+    else
+      jq -r '.af_findings[]? | select(.af_id=="AF-003")
+        | "**Needs your incident feed.** " + (.reason // "No incident/ack stream supplied, so the true alert-to-incident ratio and %-actionable are not computed — and never fabricated. Provide a fatigue.json signal block ({window, alerts_fired, incidents}) to compute it.")' "$AFJ"
+      echo
+      echo "**Not measured this run (incident-feed tier — deliberately not fabricated):** true alert-to-incident ratio, %-actionable (precision), MTTA/MTTR, escalation & ack rates, and the off-hours interruption split (business / off / sleep hours) all need the paging tool's incident/ack stream. Connect it — or supply a \`fatigue.json\` signal block — to unlock them. This honesty is the point: we report what the config + fire-history reads prove, and say so where a number would be a guess (unlike a headline \"N% noise reduction\" no one can reconcile)."
+    fi
+    echo
+    echo "### What \"good\" looks like (cited — score against these, never invent one)"
+    echo
+    echo "- **Every page actionable; page on symptoms, not causes.** (Google SRE, *Monitoring Distributed Systems*)"
+    echo "- **<= 2 incidents per 12-hour shift**, on-call <= 25% of time. Above this is the fatigue red flag. (Google SRE, *Being On-Call*)"
+    echo "- **Alert on SLO burn-rate, not static thresholds** — multi-window 14.4 (1h/5m) + 6 (6h/30m); short window ~ 1/12 the long, long <= 48h. (SRE Workbook, *Alerting on SLOs*)"
+    echo "- **Target 1:1 alert-to-incident**; group (~30-min default) and dedup (~24h default) so one incident is one page. (incident.io / FireHydrant / Opsgenie)"
+    echo "- **AIOps compression sweet spot ~ 70-85%** — higher over-groups and hides real signal. (BigPanda / Splunk)"
+    echo "- Full principles, per-tier checklist, and sources: \`skills/alert-fatigue/references/methodology.md\`."
+    echo
+    echo "_Non-scored roll-up — cites each source finding-ID, re-scores nothing; noise is scored once in its home audit. Config + fire-history numbers are measured from read-only reads; the alert-to-incident ratio is reported only from your incident data._"
+    ;;
+
+  alert-fatigue-html)
+    # Standalone HTML dashboard for alert-fatigue.json — mirrors the audit report.html
+    # (severity chips, sortable "top offenders" table with a Fix column), scoped to
+    # the alert-noise/fatigue view. Renders only structured fields, HTML-escaped via
+    # jq @html; never a secret or raw command output. Read-only over local files.
+    AFJ="${1:?alert-fatigue.json}"; OUT="${2:?out.html}"; D="${3:?audits-dir}"; RD="${4:?run-date}"
+    [ -f "$AFJ" ] || { echo "no such file: $AFJ" >&2; exit 1; }
+    read -r TN TS TT <<EOF
+$(jq -r '.totals | "\(.alerting_noise_findings // 0) \(.cross_source_storms // 0) \(.tools_with_noise // 0)"' "$AFJ")
+EOF
+    RSTATUS="$(jq -r '.af_findings[]? | select(.af_id=="AF-003") | .status // "not-in-scope"' "$AFJ")"
+    if [ "$RSTATUS" = "computed" ]; then
+      RATIO_TXT="$(jq -r '.af_findings[]? | select(.af_id=="AF-003") | "\(.alerts_per_incident):1 (\(.alerts_fired) alerts / \(.incidents) incident(s), \(.window))"' "$AFJ")"
+    else
+      RATIO_TXT="needs incident feed (not fabricated)"
+    fi
+    NOISE="$(af_enriched_noise "$AFJ" "$D" "$RD")"
+    read -r SC SH SM SL SI <<EOF
+$(printf '%s' "$NOISE" | jq -r 'reduce .[] as $f ({critical:0,high:0,medium:0,low:0,info:0}; .[$f.severity] += 1) | "\(.critical) \(.high) \(.medium) \(.low) \(.info)"')
+EOF
+    {
+    cat <<HTMLHEAD
+<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Scoutflo AI Readiness — Alert noise &amp; fatigue</title>
+<style>
+:root{color-scheme:light dark}
+body{font:15px/1.5 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;margin:0;background:#f7f8fa;color:#1a202c}
+@media(prefers-color-scheme:dark){body{background:#12151a;color:#e2e8f0}.card{background:#1a1f27!important;border-color:#2d3748!important}}
+.wrap{max-width:1000px;margin:0 auto;padding:24px}
+.card{background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:20px;margin:16px 0;box-shadow:0 1px 3px rgba(0,0,0,.04)}
+h1{font-size:20px;margin:0 0 4px}.sub{color:#718096;font-size:13px}
+.metrics{display:flex;gap:28px;flex-wrap:wrap;margin:14px 0 4px}
+.metric{display:flex;flex-direction:column}.metric .n{font-size:26px;font-weight:700}.metric .l{color:#718096;font-size:12px}
+.sev{display:flex;gap:16px;flex-wrap:wrap;margin-top:8px}
+.chip{display:inline-flex;align-items:center;gap:6px;font-weight:600}
+.dot{width:12px;height:12px;border-radius:50%;display:inline-block}
+.tiers{font-size:13px;color:#4a5568;margin-top:12px;line-height:1.6}
+table{border-collapse:collapse;width:100%;font-size:14px}th,td{text-align:left;padding:8px 10px;border-bottom:1px solid #e2e8f0;vertical-align:top}
+th{cursor:pointer;user-select:none;color:#4a5568}
+code{font-size:12px}
+.footer{color:#a0aec0;font-size:12px;text-align:center;margin:24px 0}
+</style></head><body><div class="wrap">
+<div class="card"><h1>Alert noise &amp; fatigue</h1><div class="sub">Scoutflo AI Readiness · ${RD} (UTC) · read-only, non-scored</div>
+<div class="metrics">
+<div class="metric"><span class="n">${TN}</span><span class="l">alerting-noise findings</span></div>
+<div class="metric"><span class="n">${TT}</span><span class="l">tools with noise</span></div>
+<div class="metric"><span class="n">${TS}</span><span class="l">cross-source storms</span></div>
+<div class="metric"><span class="n" style="font-size:18px">${RATIO_TXT}</span><span class="l">alert-to-incident ratio</span></div>
+</div>
+<div class="sev">
+<span class="chip"><span class="dot" style="background:#c53030"></span>${SC} critical</span>
+<span class="chip"><span class="dot" style="background:#dd6b20"></span>${SH} high</span>
+<span class="chip"><span class="dot" style="background:#d69e2e"></span>${SM} medium</span>
+<span class="chip"><span class="dot" style="background:#3182ce"></span>${SL} low</span>
+<span class="chip"><span class="dot" style="background:#a0aec0"></span>${SI} info</span>
+</div>
+<div class="tiers"><strong>Three honest tiers:</strong> <em>config</em> (rule hygiene, a real yes/no) · <em>fire-history</em> (measured volume/flapping/dead-weight from the alert stream) · <em>incident-feed</em> (true precision &amp; alert-to-incident ratio — only from your incident data, never fabricated). The noise findings below are the config + fire-history picture; the ratio is the incident-feed tier.</div>
+</div>
+<div class="card"><h1 style="font-size:16px">Top offenders — worst first (problem &rarr; fix)</h1>
+<table id="find"><thead><tr><th onclick="sortT(this,0)">Severity</th><th onclick="sortT(this,1)">Problem</th><th onclick="sortT(this,2)">Where</th><th onclick="sortT(this,3)">How to fix</th><th>Ref</th></tr></thead><tbody>
+HTMLHEAD
+    printf '%s' "$NOISE" | jq -r '
+      def rank: {"critical":0,"high":1,"medium":2,"low":3,"info":4}[.] // 5;
+      def sd: {critical:"#c53030",high:"#dd6b20",medium:"#d69e2e",low:"#3182ce"}[.] // "#a0aec0";
+      sort_by([(.severity|rank), .target, .id])
+      | .[]
+      | "<tr><td><span class=\"dot\" style=\"background:\(.severity|sd)\"></span> \(.severity)</td>"
+        + "<td>\(.title|@html)<div class=\"sub\">\((.impact // "")|@html)</div></td>"
+        + "<td>\(((.affected // []) | join(", "))|@html)</td>"
+        + "<td>\(((.recommendation // "") + (if (.remediation // "") != "" then " -> " + .remediation else "" end))|@html)</td>"
+        + "<td><code>\(.id|@html)</code> · \(.target|@html)</td></tr>"'
+    cat <<'HTMLMID'
+</tbody></table></div>
+<div class="card"><h1 style="font-size:16px">Where the noise concentrates (by tool)</h1>
+<table><thead><tr><th onclick="sortT(this,0)">Tool</th><th onclick="sortT(this,1,1)">Noise findings</th><th>By severity</th></tr></thead><tbody>
+HTMLMID
+    jq -r 'def tdisp: if type=="object" then (.host // .name // .type // tojson) else tostring end;
+      .af_findings[]? | select(.af_id=="AF-001") | .by_source[]?
+      | "<tr><td><code>\((.target|tdisp)|@html)</code></td><td>\(.noise_findings)</td><td>\(((.by_severity // {}) | to_entries | map("\(.value) \(.key)") | join(", "))|@html)</td></tr>"' "$AFJ"
+    if [ "${TS:-0}" -gt 0 ]; then
+      cat <<'HTMLSTORM'
+</tbody></table></div>
+<div class="card"><h1 style="font-size:16px">Cross-source alert storms</h1>
+<p class="sub">One real incident on these services pages through every listed tool at once — consolidate the paging path so one incident is one page.</p>
+<table><thead><tr><th>Service</th><th>Tools</th><th>Count</th></tr></thead><tbody>
+HTMLSTORM
+      jq -r 'def tdisp: if type=="object" then (.host // .name // .type // tojson) else tostring end;
+        .af_findings[]? | select(.type=="cross-source-alert-storm") | .storms[]?
+        | "<tr><td><code>\(.service|@html)</code></td><td>\(((.tools // []) | map(tdisp) | join(", "))|@html)</td><td>\(.tool_count)</td></tr>"' "$AFJ"
+    fi
+    RATIO_NOTE="$(jq -r '.af_findings[]? | select(.af_id=="AF-003") | (if .status=="computed" then ((.note // "")) else (.reason // "No incident/ack stream supplied — the true ratio and %-actionable are not computed and never fabricated. Provide a fatigue.json signal block to compute it.") end)' "$AFJ" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g')"
+    GATED_HTML=""
+    if [ "$RSTATUS" != "computed" ]; then
+      GATED_HTML='<p class="sub"><strong>Not measured this run (incident-feed tier — deliberately not fabricated):</strong> true alert-to-incident ratio, %-actionable (precision), MTTA/MTTR, escalation &amp; ack rates, and the off-hours interruption split all need the paging tool&rsquo;s incident/ack stream. Connect it &mdash; or supply a <code>fatigue.json</code> signal block &mdash; to unlock them. We report what the config + fire-history reads prove and say so where a number would be a guess.</p>'
+    fi
+    cat <<HTMLFOOT
+</tbody></table></div>
+<div class="card"><h1 style="font-size:16px">Alert-to-incident ratio</h1>
+<p><strong>${RATIO_TXT}</strong></p><p class="sub">${RATIO_NOTE}</p>${GATED_HTML}</div>
+<div class="footer">Generated by Scoutflo AI Readiness for Claude Code · mirrors alert-fatigue.json · non-scored roll-up · contains infrastructure detail — keep within your team</div>
+<script>
+function sortT(th,col,num){var t=th.closest('table'),tb=t.tBodies[0],rows=[].slice.call(tb.rows);
+var d=th.__d=!th.__d;rows.sort(function(a,b){var x=a.cells[col].innerText,y=b.cells[col].innerText;
+if(num){x=parseFloat(x)||0;y=parseFloat(y)||0;return d?x-y:y-x;}return d?x.localeCompare(y):y.localeCompare(x);});
+rows.forEach(function(r){tb.appendChild(r);});}
+</script>
+</div></body></html>
+HTMLFOOT
+    } > "$OUT"
+    echo "wrote $OUT"
+    ;;
+
   *)
-    echo "usage: render-report-viz.sh {at-a-glance|scorecard|mermaid-topo|html|overlaps|rollup|inventory|inventory-rollup} ..." >&2
+    echo "usage: render-report-viz.sh {at-a-glance|scorecard|lanes|mermaid-topo|html|overlaps|rollup|inventory|inventory-rollup|alert-fatigue|alert-fatigue-html} ..." >&2
     exit 2
     ;;
 esac
