@@ -33,6 +33,7 @@ One permanent ID per check. IDs never change or get reused; retired checks keep 
 | DD-012 | Monitor noise | Renotification bounded, not unlimited (`renotify_interval`, `renotify_occurrences`) | low |
 | DD-013 | Monitor noise | Evaluation delay / new-group delay set where the query needs late data | low |
 | DD-014 | Monitor noise | Auto-resolve (`timeout_h`) deliberate per monitor type | low |
+| DD-039 | Monitor noise | `require_full_window` is deliberate for the metric's cadence — not `false` on a dense metric (partial-window evaluation flaps at the window edge) nor `true` on a sparse/low-frequency metric (a window never completes, so evaluations are skipped → silent gaps) | low |
 | DD-015 | Monitor noise | Datadog's own `quality_issues[]` reviewed and reconciled with this audit | info |
 | DD-016 | Monitor noise | Receiver noise concentration: the real pages share a handle with many noisy monitors | high |
 | DD-017 | Monitor noise | No monitor stuck in `Alert` state so long it can never re-page a new breach | medium |
@@ -89,7 +90,7 @@ curl -fsS --max-time 60 -H "DD-API-KEY: ${DATADOG_API_KEY}" -H "DD-APPLICATION-K
       tags,
       options: (.options // {} | {silenced, notify_no_data, no_data_timeframe, on_missing_data,
         renotify_interval, renotify_occurrences, evaluation_delay, new_group_delay,
-        timeout_h, thresholds})}]' > "${RAW_DIR}/monitors.json"
+        timeout_h, thresholds, require_full_window})}]' > "${RAW_DIR}/monitors.json"
 # NOTE: `query` is captured because DD-031 scans a composite monitor's constituent
 # ids out of its top-level query string (e.g. "12345 && 67890"); dropping it made
 # DD-031 silently never fire.
@@ -456,6 +457,29 @@ jq '[.[] | select((.options.renotify_interval // 0) > 0 and (.options.renotify_o
 
 # DD-014: auto-resolve posture
 jq '[.[] | {id, name, timeout_h: .options.timeout_h}]' "${RAW_DIR}/monitors.json"
+
+# DD-039: require_full_window posture (metric monitors only — the field is meaningless on
+# event/log/etc. types). This is a two-sided flap/gap control, not a "should be true" rule:
+#   - false on a DENSE metric  -> partial windows evaluate, flapping at the window edge;
+#   - true  on a SPARSE metric -> the window never fills, evaluations are skipped -> silent gaps.
+# The API omits the key when it equals the type default (metric-alert default is `true`), so a
+# missing field means "true (default)". We can only flag the mechanically-certain half from config
+# alone — `require_full_window == false` on a metric monitor — and must NOT assert the sparse-metric
+# `true` case as a fail without the metric's actual reporting cadence (that is fire-history/DD-013
+# territory). So: list the metric monitors with the field explicitly false as the config-tier finding,
+# and note the sparse-metric inverse as a verify-with-cadence follow-up rather than a confident fail.
+# NB: match ONLY an explicit `false` — do NOT write `.options.require_full_window // true`,
+# because jq's `//` treats `false` as empty and coerces it to `true`, so the exact case we
+# want to flag would silently never match (the plugin-wide `jq // false→true` gotcha).
+jq '[.[] | select(.type == "metric alert" and .options.require_full_window == false)
+    | {id, name, require_full_window: false}]' "${RAW_DIR}/monitors.json"
+# Healthy: dense metric monitors keep the default `true` (full-window evaluation, no edge flap);
+# sparse metrics that legitimately set `false` pair it with an evaluation_delay/window sized to the
+# cadence (cross-check DD-013). Fail (DD-039, low): a metric monitor with require_full_window=false
+# that is NOT a known-sparse source — name the monitor and that it evaluates partial windows.
+# Remediation is inline (no setup-datadog ships): Monitor edit > Advanced > "require a full window
+# of data" — enable it for dense metrics; for a genuinely sparse metric keep it off but widen the
+# evaluation window / add an evaluation_delay so a window can complete.
 
 # DD-015: Datadog's OWN quality issues — free corroboration, report ours alongside theirs
 jq '[.[] | select((.quality_issues | length) > 0) | {id, name, quality_issues}]' \
