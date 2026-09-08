@@ -930,8 +930,67 @@ HTMLFOOT
     echo "wrote $OUT"
     ;;
 
+  exec-summary)
+    # The top-of-report EXECUTIVE one-pager across the whole estate, computed from
+    # the per-audit findings.json (+ alert-fatigue.json). Ranking is severity-first
+    # (lexicographic), then recoverable points, then $ as an IN-BAND tiebreaker — a
+    # big dollar figure NEVER promotes a low-severity finding above a critical one
+    # (CVSS / AWS Security Hub both keep severity separate from $/criticality). No
+    # blended composite score. Read-only; renders only structured fields.
+    D="${1:?audits-dir}"; RD="${2:?run-date}"; TOPN="${3:-6}"
+    set --
+    for f in "$D"/*/"$RD"/findings.json "$D"/*/*/"$RD"/findings.json; do
+      [ -e "$f" ] || continue
+      case "$f" in */all/*|*/doctor/*|*/alert-fatigue/*) continue ;; esac
+      set -- "$@" "$f"
+    done
+    echo "## Executive summary"
+    echo
+    if [ "$#" -eq 0 ]; then
+      echo "_No audit findings for ${RD} yet — run \`/scoutflo:audit-all\` (or a triage pass) first._"
+      exit 0
+    fi
+    ALL="$(jq -s '[ .[] | (.target // "unknown") as $t | (.findings // [])[] | select((.lifecycle // "new") != "suppressed") | . + {target: $t} ]' "$@")"
+    read -r NC NH NM NST <<EOF
+$(printf '%s' "$ALL" | jq -r '"\([.[]|select(.severity=="critical")]|length) \([.[]|select(.severity=="high")]|length) \([.[]|select(.severity=="medium")]|length) \([.[].target]|unique|length)"')
+EOF
+    # posture grade from the worst severity present
+    if [ "${NC:-0}" -gt 0 ]; then GRADE="AT RISK — critical gaps"; elif [ "${NH:-0}" -gt 0 ]; then GRADE="NEEDS WORK — high-severity gaps"; elif [ "${NM:-0}" -gt 0 ]; then GRADE="FAIR — medium gaps"; else GRADE="HEALTHY on what ran"; fi
+    echo "**Posture: ${GRADE}.** ${NC} critical · ${NH} high · ${NM} medium across ${NST} stack(s), ${RD}. Start with the ${TOPN} below (worst first)."
+    echo
+    echo "| # | Severity | What's wrong | Where (blast radius) | \$/mo | Fix |"
+    echo "| --- | --- | --- | --- | ---: | --- |"
+    printf '%s' "$ALL" | jq -r --argjson n "$TOPN" '
+      def rank: {"critical":0,"high":1,"medium":2,"low":3,"info":4}[.] // 5;
+      def esc: tostring | gsub("\\|"; "\\|") | gsub("\n"; " ");
+      [ .[] | select(.severity != "info") ]
+      | sort_by([ (.severity|rank), (-((.points_recoverable) // 0)), (-((.estimated_monthly_savings_usd) // 0)) ])
+      | .[0:$n] | to_entries[]
+      | ((.key + 1) | tostring) as $i | .value as $f
+      | "| " + $i + " | " + (($f.severity // "info") | ascii_upcase) + " | " + ($f.title | esc)
+        + "<br><sub>" + ($f.target | esc) + " · " + ($f.id | esc) + "</sub> | "
+        + (($f.affected // [] | join(", ")) | esc) + " | "
+        + (if ($f.estimated_monthly_savings_usd // null) != null then ("$" + ($f.estimated_monthly_savings_usd | tostring)) else "—" end) + " | "
+        + ($f.recommendation // "" | esc) + (if ($f.remediation // "") != "" then " → `" + $f.remediation + "`" else "" end) + " |"'
+    echo
+    # measured reachability headline (alert-fatigue AF-004) — the fatigue-adjacent exec signal
+    AFJ="$D/alert-fatigue.json"
+    if [ -f "$AFJ" ]; then
+      jq -r '.af_findings[]? | select(.af_id=="AF-004" and .status=="measured" and ((.unreachable_objects // 0) > 0))
+        | "**Alerting reachability:** \(.unreachable_objects) of \(.measured_objects) alerting objects cannot reach a human by construction — a page that pages nobody (see Alert noise & fatigue)."' "$AFJ"
+    fi
+    # top real cost lever (never modeled — only a provider-native $)
+    TOPSAVE="$(printf '%s' "$ALL" | jq -r '[.[] | select((.estimated_monthly_savings_usd // 0) > 0)] | sort_by(-(.estimated_monthly_savings_usd)) | (.[0] // empty) | "\(.estimated_monthly_savings_usd)\t\(.title)"')"
+    if [ -n "$TOPSAVE" ]; then
+      TSV="$(printf '%s' "$TOPSAVE" | cut -f1)"; TST="$(printf '%s' "$TOPSAVE" | cut -f2-)"
+      echo "**Top cost lever:** \$${TSV}/mo — ${TST} (provider-native figure; full ranked savings in the cost section)."
+    fi
+    echo
+    echo "_Ranked worst-first by severity, then recoverable points, then \$ as an in-band tiebreaker — never a blended cross-domain score, and \$ never promotes a lesser finding above a critical one. Full per-finding detail is in each stack's report and the sections below._"
+    ;;
+
   *)
-    echo "usage: render-report-viz.sh {at-a-glance|scorecard|lanes|mermaid-topo|html|overlaps|rollup|inventory|inventory-rollup|alert-fatigue|alert-fatigue-html} ..." >&2
+    echo "usage: render-report-viz.sh {at-a-glance|scorecard|lanes|mermaid-topo|html|overlaps|rollup|inventory|inventory-rollup|alert-fatigue|alert-fatigue-html|exec-summary} ..." >&2
     exit 2
     ;;
 esac

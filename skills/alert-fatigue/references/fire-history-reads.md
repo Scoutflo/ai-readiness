@@ -20,6 +20,18 @@ present) marks that provider's fire-history tier `verify-pending` in
 APIs below paginate) and cap the object set on a large estate before pulling per-object
 history, so the lane never grinds.
 
+**Reuse the config audit's inventory — don't re-enumerate.** If the provider's audit
+already ran today (its `inventory.json` / `findings.json` exist under the audits dir),
+take the **object set** (the alarms/rules/monitors and their routing) from there and pull
+only the **history delta** per object — never re-list the whole estate. Example:
+`audit-aws` already enumerates every CloudWatch alarm and its `AlarmActions`/SNS wiring
+(and often flags the zero-subscriber and stuck-in-ALARM cases at the config tier); the
+fire-history lane reads that inventory for the alarm set + routing verdict and adds only
+`DescribeAlarmHistory` per alarm — it does not re-run `describe-alarms` across the account.
+This keeps the two consistent (one enumeration, no double-pull) and bounds the lane on a
+large estate. Cite the config finding in each signal's `source_finding_ids` so the analysis
+joins back rather than restating.
+
 ## Output contract — `fatigue-signals.json` (`scoutflo-fatigue-signals/v1`)
 
 Write it to `${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/fatigue-signals.json`:

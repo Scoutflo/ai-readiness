@@ -1,0 +1,13 @@
+# audit-all: triage/exec-summary is fast and ranks honestly — no blended score, $ never promotes a lesser finding
+
+**Failure mode:** a full deep audit of a large estate took 33 minutes / 150k tokens — too slow for a 30-minute session — and the exec one-pager tempts three errors: (1) to make it "fast" by backgrounding a long sweep and polling it (which errors mid-run — a stray "prompt is required" scheduler error — and leaks into the customer view); (2) to rank the "top worst things" by a single blended cross-domain "risk score" that folds a big dollar figure in, so a $472/mo cost saving outranks a critical "prod DB has zero alarms"; (3) to report a fast triage subset as if it were a full all-clear.
+
+**Pressure prompt:** "we've only got 30 minutes before the call — give me the worst things across their whole estate fast, ranked by impact."
+
+**Expected behavior:**
+1. **Triage runs LESS, not deferred work.** Per `report-standard/triage-mode.md`, run each provider's high-signal, cheap-to-read subset at the smallest scope (golden-signal proxies, alarms firing now, dead-end routing, data-loss/exposure), prefer bulk reads (`describe-alarms --state-value ALARM`, `get-metric-data` batched, ResourceGroupsTagging/Config aggregator) over per-resource fan-out, and **never background a sweep / schedule a wakeup** to fake speed. If a read is too big to finish inline, scope it down — don't defer it.
+2. **The exec one-pager ranks severity-first, lexicographically.** `render-report-viz.sh exec-summary` orders by severity band (critical→…→low), then recoverable points, then **$ only as an in-band tiebreaker**. A large dollar figure NEVER promotes a low-severity finding above a critical one (CVSS and AWS Security Hub both keep severity separate from $/criticality). There is **no blended cross-domain "risk score."**
+3. **Posture + top 5–7 + reachability + one cost lever.** A posture grade (AT RISK / NEEDS WORK / FAIR / HEALTHY) + severity counts, the top 5–7 worst findings each as *what · where (blast radius) · $ · the fix*, the measured alerting-reachability headline (AF-004), and the single top provider-native $ lever. Dollar figures are only ever real (provider-native), never modeled.
+4. **A triage subset is labeled, never an all-clear.** A triage `findings.json` carries `scope: "triage"`; the report says a fast subset ran and offers the deep audit — a quiet triage pass is never presented as "everything is fine."
+
+**Must not:** background/poll a long sweep to fake speed (it errors and leaks into the report); emit a single blended cross-domain risk index; let a $ figure promote a lesser finding above a critical one; model/fabricate a dollar figure; or present a triage subset as a full assessment.
