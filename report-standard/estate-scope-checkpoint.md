@@ -21,6 +21,19 @@ with no scoping question is a bug, not a feature.
 Thresholds are examples; an audit may tune them to its object kind, but the
 pause-on-large behavior is the same everywhere.
 
+## Run the scoped sweep inline — never background-wait
+
+Once scoped, run the batched reads **inline and sequentially** and let them
+finish in the same turn. Do **not** background a long sweep and then "wait" for
+it — do not schedule a wakeup, spawn a detached poller, or hand a multi-minute
+scan (an S3-lifecycle walk over dozens of buckets, per-object history, hundreds
+of log groups) to a background task you then block on. A long read is bounded by
+**scoping it smaller**, not by deferring it: background-wait patterns add no
+speed, can error mid-run (a stray "prompt is required"/scheduler error), and that
+error leaks into the customer-facing flow. If a sweep is genuinely too large to
+finish inline, that is the signal to **scope it down at the checkpoint above** (or
+run the fast triage subset — see [triage-mode.md](triage-mode.md)), not to background it.
+
 ## The checkpoint block every audit runs after computing `TOTAL`
 
 Each audit computes `TOTAL` in its Estate sizing phase (its own cheap count),

@@ -29,7 +29,11 @@ names a gate/case that no longer exists, that is itself a defect.
 
 - **Producer:** every `audit-*` (except `audit-all`, `audit-cost` for inventory).
 - **Consumers:** `audit-all`, `correlation-engine`, `cost-analysis`,
-  `render-report-viz`, `rca`, the history ledger.
+  `render-report-viz` (incl. the `exec-summary` mode — the top-of-report executive
+  one-pager: worst findings across the estate, ranked severity-first → recoverable
+  points → $ as an in-band tiebreaker, never a blended cross-domain score; see
+  `report-standard/triage-mode.md` for the fast-pass doctrine + the `SCOUTFLO_TRIAGE`
+  contract), `rca`, the history ledger.
 - **Invariants:** evidence-aware audit emitters use `scoutflo-findings/v2`;
   `v1` remains readable for historical input and audit skills still in the
   staged migration. In both versions, `overall` reconciles

@@ -71,6 +71,7 @@ Targeting these at `ap-south-2` hits a non-existent endpoint and fails. **Comput
 | COST-AWS-022 | gp2 → gp3 EBS migration candidates | EC2 `describe-volumes` | None (presence fact) |
 | COST-AWS-023 | Previous-generation instance families | EC2 `describe-instances` | None (presence fact) |
 | COST-AWS-024 | Idle NAT gateways (zero bytes N days) | EC2 `describe-nat-gateways` + CloudWatch `get-metric-statistics` | None (presence fact) |
+| COST-AWS-025 | Cost-optimization enablement gap (rightsizing is blind) | `compute-optimizer get-enrollment-status` + `cost-optimization-hub list-enrollment-statuses` | None (enablement action) — surfaces not-enrolled as ONE actionable, free-to-fix finding, not just an `excluded` reason on seven other checks |
 
 ## 4. Doctor-probe dependency (which cost scope each check needs)
 
@@ -107,6 +108,8 @@ aws_cli compute-optimizer get-enrollment-status --output json | jq -r '.status'
 ```
 
 Expected `Active`. `Inactive`/`Pending`/`AccessDeniedException` → COST-AWS-001…007 all report `excluded, reason: "Compute Optimizer not enrolled"`. When active, pull each family. Note the `finding` enum is **mixed-case** (`Optimized`, `Overprovisioned`, `Underprovisioned`, `NotOptimized`) — comparing against `"OPTIMIZED"` never matches and would falsely flag every healthy resource.
+
+**COST-AWS-025 — surface the enablement gap as ONE actionable finding, not seven silent exclusions.** When `get-enrollment-status` is not `Active` (and/or Cost Optimization Hub is not enrolled), the reader currently sees rightsizing simply *missing* — the value ("turn this on, it's free, and you unlock native savings figures") is buried across seven `excluded` reasons. Emit a single **COST-AWS-025** (low, actionable, **no dollar** — it is an enablement action, not a measured saving): *"AWS Compute Optimizer is not enrolled, so per-resource rightsizing/idle recommendations (COST-AWS-001…007) cannot run — the account is blind to its largest native-savings source. Enrollment is **free** and account-wide (Compute Optimizer console → opt in; add Cost Optimization Hub for COST-AWS-013). Re-run the cost audit after enrollment (Compute Optimizer needs ~24–48h to generate first recommendations)."* This is a real prerequisite, not a fabricated number — do not attach `estimated_monthly_savings_usd`. When both are already `Active`, COST-AWS-025 is `not-in-scope` (nothing to enable). The RI/SP **unused-commitment** waste (a commitment running at low utilization — the "$/mo already spent on idle reservations" case) is **COST-AWS-012**, reported verbatim from the utilization API; keep it prominent in the report rather than letting it hide among the presence facts.
 
 ```bash
 # COST-AWS-001 EC2 — per instance: current type, recommended type, native $.
