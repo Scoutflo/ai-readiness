@@ -50,6 +50,8 @@ The organizing principle (six research passes converged on it): every signal fal
 
 **Feed-dependency is the never-fabricate rule:** tiers A & B are real numbers from read-only access; tier C is a labeled proxy or `verify-pending (needs incident feed)` — never a fabricated precision/ratio.
 
+**The measured tiers (B & C) are collected by the skill's own read-only fire-history lane** — the exact per-provider read blocks (CloudWatch `DescribeAlarmHistory` + SNS subscriber check, Datadog Events + monitor state, Grafana annotations/state-history, Prometheus `ALERTS`/`ALERTS_FOR_STATE` PromQL, Alertmanager notification counters + silences, SigNoz rule-history routes, and the PagerDuty/incident.io/Opsgenie incident-feed reads for tier C), their VERIFIED/UNVERIFIED flags, and the `fatigue-signals.json` output contract are in **[fire-history-reads.md](fire-history-reads.md)**. Off-hours has no native field anywhere — it is always derived from a fire timestamp against the business-hours window.
+
 ## 4. Vendor noise-reduction technique catalog (config-hygiene vs runtime)
 
 - **Deduplication** (same source/key, still-firing → collapse): PagerDuty `dedup_key`, Opsgenie **alias**, Rootly dedup-key-path, FireHydrant `idempotency_key` (default 24h window), incident.io dedup key. → config-hygiene (key design) + runtime effect.

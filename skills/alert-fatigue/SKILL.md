@@ -38,19 +38,34 @@ When the user asks for an alert-noise/fatigue read on **one integration** (or a 
    | `lgtm` (vmalert) | `audit-lgtm` — vmalert routing/hygiene lane |
 
 2. **Run only the alerting-lane checks** for each configured provider (not the full audit — the coverage/retention/security lanes are out of scope for a fatigue read). Each writes its normal `findings.json` under `<audits-dir>/<target>/<date>/`, so the reads happen in the audit lane (which is allowed to call providers) and the roll-up library still makes zero provider calls.
-3. **Roll up** exactly as `alert_fatigue_run` does below. With one provider you still get its config-tier + fire-history-tier picture; with two or more you also get the cross-source view (AF-002).
+3. **Collect the measured fire-history tier (read-only)** for each configured provider per [references/fire-history-reads.md](references/fire-history-reads.md), writing `fatigue-signals.json` — this is what powers AF-004/005/006 (and AF-003 when an incident feed is read). Skip a provider that can't expose history (mark it `verify-pending`).
+4. **Roll up** exactly as `alert_fatigue_run` does below. With one provider you still get its config + measured picture; with two or more you also get the cross-source view (AF-002). The library auto-loads `fatigue-signals.json` if present.
 
 **If the operator has already run those audits today**, skip step 2 — the findings exist; go straight to the roll-up (that is roll-up mode). This is the "handle both": standalone drives the checks; roll-up consumes them; the same `alert-fatigue.json` comes out.
 
+## Fire-history collection lane (the measured tier — how this skill goes deeper than a re-list)
+
+The config audits answer *"is this rule shaped well?"*. The fatigue skill owns the definition of what qualifies as fatigue, so it collects the **measured** tier itself: per configured alerting provider it makes **read-only fire-history API calls** — the reads the config audits skip — normalizes them into `fatigue-signals.json`, and the roll-up library analyzes them into **AF-004 reachability, AF-005 volume/flapping, AF-006 chronic/stuck** (and, from an incident feed, **AF-003**). The provider calls happen **here, in this collection lane** (the audit lane is allowed to call providers); the roll-up library still makes zero provider calls.
+
+The exact per-provider read blocks, the `fatigue-signals.json` schema, and the derivations (fires / flapping / stuck / off-hours / reaches-a-human) are in **[references/fire-history-reads.md](references/fire-history-reads.md)** — CloudWatch `DescribeAlarmHistory` + SNS `ListSubscriptionsByTopic`; Datadog Events + monitor state; Grafana annotations / state-history; Prometheus `ALERTS`/`ALERTS_FOR_STATE` PromQL; Alertmanager notification counters + silences; SigNoz rule-history routes; and the incident-feed reads (PagerDuty/incident.io/Opsgenie) for AF-003.
+
+**Rails (non-negotiable):** every read is a GET or a documented read-by-POST (a query/search body, no mutation) — this lane never mutates. **Off-hours has no native field** anywhere — it is *derived* from a fire timestamp against the business-hours window; say so. A provider that cannot expose history (no permission / API absent) is marked **`verify-pending`** in `provider_coverage[]` — never a guessed number. Honor the estate-scope checkpoint: window/page the reads and cap the object set on a large estate so the lane never grinds.
+
+Absent the lane (or where a provider is `verify-pending`), AF-004/005/006 are simply `not-in-scope` and the config tier (AF-001/002/007) still reports fully — the analysis degrades honestly, it never fabricates a measured number.
+
 ## What it produces
 
-`${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/alert-fatigue.json` (`scoutflo-alert-fatigue/v1`, `scoring_scope: non-scored`) with three advisory `AF-*` items, each citing the source findings it rolled up:
+`${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/alert-fatigue.json` (`scoutflo-alert-fatigue/v1`, `scoring_scope: non-scored`) with the advisory `AF-*` analysis. **AF-001/002/007 are the config tier** (from the audits' `findings.json`, always available); **AF-004/005/006 are the measured fire-history tier** (from `fatigue-signals.json` — the read-only fire-history collection lane below — `not-in-scope` when that lane did not run); **AF-003 is the incident-feed tier**. Every item cites its source finding-IDs and re-scores nothing:
 
-| ID | What it rolls up |
+| ID | What it computes |
 | --- | --- |
-| `AF-001` | **Alerting-noise concentration** — every alerting/hygiene finding across all audits, grouped by source tool and severity, so you can see where the noise lives. Cites each source finding-ID; it re-scores nothing. |
-| `AF-002` | **Cross-source alert storm** — a service that carries alerting-noise findings from **two or more** tools. One real incident on that service pages through every one of them; consolidating the paging path turns N pages back into one. |
-| `AF-003` | **Alert-to-incident ratio** — computed **only** from an operator-supplied signal block (see below). Absent that block it is `not-in-scope`, never a fabricated actionability percentage. |
+| `AF-001` | **Alerting-noise concentration** (config) — every alerting/hygiene finding across all audits, grouped by source tool and severity. Cites each source finding-ID; re-scores nothing. |
+| `AF-002` | **Cross-source alert storm** (config) — a service carrying alerting-noise findings from **two or more** tools. One real incident there pages through every one of them; consolidate the paging path to turn N pages back into one. |
+| `AF-003` | **Alert-to-incident ratio** (incident-feed) — computed from a **live incident feed** (`fatigue-signals.json` `.incident_feed`, collected read-only from PagerDuty/incident.io/Opsgenie) **or** an operator `fatigue.json`. Absent both → `not-in-scope`, never a fabricated percentage (with MTTA/MTTR/%-actionable when the feed supplies them). |
+| `AF-004` | **Alerting reachability** (measured) — of the alerting objects whose routing was resolved, **how many can reach NOBODY** by construction (zero-subscriber SNS / zero-workflow detector / no channel), grouped by reason. The headline fatigue-adjacent finding. `not-in-scope` if no signal resolved routing. |
+| `AF-005` | **Measured noise volume & flapping** (measured) — real fires per object over the window, the flapping set, and the **top offenders ranked by fatigue impact** (fires weighted by flapping / off-hours share / dead-end routing — each weight added only when its datum is present). |
+| `AF-006` | **Chronic / stuck alerts** (measured) — objects firing continuously for a long time (desensitization risk), ranked by duration. |
+| `AF-007` | **Fatigue anti-pattern histogram** (config+measured) — every noise finding classified into a named failure mode (dead-end, chronic-stuck, flap-prone, un-gated-repage, ownerless, decoration-or-dead-weight), with counts. Turns "N noise findings" into "what KIND of noise". |
 
 Plus the **human report** (see §Running it): `alert-fatigue-report.md` and a standalone `alert-fatigue-report.html` dashboard, rendered from `alert-fatigue.json` by [`report-standard/render-report-viz.sh`](../../report-standard/render-report-viz.sh) (`alert-fatigue` / `alert-fatigue-html` modes). The report leads with an at-a-glance line and the three honest tiers, then a **worst-first "top offenders" list where every noise finding shows problem → where → why it matters → the exact fix** (its `recommendation` + `remediation` pointer, joined from the home `findings.json`), where the noise concentrates by tool, the cross-source storms, the alert-to-incident ratio (or an explicit "not measured — needs an incident feed" block), and the cited benchmarks to score against. This is the deliverable a user reads — not the JSON. Same never-fabricate, cites-never-re-scores discipline as the roll-up.
 
@@ -66,7 +81,9 @@ A finding is rolled into the fatigue view when its `area` names the alerting/rou
 { "window": "7d", "alerts_fired": 4200, "incidents": 35 }
 ```
 
-With it, `AF-003` reports `alerts_per_incident` (here 120 — a strong fatigue signal). Without it, `AF-003` is `not-in-scope` with that reason stated, and `AF-001`/`AF-002` (which need no incident data) still report. **This roll-up never invents an actionability number.**
+With it, `AF-003` reports `alerts_per_incident` (here 120 — a strong fatigue signal). Without it, `AF-003` is `not-in-scope` with that reason stated, and the config tier still reports. **This roll-up never invents an actionability number.**
+
+**Preferred over the operator block: a live incident feed.** When the fire-history lane reads a paging tool's incident/ack stream (PagerDuty/incident.io/Opsgenie — see [references/fire-history-reads.md](references/fire-history-reads.md)) it writes an `incident_feed` block into `fatigue-signals.json`; `AF-003` then computes the ratio **and** MTTA/MTTR/%-actionable from that live feed (source recorded). The operator `fatigue.json` is the fallback when no feed is reachable; absent both, `not-in-scope`.
 
 ## The three feed tiers (what is a real number vs a proxy vs verify-pending)
 
@@ -97,7 +114,7 @@ The full principles, anti-patterns, per-tier auditor checklist, vendor technique
 
 ## Honest ceiling (stated every run)
 
-- **Structural, not behavioral.** `AF-001`/`AF-002` are read off the audits' *configuration* findings — where noise is structurally likely and which services are multi-tool-paged. They are not a measured page rate. The only behavioral number is `AF-003`, and only when you supply the signal block.
+- **Config tier vs measured tier, labeled honestly.** `AF-001`/`AF-002`/`AF-007` are read off the audits' *configuration* findings — where noise is structurally likely and which services are multi-tool-paged; they are not a measured page rate. `AF-004`/`AF-005`/`AF-006` **are** measured, but only when the fire-history collection lane ran against a provider that exposes history — otherwise they are `not-in-scope`, never a guess. `AF-003` is measured only from a live incident feed or the operator block. Each `fire_history_coverage[]` entry states `collected` vs `verify-pending` per provider.
 - **Non-scored.** There is no 0–100 here and no `check-findings.sh` reconciliation; `alert-fatigue.json` is a synthesis file like `correlation.json`, not a scored audit result. Finding-ID prefix `AF` is registered as a non-scored roll-up prefix.
 - **Cites, never mutates.** Every `source_findings[].finding_id` exists in this run's `findings.json`; this roll-up changes none of them and re-scores nothing. Noise is scored once, in its home audit; this only aggregates and de-duplicates the estate view.
 
@@ -113,7 +130,7 @@ RUN_DATE="$(date -u +%F)"
 alert_fatigue_run "$RUN_DATE"
 ```
 
-Expected: `[alert-fatigue] Written <audits-dir>/alert-fatigue.json` plus a one-line summary (`alerting-noise findings: N | cross-source storms: N | tools with noise: N | ratio: computed|not-in-scope`). Zero findings for the date is a clean skip, not an error. It reads only local files, so re-running is free.
+Expected: `[alert-fatigue] Written <audits-dir>/alert-fatigue.json` plus a one-line summary (`noise:N storms:N tools:N | fire-history objects:N unreachable:N chronic:N | ratio: computed|not-in-scope`). The run **auto-loads `fatigue-signals.json`** if the fire-history collection lane wrote one (that is where `fire-history objects`/`unreachable`/`chronic` come from); with none, those tiers are `not-in-scope` and only the config tier reports. Zero findings **and** zero signals for the date is a clean skip. It reads only local files, so re-running is free.
 
 **Then render the human report** — a pretty, self-contained deliverable that shows each problem *and its exact fix*, so the user does not read raw JSON. The renderer is deterministic and joins each cited noise finding back to its home `findings.json` for the fix text (`recommendation` + `remediation`); it never re-derives or re-scores:
 
@@ -141,3 +158,6 @@ Show the operator the rendered `alert-fatigue-report.md` (the worst-first, probl
 | A single-block signoz/kubernetes or a multi-target label dropped from the roll-up | The findings collector globs BOTH `<target>/<date>/` and `<integration>/<label>/<date>/`, matching correlation-engine and the report standard |
 | A storm reported without evidence | `AF-002` only fires when a service's `affected` token appears in alerting-noise findings from two or more distinct target directories; each contributing finding is cited by target + id |
 | Mutating a finding's severity from the roll-up | The library only reads findings.json; it writes alert-fatigue.json and touches no per-audit artifact |
+| Fabricating a measured fire count / reachability when the fire-history lane could not read a provider | That provider is marked `verify-pending` in `provider_coverage[]`; AF-004/005/006 stay `not-in-scope` for it — a measured number is only emitted from a real read |
+| A fire-history read that mutates (a test-fire, an ack) | The collection lane is GET / read-by-POST only, per [references/fire-history-reads.md](references/fire-history-reads.md); it never mutates, exactly like an audit |
+| Presenting an off-hours % as a native provider metric | Off-hours has no native field anywhere; it is derived from a fire timestamp against the business-hours window, and the report says so |
