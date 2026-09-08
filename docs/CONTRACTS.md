@@ -344,15 +344,26 @@ names a gate/case that no longer exists, that is itself a defect.
   `tests/test-report-viz.sh` and `tests/test-check-report.sh`; prompt-level
   roll-up and Slack consumers are covered by `tests/test-v2-consumer-safety.sh`.
 
-## C17 — Alert-fatigue roll-up (non-scored cross-audit synthesis)
+## C17 — Alert-fatigue analysis (non-scored: config tier + measured fire-history tier)
 
 - **Producer:** `skills/alert-fatigue/lib/alert-fatigue.sh` (`alert_fatigue_run`)
   writes `${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/alert-fatigue.json`
-  (`scoutflo-alert-fatigue/v1`, `scoring_scope: non-scored`) with `AF-001`
-  (alerting-noise concentration), `AF-002` (cross-source storm: a service with
-  alerting-noise findings from ≥2 target dirs), and `AF-003` (alert-to-incident
-  ratio, computed only from an operator-provided `fatigue.json` signal block, else
-  `not-in-scope`).
+  (`scoutflo-alert-fatigue/v1`, `scoring_scope: non-scored`). **Config tier** (from
+  the audits' `findings.json`): `AF-001` (noise concentration), `AF-002` (cross-source
+  storm: a service with alerting-noise findings from ≥2 target dirs), `AF-007`
+  (fatigue anti-pattern histogram). **Measured fire-history tier** (from an optional
+  `fatigue-signals.json`, else `not-in-scope`): `AF-004` (reachability — objects that
+  reach nobody), `AF-005` (measured volume/flapping/top-offenders by fatigue impact),
+  `AF-006` (chronic/stuck). **Incident-feed tier:** `AF-003` (alert-to-incident ratio +
+  MTTA/MTTR/%-actionable), computed from `fatigue-signals.json` `.incident_feed` (live)
+  OR an operator `fatigue.json`, else `not-in-scope`.
+- **Second producer — the fire-history collection lane (in the SKILL, not the lib):**
+  the `alert-fatigue` skill makes **read-only** per-provider fire-history + incident-feed
+  reads and writes `${SCOUTFLO_AUDIT_DIR}/fatigue-signals.json`
+  (`scoutflo-fatigue-signals/v1`: `signals[]` + `provider_coverage[]` + optional
+  `incident_feed`). The provider calls happen in this audit-lane, per
+  [skills/alert-fatigue/references/fire-history-reads.md](../skills/alert-fatigue/references/fire-history-reads.md);
+  the roll-up **library** still makes zero provider calls (it only reads local files).
 - **Consumers:** `audit-all` Phase 3.6 runs it after correlation; the report
   renderer `render-report-viz.sh` (`alert-fatigue` + `alert-fatigue-html` modes)
   turns `alert-fatigue.json` into the report §7 markdown section and a standalone
@@ -361,20 +372,27 @@ names a gate/case that no longer exists, that is itself a defect.
   for the `recommendation`/`remediation` (never re-derived or re-scored). The
   standalone `alert-fatigue` skill renders the same into `alert-fatigue-report.md`.
   The file is otherwise terminal (nothing scores it).
-- **Invariants:** **zero provider calls** — reads only this run's per-audit
-  `findings.json` (same dual-glob + roll-up-dir skip as `correlation-engine`, so
-  signoz/kubernetes/multi-target stacks are never dropped); **never mutates a
-  finding or its severity and never re-scores** — every `source_findings[].finding_id`
-  exists in this run and its noise is scored once in its home audit; `AF-003`
-  **never fabricates** an actionability percentage (no signal block → `not-in-scope`).
-  `AF` is a registered **non-scored** prefix (findings-schema), like `COST`.
-- **SSOT:** `skills/alert-fatigue/SKILL.md`.
+- **Invariants:** **the roll-up library makes zero provider calls** — it reads only
+  local files (per-audit `findings.json`, same dual-glob + roll-up-dir skip as
+  `correlation-engine`, plus the optional `fatigue-signals.json`); the fire-history
+  collection lane's reads are **read-only** (GET / read-by-POST, never mutate).
+  **Never mutates a finding or its severity and never re-scores** — every
+  `source_findings[].finding_id` exists in this run and its noise is scored once in its
+  home audit. **Never fabricates a measured number:** a tier with no data is
+  `not-in-scope`/`verify-pending`, never guessed (AF-003 without a feed/block; AF-004/005/006
+  without `fatigue-signals.json`; a provider marked `verify-pending` in `provider_coverage[]`).
+  Off-hours is always derived from a timestamp, never a native field. `AF` is a registered
+  **non-scored** prefix (findings-schema), like `COST`.
+- **SSOT:** `skills/alert-fatigue/SKILL.md`; the fire-history read spec +
+  `fatigue-signals.json` contract in `skills/alert-fatigue/references/fire-history-reads.md`.
 - **Guards:** `skills/alert-fatigue/tests/test-alert-fatigue.sh` (run by
-  `ci/run-tests.sh`: storm detection, noise selection incl. exclusion of
-  non-alerting findings, non-scored + cites-source-IDs, and the `fatigue.json`
-  ratio path); `tests/test-report-viz.sh` Tests 12–14 (the renderer joins each
-  cited noise finding to its exact fix, orders worst-first, excludes non-cited
-  findings, self-contained/asset-free HTML, and degrades on missing/zero-noise);
+  `ci/run-tests.sh`: storm detection, noise selection incl. exclusion of non-alerting
+  findings, non-scored + cites-source-IDs, the `fatigue.json` ratio path, **and the
+  measured tier — AF-004 reachability, AF-005 fatigue-impact ranking, AF-006 chronic,
+  AF-007 histogram, live-feed AF-003, verify-pending coverage, and never-fabricate when
+  signals are absent**); `tests/test-report-viz.sh` Tests 12–15 (the renderer joins each
+  cited noise finding to its exact fix, orders worst-first, renders the measured tier +
+  the two new HTML metric tiles, and degrades honestly when a tier is not collected);
   `ci/prefix-registry-check.sh` (`AF` registered);
   `ci/catalog-consistency-check.sh` (alert-fatigue is a documented internal
   helper). Selftest: `layer_depth` alert-fatigue lock.

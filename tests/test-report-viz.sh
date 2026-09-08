@@ -251,5 +251,45 @@ jq '.totals.alerting_noise_findings=0 | .af_findings[0].source_findings=[]' "$AF
 printf '%s' "$(sh "$VIZ" alert-fatigue "$AFD/af-empty.json" "$AFD" "$AFDATE")" | grep -qi 'No alerting-noise findings' || fail "zero-noise degrade wrong"
 echo "PASS"
 
+echo "Test 15: alert-fatigue renders the MEASURED fire-history tier (AF-004/005/006/007) + degrades honestly"
+# reuse Test 12's audits dir ($AFD) for the AF-001 join; craft an alert-fatigue.json with the measured tier
+cat > "$AFD/af-measured.json" <<'EOF'
+{"schema":"scoutflo-alert-fatigue/v1","scoring_scope":"non-scored",
+ "totals":{"alerting_noise_findings":4,"cross_source_storms":1,"tools_with_noise":2,"fire_history_objects":3,"unreachable_objects":2,"chronic_objects":1},
+ "fire_history_coverage":[{"provider":"sentry","tier":"fire-history","status":"collected"},{"provider":"datadog","tier":"fire-history","status":"verify-pending","reason":"no key"}],
+ "af_findings":[
+  {"af_id":"AF-001","type":"alerting-noise-concentration","by_source":[{"target":"sentry","noise_findings":3,"by_severity":{"high":2,"low":1}},{"target":"datadog","noise_findings":1,"by_severity":{"medium":1}}],
+   "source_findings":[{"target":"sentry","finding_id":"SNTRY-107","severity":"high"},{"target":"sentry","finding_id":"SNTRY-106","severity":"high"},{"target":"sentry","finding_id":"SNTRY-110","severity":"low"},{"target":"datadog","finding_id":"DD-006","severity":"medium"}]},
+  {"af_id":"AF-002","type":"cross-source-alert-storm","storms":[{"service":"deploy-gateway","tools":["datadog","sentry"],"tool_count":2}]},
+  {"af_id":"AF-003","type":"alert-to-incident-ratio","status":"not-in-scope","reason":"no feed"},
+  {"af_id":"AF-004","type":"alerting-reachability","status":"measured","measured_objects":3,"unreachable_objects":2,"by_reason":[{"reason":"SNS topic has 0 subscribers","count":1},{"reason":"detector wired to 0 workflows","count":1}],"examples":[]},
+  {"af_id":"AF-005","type":"measured-noise-volume","status":"measured","objects_with_history":3,"total_fires":49,"flapping_objects":1,"off_hours_known":1,
+   "top_offenders":[{"provider":"aws","object_id":"chatbot-dlq","fires":48,"flapping":true,"off_hours_fires":30,"reaches_human":false,"fatigue_impact":111},{"provider":"aws","object_id":"envhealth","fires":1,"flapping":false,"reaches_human":true,"fatigue_impact":1}]},
+  {"af_id":"AF-006","type":"chronic-stuck-alerts","status":"measured","chronic_objects":1,"objects":[{"provider":"aws","object_id":"envhealth","stuck_since":"2025-10-01T00:00:00Z","stuck_days":342}]},
+  {"af_id":"AF-007","type":"fatigue-anti-pattern-histogram","histogram":[{"class":"dead-end","count":2,"finding_ids":["SNTRY-107","SNTRY-110"]},{"class":"flap-prone","count":1,"finding_ids":["DD-006"]}]}
+ ]}
+EOF
+AFM="$(sh "$VIZ" alert-fatigue "$AFD/af-measured.json" "$AFD" "$AFDATE")"
+printf '%s' "$AFM" | grep -q 'Measured fire-history (this run)' || fail "measured section heading missing"
+printf '%s' "$AFM" | grep -q '2 of 3 alerting objects cannot reach a human' || fail "reachability headline missing"
+printf '%s' "$AFM" | grep -q 'SNS topic has 0 subscribers' || fail "reachability by-reason missing"
+printf '%s' "$AFM" | grep -q 'Top offenders — ranked by measured fatigue impact' || fail "measured top-offenders missing"
+printf '%s' "$AFM" | grep -q 'Chronic / stuck' || fail "chronic section missing"
+printf '%s' "$AFM" | grep -q 'verify-pending' || fail "verify-pending honesty line missing (datadog)"
+printf '%s' "$AFM" | grep -q 'What KIND of noise' || fail "anti-pattern histogram missing"
+# fatigue-impact ordering: chatbot-dlq (111) before envhealth (1)
+printf '%s' "$AFM" | awk '/chatbot-dlq/{a=NR} /envhealth/{b=NR} END{exit !(a<b)}' || fail "top offenders not ordered by fatigue impact"
+# HTML: measured card + the two new metric tiles
+sh "$VIZ" alert-fatigue-html "$AFD/af-measured.json" "$AFD/afm.html" "$AFD" "$AFDATE" >/dev/null
+[ "$(grep -c '<!doctype html>' "$AFD/afm.html")" -eq 1 ] || fail "measured html not a single document"
+grep -q "can't reach a human (measured)" "$AFD/afm.html" || fail "unreachable metric tile missing from html"
+grep -q 'Measured fire-history' "$AFD/afm.html" || fail "measured card missing from html"
+grep -q 'chatbot-dlq' "$AFD/afm.html" || fail "measured top offender missing from html"
+grep -qE 'src="http|href="http|<link |<img ' "$AFD/afm.html" && fail "measured html references an external asset"
+# degrade: an alert-fatigue.json with no measured tier says so, doesn't fabricate
+jq '.af_findings |= map(if .af_id=="AF-004" or .af_id=="AF-005" or .af_id=="AF-006" then .status="not-in-scope" else . end) | .totals.unreachable_objects=0 | .totals.chronic_objects=0' "$AFD/af-measured.json" > "$AFD/af-nomeasure.json"
+printf '%s' "$(sh "$VIZ" alert-fatigue "$AFD/af-nomeasure.json" "$AFD" "$AFDATE")" | grep -qi 'Measured fire-history tier not collected this run' || fail "no-measure degrade line missing"
+echo "PASS"
+
 echo
 echo "=== report-viz self-test passed ==="

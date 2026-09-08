@@ -644,7 +644,7 @@ EOF
     fi
     echo "**At a glance — ${TN} alerting-noise finding(s) across ${TT} tool(s) · ${TS} cross-source storm(s) · ${RATIO_LINE}.**"
     echo
-    echo "Read across three honest tiers: **config** (rule hygiene — a real yes/no from the rules), **fire-history** (measured volume/flapping/dead-weight from the alert stream), and **incident-feed** (true precision & alert-to-incident ratio — reported only from your incident data, never fabricated). AF-001/AF-002 below are the config + fire-history picture; the ratio is the incident-feed tier."
+    echo "Read across three honest tiers: **config** (rule hygiene — a real yes/no from the rules), **fire-history** (measured volume/flapping/reachability/chronic from the alert stream), and **incident-feed** (true precision & alert-to-incident ratio — from your incident data, never fabricated). AF-001/002/007 are the config picture; **AF-004/005/006 are the measured fire-history tier** (shown when the collection lane ran, else not-in-scope); the ratio is the incident-feed tier."
     echo
     NOISE="$(af_enriched_noise "$AFJ" "$D" "$RD")"
     read -r SC SH SM SL SI <<EOF
@@ -683,6 +683,70 @@ EOF
         echo "| \`${t}\` | ${n} | ${bs:--} |"
       done
     echo
+    # --- Measured fire-history tier (AF-004/005/006) — shown only when collected ---
+    REACH_STATUS="$(jq -r '.af_findings[]? | select(.af_id=="AF-004") | .status // "not-in-scope"' "$AFJ")"
+    VOL_STATUS="$(jq -r '.af_findings[]? | select(.af_id=="AF-005") | .status // "not-in-scope"' "$AFJ")"
+    CHRON_STATUS="$(jq -r '.af_findings[]? | select(.af_id=="AF-006") | .status // "not-in-scope"' "$AFJ")"
+    if [ "$REACH_STATUS" = "measured" ] || [ "$VOL_STATUS" = "measured" ] || [ "$CHRON_STATUS" = "measured" ]; then
+      echo "### Measured fire-history (this run)"
+      echo
+      if [ "$REACH_STATUS" = "measured" ]; then
+        jq -r '.af_findings[]? | select(.af_id=="AF-004")
+          | "**Reachability — \(.unreachable_objects) of \(.measured_objects) alerting objects cannot reach a human by construction.** These fire into the void (a page that pages nobody):"' "$AFJ"
+        echo
+        echo "| Can't reach a human because | Objects |"
+        echo "| --- | ---: |"
+        jq -r 'def esc: tostring | gsub("\\|"; "\\|"); .af_findings[]? | select(.af_id=="AF-004") | .by_reason[]? | [ (.reason|esc), (.count|tostring) ] | @tsv' "$AFJ" \
+        | while IFS="$(printf '\t')" read -r rsn cnt; do echo "| ${rsn} | ${cnt} |"; done
+        echo
+      fi
+      if [ "$VOL_STATUS" = "measured" ]; then
+        jq -r '.af_findings[]? | select(.af_id=="AF-005")
+          | "**Top offenders — ranked by measured fatigue impact** (\(.total_fires) total fires across \(.objects_with_history) object(s); \(.flapping_objects) flapping). Fatigue impact weights raw fires by flapping, off-hours share, and dead-end routing:"' "$AFJ"
+        echo
+        echo "| Object | Tool | Fires | Flapping | Off-hours | Reaches human | Fatigue impact |"
+        echo "| --- | --- | ---: | --- | ---: | --- | ---: |"
+        jq -r 'def esc: tostring | gsub("\\|"; "\\|");
+          .af_findings[]? | select(.af_id=="AF-005") | .top_offenders[]?
+          | [ (.object_id|esc), (.provider|esc), (.fires|tostring),
+              (if .flapping==true then "yes" else "no" end),
+              ((.off_hours_fires // "—")|tostring),
+              (if .reaches_human==false then "**NO**" elif .reaches_human==true then "yes" else "?" end),
+              (.fatigue_impact|tostring) ] | @tsv' "$AFJ" \
+        | while IFS="$(printf '\t')" read -r oid prov fires flap oh reach imp; do
+            echo "| \`${oid}\` | ${prov} | ${fires} | ${flap} | ${oh} | ${reach} | ${imp} |"
+          done
+        echo
+      fi
+      if [ "$CHRON_STATUS" = "measured" ]; then
+        NCHRON="$(jq -r '.af_findings[]? | select(.af_id=="AF-006") | .chronic_objects // 0' "$AFJ")"
+        if [ "${NCHRON:-0}" -gt 0 ]; then
+          echo "**Chronic / stuck — firing continuously for a long time (desensitization risk — the team has learned to ignore these):**"
+          echo
+          echo "| Object | Tool | Stuck since | Days |"
+          echo "| --- | --- | --- | ---: |"
+          jq -r 'def esc: tostring | gsub("\\|"; "\\|"); .af_findings[]? | select(.af_id=="AF-006") | .objects[]? | [ (.object_id|esc), (.provider|esc), ((.stuck_since // "—")|esc), ((.stuck_days // 0)|tostring) ] | @tsv' "$AFJ" \
+          | while IFS="$(printf '\t')" read -r oid prov since days; do echo "| \`${oid}\` | ${prov} | ${since} | ${days} |"; done
+          echo
+        fi
+      fi
+      # honest coverage line
+      PENDING="$(jq -r '[.fire_history_coverage[]? | select(.status!="collected") | .provider] | join(", ")' "$AFJ")"
+      [ -n "$PENDING" ] && { echo "_Fire-history not collected for: ${PENDING} (marked verify-pending — no measured number is guessed for them)._"; echo; }
+    else
+      echo "_Measured fire-history tier not collected this run (no \`fatigue-signals.json\`). AF-004/005/006 are not-in-scope — run the fire-history collection lane (references/fire-history-reads.md) for measured reachability, volume, and chronic-stuck. The config tier above still reports fully._"
+      echo
+    fi
+    # --- Fatigue anti-pattern histogram (AF-007) ---
+    if jq -e '.af_findings[]? | select(.af_id=="AF-007") | (.histogram | length) > 0' "$AFJ" >/dev/null 2>&1; then
+      echo "### What KIND of noise (anti-pattern histogram)"
+      echo
+      echo "| Failure mode | Findings |"
+      echo "| --- | ---: |"
+      jq -r 'def esc: tostring | gsub("\\|"; "\\|"); .af_findings[]? | select(.af_id=="AF-007") | .histogram[]? | [ (.class|esc), (.count|tostring) ] | @tsv' "$AFJ" \
+      | while IFS="$(printf '\t')" read -r cls cnt; do echo "| ${cls} | ${cnt} |"; done
+      echo
+    fi
     echo "### Cross-source alert storms"
     echo
     if [ "${TS:-0}" -gt 0 ]; then
@@ -745,6 +809,9 @@ EOF
     read -r SC SH SM SL SI <<EOF
 $(printf '%s' "$NOISE" | jq -r 'reduce .[] as $f ({critical:0,high:0,medium:0,low:0,info:0}; .[$f.severity] += 1) | "\(.critical) \(.high) \(.medium) \(.low) \(.info)"')
 EOF
+    UNREACH="$(jq -r '.totals.unreachable_objects // 0' "$AFJ")"
+    CHRON="$(jq -r '.totals.chronic_objects // 0' "$AFJ")"
+    FHOBJ="$(jq -r '.totals.fire_history_objects // 0' "$AFJ")"
     {
     cat <<HTMLHEAD
 <!doctype html><html lang="en"><head><meta charset="utf-8">
@@ -773,6 +840,8 @@ code{font-size:12px}
 <div class="metric"><span class="n">${TN}</span><span class="l">alerting-noise findings</span></div>
 <div class="metric"><span class="n">${TT}</span><span class="l">tools with noise</span></div>
 <div class="metric"><span class="n">${TS}</span><span class="l">cross-source storms</span></div>
+<div class="metric"><span class="n" style="color:#c53030">${UNREACH}</span><span class="l">can't reach a human (measured)</span></div>
+<div class="metric"><span class="n" style="color:#dd6b20">${CHRON}</span><span class="l">chronic / stuck (measured)</span></div>
 <div class="metric"><span class="n" style="font-size:18px">${RATIO_TXT}</span><span class="l">alert-to-incident ratio</span></div>
 </div>
 <div class="sev">
@@ -782,7 +851,7 @@ code{font-size:12px}
 <span class="chip"><span class="dot" style="background:#3182ce"></span>${SL} low</span>
 <span class="chip"><span class="dot" style="background:#a0aec0"></span>${SI} info</span>
 </div>
-<div class="tiers"><strong>Three honest tiers:</strong> <em>config</em> (rule hygiene, a real yes/no) · <em>fire-history</em> (measured volume/flapping/dead-weight from the alert stream) · <em>incident-feed</em> (true precision &amp; alert-to-incident ratio — only from your incident data, never fabricated). The noise findings below are the config + fire-history picture; the ratio is the incident-feed tier.</div>
+<div class="tiers"><strong>Three honest tiers:</strong> <em>config</em> (rule hygiene, a real yes/no) · <em>fire-history</em> (measured volume/flapping/reachability/chronic from the alert stream — the Measured fire-history card below, shown when the collection lane ran) · <em>incident-feed</em> (true precision &amp; alert-to-incident ratio — only from your incident data, never fabricated). A tier with no data is not-in-scope, never guessed.</div>
 </div>
 <div class="card"><h1 style="font-size:16px">Top offenders — worst first (problem &rarr; fix)</h1>
 <table id="find"><thead><tr><th onclick="sortT(this,0)">Severity</th><th onclick="sortT(this,1)">Problem</th><th onclick="sortT(this,2)">Where</th><th onclick="sortT(this,3)">How to fix</th><th>Ref</th></tr></thead><tbody>
@@ -816,13 +885,36 @@ HTMLSTORM
         .af_findings[]? | select(.type=="cross-source-alert-storm") | .storms[]?
         | "<tr><td><code>\(.service|@html)</code></td><td>\(((.tools // []) | map(tdisp) | join(", "))|@html)</td><td>\(.tool_count)</td></tr>"' "$AFJ"
     fi
+    echo '</tbody></table></div>'
+    # Measured fire-history cards (AF-004/005/006) — shown only when the lane collected
+    REACH_ST="$(jq -r '.af_findings[]? | select(.af_id=="AF-004") | .status // "not-in-scope"' "$AFJ")"
+    VOL_ST="$(jq -r '.af_findings[]? | select(.af_id=="AF-005") | .status // "not-in-scope"' "$AFJ")"
+    if [ "$REACH_ST" = "measured" ] || [ "$VOL_ST" = "measured" ]; then
+      echo '<div class="card"><h1 style="font-size:16px">Measured fire-history</h1>'
+      if [ "$REACH_ST" = "measured" ]; then
+        jq -r '.af_findings[]? | select(.af_id=="AF-004") | "<p><strong style=\"color:#c53030\">\(.unreachable_objects) of \(.measured_objects)</strong> alerting objects cannot reach a human by construction — a page that pages nobody. By reason: " + (([.by_reason[]? | "\(.reason|@html) (\(.count))"]) | join("; ")) + ".</p>"' "$AFJ"
+      fi
+      if [ "$VOL_ST" = "measured" ]; then
+        echo '<p class="sub">Top offenders ranked by measured fatigue impact (fires weighted by flapping / off-hours share / dead-end routing):</p>'
+        echo '<table><thead><tr><th onclick="sortT(this,0)">Object</th><th onclick="sortT(this,1)">Tool</th><th onclick="sortT(this,2,1)">Fires</th><th>Flapping</th><th>Reaches human</th><th onclick="sortT(this,5,1)">Fatigue impact</th></tr></thead><tbody>'
+        jq -r '.af_findings[]? | select(.af_id=="AF-005") | .top_offenders[]?
+          | "<tr><td><code>\(.object_id|@html)</code></td><td>\(.provider|@html)</td><td>\(.fires)</td><td>\(if .flapping==true then "yes" else "no" end)</td><td>\(if .reaches_human==false then "<strong style=\"color:#c53030\">NO</strong>" elif .reaches_human==true then "yes" else "?" end)</td><td>\(.fatigue_impact)</td></tr>"' "$AFJ"
+        echo '</tbody></table>'
+      fi
+      echo '</div>'
+    fi
+    # Anti-pattern histogram card (AF-007)
+    if jq -e '.af_findings[]? | select(.af_id=="AF-007") | (.histogram | length) > 0' "$AFJ" >/dev/null 2>&1; then
+      echo '<div class="card"><h1 style="font-size:16px">What KIND of noise</h1><table><thead><tr><th>Failure mode</th><th>Findings</th></tr></thead><tbody>'
+      jq -r '.af_findings[]? | select(.af_id=="AF-007") | .histogram[]? | "<tr><td>\(.class|@html)</td><td>\(.count)</td></tr>"' "$AFJ"
+      echo '</tbody></table></div>'
+    fi
     RATIO_NOTE="$(jq -r '.af_findings[]? | select(.af_id=="AF-003") | (if .status=="computed" then ((.note // "")) else (.reason // "No incident/ack stream supplied — the true ratio and %-actionable are not computed and never fabricated. Provide a fatigue.json signal block to compute it.") end)' "$AFJ" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g')"
     GATED_HTML=""
     if [ "$RSTATUS" != "computed" ]; then
       GATED_HTML='<p class="sub"><strong>Not measured this run (incident-feed tier — deliberately not fabricated):</strong> true alert-to-incident ratio, %-actionable (precision), MTTA/MTTR, escalation &amp; ack rates, and the off-hours interruption split all need the paging tool&rsquo;s incident/ack stream. Connect it &mdash; or supply a <code>fatigue.json</code> signal block &mdash; to unlock them. We report what the config + fire-history reads prove and say so where a number would be a guess.</p>'
     fi
     cat <<HTMLFOOT
-</tbody></table></div>
 <div class="card"><h1 style="font-size:16px">Alert-to-incident ratio</h1>
 <p><strong>${RATIO_TXT}</strong></p><p class="sub">${RATIO_NOTE}</p>${GATED_HTML}</div>
 <div class="footer">Generated by Scoutflo AI Readiness for Claude Code · mirrors alert-fatigue.json · non-scored roll-up · contains infrastructure detail — keep within your team</div>

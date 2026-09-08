@@ -90,5 +90,38 @@ alert_fatigue_run "$DATE" >/dev/null 2>&1
 check "AF-003 computed with signal block"   "$(jq -r '.af_findings[] | select(.af_id=="AF-003") | .status' "$OUT")" "computed"
 check "AF-003 alerts_per_incident = 120"    "$(jq -r '.af_findings[] | select(.af_id=="AF-003") | .alerts_per_incident' "$OUT")" "120"
 
+# 8. MEASURED fire-history tier — a fatigue-signals.json drives AF-004/005/006 and
+#    a live incident_feed drives AF-003 (preferred over the operator fatigue.json).
+cat > "$SCOUTFLO_AUDIT_DIR/fatigue-signals.json" <<'JSON'
+{ "schema":"scoutflo-fatigue-signals/v1","window":"30d",
+  "signals":[
+    {"provider":"alertmanager","target":"alertmanager","object_id":"checkout-flap","object_kind":"prometheus_alert","fires":40,"flapping":true,"stuck":false,"off_hours_fires":20,"reaches_human":false,"reach_reason":"routes to a black-hole receiver","source_finding_ids":["ALR-012"]},
+    {"provider":"grafana","target":"grafana","object_id":"checkout-stuck","object_kind":"grafana_rule","fires":1,"flapping":false,"stuck":true,"stuck_since":"2025-11-01T00:00:00Z","stuck_days":311,"reaches_human":true,"source_finding_ids":["GRAF-021"]}
+  ],
+  "provider_coverage":[{"provider":"alertmanager","tier":"fire-history","status":"collected"},{"provider":"datadog","tier":"fire-history","status":"verify-pending","reason":"no key"}],
+  "incident_feed":{"status":"collected","source":"pagerduty","window":"30d","alerts_fired":400,"incidents":8,"actionable_pct":40}
+}
+JSON
+alert_fatigue_run "$DATE" >/dev/null 2>&1
+check "AF-004 reachability measured"          "$(jq -r '.af_findings[]|select(.af_id=="AF-004")|.status' "$OUT")" "measured"
+check "AF-004 one unreachable object"          "$(jq -r '.af_findings[]|select(.af_id=="AF-004")|.unreachable_objects' "$OUT")" "1"
+check "AF-004 by-reason names the black hole"  "$(jq -r '.af_findings[]|select(.af_id=="AF-004")|.by_reason[0].reason' "$OUT")" "routes to a black-hole receiver"
+check "AF-005 total fires = 41"                "$(jq -r '.af_findings[]|select(.af_id=="AF-005")|.total_fires' "$OUT")" "41"
+check "AF-005 top offender is the flapper"     "$(jq -r '.af_findings[]|select(.af_id=="AF-005")|.top_offenders[0].object_id' "$OUT")" "checkout-flap"
+check "AF-006 one chronic object"              "$(jq -r '.af_findings[]|select(.af_id=="AF-006")|.chronic_objects' "$OUT")" "1"
+check "AF-006 chronic is the stuck rule"       "$(jq -r '.af_findings[]|select(.af_id=="AF-006")|.objects[0].object_id' "$OUT")" "checkout-stuck"
+check "AF-007 histogram has classes"           "$(jq -r '[.af_findings[]|select(.af_id=="AF-007")|.histogram[].class] | any(. == "dead-end" or . == "flap-prone" or . == "chronic-stuck")' "$OUT")" "true"
+check "AF-003 prefers the live incident feed"  "$(jq -r '.af_findings[]|select(.af_id=="AF-003")|.source' "$OUT")" "pagerduty"
+check "AF-003 ratio from feed = 50"            "$(jq -r '.af_findings[]|select(.af_id=="AF-003")|.alerts_per_incident' "$OUT")" "50"
+check "coverage marks datadog verify-pending"  "$(jq -r '[.fire_history_coverage[]|select(.status=="verify-pending")|.provider]|.[0]' "$OUT")" "datadog"
+check "totals.unreachable_objects = 1"         "$(jq -r '.totals.unreachable_objects' "$OUT")" "1"
+
+# 9. NEVER-FABRICATE — with signals removed, the measured tiers are not-in-scope, not guessed
+rm -f "$SCOUTFLO_AUDIT_DIR/fatigue-signals.json"
+alert_fatigue_run "$DATE" >/dev/null 2>&1
+check "AF-004 not-in-scope without signals"    "$(jq -r '.af_findings[]|select(.af_id=="AF-004")|.status' "$OUT")" "not-in-scope"
+check "AF-005 not-in-scope without signals"    "$(jq -r '.af_findings[]|select(.af_id=="AF-005")|.status' "$OUT")" "not-in-scope"
+check "AF-006 not-in-scope without signals"    "$(jq -r '.af_findings[]|select(.af_id=="AF-006")|.status' "$OUT")" "not-in-scope"
+
 echo "alert-fatigue: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
