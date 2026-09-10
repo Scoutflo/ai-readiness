@@ -311,5 +311,21 @@ printf '%s' "$EX" | grep -qi 'never a blended cross-domain score' || fail "hones
 printf '%s' "$(sh "$VIZ" exec-summary "$WORK/nonexist-audits" "$EXDATE")" | grep -qi 'No audit findings' || fail "exec-summary empty-estate degrade missing"
 echo "PASS"
 
+echo "Test 17: exec-summary stamps a TRIAGE run + AF-004 surfaces its coverage denominator (P3/P4)"
+TRD="$WORK/triage"; TRDATE="2026-09-08"; mkdir -p "$TRD/aws/$TRDATE"
+# a triage-scoped findings.json with only a LOW finding -> without the stamp this would read "HEALTHY"
+jq -n '{schema:"scoutflo-findings/v2",scope:"triage",target:"aws",score:{overall:90,categories:[]},severity_counts:{critical:0,high:0,medium:0,low:1,info:0},findings:[{id:"AWS-060",title:"minor tag gap",severity:"low",affected:["x"],impact:"i",recommendation:"r",remediation:"setup-aws#t"}]}' > "$TRD/aws/$TRDATE/findings.json"
+# AF-004 measured over a RESOLVED SUBSET (measured_objects < objects_seen) -> coverage caveat must show
+printf '{"schema":"scoutflo-alert-fatigue/v1","totals":{"unreachable_objects":1},"af_findings":[{"af_id":"AF-004","type":"alerting-reachability","status":"measured","measured_objects":2,"objects_seen":9,"unreachable_objects":1,"routing_coverage_note":"routing resolved for 2 of 9"}]}' > "$TRD/alert-fatigue.json"
+TREX="$(sh "$VIZ" exec-summary "$TRD" "$TRDATE")"
+printf '%s' "$TREX" | grep -qi 'TRIAGE — fast worst-first subset, NOT a full assessment' || fail "triage banner missing (a subset could read as a full assessment)"
+printf '%s' "$TREX" | grep -qi 'not a full-assessment all-clear' || fail "triage-aware grade missing (bare HEALTHY on a subset)"
+printf '%s' "$TREX" | grep -q 'routing resolved for 2 of 9 objects seen' || fail "AF-004 resolved-subset coverage caveat missing from exec reachability line"
+# and a NON-triage run must NOT show the banner
+NTD="$WORK/nontriage"; mkdir -p "$NTD/aws/$TRDATE"
+jq -n '{schema:"scoutflo-findings/v2",target:"aws",score:{overall:90,categories:[]},severity_counts:{critical:0,high:0,medium:0,low:1,info:0},findings:[{id:"AWS-061",title:"minor",severity:"low",affected:["x"],impact:"i",recommendation:"r",remediation:"setup-aws#t"}]}' > "$NTD/aws/$TRDATE/findings.json"
+printf '%s' "$(sh "$VIZ" exec-summary "$NTD" "$TRDATE")" | grep -qi 'TRIAGE — fast worst-first' && fail "triage banner shown on a NON-triage run (false stamp)"
+echo "PASS"
+
 echo
 echo "=== report-viz self-test passed ==="

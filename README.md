@@ -230,6 +230,18 @@ Secrets live only in environment variables you export yourself. `~/.scoutflo/too
 
 (No `setup-alertmanager` yet — that's coming; today alertmanager findings point at `setup-lgtm` or `setup-grafana`.)
 
+## Alert noise & fatigue, triage, and the executive one-pager
+
+Beyond each audit's own alert-hygiene scoring, `/scoutflo:audit-all` runs a cross-cutting **alert noise & fatigue** analysis that answers the question no single tool can: *across all your alerting, how much of your paging is noise, and does one incident page through several tools at once?* It reports three honest tiers and never fabricates a number:
+
+- **Config tier** (always available) — where alerting-noise findings concentrate by tool, and **cross-source storms** (one service paged by two or more tools), classified into named failure modes.
+- **Measured fire-history tier** (when the read-only fire-history lane runs) — how each alert actually *behaved*: real fire counts, flapping, chronic/stuck alarms, and **how many alerting objects can't reach a human by construction** (a page that pages nobody). A provider it can't read is marked `verify-pending`; a provider read from a not-yet-live-confirmed spec is marked `spec-only` — never a guessed number.
+- **Incident-feed tier** (when you connect a paging tool) — the true alert-to-incident ratio, MTTA/MTTR, and %-actionable from your incident stream. Absent that feed it stays `not-in-scope` — the toolkit never invents an actionability percentage.
+
+**Triage mode** is the fast first pass: `SCOUTFLO_TRIAGE=1` (or asking for a "fast/triage pass") runs a curated, high-signal subset per provider — the smallest scope, no per-resource sweeps — and renders the one-pager in a few minutes, then offers the deep audit for detail. It's fast because it reads *less*, not because of any speed trick; a triage report is stamped as a subset so a quiet result is never mistaken for a full all-clear.
+
+Every `audit-all` report opens with an **executive one-pager**: a posture grade, the top few worst findings as *what · where · $ · the fix*, the reachability headline, and the single top real cost lever. Ranking is **severity-first** — a large dollar figure never promotes a low-severity finding above a critical one, and there is no blended "risk score."
+
 ## Reading a report
 
 Every audit run writes three files:
