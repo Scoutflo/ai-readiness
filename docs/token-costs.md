@@ -238,6 +238,14 @@ For these, Sonnet 5 is a good middle ground (3–10× more reasoning power, 3.75
 > that is what the section below measures. We deliberately publish no wall-time
 > figure, since it would depend on your model choice and estate rather than the plugin.
 
+> **Triage mode reads less, so it costs less.** `SCOUTFLO_TRIAGE=1` runs a curated
+> high-signal subset per provider (smallest scope, no per-resource sweeps, bulk
+> reads over per-object fan-out), so it consumes materially fewer tokens than a
+> full deep run and renders the executive one-pager first. That saving is a real
+> property of the plugin (it does fewer/cheaper reads); we still publish no
+> "X% faster" wall-time claim, for the same reason as above. A triage report is a
+> subset, not a full assessment — run the deep audit when you want complete coverage.
+
 ## Efficiency, measured
 
 The claims here are reproducible: run `sh tests/measure-efficiency.sh` from the

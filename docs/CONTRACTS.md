@@ -368,6 +368,13 @@ names a gate/case that no longer exists, that is itself a defect.
   `incident_feed`). The provider calls happen in this audit-lane, per
   [skills/alert-fatigue/references/fire-history-reads.md](../skills/alert-fatigue/references/fire-history-reads.md);
   the roll-up **library** still makes zero provider calls (it only reads local files).
+  Each provider carries `provider_coverage[].verification` (`spec-only` until a first
+  live run confirms its flagged fields, then `live-verified`; ledger + per-provider
+  checklist in fire-history-reads.md § Live-verification). **Before the roll-up
+  analyzes it**, the lane validates `fatigue-signals.json` with
+  [report-standard/check-fatigue-signals.sh](../report-standard/check-fatigue-signals.sh)
+  (schema, field types, the `off_hours_fires ≤ fires` bound, reason-on-`verify-pending`,
+  and the never-fabricate cross-check that every `source_finding_ids` exists in this run).
 - **Consumers:** `audit-all` Phase 3.6 runs it after correlation; the report
   renderer `render-report-viz.sh` (`alert-fatigue` + `alert-fatigue-html` modes)
   turns `alert-fatigue.json` into the report §7 markdown section and a standalone
@@ -385,8 +392,12 @@ names a gate/case that no longer exists, that is itself a defect.
   home audit. **Never fabricates a measured number:** a tier with no data is
   `not-in-scope`/`verify-pending`, never guessed (AF-003 without a feed/block; AF-004/005/006
   without `fatigue-signals.json`; a provider marked `verify-pending` in `provider_coverage[]`).
-  Off-hours is always derived from a timestamp, never a native field. `AF` is a registered
-  **non-scored** prefix (findings-schema), like `COST`.
+  Off-hours is always derived from a timestamp, never a native field. **AF-004 reports its
+  coverage denominator** (`objects_seen` vs `measured_objects`): when routing was resolved for
+  only a subset, the report says so, so "N cannot reach a human" never implies the whole estate
+  from a partial read. A `spec-only` provider is surfaced in the report's fire-history coverage
+  line so the measured tier is never presented as live-battle-tested when it is not. `AF` is a
+  registered **non-scored** prefix (findings-schema), like `COST`.
 - **SSOT:** `skills/alert-fatigue/SKILL.md`; the fire-history read spec +
   `fatigue-signals.json` contract in `skills/alert-fatigue/references/fire-history-reads.md`.
 - **Guards:** `skills/alert-fatigue/tests/test-alert-fatigue.sh` (run by
@@ -394,9 +405,13 @@ names a gate/case that no longer exists, that is itself a defect.
   findings, non-scored + cites-source-IDs, the `fatigue.json` ratio path, **and the
   measured tier — AF-004 reachability, AF-005 fatigue-impact ranking, AF-006 chronic,
   AF-007 histogram, live-feed AF-003, verify-pending coverage, and never-fabricate when
-  signals are absent**); `tests/test-report-viz.sh` Tests 12–15 (the renderer joins each
-  cited noise finding to its exact fix, orders worst-first, renders the measured tier +
-  the two new HTML metric tiles, and degrades honestly when a tier is not collected);
+  signals are absent**); `report-standard/check-fatigue-signals.sh` + `tests/test-check-fatigue-signals.sh`
+  (validate the model-produced `fatigue-signals.json`: schema, field types incl. the `//`-bool
+  trap, off-hours≤fires, reason-on-verify-pending, and the never-fabricate source-id cross-check);
+  `tests/test-report-viz.sh` Tests 12–17 (the renderer joins each cited noise finding to its exact
+  fix, orders worst-first, renders the measured tier + coverage line + spec-only caveat, stamps a
+  triage run so a subset is never read as a full assessment, and the exec-summary ranks
+  severity-first with `$` as an in-band tiebreaker — never promoting a lesser finding);
   `ci/prefix-registry-check.sh` (`AF` registered);
   `ci/catalog-consistency-check.sh` (alert-fatigue is a documented internal
   helper). Selftest: `layer_depth` alert-fatigue lock.

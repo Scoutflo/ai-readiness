@@ -133,12 +133,17 @@ alert_fatigue_signal_coverage() {
 # Reads the signals array on stdin.
 alert_fatigue_reachability() {
   jq '
-    [ .[] | select(has("reaches_human")) ] as $known
+    length as $seen
+    | [ .[] | select(has("reaches_human")) ] as $known
     | ([ $known[] | select(.reaches_human == false) ]) as $dead
     | {
         status: (if ($known|length) > 0 then "measured" else "not-in-scope" end),
         measured_objects: ($known|length),
+        objects_seen: $seen,
         unreachable_objects: ($dead|length),
+        routing_coverage_note: (if ($known|length) > 0 and $seen > ($known|length)
+          then ("routing was resolved for " + (($known|length)|tostring) + " of " + ($seen|tostring) + " alerting objects seen this run — the unreachable count is over the RESOLVED subset, not the whole estate; the rest need a routing resolve to judge")
+          else null end),
         by_reason: ($dead | map(.reach_reason // "unspecified") | group_by(.) | map({reason: .[0], count: length}) | sort_by(-.count)),
         examples: ($dead | map({provider, object_id, object_kind, reach_reason, source_finding_ids}) | .[0:10]),
         reason: (if ($known|length) > 0 then null else "no fire-history signal carried a resolved routing target (reaches_human); reachability needs the fire-history collection lane to resolve each alerting object routing to a live receiver" end)

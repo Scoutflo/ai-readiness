@@ -56,7 +56,7 @@ Write it to `${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/fatigue-signals.json`:
       "source_finding_ids": ["AWS-SNS"] }   // link back to the config finding(s)
   ],
   "provider_coverage": [
-    { "provider": "aws",     "tier": "fire-history", "status": "collected", "objects": 118 },
+    { "provider": "aws",     "tier": "fire-history", "status": "collected", "objects": 118, "verification": "spec-only" },
     { "provider": "datadog", "tier": "fire-history", "status": "verify-pending", "reason": "events read returned 403 (needs events_read scope)" }
   ],
   "incident_feed": {          // OPTIONAL — the incident-feed tier for AF-003 (see §incident-feed)
@@ -66,6 +66,45 @@ Write it to `${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/fatigue-signals.json`:
 ```
 
 Only emit a field you actually measured. A missing field is honest; a fabricated one is a bug.
+
+**Validate before analyzing.** After writing `fatigue-signals.json`, run
+[`report-standard/check-fatigue-signals.sh`](../../../report-standard/check-fatigue-signals.sh)
+`<fatigue-signals.json> <audits-dir> <run-date>` — it fails closed on a malformed
+schema, a wrong field type, an `off_hours_fires > fires` impossibility, a
+`verify-pending` with no reason, or a `source_finding_ids` entry that cites a
+finding absent from this run (the never-fabricate cross-check). Do not feed a file
+that does not print `FATIGUE-SIGNALS-OK` into the analysis.
+
+## Live-verification status & checklist (the measured tier is doc-verified, not yet live-proven)
+
+**Honesty rule for this whole lane:** the per-provider read blocks below are
+**doc-verified** (each field tagged VERIFIED / UNVERIFIED against the vendor's own
+API reference), but the measured tier as a whole has **not yet been confirmed
+against a live tenant per provider**. Until it is, set each provider's
+`provider_coverage[].verification` to **`spec-only`**; the report surfaces that so
+AF-004/005/006 are never presented as battle-tested when they are not. On the first
+live run against an authorized estate, confirm the UNVERIFIED fields below parse as
+expected, then set `verification: "live-verified"` for that provider. This closes
+the plugin's own live-smoke gate (AGENTS Done-criteria #5) provider by provider.
+
+| Provider | Read blocks | Confirm on first live run (the UNVERIFIED fields) |
+| --- | --- | --- |
+| **AWS CloudWatch** | `DescribeAlarmHistory` + SNS subscriber check | `HistoryData` keys (`newState.stateValue`/`oldState.stateValue`); the SNS `PendingConfirmation` sentinel |
+| **Datadog** | Events v1/v2 + monitor state | `aggregation_key` uniqueness per monitor; the v2 `timestamp` unit (ms vs s) |
+| **Grafana** | annotations / Loki state-history | Loki `GET /api/v1/rules/history` frame field names (prefer annotations if Loki absent) |
+| **Prometheus** | `ALERTS`/`ALERTS_FOR_STATE` PromQL | (both series VERIFIED) — confirm `eval_interval` used in the stuck ratio matches the deployment |
+| **Alertmanager** | notification counters + silences | the `alertmanager_alerts{state}` gauge name (confirm from a live `/metrics`) |
+| **SigNoz** | `rules/{id}/history/*` POST routes | route reachability + `Stats.TotalCurrentTriggers` shape; ClickHouse table name is UNVERIFIED (prefer REST) |
+| **PagerDuty** | `GET /incidents` + `log_entries` | `analytics/metrics` response fields (prefer `log_entries` until confirmed) |
+| **incident.io / Opsgenie** | incidents lists | `duration_metrics[]` / `report.ackTime` shapes |
+| **Zenduty** | incidents list | **entirely UNVERIFIED** (docs migrated to Xurrent) — keep `verify-pending` until re-confirmed |
+
+**Per-provider checklist (run once, on an authorized estate):** (1) run the read
+block read-only; (2) confirm each UNVERIFIED field above is present and parses (fall
+back to the documented text/alternate field if not, and note it); (3) confirm
+`fires`/`stuck`/`reaches_human` derive sane values against a known object; (4) set
+`verification: "live-verified"`; (5) if a read is blocked (403/absent), mark that
+provider `verify-pending` with the reason — never emit a guessed number.
 
 ---
 

@@ -633,8 +633,12 @@ HTMLFOOT
 $(jq -r '.totals | "\(.alerting_noise_findings // 0) \(.cross_source_storms // 0) \(.tools_with_noise // 0)"' "$AFJ")
 EOF
     RSTATUS="$(jq -r '.af_findings[]? | select(.af_id=="AF-003") | .status // "not-in-scope"' "$AFJ")"
-    if [ "${TN:-0}" -eq 0 ]; then
-      echo "No alerting-noise findings for ${RD} — the configured alerting is clean on the checks that ran, or no alerting provider was audited. (This is a config + fire-history read; a true alert-to-incident ratio needs an incident feed.)"
+    FHO="$(jq -r '.totals.fire_history_objects // 0' "$AFJ")"
+    # Only bail when BOTH tiers are empty. A run with zero config-noise findings but
+    # measured fire-history (the standalone fire-history case) must still render the
+    # measured tier — the whole point of AF-004/005/006 is noise the config can't see.
+    if [ "${TN:-0}" -eq 0 ] && [ "${FHO:-0}" -eq 0 ]; then
+      echo "No alerting-noise findings and no measured fire-history for ${RD} — the configured alerting is clean on the checks that ran (or no alerting provider was audited) and the fire-history collection lane did not run. (A true alert-to-incident ratio needs an incident feed.)"
       exit 0
     fi
     if [ "$RSTATUS" = "computed" ]; then
@@ -651,6 +655,7 @@ EOF
 $(printf '%s' "$NOISE" | jq -r 'reduce .[] as $f ({critical:0,high:0,medium:0,low:0,info:0}; .[$f.severity] += 1) | "\(.critical) \(.high) \(.medium) \(.low) \(.info)"')
 EOF
     SEVMAX="$(printf '%s\n' "$SC" "$SH" "$SM" "$SL" "$SI" | sort -rn | head -1)"; [ "${SEVMAX:-0}" -gt 0 ] || SEVMAX=1
+    if [ "${TN:-0}" -gt 0 ]; then
     echo "| Severity | Noise findings | |"
     echo "| --- | ---: | --- |"
     echo "| 🔴 critical | ${SC} | \`$(viz_bar "$SC" "$SEVMAX" 10)\` |"
@@ -671,6 +676,10 @@ EOF
         + (if (.recommendation != "") then "  - Fix: " + .recommendation + (if (.remediation != "") then "  -> `" + .remediation + "`" else "" end) + "\n"
            elif (.remediation != "") then "  - Fix: `" + .remediation + "`\n" else "" end)'
     echo
+    else
+      echo "_Config tier: 0 alerting-noise findings from the audits this run — the measured fire-history tier below is the story (or the config alerting is clean on the checks that ran)._"
+      echo
+    fi
     echo "### Where the noise concentrates (by tool)"
     echo
     echo "| Tool | Noise findings | By severity |"
@@ -690,9 +699,24 @@ EOF
     if [ "$REACH_STATUS" = "measured" ] || [ "$VOL_STATUS" = "measured" ] || [ "$CHRON_STATUS" = "measured" ]; then
       echo "### Measured fire-history (this run)"
       echo
+      # per-provider fire-history coverage (collected / verify-pending / spec-only) — honesty
+      if jq -e '(.fire_history_coverage // []) | length > 0' "$AFJ" >/dev/null 2>&1; then
+        echo "| Provider | Fire-history | Verification | Note |"
+        echo "| --- | --- | --- | --- |"
+        jq -r 'def esc: tostring | gsub("\\|"; "\\|"); .fire_history_coverage[]? | [ (.provider|esc), ((.status // "-")|esc), ((.verification // "-")|esc), ((.reason // "-")|esc) ] | @tsv' "$AFJ" \
+        | while IFS="$(printf '\t')" read -r pv st vf rs; do echo "| ${pv} | ${st} | ${vf} | ${rs} |"; done
+        echo
+        if jq -e '[.fire_history_coverage[]? | select(.verification=="spec-only")] | length > 0' "$AFJ" >/dev/null 2>&1; then
+          echo "_Providers marked \`spec-only\` were read from a doc-verified but not-yet-live-confirmed lane — the numbers are real reads; a first live run confirms the field parsing (see references/fire-history-reads.md § Live-verification)._"
+          echo
+        fi
+      fi
       if [ "$REACH_STATUS" = "measured" ]; then
         jq -r '.af_findings[]? | select(.af_id=="AF-004")
           | "**Reachability — \(.unreachable_objects) of \(.measured_objects) alerting objects cannot reach a human by construction.** These fire into the void (a page that pages nobody):"' "$AFJ"
+        echo
+        # honest coverage: if routing was resolved for only a subset of objects seen, say so
+        jq -r '.af_findings[]? | select(.af_id=="AF-004") | select(.routing_coverage_note != null) | "_(" + .routing_coverage_note + ".)_"' "$AFJ"
         echo
         echo "| Can't reach a human because | Objects |"
         echo "| --- | ---: |"
@@ -944,18 +968,29 @@ HTMLFOOT
       case "$f" in */all/*|*/doctor/*|*/alert-fatigue/*) continue ;; esac
       set -- "$@" "$f"
     done
+    # P3: detect a triage run — any findings.json with a "triage" scope envelope. A triage
+    # pass is a curated fast SUBSET, so its one-pager must never read as a full assessment.
+    TRIAGE=0
+    for f in "$@"; do
+      [ "$(jq -r '.scope // ""' "$f" 2>/dev/null)" = "triage" ] && { TRIAGE=1; break; }
+    done
     echo "## Executive summary"
     echo
     if [ "$#" -eq 0 ]; then
       echo "_No audit findings for ${RD} yet — run \`/scoutflo:audit-all\` (or a triage pass) first._"
       exit 0
     fi
+    if [ "$TRIAGE" -eq 1 ]; then
+      echo "> ⚡ **TRIAGE — fast worst-first subset, NOT a full assessment.** This pass ran a curated high-signal subset per provider (smallest scope, no per-resource sweep). A clean or quiet result here is *not* an all-clear — run the full \`/scoutflo:audit-all\` for complete coverage."
+      echo
+    fi
     ALL="$(jq -s '[ .[] | (.target // "unknown") as $t | (.findings // [])[] | select((.lifecycle // "new") != "suppressed") | . + {target: $t} ]' "$@")"
     read -r NC NH NM NST <<EOF
 $(printf '%s' "$ALL" | jq -r '"\([.[]|select(.severity=="critical")]|length) \([.[]|select(.severity=="high")]|length) \([.[]|select(.severity=="medium")]|length) \([.[].target]|unique|length)"')
 EOF
     # posture grade from the worst severity present
-    if [ "${NC:-0}" -gt 0 ]; then GRADE="AT RISK — critical gaps"; elif [ "${NH:-0}" -gt 0 ]; then GRADE="NEEDS WORK — high-severity gaps"; elif [ "${NM:-0}" -gt 0 ]; then GRADE="FAIR — medium gaps"; else GRADE="HEALTHY on what ran"; fi
+    if [ "${NC:-0}" -gt 0 ]; then GRADE="AT RISK — critical gaps"; elif [ "${NH:-0}" -gt 0 ]; then GRADE="NEEDS WORK — high-severity gaps"; elif [ "${NM:-0}" -gt 0 ]; then GRADE="FAIR — medium gaps";
+    elif [ "$TRIAGE" -eq 1 ]; then GRADE="no critical/high/medium in the TRIAGE SUBSET — not a full-assessment all-clear"; else GRADE="HEALTHY on what ran"; fi
     echo "**Posture: ${GRADE}.** ${NC} critical · ${NH} high · ${NM} medium across ${NST} stack(s), ${RD}. Start with the ${TOPN} below (worst first)."
     echo
     echo "| # | Severity | What's wrong | Where (blast radius) | \$/mo | Fix |"
@@ -977,7 +1012,7 @@ EOF
     AFJ="$D/alert-fatigue.json"
     if [ -f "$AFJ" ]; then
       jq -r '.af_findings[]? | select(.af_id=="AF-004" and .status=="measured" and ((.unreachable_objects // 0) > 0))
-        | "**Alerting reachability:** \(.unreachable_objects) of \(.measured_objects) alerting objects cannot reach a human by construction — a page that pages nobody (see Alert noise & fatigue)."' "$AFJ"
+        | "**Alerting reachability:** \(.unreachable_objects) of \(.measured_objects) alerting objects cannot reach a human by construction — a page that pages nobody (see Alert noise & fatigue)." + (if .routing_coverage_note != null then " _(routing resolved for \(.measured_objects) of \(.objects_seen) objects seen — over the resolved subset, not the whole estate.)_" else "" end)' "$AFJ"
     fi
     # top real cost lever (never modeled — only a provider-native $)
     TOPSAVE="$(printf '%s' "$ALL" | jq -r '[.[] | select((.estimated_monthly_savings_usd // 0) > 0)] | sort_by(-(.estimated_monthly_savings_usd)) | (.[0] // empty) | "\(.estimated_monthly_savings_usd)\t\(.title)"')"
