@@ -95,6 +95,7 @@ the plugin's own live-smoke gate (AGENTS Done-criteria #5) provider by provider.
 | **Prometheus** | `ALERTS`/`ALERTS_FOR_STATE` PromQL | (both series VERIFIED) — confirm `eval_interval` used in the stuck ratio matches the deployment |
 | **Alertmanager** | notification counters + silences | the `alertmanager_alerts{state}` gauge name (confirm from a live `/metrics`) |
 | **SigNoz** | `rules/{id}/history/*` POST routes | route reachability + `Stats.TotalCurrentTriggers` shape; ClickHouse table name is UNVERIFIED (prefer REST) |
+| **New Relic** | `NrAiIncident` NRQL via NerdGraph | field set CONFIRMED LIVE against a real fired incident (event/openTime/conditionName/priority/muted/entity.guid, 2026-09) — first live run may set `live-verified` directly after re-confirming on the target tenant |
 | **PagerDuty** | `GET /incidents` + `log_entries` | `analytics/metrics` response fields (prefer `log_entries` until confirmed) |
 | **incident.io / Opsgenie** | incidents lists | `duration_metrics[]` / `report.ackTime` shapes |
 | **Zenduty** | incidents list | **entirely UNVERIFIED** (docs migrated to Xurrent) — keep `verify-pending` until re-confirmed |
@@ -155,6 +156,36 @@ request `{start,end (epoch ms),state,filters,offset,limit,order}`.
 - **stuck / since-when:** a `fingerprint` whose earliest firing `unixMilli` is far in the past with no intervening `normal`; `stuck_since` = that `unixMilli`.
 - **top-noisy:** `history/top_contributors`. **Resolution health:** `Stats.CurrentAvgResolutionTime`.
 - The ClickHouse alert-state-history table is a fallback but its **name is UNVERIFIED** — prefer the REST routes; if neither is reachable, mark SigNoz fire-history `verify-pending`.
+
+---
+
+## New Relic  (fields CONFIRMED LIVE against a real fired incident, 2026-09)
+
+One read: the `NrAiIncident` event type via a NerdGraph NRQL query (a documented
+read-by-POST — a `query` document on `/graphql`, no mutation):
+
+```
+SELECT count(*) FROM NrAiIncident FACET conditionName, event SINCE 7 days ago LIMIT 100
+SELECT count(*) FROM NrAiIncident WHERE muted IS TRUE SINCE 7 days ago
+```
+
+Confirmed-live fields per row: `event` (`open`/`close`), `openTime`,
+`conditionName`, `conditionId`, `policyId`, `policyName`, `priority`
+(`WARNING`/`CRITICAL`), `muted`, `entity.guid`, `threshold`.
+- **fires:** count of `event = 'open'` rows per condition over the window.
+- **flapping:** open/close alternation rate per condition (join opens to closes
+  by `incidentId` when present; a high open count with matching closes inside
+  short gaps is the flap signature).
+- **stuck / since-when:** opens with **no matching close** across the window;
+  `stuck_since` = the earliest such `openTime`.
+- **top-noisy:** the FACET ranking by opens. **muted fires:** the `muted IS TRUE`
+  count — noise the team hid instead of fixing.
+- **off-hours:** derived (as everywhere) from `openTime` against the
+  business-hours window — no native field.
+- Issue-level state (`aiIssues.issues` → `state: ACTIVATED/…`) confirms the
+  incident→issue grouping when needed; the incident rows above are the volume
+  truth. Auth is the same User key as `audit-newrelic`; a 401/403 marks the
+  provider `verify-pending`, never a guessed number.
 
 ---
 

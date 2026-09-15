@@ -6,7 +6,7 @@ description: Non-scored alert noise & fatigue assessment with TWO modes. (1) Cro
 
 # alert-fatigue
 
-Alert noise & fatigue, two ways, answering a question no single backend can: *across your alerting, how much of your paging is noise, and does one incident page through several tools at once?* It is a sibling of `/scoutflo:correlation-engine` and the `cost-analysis` roll-up. It **never mutates a finding or its severity and never re-scores** — each alerting-noise finding is scored **once**, in its home audit (`audit-alertmanager`, `audit-grafana`, `audit-datadog`, `audit-lgtm`, `audit-prometheus`, `audit-sentry`, `audit-pagerduty`, `audit-jsm`, `audit-zenduty`, `audit-signoz`, `audit-groundcover`, `audit-digitalocean`); this skill **cites** those source finding-IDs and adds the estate-wide view.
+Alert noise & fatigue, two ways, answering a question no single backend can: *across your alerting, how much of your paging is noise, and does one incident page through several tools at once?* It is a sibling of `/scoutflo:correlation-engine` and the `cost-analysis` roll-up. It **never mutates a finding or its severity and never re-scores** — each alerting-noise finding is scored **once**, in its home audit (`audit-alertmanager`, `audit-grafana`, `audit-datadog`, `audit-lgtm`, `audit-prometheus`, `audit-sentry`, `audit-pagerduty`, `audit-jsm`, `audit-zenduty`, `audit-signoz`, `audit-newrelic`, `audit-groundcover`, `audit-digitalocean`); this skill **cites** those source finding-IDs and adds the estate-wide view.
 
 ## Two modes
 
@@ -33,6 +33,7 @@ When the user asks for an alert-noise/fatigue read on **one integration** (or a 
    | `zenduty` | `audit-zenduty` — ZD-007/008/025/033/034 (orphaned EP, bus factor, dormancy, GET-only actionability, timeout posture) |
    | `grafana` | `audit-grafana` — alert-rule wiring, receiver delivery |
    | `signoz` | `audit-signoz` — SIG-040 routing + SIG-042 SLO-aware alert quality |
+   | `newrelic` | `audit-newrelic` — NR-010/011/012/013 (unwatched estate, uncaught policy, broken workflow→channel→destination linkage, destination posture) + NR-020–026 noise lane (single-tier terms, evaluation sanity incl. charts-vs-alerts divergence and sparse-signal stall, loss-of-signal, dead-weight disabled conditions, open-ended mutes, **measured `NrAiIncident` fire-history** — chronic opens, top-noisy, muted fires — and incidentPreference judgment) |
    | `elk` | `audit-elk` — ELK-007/015 (zero connectors, never-alerted stale rule) |
    | `digitalocean` | `audit-digitalocean` — DO-017/026/073 (uncovered-failing, prod/PP parity, destination consistency) |
    | `lgtm` (vmalert) | `audit-lgtm` — vmalert routing/hygiene lane |

@@ -1276,6 +1276,67 @@ else
   done
 fi
 
+# --- newrelic (NerdGraph, User key) ---------------------------------------------------------
+# One endpoint per region; auth is a USER key (NRAK-) on the API-Key header. The three
+# diagnosable outcomes: 401 = key missing/invalid (INDISTINGUISHABLE server-side — one state),
+# 403 = valid key on the wrong region host ("not authorized for account region"), 200+JSON = ok.
+# A 200 whose body is not the NerdGraph actor JSON is a proxy/SSO page — fail closed.
+
+NEWRELIC_KIND="$(tkind newrelic)"; NEWRELIC_N="$(tcount newrelic)"
+if [ "${NEWRELIC_N:-0}" -eq 0 ]; then
+  row newrelic configured no - skipped - "add a newrelic block via /scoutflo:connect if you run New Relic"
+else
+  _nri=0
+  while [ "$_nri" -lt "$NEWRELIC_N" ]; do
+    NR_INT="$(tint newrelic "$_nri" "$NEWRELIC_N")"
+    NR_ACCT="$(tv newrelic "$NEWRELIC_KIND" "$_nri" account_id)"
+    NR_REGION="$(tv newrelic "$NEWRELIC_KIND" "$_nri" region)"; NR_REGION="${NR_REGION:-US}"
+    case "$NR_REGION" in US|us) NR_API_HOST="api.newrelic.com" ;; EU|eu) NR_API_HOST="api.eu.newrelic.com" ;; *) NR_API_HOST="" ;; esac
+    if [ -z "$NR_ACCT" ]; then
+      row "$NR_INT" config yes - fail - "newrelic.account_id is empty in toolkit.yaml; set the account to audit"
+    elif [ -z "$NR_API_HOST" ]; then
+      row "$NR_INT" config yes - fail - "newrelic.region must be US or EU (got '${NR_REGION}')"
+    else
+      CONFIGURED_COUNT=$((CONFIGURED_COUNT + 1))
+      NR_KEY_VAR="$(tv newrelic "$NEWRELIC_KIND" "$_nri" api_key_env)"; NR_KEY_VAR="${NR_KEY_VAR:-NEW_RELIC_USER_API_KEY}"
+      NR_KEY="$(printenv "$NR_KEY_VAR" 2>/dev/null || true)"
+      if [ -z "$NR_KEY" ]; then
+        row "$NR_INT" env yes "$NR_KEY_VAR" env-missing - "$(missing_hint "$NR_KEY_VAR")"
+        row "$NR_INT" nerdgraph-read yes "$NR_KEY_VAR" skipped - "blocked: ${NR_KEY_VAR} is not set — see the ${NR_KEY_VAR} env row above, then rerun"
+      else
+        row "$NR_INT" env yes "$NR_KEY_VAR" pass - -
+        note "doctor: checking ${NR_INT} nerdgraph-read: POST https://${NR_API_HOST}/graphql (actor query)"
+        NRB="$(mktemp)"; NRR=0
+        NRM="$(curl -s -o "$NRB" -w '%{http_code} %{content_type}' \
+          --connect-timeout "$CONNECT_TIMEOUT" --max-time "$MAX_TIME" \
+          -X POST "https://${NR_API_HOST}/graphql" \
+          -H 'Content-Type: application/json' -H "API-Key: ${NR_KEY}" \
+          --data '{"query":"{ actor { user { name } accounts { id } } }"}')" || NRR=$?
+        NRC="${NRM%% *}"; NRCT="${NRM#* }"
+        if [ "$NRR" -ne 0 ]; then
+          row "$NR_INT" nerdgraph-read yes "$NR_KEY_VAR" fail "000" "$(transport_hint "$NRR") (https://${NR_API_HOST}/graphql)"
+        elif [ "$NRC" = "401" ]; then
+          row "$NR_INT" nerdgraph-read yes "$NR_KEY_VAR" fail "$NRC" "401 authentication required: the User key is missing or invalid (indistinguishable) — mint/re-paste a USER key (NRAK-, not a license key) into ${NR_KEY_VAR}"
+        elif [ "$NRC" = "403" ]; then
+          row "$NR_INT" nerdgraph-read yes "$NR_KEY_VAR" fail "$NRC" "403: valid key on the WRONG REGION endpoint — set newrelic.region to this account's region (US or EU)"
+        elif [ "$NRC" = "200" ] && printf '%s' "$NRCT" | grep -qi json && jq -e '.data.actor.user.name' "$NRB" >/dev/null 2>&1; then
+          if jq -e --argjson a "$NR_ACCT" '.data.actor.accounts | any(.[]; .id == $a)' "$NRB" >/dev/null 2>&1; then
+            row "$NR_INT" nerdgraph-read yes "$NR_KEY_VAR" pass "$NRC" "-"
+          else
+            row "$NR_INT" nerdgraph-read yes "$NR_KEY_VAR" fail "$NRC" "key is valid but account ${NR_ACCT} is not among the accounts it can see — fix newrelic.account_id (compare against actor.accounts) or use the right account's key"
+          fi
+        elif [ "$NRC" = "200" ]; then
+          row "$NR_INT" nerdgraph-read yes "$NR_KEY_VAR" fail "$NRC" "200 but Content-Type='${NRCT}' / body is not the NerdGraph actor JSON — an HTML proxy/SSO page, not ${NR_API_HOST}; not verified"
+        else
+          row "$NR_INT" nerdgraph-read yes "$NR_KEY_VAR" fail "$NRC" "unexpected ${NRC} from https://${NR_API_HOST}/graphql"
+        fi
+        rm -f "$NRB"
+      fi
+    fi
+    _nri=$((_nri+1))
+  done
+fi
+
 # --- digitalocean ------------------------------------------------------------------------
 
 DO_KIND="$(tkind digitalocean)"; DO_N="$(tcount digitalocean)"
@@ -1662,7 +1723,7 @@ done
 # doctor does not know is reported, never silently ignored (a clickstack-only config
 # once exited 0 "PASS" with zero rows — that class of false green is what this kills).
 
-KNOWN_BLOCKS="grafana sentry pagerduty datadog elk jsm zenduty groundcover lgtm prometheus alertmanager loki tempo mimir victoriametrics vmalert signoz digitalocean gcp aws azure github kubernetes clickstack slack"
+KNOWN_BLOCKS="grafana sentry pagerduty datadog elk jsm zenduty groundcover lgtm prometheus alertmanager loki tempo mimir victoriametrics vmalert signoz newrelic digitalocean gcp aws azure github kubernetes clickstack slack"
 for blk in $(sed -n 's/^\([a-z_][a-z_0-9]*\):.*$/\1/p' "$CONFIG" | sort -u); do
   case " $KNOWN_BLOCKS " in
     *" $blk "*) : ;;

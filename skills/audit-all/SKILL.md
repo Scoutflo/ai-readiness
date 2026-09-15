@@ -56,6 +56,7 @@ Expected output: one key per line, for example `grafana`, `sentry`, `prometheus`
 | `kubernetes` | `audit-kubernetes` |
 | `clickstack` | `audit-clickstack` |
 | `signoz` | `audit-signoz` |
+| `newrelic` | `audit-newrelic` |
 
 Show the plan before running anything: every queued audit in order, and every skipped audit with the reason "not configured". For each queued own-block audit, enumerate its targets with `sh "${CLAUDE_PLUGIN_ROOT}/report-standard/toolkit-targets.sh" "$CONFIG" <block> labels` and show one plan line per target when a block is a labeled list (e.g. `azure (prod-core)`, `azure (prod-data)`), so the plan makes the per-target fan-out visible rather than hiding N targets behind one row. If `./scoutflo-audits/topology.md` is missing, note that findings will use inferred service names and suggest `/scoutflo:map-topology`, but do not block.
 
