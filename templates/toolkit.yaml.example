@@ -129,6 +129,12 @@ signoz:
   # clickhouse_user: scoutflo_ro            # read-only user: SELECT on signoz_* + system.*
   # clickhouse_password_env: SIGNOZ_CH_KEY  # env var for that user's password
 
+newrelic:
+  account_id: 1234567                       # the New Relic account to audit (actor.accounts lists what your key can see)
+  api_key_env: NEW_RELIC_USER_API_KEY       # a USER API key (NRAK-...), never a license/ingest key
+  region: US                                # US (api.newrelic.com) or EU (api.eu.newrelic.com); wrong region = diagnosable 403
+  tier: read-only                           # NerdGraph query documents only; the audit sends no mutations
+
 loki:
   url: https://loki.example.com
   # token_env: LOKI_TOKEN

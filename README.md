@@ -25,7 +25,7 @@ flowchart TD
     end
 
     subgraph AUDIT["② Audit — read-only, scored 0–100, changes nothing"]
-        aud["18 audit skills: prometheus · lgtm · grafana · sentry · pagerduty · datadog<br/>elk · jsm · zenduty · groundcover · alertmanager<br/>kubernetes · digitalocean · gcp · aws · azure · clickstack · signoz"]
+        aud["19 audit skills: prometheus · lgtm · grafana · sentry · pagerduty · datadog<br/>elk · jsm · zenduty · groundcover · alertmanager<br/>kubernetes · digitalocean · gcp · aws · azure · clickstack · signoz · newrelic"]
         cost["/scoutflo:audit-cost<br/>deep per-resource cost, ranked savings"]
     end
 
@@ -198,6 +198,7 @@ Secrets live only in environment variables you export yourself. `~/.scoutflo/too
 | `/scoutflo:audit-lgtm` | **Loki, Tempo, Mimir, VictoriaMetrics** store health + per-service telemetry coverage — logs/traces reachability & queryability, the Mimir/VM metrics **stores** (query, multi-tenancy, ingestion freshness, ruler health), retention, and Alertmanager/vmalert routing (the deep **Prometheus** server + rule-engine plane is `audit-prometheus`; the paging-path proof is `audit-alertmanager`) |
 | `/scoutflo:audit-clickstack` | **ClickStack** (ClickHouse + HyperDX + OpenTelemetry) — telemetry coverage, ingestion freshness, retention TTL, ClickHouse DB/parts/replica health, HyperDX alerting + dashboards, security posture |
 | `/scoutflo:audit-signoz` | **SigNoz** (ClickHouse-backed, OpenTelemetry-native) — query-API health, telemetry coverage, ingestion freshness, retention TTL, ClickHouse health/capacity, alert-rule→channel delivery, dashboards, security posture |
+| `/scoutflo:audit-newrelic` | **New Relic** — alert delivery (condition→policy→workflow→destination joins incl. the per-critical-service paging path), alert noise with measured `NrAiIncident` fire-history, entity coverage + span-derived topology (`relatedEntities`, golden metrics), SLO/dashboard/change-tracking posture, data health (`NrIntegrationError` silent-rejection visibility, cardinality, ingest concentration), plus a non-scored ingest/cost section |
 | `/scoutflo:audit-grafana` | Dashboard truthfulness, alert-rule wiring, query hygiene, datasource health |
 | `/scoutflo:audit-sentry` | Org and project config, privacy scrubbing, alert-rule tiers, releases, monitors |
 | `/scoutflo:audit-pagerduty` | Paging health: services, escalation policies, on-call coverage, alert grouping and noise, incident aging — plus a vendor-analytics-backed **actionability** section (auto-resolved share, MTTA, sleep-hour interruptions) when your plan and key allow |

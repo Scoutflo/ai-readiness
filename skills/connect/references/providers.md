@@ -1044,6 +1044,75 @@ esac
 rm -f "$SB"
 ```
 
+## New Relic
+
+`audit-newrelic` reads one surface: NerdGraph (`https://api.newrelic.com/graphql`
+US, `https://api.eu.newrelic.com/graphql` EU) with a **User API key** (`NRAK-…`)
+on the `API-Key` header — query documents only, never a mutation. The account's
+license/ingest keys are a different key family the audit never needs.
+
+### Config
+
+```yaml
+newrelic:
+  account_id: 1234567                  # the account to audit
+  api_key_env: NEW_RELIC_USER_API_KEY  # a USER key (NRAK-...), never a license key
+  region: US                           # US (default) or EU — set to the account's real region
+  tier: read-only
+```
+
+**Multiple New Relic accounts in ONE environment — make `newrelic` a YAML list:**
+
+```yaml
+newrelic:
+  - label: prod
+    account_id: 1234567
+    api_key_env: NEW_RELIC_USER_API_KEY_PROD
+    region: US
+  - label: staging
+    account_id: 7654321
+    api_key_env: NEW_RELIC_USER_API_KEY_STG
+    region: EU
+```
+
+Each target audits separately (`SCOUTFLO_TARGET=<label>`), outputs under
+`newrelic/<label>/<date>/`.
+
+### Create the read credential
+
+one.newrelic.com → your user menu → **API keys** → *Create a key* → key type
+**User**. Any user who can see the account can mint one; there is no finer scope
+on a User key (it reads what its user reads), so create it under a
+least-privileged user where possible. Note the account's **region** — it is fixed
+at account creation and selects the endpoint; a valid key on the wrong region
+host fails with a diagnosable 403 (`not authorized for account region`), while a
+missing and an invalid key are indistinguishable (both 401
+`authentication required`).
+
+### Verify
+
+```bash
+# Three-outcome probe: 200+JSON = ok; 401 = key missing/invalid (one state); 403 = wrong region.
+NRB="$(mktemp)"; META=$(curl -s -o "$NRB" -w '%{http_code} %{content_type}' --max-time 15 \
+  -X POST "https://api.newrelic.com/graphql" \
+  -H 'Content-Type: application/json' -H "API-Key: ${NEW_RELIC_USER_API_KEY}" \
+  --data '{"query":"{ actor { user { name } accounts { id name } } }"}')
+CODE="${META%% *}"; CT="${META#* }"
+case "$CODE" in
+  200) case "$CT" in application/json*) jq -e '.data.actor.user.name' "$NRB" >/dev/null 2>&1 \
+         && { echo "New Relic key PASS; accounts visible:"; jq -r '.data.actor.accounts[] | "  - \(.id) \(.name)"' "$NRB"; } \
+         || echo "New Relic FAIL — 200 but unexpected body";;
+       *) echo "New Relic FAIL — 200 but Content-Type=$CT (proxy/SSO page, not NerdGraph)";; esac ;;
+  401) echo "New Relic FAIL — 401 authentication required (key missing or invalid — indistinguishable; mint/re-paste a USER key, NRAK-)";;
+  403) echo "New Relic FAIL — 403: valid key on the wrong region endpoint; use api.eu.newrelic.com for an EU account (newrelic.region: EU)";;
+  *)   echo "New Relic FAIL — got $CODE";;
+esac
+rm -f "$NRB"
+```
+
+Confirm the `account_id` you configure appears in that accounts list — the audit's
+doctor gate enforces it.
+
 ## Azure
 
 ### Config

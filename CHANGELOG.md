@@ -1,5 +1,42 @@
 # Changelog
 
+## 0.1.187
+
+**New integration: `audit-newrelic` — the 19th scored audit.** Read-only NerdGraph
+(query documents only; every mutation forbidden) audit of a New Relic account:
+
+- **Catalog: 27 scored `NR-*` checks** across 5 categories — Reachability and data
+  health (three-outcome auth probe: 401 key missing/invalid are indistinguishable,
+  403 = wrong region host; `NrIntegrationError` as the "HTTP 200 is not ingested"
+  rejection surface; cardinality rollup-cutoff posture; ingest concentration),
+  Alert delivery (policy→workflow→channel→destination joins; the auto-created
+  "Service Levels default policy" recognized as a platform artifact; flagship
+  NR-014 per-critical-service paging path), Alert noise (tiering, evaluation
+  sanity incl. the documented charts-vs-alerts divergence and sparse-signal
+  EVENT_TIMER rule, loss-of-signal, dead-weight disabled conditions, open-ended
+  mutes, **measured `NrAiIncident` fire-history**, incidentPreference judgment),
+  Coverage and topology (`alertSeverity: NOT_CONFIGURED` zero-coverage; the
+  8-day EXT entity-expiry distinction; span-derived `relatedEntities` CALLS
+  topology; per-entity `goldenMetrics`; synthetics; ownership tags), SLO and
+  dashboards (page-entity de-dup; change tracking). Plus a non-scored
+  `NROPT-*` ingest/cost section (GB from the account's own consumption reads;
+  never an invented dollar).
+- Both entity domains queried (`EXT` for OTel services, `APM` for agent
+  services) — an OTel estate is never scored zero by an APM-only read.
+- Multi-target (`newrelic` as a labeled list), scope checkpoint, business-context
+  apply, `~/.scoutflo/env` load, secret redaction, and `scoutflo-findings/v2`
+  emit — all parity gates wired.
+- Registered everywhere: start/README/connect/providers/audit-all/doctor (new
+  three-outcome NerdGraph probe + `newrelic` in KNOWN_BLOCKS), `NR`/`NROPT`
+  prefixes, alert-fatigue standalone table + fire-history reads (`NrAiIncident`
+  fields confirmed live against a real fired incident) + triage row. 4 pressure
+  scenarios.
+- Grounding: a dedicated live Phase-1 validation against a real populated New
+  Relic estate (entities, alerting stack, genuinely fired incidents, SLO,
+  synthetics, workloads, dashboards) — endpoints, error shapes, entity model,
+  and platform behaviors locked before authoring; live smoke of the audit reads
+  against that estate accompanies the PR.
+
 ## 0.1.186
 
 **Fix (caught in a live customer session): the cloud providers (AWS/Azure/GCP) are alert sources — standalone `alert-fatigue` no longer skips them.** In a live run, pointed at an estate configured with **Sentry, AWS, and GitHub**, standalone alert-fatigue concluded "only Sentry is an alerting-lane provider — AWS/GitHub aren't in the fatigue table" and skipped AWS. But AWS CloudWatch alarms → SNS routing are a first-class alert source (audit-aws scores a full alerting/noise lane, and the measured fire-history tier *leads* with CloudWatch). The standalone-mode provider table was stale — it listed only the SaaS alerting tools and omitted the clouds.
