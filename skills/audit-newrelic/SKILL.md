@@ -48,13 +48,20 @@ Outputs, per the [report standard](../../report-standard/README.md):
 - `./scoutflo-audits/newrelic/[<label>/]<YYYY-MM-DD>/report.md` per the
   [report template](../../report-standard/report-template.md), including the
   `## Inventory` section (the `render-report-viz.sh inventory` output)
+- `./scoutflo-audits/newrelic/[<label>/]<YYYY-MM-DD>/report.html` — the
+  self-contained visual report (`render-report-viz.sh html`)
 - `./scoutflo-audits/newrelic/[<label>/]<YYYY-MM-DD>/inventory.json` per the
   [inventory schema](../../report-standard/inventory-schema.md)
-  (`scoutflo-inventory/v1`): the complete Phase-2 catalog — one item per policy,
-  condition, workflow, destination, channel, muting rule, service entity,
-  synthetic monitor, SLO, and dashboard — each with `kind`, `covers`, `enabled`,
-  `severity`, and `routes_to` for alerting objects. Built from the raw pull,
-  never invented; redacted at capture, never a secret value.
+  (`scoutflo-inventory/v1`): the complete Phase-2 catalog — one item per policy
+  (`kind: policy`), condition (**`kind: alert_rule`** — the coverage-countable
+  kind the cross-tool engine keys on, contract C14; `covers` = the service its
+  NRQL selects, `routes_to` = its policy id), workflow (`workflow`), destination
+  (`destination`), channel (`channel`), muting rule (`muting_rule`), service
+  entity (`service`), synthetic monitor (**`kind: uptime_check`** — also
+  coverage-countable), SLO (`slo`), and dashboard (`dashboard`) — each with
+  `kind`, `covers`, `enabled`, `severity`, and `routes_to` for alerting objects.
+  Built from the raw pull, never invented; redacted at capture, never a secret
+  value.
 - One appended line in `./scoutflo-audits/newrelic/[<label>/]history.jsonl`
 - One Slack brief, when `slack.webhook_env` is configured
 
@@ -338,11 +345,15 @@ consumption, deployments, synthetic results) into `${RAW_DIR}`. Every later chec
 reads these files; nothing re-fetches.
 
 Build `inventory.json` (`scoutflo-inventory/v1`) from the raw pull: one item per
-object with `kind` (`policy`, `condition`, `workflow`, `destination`, `channel`,
-`muting-rule`, `service`, `synthetic`, `slo`, `dashboard`), `covers`, `enabled`,
-`severity`, and `routes_to` for alerting objects (condition → policy id,
-workflow → channel ids, channel → destination id). `counts.total` must reconcile
-with `items`.
+object with `kind` — `policy`, **`alert_rule`** (each NRQL condition; the
+coverage-countable kind per contract C14, so a New Relic condition can cover a
+gap another tool has), `workflow`, `destination`, `channel`, `muting_rule`,
+`service`, **`uptime_check`** (each synthetic monitor; also coverage-countable),
+`slo`, `dashboard` — plus `covers` (for an `alert_rule`, the service its NRQL
+selects; for an `uptime_check`, the endpoint), `enabled`, `severity`, and
+`routes_to` for alerting objects (condition → policy id, workflow → channel ids,
+channel → destination id). Routing/muting kinds are never coverage.
+`counts.total` must reconcile with `items`.
 
 ## Phase 3: Reachability and data health (NR-001 to NR-006)
 
@@ -382,22 +393,72 @@ present (`relatedEntities` CALLS edges), golden signals resolvable
 per-entity reads run for critical services only (≤10). Commands:
 [references/newrelic-checks.md](references/newrelic-checks.md) section 8.
 
-## Phase 7: SLO, dashboards, and topology readiness (NR-040 to NR-042)
+## Phase 7: SLO, dashboards, coverage matrix, and topology readiness (NR-040 to NR-042)
 
 SLOs on critical services, dashboards (page-entity de-dup), change tracking.
 Commands: [references/newrelic-checks.md](references/newrelic-checks.md)
 section 9.
 
-Then compute the **Topology Readiness** matrix the report standard requires: for
-each critical service — entity exists · reporting · alert-covered
-(`alertSeverity != NOT_CONFIGURED`) · caught by a workflow (NR-011 join) · CALLS
-edges present · golden metrics resolve. The headline is `N of M critical services
-fully ready`; each gap row names the finding that explains it (or
-`/scoutflo:map-topology` when no finding applies).
+**Coverage matrix.** Fill one row per critical service — using the service names
+from `topology.md` when the customer has run `/scoutflo:map-topology` (never a
+re-inferred name for a mapped service) — with the check-result vocabulary
+(`pass`, `partial`, `fail`, `blocked`, `not-in-scope`):
+
+| Service | Ready | Delivery | Noise | Coverage | SLO | Owner | Gap |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+
+Every cell carries its `passed/total` denominator. The audit's New Relic reads
+feed the cells: entity present + reporting (NR-031), alert-covered (NR-030),
+workflow-caught (NR-011/NR-014), noise posture (NR-020 to NR-026), CALLS edges +
+golden metrics (NR-032/NR-033), SLO (NR-040), ownership tag (NR-035). Name
+affected services in findings.
+
+Then render the Scoutflo Topology Readiness section per
+[topology-readiness.md](../../report-standard/topology-readiness.md): evaluate
+the six checks per critical service from `./scoutflo-audits/topology-export.json`,
+read-only. Render check names and confidence per the standard: plain-English
+column headers (T-codes only in the legend line), confidence as `n/10`, the
+verdicts `ready`/`partial`/`not-ready`, the exact headline
+`<r> of <n> critical services are ready for automatic Scoutflo correlation`
+(`audit-all` greps this plain-language line — never the forbidden `sync-ready`
+jargon), and — whenever any service is below ready — the ticket-ready readiness
+action plan table. Gaps that map to an existing finding reference its ID; gaps
+with no finding get a `TOPO-` row pointing at `/scoutflo:map-topology`. If the
+export or `topology.md` is missing, or describes a different target than this
+audit covers, the section renders the matching state from topology-readiness.md
+with its one-line unlock; it never guesses and never says a bare "unavailable".
+Readiness is reported, never folded into the 0-100 score.
+
+**A confirmed, real platform gap specific to this provider (verified against the
+platform's current model):** New Relic is not itself a valid topology provider
+identity on the Scoutflo platform — there is no `newrelic` value in the
+platform's provider identity list, and no per-field attribute schema for it
+either. A monitoring/alerting connection modeling **native New Relic alerting as
+the connection's own tool identity** cannot satisfy Connection details (T4) or
+Tool identity (T5) on the real platform, no matter how solid this audit's live
+proof of the paging path is — there is no correct value to put in that
+connection's provider field. This is not something the export format can work
+around with different field names; it is a gap in what the platform itself
+currently models. State this plainly in the Topology Readiness section for any
+service whose alerting backend is native New Relic, rather than silently capping
+the connection at `partial` with no explanation. If the real alerting funnel
+routes New Relic's notifications onward into a provider the platform does model
+(for example PagerDuty via a webhook destination), Connection details, Tool
+identity, and Match confidence are fully reachable through *that* provider's
+connection instead — the gap is specific to representing native New Relic as the
+connection's own identity, not to auditing a New-Relic-monitored service in
+general.
 
 ## Phase 8: Score, write, brief
 
-1. Score each category from its checks; compute the weighted overall.
+1. Score each category from its checks; compute the weighted overall. The
+   executive summary states the numeric gap to the target profile
+   ([references §3](references/newrelic-checks.md)) and names the biggest levers
+   by `points_recoverable` — "fix X, gain N points" — never just the score.
+   Classify each finding's lifecycle (`new`/`unchanged`/`regressed`/`resolved`)
+   by comparing against the PREVIOUS run's `findings.json` under
+   `${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/<seg>/` (match on finding id +
+   affected), never guessed; a first run marks everything `new`.
 2. Load `./scoutflo-audits/exemptions.yaml` when present. Entries with `id`,
    `reason`, and `expires` all set and unexpired suppress their finding into the
    Suppressed appendix; malformed or expired entries are reported, never honored.
@@ -472,6 +533,12 @@ sh "${CLAUDE_PLUGIN_ROOT}/report-standard/check-report.sh" "${TARGET_DIR}/report
 # built from the raw pull (never invented, redacted). counts.total must reconcile with items.
 jq -e '.schema == "scoutflo-inventory/v1" and (.counts.total == (.items | length))' \
   "${TARGET_DIR}/inventory.json" >/dev/null && echo "inventory ok"
+# Render the derived views (contract C1: every run also writes report.html; the
+# ## Inventory and findings-by-purpose sections of report.md ARE these renders):
+sh "${CLAUDE_PLUGIN_ROOT}/report-standard/render-report-viz.sh" inventory "${TARGET_DIR}/inventory.json" >/dev/null && echo "inventory section renders"
+sh "${CLAUDE_PLUGIN_ROOT}/report-standard/render-report-viz.sh" lanes "${TARGET_DIR}/findings.json" >/dev/null && echo "findings-by-purpose section renders"
+sh "${CLAUDE_PLUGIN_ROOT}/report-standard/render-report-viz.sh" html "${TARGET_DIR}/findings.json" "${TARGET_DIR}/report.html" "${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${NR_SEG}/history.jsonl" \
+  && echo "report.html written"
 # History: one line per run (v1 back-compat: overall may be null on a fully blocked run).
 HIST="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${NR_SEG}/history.jsonl"
 jq -c '{run_date:.run_date, overall:.score.overall, scoring_model:.score.scoring_model, check_set:.score.check_set,

@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.1.188
+
+**audit-newrelic contract-compliance + rubric hardening** (follow-up to 0.1.187,
+from a full CONTRACTS.md compliance pass + the maintainer rubric review):
+
+- **C1**: Phase 8 now renders `report.html` and the inventory/findings-by-purpose
+  sections (`render-report-viz.sh html|inventory|lanes`); outputs list corrected.
+- **C8**: Topology Readiness headline is the exact contract string
+  (`… are ready for automatic Scoutflo correlation`) — the previous wording would
+  have read as "readiness not recorded" in `audit-all`'s combined table.
+- **C14**: inventory kinds corrected so New Relic coverage is visible to the
+  cross-tool coverage engine — conditions emit `kind: alert_rule`, synthetics
+  `kind: uptime_check` (both coverage-countable); `muting_rule` snake_cased.
+- **Topology Readiness rebuilt on the shared six-check model** (plain-English
+  names, `n/10` confidence, ready/partial/not-ready verdicts, ticket-ready
+  action plan, missing-map states) instead of provider-invented checks — plus a
+  **confirmed platform gap stated honestly**: New Relic is not a valid topology
+  provider identity on the Scoutflo platform (no provider value, no attribute
+  schema — verified against the platform's current code), so native New Relic
+  alerting as a connection's own tool identity cannot satisfy Connection
+  details/Tool identity; routing onward into a modeled provider restores full
+  reachability (same class of caveat as DigitalOcean).
+- Rubric fixes: per-category target profile (what 100/100 looks like), exec
+  summary states the gap + biggest `points_recoverable` levers, lifecycle
+  computed by comparing the previous run's findings.json (never guessed),
+  coverage matrix uses `topology.md` names when present, `nrq` helper refuses to
+  send an empty auth header.
+- New `evals/evals.json` (4 behavioral evals projected from the pressure
+  scenarios) and a token-costs table row.
+
 ## 0.1.187
 
 **New integration: `audit-newrelic` — the 19th scored audit.** Read-only NerdGraph

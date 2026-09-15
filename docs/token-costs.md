@@ -13,6 +13,7 @@ These are **order-of-magnitude baseline figures** to help you plan, not a guaran
 | Audit Skill | Estate Size | Input Tokens | Output Tokens | Total | Cost (Haiku) |
 |---|---|---|---|---|---|
 | `audit-datadog` | Medium | ~45K | ~20K | ~65K | ~$0.052 |
+| `audit-newrelic` | Medium | ~45K | ~20K | ~65K | ~$0.052 |
 | `audit-pagerduty` | Medium | ~40K | ~18K | ~58K | ~$0.046 |
 | `audit-elk` | Medium | ~35K | ~17K | ~52K | ~$0.042 |
 | `audit-jsm` | Small | ~32K | ~16K | ~48K | ~$0.038 |

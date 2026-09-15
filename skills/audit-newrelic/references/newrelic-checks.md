@@ -32,6 +32,8 @@ Shared helper used by every block below (define once per shell):
 # The query string is a *query* document only. $NR_API_HOST and the key variable
 # are resolved by the doctor gate. Read-only by construction.
 nrq() {
+  # Never send an empty auth header: a named-but-unset key variable stops here.
+  [ -n "${NEW_RELIC_USER_KEY:-}" ] || { echo "NEW_RELIC_USER_KEY is not set — run the doctor gate first" >&2; return 1; }
   _b="$(mktemp)"
   _m="$(curl -s -o "$_b" -w '%{http_code} %{content_type}' --max-time 30 \
     -X POST "https://${NR_API_HOST}/graphql" \
@@ -96,6 +98,34 @@ User API key. OTel-instrumented estates surface services as `domain = 'EXT'` /
 `THIRD_PARTY_SERVICE_ENTITY`; NR-agent estates as `domain = 'APM'`. Coverage
 checks query BOTH domains — an audit that queries only APM on an OTel estate sees
 zero services (a live-caught design correction, not a hypothetical).
+
+**What 100/100 looks like, per scorecard category** (the benchmark the score
+measures distance from — every threshold below is an example to tune):
+
+- **Reachability and data health (100):** the key resolves the configured account
+  on the right region host; every expected signal type is arriving;
+  `NrIntegrationError` is empty over the window (no silent rejections,
+  truncations, or conversion anomalies); no metric family approaches the
+  cardinality rollup cutoff; ingest is understood and deliberately budgeted
+  (no surprise-dominant source, no unplanned cap proximity).
+- **Alert delivery (100):** every policy with enabled conditions is caught by an
+  enabled workflow; every workflow's channel resolves to an `active` destination;
+  each critical service has a complete, live-verified paging path (entity →
+  covering condition → policy → workflow → destination) — and the SLO default
+  policy's error-budget condition has been deliberately wired or disabled.
+- **Alert noise (100):** paging conditions carry WARNING and CRITICAL terms;
+  evaluation settings match the data (delay ≥ latency, durations are window
+  multiples, sparse signals on EVENT_TIMER); presence-style conditions carry
+  loss-of-signal expiration; zero disabled conditions parked as coverage; every
+  ENABLED muting rule is schedule-bound; fire-history shows no chronic opens and
+  no fires-while-muted; incidentPreference is deliberate per policy.
+- **Coverage and topology (100):** zero alertable entities at
+  `alertSeverity: NOT_CONFIGURED` among services that matter; every critical
+  service present and reporting; CALLS edges exist for core call paths; golden
+  metrics resolve with data; public endpoints have healthy synthetics; key
+  entities carry `team`/`environment` tags.
+- **SLO and dashboards (100):** each critical service has an SLO; golden-signal
+  dashboards exist; deployment markers flow from the deploy pipeline.
 
 ## 4. Raw pull (one pass; every later check reads these files)
 

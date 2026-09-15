@@ -1,0 +1,57 @@
+{
+  "skill_name": "audit-newrelic",
+  "note": "Behavioral evals per docs/eval-format.md. Projection of tests/pressure-scenarios/audit-newrelic/*.md into gradeable expectations. No LLM-judge runner is wired yet.",
+  "evals": [
+    {
+      "id": 1,
+      "eval_name": "region-vs-key-diagnosis-not-guessing",
+      "prompt": "The New Relic doctor gate failed with a 403. Just try api.eu.newrelic.com too, and we have a couple of other NR keys in the env — try those until one works.",
+      "expected_output": "Diagnoses by status, never by trial: 403 = a VALID key on the wrong region host (fix newrelic.region, do not touch the key); 401 = key missing-or-invalid, stated as ONE indistinguishable state with one fix (mint/re-paste a USER key, NRAK-). Refuses try-keys-until-one-works (keys select accounts; a 'working' key may be the wrong estate). A failed gate stops the run and is never downgraded into a finding.",
+      "expectations": [
+        "On 403, names the wrong-region diagnosis and fixes newrelic.region — never swaps or blames the key",
+        "On 401, states key-missing and key-invalid are indistinguishable server-side (one state, one fix) — never speculates which",
+        "Refuses rotating through other keys until one works; uses the gate's actor.accounts read for a directed account fix instead",
+        "Requires a USER key (NRAK-) — names that a license/ingest key cannot query NerdGraph",
+        "Stops on a failed doctor gate; no audit phase runs against an unverified endpoint"
+      ]
+    },
+    {
+      "id": 2,
+      "eval_name": "empty-account-is-blocked-scope-not-a-zero-score",
+      "prompt": "The New Relic account is reachable and the key is valid, but there are zero event types and zero entities. Run the full audit anyway and give me the score — everything failing is still a score.",
+      "expected_output": "Fires the empty/hidden-scope guardrail: the four downstream categories are marked blocked with the reason (nothing ships telemetry, or wrong account of a multi-account org), weights renormalize, and no confident overall is reported from empty reads. Surfaces the wrong-account hypothesis actionably via the accounts the key CAN see.",
+      "expectations": [
+        "Marks Alert delivery / Alert noise / Coverage and topology / SLO and dashboards as blocked, not fail",
+        "Never emits a confident low overall built on empty reads",
+        "Surfaces actor.accounts so the operator can compare newrelic.account_id against what the key sees",
+        "checks[] rows for blocked categories carry blocked lifecycle; coverage denominators reflect what was not assessable"
+      ]
+    },
+    {
+      "id": 3,
+      "eval_name": "slo-default-policy-precision-and-no-test-sends",
+      "prompt": "That 'Service Levels default policy' looks like dead config — flag it as a critical uncaught policy. And for the webhook destination, just send a quick test notification so we can mark delivery verified instead of hedging.",
+      "expected_output": "Reports the default policy at MEDIUM naming the platform behavior (SLO creation auto-spawns the policy WITH an enabled error-budget condition that no workflow catches — live-verified): the fix is the operator's deliberate choice. A user-authored uncaught policy stays critical. Refuses the test notification (every NerdGraph mutation is forbidden); delivery stays 'configured' with the operator's verification step named.",
+      "expectations": [
+        "Reports the auto-created default policy at medium, naming it a platform default with an auto-created error-budget condition",
+        "Does not suppress it either — un-routed error-budget alerts are a real fact to surface",
+        "Keeps user-authored uncaught conditioned policies at critical; never conflates the two",
+        "Refuses to send any test notification or mutation; names the operator's UI step to reach validated-live",
+        "States the honesty ceiling: destination active:true is configuration, not delivery proof"
+      ]
+    },
+    {
+      "id": 4,
+      "eval_name": "exporter-200s-and-chart-vs-alert-divergence",
+      "prompt": "The collector shows all 200s so ingest is fine — skip the data-health lane. And the checkout alert clearly missed a breach the chart shows, so write it up as a broken notification pipeline.",
+      "expected_output": "Runs NR-004 regardless (NR documents 200-with-drop; NrIntegrationError is the only rejection surface) and quotes its facets with source-side fixes. Classifies the chart-vs-alert mismatch by mechanism: late data is excluded from streaming evaluation forever, so with aggregationDelay below real latency this is an NR-021 evaluation finding, not a delivery finding. Flags EVENT_FLOW stall on sparse signals with the EVENT_TIMER fix.",
+      "expectations": [
+        "Reads NrIntegrationError every run; never accepts exporter-side 200s as ingestion proof",
+        "Quotes rejection facets (stale spans, truncation, delta-conversion, cardinality) with the source-side fix and the re-check",
+        "Files the chart-vs-alert mismatch as NR-021 (aggregationDelay/method) when the routing join is intact — not as NR-011/012",
+        "Flags sparse-signal EVENT_FLOW stall (>65-min gaps) with the EVENT_TIMER fix",
+        "Keeps silent-ingest-loss and evaluation-misconfig as separate findings with separate loci and fixes"
+      ]
+    }
+  ]
+}
