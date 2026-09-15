@@ -57,6 +57,7 @@ This toolkit audits, hardens, and monitors your infrastructure and observability
 | `/scoutflo:audit-kubernetes` | audit | Kubernetes security and reliability: Pod Security Admission, RBAC over-permissioning, network policies, resource limits, disruption budgets |
 | `/scoutflo:setup-kubernetes` | setup | Guided hardening for `audit-kubernetes` findings: PSA labels, RBAC tightening, network policies, resource limits, PDBs |
 | `/scoutflo:setup-sentry` | setup | Projects, environments, alert taxonomy, integrations |
+| `/scoutflo:setup-newrelic` | setup | Wire workflows to uncaught policies, per-service conditions from golden metrics, loss-of-signal, muting schedules, SLOs, tags, synthetics |
 | `/scoutflo:audit-alertmanager` | audit | Proves your paging path is live, rule to receiver (the Prometheus→Alertmanager→receiver walk) |
 | `/scoutflo:audit-digitalocean` | audit | App Platform, managed databases, uptime, alert routing |
 | `/scoutflo:setup-digitalocean` | setup | Alert policies, uptime checks, database and app hardening |

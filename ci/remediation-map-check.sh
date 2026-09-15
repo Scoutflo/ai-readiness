@@ -45,6 +45,7 @@ audit_for_prefix() {
     JSM) echo audit-jsm ;;
     GC) echo audit-groundcover ;;
     CS) echo audit-clickstack ;;
+    NR) echo audit-newrelic ;;
     *) echo "" ;;
   esac
 }

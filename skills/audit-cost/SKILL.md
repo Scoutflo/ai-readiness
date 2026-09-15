@@ -34,6 +34,7 @@ This audit reads cost-recommendation and inventory surfaces for every **configur
 | Kubernetes | `kubernetes.context` | metrics source: metrics-server (`kubectl top`) or Prometheus | `get` on workloads/PVCs/PVs |
 | DigitalOcean | `digitalocean.*` | (none — billing/list only) | `doctl ... list` / monitoring read |
 | SigNoz | `signoz.*` (host/org/token or ClickHouse read user) | Cost Meter (`signoz.meter.*`, `source:meter`) read; falls back to metrics-store reads | `POST /api/v3/query_range` / `SELECT` on the metrics store |
+| New Relic | `newrelic.*` (account, User key, region) | `NrConsumption` (billed GB; ~daily lag) with `bytecountestimate()` as the live fallback | NerdGraph NRQL reads (query documents only) |
 
 ```bash
 set -eu
@@ -155,6 +156,7 @@ For each **configured and in-scope** provider, run its catalog. Each reference i
 | Datadog | [references/datadog-cost.md](references/datadog-cost.md) | `COST-DD-NNN` |
 | DigitalOcean | [references/digitalocean-cost.md](references/digitalocean-cost.md) | `COST-DO-NNN` |
 | SigNoz | [references/signoz-cost.md](references/signoz-cost.md) | `COST-SIG-NNN` |
+| New Relic | [references/newrelic-cost.md](references/newrelic-cost.md) | `COST-NR-NNN` |
 
 For each opportunity, build a finding: the concrete resource(s) in `affected`; `estimated_monthly_savings_usd` **only** when the provider gave one (with `savings_source` naming the API); `utilization` backing rightsizing/idle calls; evidence = the real command + its trimmed output. A provider whose cost scope was missing is added to `providers_excluded` with the doctor's reason; its presence-fact checks still run if plain list permissions exist.
 

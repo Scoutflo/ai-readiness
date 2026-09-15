@@ -537,6 +537,86 @@
     "CS-061": {
       "setup_skill": "setup-clickstack",
       "anchor": "manage-merge-pressure"
+    },
+    "NR-004": {
+      "setup_skill": "setup-newrelic",
+      "anchor": "fix-ingest-at-the-source"
+    },
+    "NR-005": {
+      "setup_skill": "setup-newrelic",
+      "anchor": "fix-ingest-at-the-source"
+    },
+    "NR-006": {
+      "setup_skill": "setup-newrelic",
+      "anchor": "fix-ingest-at-the-source"
+    },
+    "NR-010": {
+      "setup_skill": "setup-newrelic",
+      "anchor": "create-per-service-alert-conditions"
+    },
+    "NR-011": {
+      "setup_skill": "setup-newrelic",
+      "anchor": "wire-a-workflow-to-an-uncaught-policy"
+    },
+    "NR-012": {
+      "setup_skill": "setup-newrelic",
+      "anchor": "wire-a-workflow-to-an-uncaught-policy"
+    },
+    "NR-013": {
+      "setup_skill": "setup-newrelic",
+      "anchor": "wire-a-workflow-to-an-uncaught-policy"
+    },
+    "NR-014": {
+      "setup_skill": "setup-newrelic",
+      "anchor": "create-per-service-alert-conditions"
+    },
+    "NR-020": {
+      "setup_skill": "setup-newrelic",
+      "anchor": "fix-condition-tiering-and-evaluation-settings"
+    },
+    "NR-021": {
+      "setup_skill": "setup-newrelic",
+      "anchor": "fix-condition-tiering-and-evaluation-settings"
+    },
+    "NR-022": {
+      "setup_skill": "setup-newrelic",
+      "anchor": "set-loss-of-signal-handling"
+    },
+    "NR-023": {
+      "setup_skill": "setup-newrelic",
+      "anchor": "retire-dead-weight-conditions"
+    },
+    "NR-024": {
+      "setup_skill": "setup-newrelic",
+      "anchor": "schedule-or-disable-muting-rules"
+    },
+    "NR-025": {
+      "setup_skill": "setup-newrelic",
+      "anchor": "tune-chronic-and-noisy-conditions"
+    },
+    "NR-026": {
+      "setup_skill": "setup-newrelic",
+      "anchor": "set-incident-preference-deliberately"
+    },
+    "NR-030": {
+      "setup_skill": "setup-newrelic",
+      "anchor": "create-per-service-alert-conditions"
+    },
+    "NR-034": {
+      "setup_skill": "setup-newrelic",
+      "anchor": "add-synthetic-monitors"
+    },
+    "NR-035": {
+      "setup_skill": "setup-newrelic",
+      "anchor": "add-ownership-tags"
+    },
+    "NR-040": {
+      "setup_skill": "setup-newrelic",
+      "anchor": "add-slos"
+    },
+    "NR-042": {
+      "setup_skill": "setup-newrelic",
+      "anchor": "wire-change-tracking"
     }
   }
 }

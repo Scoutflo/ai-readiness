@@ -38,7 +38,7 @@ flowchart TD
     end
 
     subgraph FIX["④ Fix — only with your explicit yes"]
-        setup["9 setup skills: lgtm · grafana · sentry · digitalocean<br/>gcp · aws · kubernetes · azure · clickstack<br/>announce → confirm → apply → re-verify"]
+        setup["10 setup skills: lgtm · grafana · sentry · digitalocean<br/>gcp · aws · kubernetes · azure · clickstack · newrelic<br/>announce → confirm → apply → re-verify"]
     end
 
     start --> connect --> doctor
@@ -223,6 +223,7 @@ Secrets live only in environment variables you export yourself. `~/.scoutflo/too
 | `/scoutflo:setup-clickstack` | ClickHouse retention TTL, read-only audit user, HyperDX alerts, auth hardening |
 | `/scoutflo:setup-grafana` | Datasources, dashboards, contact points, notification policies, alert rules |
 | `/scoutflo:setup-sentry` | Projects, environments, privacy scrubbing, alert routing, monitors |
+| `/scoutflo:setup-newrelic` | Workflow wiring for uncaught policies (incl. the auto-created SLO default), per-service conditions from golden metrics, tiering/loss-of-signal fixes, muting schedules, SLOs, ownership tags, synthetics, change tracking |
 | `/scoutflo:setup-digitalocean` | Alert destinations, uptime checks, App Platform and database alerting |
 | `/scoutflo:setup-gcp` | Notification channels, uptime checks, alert policies, dashboards |
 | `/scoutflo:setup-azure` | Action groups, metric/log/activity alerts, AKS monitoring, diagnostic settings |
