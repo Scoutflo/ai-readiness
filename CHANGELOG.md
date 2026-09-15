@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.186
+
+**Fix (caught in a live customer session): the cloud providers (AWS/Azure/GCP) are alert sources — standalone `alert-fatigue` no longer skips them.** In a live run, pointed at an estate configured with **Sentry, AWS, and GitHub**, standalone alert-fatigue concluded "only Sentry is an alerting-lane provider — AWS/GitHub aren't in the fatigue table" and skipped AWS. But AWS CloudWatch alarms → SNS routing are a first-class alert source (audit-aws scores a full alerting/noise lane, and the measured fire-history tier *leads* with CloudWatch). The standalone-mode provider table was stale — it listed only the SaaS alerting tools and omitted the clouds.
+
+- **`skills/alert-fatigue/SKILL.md` standalone-mode table now lists `aws`, `azure`, `gcp`** with their existing alerting-lane checks: `aws` → audit-aws (AWS-001/004/007 coverage/dead-dimension/SLO-burn-rate, AWS-010/011/012 zero-action dead-end / unconfirmed SNS subscription / one-topic-all-severities, AWS-060/061/062 single-datapoint flap / `TreatMissingData` quiet-period paging / flap history); `azure` → audit-azure (AZR-001/002/004/005 action-group reachability + dead-group routing + activity-log alerts + suppressed delivery); `gcp` → audit-gcp (GCP-001/002/003/005/006 channels / zero-channel policies / one-channel-all-envs / stale snooze). GitHub and other non-alerting integrations are correctly still skipped.
+- **Roll-up path was already correct** (verified): a cloud's alerting-noise findings are selected by their `area` (`alerting` / `alert routing and delivery`) — an AWS dead-end/flap finding rolls into AF-001/002/007 and was never dropped. The gap was purely the standalone-mode driver table.
+- This also removes an internal inconsistency: `report-standard/triage-mode.md` already treated `aws` as an alert source, but the alert-fatigue table didn't.
+
+**Verification:** all four repo gates green (`leak-scan` CLEAN, `structure-check` 23, `run-tests` 32 suites, `plugin validate --strict`) + self-test lock (new: "alert-fatigue standalone table lists the cloud alert sources aws/azure/gcp"). New pressure scenario (cloud providers are alert sources; GitHub correctly is not). Verified the roll-up selects an AWS `alert routing and delivery` / `alerting` finding and excludes a `reliability` one. Docs-only change to the skill (no lib/schema change); read-only throughout.
+
 ## 0.1.185
 
 **Hardening pass on the alert-fatigue measured tier + triage/exec one-pager from an expert review — plus a full documentation refresh.** The v0.1.181–184 work built a three-tier fatigue analyzer, a triage fast-pass, and an executive one-pager; a review found the logic sound but flagged verification debt, a missing guardrail on the one model-produced artifact, and one honesty doctrine that wasn't wired. This closes those.

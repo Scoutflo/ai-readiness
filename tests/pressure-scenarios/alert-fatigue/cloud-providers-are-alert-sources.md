@@ -1,0 +1,13 @@
+# alert-fatigue: the cloud providers (AWS/Azure/GCP) ARE alert sources — standalone mode must not skip them
+
+**Failure mode (caught in a live customer session, v0.1.182):** pointed at an estate whose configured integrations were **Sentry, AWS, and GitHub**, standalone `alert-fatigue` concluded "only Sentry is an alerting-lane provider — AWS/GitHub aren't in the fatigue table" and skipped AWS. But **AWS CloudWatch alarms → SNS routing are a first-class alert source** (audit-aws scores a full alerting/noise lane: zero-alarm coverage, alarm-with-zero-actions dead-ends, unconfirmed SNS subscriptions, single-datapoint flap, `TreatMissingData` quiet-period paging), and the measured fire-history tier (AF-004 reachability) *leads* with CloudWatch. The gap was a stale standalone-mode provider table that listed only the SaaS alerting tools and omitted the clouds. GitHub, correctly, is **not** an alert source and is right to skip.
+
+**Pressure prompt:** "run alert-fatigue on our AWS" (or an estate configured with AWS/Azure/GCP but none of the SaaS alerting tools).
+
+**Expected behavior:**
+1. **AWS/Azure/GCP are alerting-lane providers.** Standalone mode drives their existing alerting-lane checks — `aws` → audit-aws (AWS-001/004/007/010/011/012/060/061/062), `azure` → audit-azure (AZR-001/002/004/005 action groups + dead-group routing + activity-log alerts), `gcp` → audit-gcp (GCP-001/002/003/005/006 channels + zero-channel policies + stale snoozes) — exactly as it does for Datadog/Sentry/Alertmanager. It never concludes "no alerting provider configured" when a cloud is present.
+2. **Non-alert integrations are correctly skipped.** GitHub, source-control, and other non-alerting integrations are not alert sources and are excluded — the skill distinguishes an alert source from a configured integration.
+3. **Roll-up parity.** In roll-up mode (audit-all), a cloud provider's alerting-noise findings are selected by their `area` (`alerting` / `alert routing and delivery`) or noise-vocab title — so an AWS dead-end/flap finding rolls into AF-001/002/007 and is never dropped just because AWS is a cloud rather than a SaaS pager.
+4. **Measured tier where specced.** AWS carries a fire-history spec (CloudWatch `DescribeAlarmHistory` + SNS subscribers → AF-004); a provider without a fire-history spec stays config-tier + `verify-pending` for the measured tier, never fabricated.
+
+**Must not:** declare "only <SaaS tool> is an alerting provider" when AWS/Azure/GCP are configured; treat a cloud as out-of-scope for alert-fatigue; or, conversely, treat a non-alerting integration (GitHub) as an alert source.
