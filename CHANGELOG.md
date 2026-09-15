@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.1.189
+
+**New skill: `setup-newrelic` (the 10th setup skill) + the New Relic cost lane +
+the formal audit-newrelic end-to-end run.**
+
+- **`setup-newrelic`** — guided, confirm-then-verify remediation for every
+  mapped `audit-newrelic` finding: wire workflows to uncaught policies
+  (including the auto-created SLO default policy, whose enabled error-budget
+  condition notifies nobody until deliberately wired or disabled), per-service
+  conditions built from each entity's ready-made golden-metric NRQL, condition
+  tiering/evaluation/loss-of-signal fixes with byte-exact backup/restore pairs,
+  dead-weight retirement (no backup, no delete), muting schedules, SLOs,
+  ownership tags, synthetics, change tracking. Mutation-surface honesty: create
+  mutations are live-verified; update/delete mutations are introspect-before-
+  first-use. 20 findings mapped in the remediation map (`NR` prefix routed);
+  3 pressure scenarios.
+- **`audit-cost` New Relic lane** (`COST-NR-NNN`,
+  `references/newrelic-cost.md`): billed GB by `usageMetric` from
+  `NrConsumption` (live fallback `bytecountestimate()`), top contributors,
+  cap/commitment proximity, events-to-metrics/retention advisories — never an
+  invented dollar; collector-side levers named (drop rules are dead/gated).
+- **Formal end-to-end `audit-newrelic` run completed against a real populated
+  account**: all 27 checks evaluated live, `findings.json` (scoutflo-findings/v2,
+  overall 68/100, FINDINGS-OK), `inventory.json` (111 items, coverage-countable
+  kinds), `report.md` (REPORT-OK) + `report.html` + history — every validator
+  green. Real findings on the estate it audited, including loss-of-signal
+  configured close-only on the traffic canary and the auto-created SLO
+  condition's duration not a multiple of its window.
+- audit-newrelic scorecard now carries the per-category maturity ladder
+  (reactive/proactive/systematic) for the executive narrative.
+
 ## 0.1.188
 
 **audit-newrelic contract-compliance + rubric hardening** (follow-up to 0.1.187,

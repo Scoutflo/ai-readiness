@@ -1,6 +1,6 @@
 ---
 name: audit-newrelic
-description: Read-only scored audit of a New Relic account across alert delivery (condition to policy to workflow to destination), alert noise (tiering, evaluation sanity, muting hygiene, measured fire-history from NrAiIncident), entity coverage and span-derived topology, SLO and dashboard posture, and data health (NrIntegrationError, cardinality, ingest concentration), plus a separate non-scored ingest and cost section; writes findings.json and report.md and changes nothing. Use when the user mentions auditing or scoring New Relic, NR alerts or alert policies, NRQL conditions, workflows and notification destinations, muting rules, New Relic entity or service coverage, NrAiIncident noise, or New Relic ingest volume. Do not use to change New Relic (no setup-newrelic ships yet; the audit names each fix), for OTel collector configuration on the shipping side (that is the cluster's own config), or for the paging layer downstream of a notification (use audit-pagerduty or audit-zenduty).
+description: Read-only scored audit of a New Relic account across alert delivery (condition to policy to workflow to destination), alert noise (tiering, evaluation sanity, muting hygiene, measured fire-history from NrAiIncident), entity coverage and span-derived topology, SLO and dashboard posture, and data health (NrIntegrationError, cardinality, ingest concentration), plus a separate non-scored ingest and cost section; writes findings.json and report.md and changes nothing. Use when the user mentions auditing or scoring New Relic, NR alerts or alert policies, NRQL conditions, workflows and notification destinations, muting rules, New Relic entity or service coverage, NrAiIncident noise, or New Relic ingest volume. Do not use to change New Relic (use setup-newrelic; this audit only names each fix), for OTel collector configuration on the shipping side (that is the cluster's own config), or for the paging layer downstream of a notification (use audit-pagerduty or audit-zenduty).
 ---
 
 # audit-newrelic
@@ -24,8 +24,8 @@ Every call is a **read**: NerdGraph `query` documents only, on the single
 `/graphql` endpoint (a documented read-by-POST — the GraphQL body decides the
 effect, and this audit never sends a `mutation` document; the full forbidden list
 is in [references/newrelic-checks.md](references/newrelic-checks.md) section 13).
-There is no `setup-newrelic` yet, so every finding names its manual fix path
-inline.
+Fixes are `setup-newrelic`'s job — each mapped finding points at its fix
+section there (the remediation map), with the manual path also named inline.
 
 **Multiple New Relic accounts, one run:** `newrelic` may be a single block (one
 `account_id`/`api_key_env`/`region`) or a **list of labeled targets**, each with
@@ -490,7 +490,11 @@ general.
 
 Scorecard (categories and weights; the checks catalog in
 [references/newrelic-checks.md](references/newrelic-checks.md) section 2 lists
-every ID under these same category names):
+every ID under these same category names). Each category also carries a
+**maturity** rating for the executive narrative — `reactive` (gaps are found by
+incidents), `proactive` (the category's checks pass by deliberate configuration),
+`systematic` (passes are enforced by pipeline/IaC, not hand-maintenance) — judged
+from the evidence, never from the score alone:
 
 | Category | Weight | Checks |
 | --- | --- | --- |
@@ -624,9 +628,11 @@ invent a business rule.
 
 ## Remediation pointers
 
-No `setup-newrelic` ships yet, so every finding's `remediation` field names the
-concrete manual fix location. When a setup skill lands, these become anchors
-without the finding IDs changing:
+Every mapped finding's `remediation` points at its [setup-newrelic](../setup-newrelic/SKILL.md)
+fix section per `docs/finding-remediation-map.json` (e.g.
+`setup-newrelic#wire-a-workflow-to-an-uncaught-policy` for NR-011). The manual
+fix locations below remain the operator's direct path for unmapped findings and
+UI-only steps:
 
 | Finding area | Fix location today |
 | --- | --- |
