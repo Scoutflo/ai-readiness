@@ -66,7 +66,7 @@ their number.
 | NR-005 | Reachability and data health | Metric cardinality below the rollup cutoff — >100k unique series per metric name/day silently stops rollups so >60-min charts break while ingest continues; cardinality-limit NrIntegrationErrors are the breach evidence | medium |
 | NR-006 | Reachability and data health | Ingest concentration understood: `bytecountestimate()` per signal type, ranked — a surprise-heavy source (unfiltered logs, cluster-wide metrics) is a budget risk; on a free-tier account the 100GB hard lockout is the ceiling | medium |
 | NR-010 | Alert delivery | Enabled alert conditions exist on a producing estate (entities + telemetry present but zero enabled conditions = an unwatched estate) | critical |
-| NR-011 | Alert delivery | Every policy that has enabled conditions is caught by an enabled workflow (issuesFilter on `labels.policyIds`, or a catch-all `predicates: []`); the auto-created "Service Levels default policy" is a recognized platform artifact — empty is its normal state | critical |
+| NR-011 | Alert delivery | Every policy that has enabled conditions is caught by an enabled workflow (issuesFilter on `labels.policyIds`, or a catch-all `predicates: []`); the auto-created "Service Levels default policy" arrives WITH an enabled error-budget condition and no workflow (live-verified) — reported at MEDIUM naming the platform behavior, never suppressed and never critical | critical (medium for the platform artifact) |
 | NR-012 | Alert delivery | Workflow → channel → destination linkage intact: workflow `destinationsEnabled`, channel exists, channel's `destinationId` resolves, destination `active: true` | high |
 | NR-013 | Alert delivery | Destination posture honest: types inventoried; `active` is configuration, not proof of delivery — delivery is `configured`, upgraded to `validated-live` only by an observed notification; webhook destinations are domain-validated at create but can rot after | medium |
 | NR-014 | Alert delivery | Flagship: the per-critical-service paging path — service entity → an enabled condition whose NRQL covers it → policy → enabled workflow → active destination; assembled end-to-end, cited link by link | critical |
@@ -465,6 +465,7 @@ operator's step, never performed by this audit).
 ## 11. Ingest & cost section (non-scored, `NROPT-NNN`)
 
 Reported and never scored — `scoring_scope: "non-scored"`, `points_recoverable: 0`,
+`area: "cost-optimization"` (the roll-up's exact selector — contract C18),
 rendered under its own heading after Topology Readiness. **Never invent a dollar.**
 A free/unknown-plan account gets GB figures only; a dollar appears solely when the
 account's own consumption data exposes billed amounts.

@@ -19,8 +19,11 @@ Mutation-surface honesty: the **create** mutations in this skill
 `aiNotificationsCreateChannel`, `aiWorkflowsCreateWorkflow`,
 `alertsMutingRuleCreate`, `serviceLevelCreate`, `syntheticsCreateSimpleMonitor`,
 `taggingAddTagsToEntity`, `changeTrackingCreateDeployment`) are live-verified
-against a real account. The **update/delete** mutations are named per New
-Relic's schema but must be **introspected before first use**
+against a real account, and so is **`alertsNrqlConditionStaticUpdate`**
+(partial-body updates of `expiration` and `terms` applied and read back live —
+a remediation session resolved NR-011/NR-022/NR-025 end-to-end with it,
+including the incident close cycle). The remaining **update/delete** mutations
+are named per New Relic's schema but must be **introspected before first use**
 (`{ __type(name: "<InputType>") { inputFields { name type { name kind } } } }`)
 — the live schema is the authority and drifts ahead of the docs; announce the
 introspected shape, not a guessed one.

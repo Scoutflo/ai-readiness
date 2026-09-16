@@ -25,4 +25,5 @@ grep -rnE '[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.(com|dev|io|cloud)' "$DIR" --exclud
 grep -rnE '(^|[^-.0-9A-Fa-f])[0-9]{12}([^-.0-9A-Fa-f]|$)' "$DIR" --exclude-dir=.git --exclude-dir=ci --exclude-dir=selftest | grep -v '123456789012' && FAIL=1
 grep -rnE '\b10\.[0-9]+\.[0-9]+\.[0-9]+\b|\b192\.168\.[0-9]+\.[0-9]+\b' "$DIR" --exclude-dir=.git --exclude-dir=ci --exclude-dir=selftest && FAIL=1
 grep -rnE '(token|secret|password|api_key)["'"'"']?\s*[:=]\s*["'"'"'][A-Za-z0-9_\-]{16,}' "$DIR" --exclude-dir=.git --exclude-dir=selftest && FAIL=1
+grep -rnE 'NRAK-[A-Za-z0-9]{20,}' "$DIR" --exclude-dir=.git --exclude-dir=selftest && FAIL=1
 [ "$FAIL" -eq 0 ] && echo CLEAN || { echo "LEAK PATTERNS FOUND"; exit 1; }

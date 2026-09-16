@@ -169,7 +169,10 @@ SELECT count(*) FROM NrAiIncident FACET conditionName, event SINCE 7 days ago LI
 SELECT count(*) FROM NrAiIncident WHERE muted IS TRUE SINCE 7 days ago
 ```
 
-Confirmed-live fields per row: `event` (`open`/`close`), `openTime`,
+Confirmed-live fields per row — **both halves of the cycle now live-verified**
+(`open` rows from a genuinely fired condition; `close` rows observed after its
+threshold was raised in a remediation session, with `aiIssues.state` moving
+`ACTIVATED` → `CLOSED`): `event` (`open`/`close`), `openTime`,
 `conditionName`, `conditionId`, `policyId`, `policyName`, `priority`
 (`WARNING`/`CRITICAL`), `muted`, `entity.guid`, `threshold`.
 - **fires:** count of `event = 'open'` rows per condition over the window.
@@ -182,7 +185,11 @@ Confirmed-live fields per row: `event` (`open`/`close`), `openTime`,
   count — noise the team hid instead of fixing.
 - **off-hours:** derived (as everywhere) from `openTime` against the
   business-hours window — no native field.
-- Issue-level state (`aiIssues.issues` → `state: ACTIVATED/…`) confirms the
+- Casing nuance (observed live): `priority` on raw `close` rows came back
+  lowercase (`warning`/`critical`) — compare case-insensitively when joining
+  opens to closes.
+- Issue-level state (`aiIssues.issues` → `state: ACTIVATED/CLOSED`, both
+  live-verified) confirms the
   incident→issue grouping when needed; the incident rows above are the volume
   truth. Auth is the same User key as `audit-newrelic`; a 401/403 marks the
   provider `verify-pending`, never a guessed number.

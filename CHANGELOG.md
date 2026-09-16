@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.1.190
+
+**Full plugin-wide coverage sweep for New Relic + a new C18 cost-lane contract.**
+A systematic pass over every consumer flow (cost roll-up, alert-fatigue, rca,
+render, doctor, connect, faq, redaction, leak-scan) found and fixed the gaps a
+per-skill view misses:
+
+- **C18 (NEW contract)**: the cost lane — `scoutflo-cost/v1` + the per-audit
+  non-scored `*OPT` sections → `check-cost.sh` → the `cost-analysis` roll-up →
+  render/audit-all — is now documented in CONTRACTS.md, including the
+  live-caught invariant that an OPT finding joins the roll-up ONLY via
+  `area: "cost-optimization"` (any other area silently drops it — audit-newrelic's
+  NROPT rules now state the exact area).
+- `rca`'s temporal-delta backend list gains `audit-newrelic` (NRQL over
+  Metric/Span + per-entity goldenMetrics as the reused read path);
+  `cost-schema.md` registers the `newrelic` provider slug; `docs/faq.md`'s two
+  provider lists updated (they had also silently omitted SigNoz, ClickStack, and
+  Azure); the redaction library and leak-scan gain an `NRAK-` key-shape pattern.
+- **setup-newrelic live-smoked against a real account**: the wire/loss-of-signal/
+  chronic-threshold session resolved NR-011/NR-022/NR-025 end-to-end,
+  live-verifying `alertsNrqlConditionStaticUpdate` (partial-body `expiration` +
+  `terms` — honesty label upgraded from introspect-first) and re-confirming the
+  notification error-union gotcha in anger. The **incident close cycle is now
+  live-verified** (`NrAiIncident` `event: "close"` + `aiIssues` `ACTIVATED` →
+  `CLOSED`; close rows carry LOWERCASE priority — join case-insensitively, noted
+  in fire-history-reads). The newly wired workflow immediately caught a real
+  error-budget breach from the auto-created SLO condition.
+- **Multi-target labeled-list flow live-verified** (two sub-accounts: labels
+  enumerate, per-target account + `newrelic/<label>/` segment resolution, empty
+  sub-account sizes honestly). NR-011's catalog row corrected to the
+  live-verified platform behavior (the default policy ships WITH an enabled
+  condition).
+- Doc leads closed live: `aiDecisions*` mutations exist (introspected), incident
+  auto-close default = 3 days (official), Live Archives page + terms located.
+
 ## 0.1.189
 
 **New skill: `setup-newrelic` (the 10th setup skill) + the New Relic cost lane +
