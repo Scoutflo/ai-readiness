@@ -29,7 +29,7 @@ flowchart TD
         cost["/scoutflo:audit-cost<br/>deep per-resource cost, ranked savings"]
     end
 
-    all["/scoutflo:audit-all<br/>runs every configured audit + one Slack brief"]
+    all["/scoutflo:audit-all<br/>runs every configured audit, then correlation +<br/>cost + alert-fatigue roll-ups + one Slack brief"]
     findings[("findings.json + report.md<br/>per target — the source of truth")]
 
     subgraph CORRELATE["③ Understand across everything — read-only analysis"]

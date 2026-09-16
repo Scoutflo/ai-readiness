@@ -6,7 +6,7 @@ Scoutflo AI Readiness audit runs use Claude models via Claude Code on your machi
 
 ## Approximate baseline costs (Haiku 4.5)
 
-These are **order-of-magnitude baseline figures** to help you plan, not a guaranteed per-run price — actual consumption scales with your estate size (an audit that pages through thousands of rules costs more than the small/medium samples below). The plugin ships **14 scored audit skills** plus `audit-cost` (ranked-savings, not scored) and `audit-all`; the table below samples a representative subset. Your own numbers are reproducible — see [Reproducing these numbers](#reproducing-these-numbers).
+These are **order-of-magnitude baseline figures** to help you plan, not a guaranteed per-run price — actual consumption scales with your estate size (an audit that pages through thousands of rules costs more than the small/medium samples below). The plugin ships **19 scored audit skills** (the full catalog is in the README and `/scoutflo:start`) plus `audit-cost` (ranked-savings, not scored) and `audit-all`; the table below samples a representative subset. Your own numbers are reproducible — see [Reproducing these numbers](#reproducing-these-numbers).
 
 ### Per-Audit Token Consumption (representative sample)
 
