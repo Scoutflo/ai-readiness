@@ -7,6 +7,7 @@ set -eu
 # Redaction patterns (in order of specificity)
 REDACTION_PATTERNS='
 s/AKIA[0-9A-Z]\{16\}/AKIA[REDACTED]/g;
+s/NRAK-[A-Za-z0-9]\{20,\}/NRAK-[REDACTED]/g;
 s/sk_live_[A-Za-z0-9]\{24,\}/sk_live_[REDACTED]/g;
 s/sk_test_[A-Za-z0-9]\{24,\}/sk_test_[REDACTED]/g;
 s/Bearer [A-Za-z0-9._-]\{40,\}/Bearer [REDACTED]/g;
@@ -39,7 +40,7 @@ redact_file() {
 has_secrets() {
   content="$1"
 
-  echo "$content" | grep -E 'AKIA[0-9A-Z]{16}|sk_live_[A-Za-z0-9]{24,}|Bearer [A-Za-z0-9._-]{40,}' > /dev/null 2>&1 || return 1
+  echo "$content" | grep -E 'AKIA[0-9A-Z]{16}|NRAK-[A-Za-z0-9]{20,}|sk_live_[A-Za-z0-9]{24,}|Bearer [A-Za-z0-9._-]{40,}' > /dev/null 2>&1 || return 1
 
   return 0
 }

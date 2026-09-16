@@ -467,3 +467,34 @@ new provider most often breaks: C1 (schema + registered prefix), C2/C3
 one verbatim), C9 (providers.md ↔ doctor ↔ audit keys), C10 (audit-all map row),
 C11 (connect/start/README/template). Run all four gates + the selftest before the
 PR; the live smoke against a real estate is a hard merge gate (`AGENTS.md`).
+
+## C18 — Cost lane (scoutflo-cost/v1 + the non-scored *OPT sections → the cost roll-up)
+
+- **Producers:** `audit-cost` emits `cost-findings.json`
+  (**`scoutflo-cost/v1`**, per [report-standard/cost-schema.md](../report-standard/cost-schema.md):
+  ranked savings, `COST-<PROVIDER>-NNN` ids, NO 0-100 score); each scored audit's
+  non-scored cost/ingest section (`AWSOPT`/`AZROPT`/`DDOPT`/`NROPT`/…) emits
+  `scoring_scope: "non-scored"` findings inside its own findings.json.
+- **Consumers:** the `cost-analysis` roll-up (runs inside `audit-all`, and
+  standalone) aggregates across every audit directory — it ALWAYS regenerates
+  (the 24h skip cache was removed for staleness), globs the two-level
+  `<integration>/<label>/<date>/` layout as well as one-level, and skips the
+  roll-up dirs' own outputs (`all`/`cost`/`cost-analysis`/`doctor` targets) so
+  aggregates never re-aggregate; `render-report-viz` and `audit-all` §7 render
+  the combined view.
+- **Invariants:** a per-audit non-scored cost finding joins the roll-up ONLY
+  via **`area: "cost-optimization"`** (the aggregator's exact selector — any
+  other area silently drops it from the combined report; live-caught on
+  audit-newrelic's first emit). **Never invent a dollar** — `estimated_monthly_savings_usd`
+  (and any `estimated_monthly_cost_usd`) appears only when the provider's own
+  API computed it, with `savings_source` naming that API; presence facts carry
+  `null`. The savings summary must equal the sum of its findings. A cost file
+  never carries a 0-100 score and never enters `score.categories` anywhere.
+  Provider slugs come from cost-schema.md's registered list.
+- **SSOT:** [report-standard/cost-schema.md](../report-standard/cost-schema.md);
+  each provider's deep lane in `skills/audit-cost/references/<provider>-cost.md`.
+- **Guards:** `report-standard/check-cost.sh` (the money-integrity gate:
+  schema, savings arithmetic, the never-invent rule) plus
+  `tests/test-check-cost.sh`; `ci/multi-target-consumer-check.sh` (the
+  cost-analysis glob shape); selftest: the audit-cost stays-`scoutflo-cost/v1`
+  case and the cost-analysis suite (`skills/cost-analysis/tests/`).

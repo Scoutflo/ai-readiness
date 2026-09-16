@@ -565,11 +565,13 @@ never a raw NRQL body.
 ## Cost & Ingest (non-scored)
 
 This section is reported and never scored, the same pattern `audit-aws` uses.
-Findings use the `NROPT-NNN` prefix, always carry `scoring_scope: "non-scored"`
-and `points_recoverable: 0`, never appear in `score.categories`,
-`score.excluded`, or the `checks[]` ledger, still carry their own `report_lanes`
-(typically `general-audit`), and render under their own heading after Topology
-Readiness. Commands in [references/newrelic-checks.md](references/newrelic-checks.md)
+Findings use the `NROPT-NNN` prefix, always carry `scoring_scope: "non-scored"`,
+`points_recoverable: 0`, and **`area: "cost-optimization"`** (the exact area the
+`cost-analysis` roll-up selects on — any other area silently drops the finding
+from the combined cost report, contract C18), never appear in
+`score.categories`, `score.excluded`, or the `checks[]` ledger, still carry
+their own `report_lanes` (typically `general-audit`), and render under their own
+heading after Topology Readiness. Commands in [references/newrelic-checks.md](references/newrelic-checks.md)
 section 11. **Never invent a dollar**: GB figures come from the account's own
 `NrConsumption`/`bytecountestimate()` reads; a dollar appears only when the
 account's own consumption data exposes billed amounts. On a free-tier account the
