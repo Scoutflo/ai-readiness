@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.1.191
+
+**Doc-currency fixes from a repo-wide staleness sweep.** Customer-facing docs
+carried counts that rotted across five releases:
+
+- `docs/token-costs.md` said the plugin ships **"14 scored audit skills"** — it
+  ships 19; corrected, with a pointer to the always-current README/`start`
+  catalog.
+- `report-standard/findings-schema.md` said **"all 18 scored audits emit v2"** —
+  rephrased count-free ("every scored audit emits v2; new audits ship v2 from
+  day one") so it can never rot again.
+- `docs/BUSINESS-CONTEXT-INTEGRATION-v0168.md`'s "14 skills reference it" made
+  count-free for the same reason.
+- README flow diagram: the `audit-all` node now states the full pipeline it
+  actually runs (correlation + cost + alert-fatigue roll-ups + the Slack brief),
+  not just "every configured audit".
+
+Verified current in the same sweep: the README flow diagram's audit (19, incl.
+newrelic) and setup (10, incl. newrelic) bubbles, AGENTS' structure-check gate
+count (23 — recounted against the script), and that the repo's only mermaid
+flow diagram is the README's (other "mermaid" hits are the `mermaid-topo`
+renderer mode in prose).
+
 ## 0.1.190
 
 **Full plugin-wide coverage sweep for New Relic + a new C18 cost-lane contract.**

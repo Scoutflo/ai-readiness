@@ -1,6 +1,6 @@
 # Business Context Integration (how audit and setup skills consume it)
 
-> **This is the current, authoritative business-context integration doc** — not a historical v0.1.68 snapshot. The `-v0168` filename is retained because 14 skills and the CI parity gate reference it by that exact path; the content tracks current behavior.
+> **This is the current, authoritative business-context integration doc** — not a historical v0.1.68 snapshot. The `-v0168` filename is retained because the audit skills and the CI parity gate reference it by that exact path; the content tracks current behavior.
 
 This is the concrete consuming logic behind every audit skill's **Metadata Load**
 phase. The source of truth is `~/.scoutflo/business_context.md`; skills read its

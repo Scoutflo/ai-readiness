@@ -1,6 +1,6 @@
 # findings.json Schema
 
-`findings.json` is the machine-readable result of one audit run. The report, the delta, and the Slack brief all derive from it. Evidence-aware audit emitters use schema identifier `scoutflo-findings/v2`; **as of v0.1.160 all 18 scored audits emit v2** (`audit-cost` uses its own `scoutflo-cost/v1` ranked-savings schema by design). The validator continues to accept `scoutflo-findings/v1` artifacts for historical (older-run) data.
+`findings.json` is the machine-readable result of one audit run. The report, the delta, and the Slack brief all derive from it. Evidence-aware audit emitters use schema identifier `scoutflo-findings/v2`; **every scored audit emits v2** (all migrated as of v0.1.160; new audits ship v2 from day one) (`audit-cost` uses its own `scoutflo-cost/v1` ranked-savings schema by design). The validator continues to accept `scoutflo-findings/v1` artifacts for historical (older-run) data.
 
 Version 2 adds a normalized `checks[]` ledger. The score is verified against that ledger, blocked checks are reported as unassessed instead of being treated as failures, and assessment coverage is shown separately from readiness. This prevents a missing permission from looking like a broken service and prevents a high score from hiding a mostly blocked audit.
 
