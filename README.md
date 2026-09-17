@@ -188,6 +188,7 @@ Secrets live only in environment variables you export yourself. `~/.scoutflo/too
 | `/scoutflo:business-context` | Captures your SLAs, critical services, per-environment rules, and exclusions into one `business_context.md` that every audit reads to tune severity and scope |
 | `/scoutflo:audit-all` | Runs every audit you've configured, then correlates across them, into one combined report and Slack brief |
 | `/scoutflo:rca` | Ask *"why is `<service>` failing — give me the RCA?"* — evidence-cited root cause correlated across every report + topology + business context, with a confidence level and an honest list of what it couldn't determine |
+| `/scoutflo:migration-plan` | Read-only migration **plan** between observability providers (currently Datadog → SigNoz): a complete evidence-cited inventory — what to migrate, what to fix first, what to drop (with the audit's proof), what the target already covers, what has no equivalent — plus the dual-write/cutover playbook. Plans only; it changes nothing on either side |
 | `/scoutflo:schedule-audits` | Sets up recurring audits via GitHub Actions, cron, or a Claude cloud schedule |
 
 **Audits** — read-only, scored 0–100, evidence-backed, change nothing. Beyond coverage, every audit also scores **alert hygiene** — flapping alerts, permanently-firing "wallpaper" rules, missing debounce, and noisy routing — so a healthy score means signal, not noise:

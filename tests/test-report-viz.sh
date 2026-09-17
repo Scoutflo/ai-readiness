@@ -327,5 +327,36 @@ jq -n '{schema:"scoutflo-findings/v2",target:"aws",score:{overall:90,categories:
 printf '%s' "$(sh "$VIZ" exec-summary "$NTD" "$TRDATE")" | grep -qi 'TRIAGE — fast worst-first' && fail "triage banner shown on a NON-triage run (false stamp)"
 echo "PASS"
 
+echo "Test 18: migration-plan renders dispositions with evidence, honest source-only banner + gaps + cutover honesty; html self-contained"
+MPD="$WORK/mig"; mkdir -p "$MPD"
+cat > "$MPD/plan.json" <<'EOF'
+{"schema":"scoutflo-migration-plan/v1","run_date":"2026-09-17","mode":"source-only",
+ "source":{"provider":"datadog","artifacts_found":true},"target":{"provider":"signoz","artifacts_found":false},
+ "totals":{"objects":4,"migrate":1,"fix_then_migrate":1,"drop_candidates":1,"already_covered":0,"no_equivalent":1},
+ "inventory":[
+  {"kind":"monitor","name":"mon-healthy","disposition":"migrate","disposition_reason":"kind default for monitor","equivalence":"approximate","evidence":[],"notes":"threshold -> SigNoz metric rule"},
+  {"kind":"monitor","name":"mon-placeholder","disposition":"fix-then-migrate","disposition_reason":"routing/threshold is broken at the source","evidence":[{"finding_id":"DD-007","severity":"high","title":"placeholder handle"}]},
+  {"kind":"monitor","name":"mon-never-fired","disposition":"drop-candidate","disposition_reason":"dead weight per the audit","evidence":[{"finding_id":"DD-037","severity":"medium","title":"never evaluated"}]},
+  {"kind":"synthetic_test","name":"api-uptime-check","disposition":"no-equivalent","disposition_reason":"no native equivalent","evidence":[]}
+ ],
+ "gaps":[{"kind":"synthetic_test","status":"no-native-equivalent","alternative":"keep the existing external uptime checks"}],
+ "cutover":{"historical_telemetry":"does-not-transfer","note":"config carries; history does not","parallel_run":"dual-write window","audit_parity_gate":"re-run both audits + correlation before sunset"}}
+EOF
+MPO="$(sh "$VIZ" migration-plan "$MPD/plan.json")"
+printf '%s' "$MPO" | grep -q '## Migration plan' || fail "migration-plan heading missing"
+printf '%s' "$MPO" | grep -q '4 source objects: 1 migrate · 1 fix-then-migrate · 1 drop-candidates' || fail "at-a-glance disposition counts wrong"
+printf '%s' "$MPO" | grep -q 'Source-only mode' || fail "source-only honesty banner missing"
+printf '%s' "$MPO" | grep -q 'DD-037' || fail "drop-candidate evidence not rendered"
+printf '%s' "$MPO" | grep -q 'keep the existing external uptime checks' || fail "gap alternative not rendered"
+printf '%s' "$MPO" | grep -q 'Historical telemetry does not transfer' || fail "history honesty line missing"
+printf '%s' "$MPO" | grep -qi 'nothing is dropped silently' || fail "propose-not-drop framing missing"
+sh "$VIZ" migration-plan-html "$MPD/plan.json" "$MPD/plan.html" >/dev/null
+[ "$(grep -c '<!doctype html>' "$MPD/plan.html")" -eq 1 ] || fail "migration html not a single document"
+grep -q 'mon-never-fired' "$MPD/plan.html" || fail "disposition row missing from html"
+grep -q 'Source-only mode' "$MPD/plan.html" || fail "source-only banner missing from html"
+grep -qE 'src="http|href="http|<link |<img ' "$MPD/plan.html" && fail "migration html references an external asset"
+printf '%s' "$(sh "$VIZ" migration-plan "$WORK/does-not-exist.json")" | grep -qi 'No .*migration-plan.json' || fail "missing-file degrade wrong"
+echo "PASS"
+
 echo
 echo "=== report-viz self-test passed ==="

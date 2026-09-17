@@ -1024,8 +1024,182 @@ EOF
     echo "_Ranked worst-first by severity, then recoverable points, then \$ as an in-band tiebreaker — never a blended cross-domain score, and \$ never promotes a lesser finding above a critical one. Full per-finding detail is in each stack's report and the sections below._"
     ;;
 
+  migration-plan)
+    # Render a migration-plan.json (scoutflo-migration-plan/v1) as the human plan:
+    # at-a-glance disposition counts, the honest mode banner, per-disposition
+    # tables (each drop/fix row shows its EVIDENCE — the plan proposes, the human
+    # decides), the capability-gap table with real alternatives, and the cutover
+    # section with the history-does-not-transfer honesty. Renders only structured
+    # fields; never re-derives a disposition. Read-only.
+    MP="${1:?migration-plan.json}"
+    echo "## Migration plan"
+    echo
+    if [ ! -f "$MP" ]; then
+      echo "_No \`migration-plan.json\` — run the migration-plan skill first (it needs the source audit's artifacts for the run date)._"
+      exit 0
+    fi
+    MP_SRC="$(jq -r '.source.provider // "?"' "$MP")"
+    MP_TGT="$(jq -r '.target.provider // "?"' "$MP")"
+    MP_MODE="$(jq -r '.mode // "?"' "$MP")"
+    MP_DATE="$(jq -r '.run_date // "?"' "$MP")"
+    read -r MN MM MF MD MC MG <<EOF
+$(jq -r '.totals | "\(.objects // 0) \(.migrate // 0) \(.fix_then_migrate // 0) \(.drop_candidates // 0) \(.already_covered // 0) \(.no_equivalent // 0)"' "$MP")
+EOF
+    echo "**${MP_SRC} → ${MP_TGT}** · ${MP_DATE} · read-only plan (nothing is changed by this plan)"
+    echo
+    echo "**At a glance — ${MN} source objects: ${MM} migrate · ${MF} fix-then-migrate · ${MD} drop-candidates (evidence-cited) · ${MC} already covered on ${MP_TGT} · ${MG} no native equivalent.**"
+    echo
+    if [ "$MP_MODE" = "source-only" ]; then
+      echo "> **Source-only mode:** ${MP_TGT} was not readable this run, so already-covered checks did not run and target shapes come from the pair catalog's capability model — verify against the live target before executing. Nothing here is fabricated from an unread target."
+      echo
+    fi
+    if [ "${MF:-0}" -gt 0 ]; then
+      echo "### Fix first, then migrate (broken at the source — do not import the defect)"
+      echo
+      echo "| Object | Kind | Why | Evidence |"
+      echo "| --- | --- | --- | --- |"
+      jq -r 'def esc: tostring | gsub("\\|"; "\\|") | gsub("\n"; " ");
+        .inventory[] | select(.disposition == "fix-then-migrate")
+        | [ (.name|esc), (.kind|esc), (.disposition_reason|esc),
+            ((.evidence // []) | map(.finding_id // ("signal:" + (.object_id // "?"))) | unique | join(", ")) ] | @tsv' "$MP" \
+      | while IFS="$(printf '\t')" read -r n k w e; do echo "| \`${n}\` | ${k} | ${w} | ${e} |"; done
+      echo
+    fi
+    if [ "${MD:-0}" -gt 0 ]; then
+      echo "### Drop candidates (dead weight — migration is the moment to shed it)"
+      echo
+      echo "These are **proposals with evidence, pending your confirmation** — nothing is dropped silently:"
+      echo
+      echo "| Object | Kind | Why | Evidence |"
+      echo "| --- | --- | --- | --- |"
+      jq -r 'def esc: tostring | gsub("\\|"; "\\|") | gsub("\n"; " ");
+        .inventory[] | select(.disposition == "drop-candidate")
+        | [ (.name|esc), (.kind|esc), (.disposition_reason|esc),
+            ((.evidence // []) | map(.finding_id // ("signal:" + (.object_id // "?"))) | unique | join(", ")) ] | @tsv' "$MP" \
+      | while IFS="$(printf '\t')" read -r n k w e; do echo "| \`${n}\` | ${k} | ${w} | ${e} |"; done
+      echo
+    fi
+    if [ "${MC:-0}" -gt 0 ]; then
+      echo "### Already covered on the target (do not double-migrate — and mind double-paging during the parallel run)"
+      echo
+      jq -r '.inventory[] | select(.disposition == "already-covered")
+        | "- `\(.name)` → matches `\(.matched_target // "?")` on the target"' "$MP"
+      echo
+    fi
+    echo "### Migrate (with the target shape per the pair catalog)"
+    echo
+    echo "| Object | Kind | Equivalence | Notes |"
+    echo "| --- | --- | --- | --- |"
+    jq -r 'def esc: tostring | gsub("\\|"; "\\|") | gsub("\n"; " ");
+      .inventory[] | select(.disposition == "migrate")
+      | [ (.name|esc), (.kind|esc),
+          ((.equivalence // .equivalence_default // "?")|esc),
+          ((.notes // .target_shape.summary // "-")|esc) ] | @tsv' "$MP" \
+    | while IFS="$(printf '\t')" read -r n k q o; do echo "| \`${n}\` | ${k} | ${q} | ${o} |"; done
+    echo
+    if [ "${MG:-0}" -gt 0 ]; then
+      echo "### No native equivalent (honest gaps — each with its alternative)"
+      echo
+      echo "| Kind | Status | Alternative |"
+      echo "| --- | --- | --- |"
+      jq -r 'def esc: tostring | gsub("\\|"; "\\|") | gsub("\n"; " ");
+        (.gaps // [])[] | [ (.kind|esc), ((.status // "no-native-equivalent")|esc), ((.alternative // "?")|esc) ] | @tsv' "$MP" \
+      | while IFS="$(printf '\t')" read -r k s a; do echo "| ${k} | ${s} | ${a} |"; done
+      echo
+    fi
+    echo "### Cutover & data continuity (the honest part)"
+    echo
+    echo "- **Historical telemetry does not transfer** — config carries over per this plan; history stays in the source until retention/sunset. Continuity comes from the dual-write/parallel-run window below."
+    jq -r '.cutover | "- **Parallel run:** " + (.parallel_run // "-")' "$MP"
+    jq -r '.cutover | "- **Sunset gate:** " + (.audit_parity_gate // "-")' "$MP"
+    echo
+    echo "_Plan-only and read-only: this skill changes nothing on either side. Every drop/fix row cites audit or fire-history evidence from this run; equivalence classes are from the pair catalog (direct / approximate / manual / none) — an untranslatable part is named \`manual\`, never silently auto-translated._"
+    ;;
+
+  migration-plan-html)
+    # Standalone HTML dashboard for migration-plan.json — disposition tiles + the
+    # per-disposition tables, mirroring the markdown. Structured fields only,
+    # HTML-escaped via jq @html; self-contained, no external assets. Read-only.
+    MP="${1:?migration-plan.json}"; OUT="${2:?out.html}"
+    [ -f "$MP" ] || { echo "no such file: $MP" >&2; exit 1; }
+    MP_SRC="$(jq -r '.source.provider // "?"' "$MP")"
+    MP_TGT="$(jq -r '.target.provider // "?"' "$MP")"
+    MP_MODE="$(jq -r '.mode // "?"' "$MP")"
+    MP_DATE="$(jq -r '.run_date // "?"' "$MP")"
+    read -r MN MM MF MD MC MG <<EOF
+$(jq -r '.totals | "\(.objects // 0) \(.migrate // 0) \(.fix_then_migrate // 0) \(.drop_candidates // 0) \(.already_covered // 0) \(.no_equivalent // 0)"' "$MP")
+EOF
+    MODE_HTML=""
+    if [ "$MP_MODE" = "source-only" ]; then
+      MODE_HTML='<div class="sub" style="margin-top:10px"><strong>Source-only mode:</strong> the target was not readable this run — already-covered checks did not run and target shapes come from the pair catalog; verify against the live target before executing.</div>'
+    fi
+    {
+    cat <<HTMLHEAD
+<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Scoutflo AI Readiness — Migration plan ${MP_SRC} → ${MP_TGT}</title>
+<style>
+:root{color-scheme:light dark}
+body{font:15px/1.5 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;margin:0;background:#f7f8fa;color:#1a202c}
+@media(prefers-color-scheme:dark){body{background:#12151a;color:#e2e8f0}.card{background:#1a1f27!important;border-color:#2d3748!important}}
+.wrap{max-width:1000px;margin:0 auto;padding:24px}
+.card{background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:20px;margin:16px 0;box-shadow:0 1px 3px rgba(0,0,0,.04)}
+h1{font-size:20px;margin:0 0 4px}.sub{color:#718096;font-size:13px}
+.metrics{display:flex;gap:28px;flex-wrap:wrap;margin:14px 0 4px}
+.metric{display:flex;flex-direction:column}.metric .n{font-size:26px;font-weight:700}.metric .l{color:#718096;font-size:12px}
+table{border-collapse:collapse;width:100%;font-size:14px}th,td{text-align:left;padding:8px 10px;border-bottom:1px solid #e2e8f0;vertical-align:top}
+th{cursor:pointer;user-select:none;color:#4a5568}
+code{font-size:12px}
+.footer{color:#a0aec0;font-size:12px;text-align:center;margin:24px 0}
+</style></head><body><div class="wrap">
+<div class="card"><h1>Migration plan — ${MP_SRC} &rarr; ${MP_TGT}</h1><div class="sub">Scoutflo AI Readiness · ${MP_DATE} (UTC) · read-only plan — nothing is changed by this plan</div>
+<div class="metrics">
+<div class="metric"><span class="n">${MN}</span><span class="l">source objects</span></div>
+<div class="metric"><span class="n" style="color:#2f855a">${MM}</span><span class="l">migrate</span></div>
+<div class="metric"><span class="n" style="color:#dd6b20">${MF}</span><span class="l">fix, then migrate</span></div>
+<div class="metric"><span class="n" style="color:#c53030">${MD}</span><span class="l">drop candidates (evidenced)</span></div>
+<div class="metric"><span class="n">${MC}</span><span class="l">already covered</span></div>
+<div class="metric"><span class="n">${MG}</span><span class="l">no equivalent</span></div>
+</div>${MODE_HTML}
+</div>
+<div class="card"><h1 style="font-size:16px">Dispositions</h1>
+<table><thead><tr><th onclick="sortT(this,0)">Object</th><th onclick="sortT(this,1)">Kind</th><th onclick="sortT(this,2)">Disposition</th><th>Why</th><th>Evidence</th></tr></thead><tbody>
+HTMLHEAD
+    jq -r '
+      def drank: {"drop-candidate":0,"fix-then-migrate":1,"no-equivalent":2,"already-covered":3,"migrate":4}[.] // 5;
+      def dcol: {"drop-candidate":"#c53030","fix-then-migrate":"#dd6b20","no-equivalent":"#718096","already-covered":"#3182ce","migrate":"#2f855a"}[.] // "#a0aec0";
+      .inventory | sort_by((.disposition | drank), .kind, .name) | .[]
+      | "<tr><td><code>\(.name|@html)</code></td><td>\(.kind|@html)</td>"
+        + "<td><span style=\"color:\(.disposition|dcol);font-weight:600\">\(.disposition|@html)</span></td>"
+        + "<td>\(.disposition_reason|@html)</td>"
+        + "<td>\(((.evidence // []) | map(.finding_id // ("signal:" + (.object_id // "?"))) | unique | join(", "))|@html)</td></tr>"' "$MP"
+    cat <<'HTMLMID'
+</tbody></table></div>
+HTMLMID
+    if [ "${MG:-0}" -gt 0 ]; then
+      echo '<div class="card"><h1 style="font-size:16px">No native equivalent — honest gaps</h1><table><thead><tr><th>Kind</th><th>Alternative</th></tr></thead><tbody>'
+      jq -r '(.gaps // [])[] | "<tr><td>\(.kind|@html)</td><td>\((.alternative // "?")|@html)</td></tr>"' "$MP"
+      echo '</tbody></table></div>'
+    fi
+    CUT_NOTE="$(jq -r '.cutover.note // ""' "$MP" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g')"
+    cat <<HTMLFOOT
+<div class="card"><h1 style="font-size:16px">Cutover &amp; data continuity</h1>
+<p><strong>Historical telemetry does not transfer.</strong> ${CUT_NOTE}</p></div>
+<div class="footer">Generated by Scoutflo AI Readiness for Claude Code · mirrors migration-plan.json · plan-only, read-only · contains infrastructure detail — keep within your team</div>
+<script>
+function sortT(th,col,num){var t=th.closest('table'),tb=t.tBodies[0],rows=[].slice.call(tb.rows);
+var d=th.__d=!th.__d;rows.sort(function(a,b){var x=a.cells[col].innerText,y=b.cells[col].innerText;
+if(num){x=parseFloat(x)||0;y=parseFloat(y)||0;return d?x-y:y-x;}return d?x.localeCompare(y):y.localeCompare(x);});
+rows.forEach(function(r){tb.appendChild(r);});}
+</script>
+</div></body></html>
+HTMLFOOT
+    } > "$OUT"
+    echo "wrote $OUT"
+    ;;
+
   *)
-    echo "usage: render-report-viz.sh {at-a-glance|scorecard|lanes|mermaid-topo|html|overlaps|rollup|inventory|inventory-rollup|alert-fatigue|alert-fatigue-html|exec-summary} ..." >&2
+    echo "usage: render-report-viz.sh {at-a-glance|scorecard|lanes|mermaid-topo|html|overlaps|rollup|inventory|inventory-rollup|alert-fatigue|alert-fatigue-html|exec-summary|migration-plan|migration-plan-html} ..." >&2
     exit 2
     ;;
 esac
