@@ -25,6 +25,9 @@ No. This repository is public, so the marketplace fetches it anonymously over HT
 **Does any of my data go to Scoutflo?**
 No. The toolkit runs inside your Claude Code. Your credentials stay in your environment, every API call originates from your machine or CI, and there is no telemetry, no report upload, and no callback. The only outbound calls go to your own integrations and, if you configure it, your own Slack webhook.
 
+**Can it migrate me from Datadog to SigNoz?**
+It plans the migration; it does not execute it. `/scoutflo:migration-plan` produces an evidence-cited inventory — migrate / fix-first (broken routing found by the audits) / drop-candidates (dead weight, with the audit's proof, pending your confirmation) / already-covered / no-native-equivalent (each with a real alternative) — plus the dual-write parallel-run and cutover playbook. It is read-only on both sides. Two honest limits it always states: historical telemetry never transfers between backends (continuity comes from the parallel run, and the source is sunset only after re-running both audits shows coverage parity), and anything that can't auto-translate is named `manual`, never silently converted. Executing the plan is your confirm-then-verify work (or a guided engagement), never this skill's.
+
 **What credentials do I need?**
 `/scoutflo:connect` walks you through it per integration, with exact minimal scopes. Audits use read-only tokens. Setup skills need a second, higher-permission token that you create only if you use them.
 

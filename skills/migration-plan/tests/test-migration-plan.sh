@@ -124,5 +124,52 @@ echo "== honest failures =="
 if migration_plan_run datadog grafana "$DATE" >/dev/null 2>&1; then bad "unsupported pair did not fail"; else ok "unsupported pair fails honestly (no improvised mapping)"; fi
 if migration_plan_run datadog signoz "1999-01-01" >/dev/null 2>&1; then bad "missing source inventory did not fail"; else ok "missing source inventory fails with guidance"; fi
 
+echo "== SKILL block execution (hermetic regression locks for the v0.1.194 flow bugs) =="
+# Extract every fenced bash block from SKILL.md and locate the doctor + sizing
+# blocks by content signature (numbering-independent). No network: only the
+# fail-closed paths that exit BEFORE any curl are executed.
+BLKDIR="$WORK/blocks"; mkdir -p "$BLKDIR"
+awk '/^```bash$/{f=1; n++; next} /^```$/{f=0} f{print > ("'"$BLKDIR"'/blk" n ".sh")}' "$DIR/SKILL.md"
+DOCTOR=""; SIZING=""
+for b in "$BLKDIR"/blk*.sh; do
+  grep -q 'identity gate' "$b" && DOCTOR="$b"
+  grep -q 'cli_pause_before_audit' "$b" && SIZING="$b"
+done
+[ -n "$DOCTOR" ] && [ -n "$SIZING" ] || { echo "FAIL: could not locate doctor/sizing blocks in SKILL.md"; exit 1; }
+
+# doctor block, fresh shell, no config anywhere -> fail-closed with guidance
+mkdir -p "$WORK/nohome"
+OUT1="$(cd "$WORK/nohome" && env -i HOME="$WORK/nohome" PATH="$PATH" sh "$DOCTOR" 2>&1 || true)"
+printf '%s' "$OUT1" | grep -q 'no toolkit.yaml' \
+  && ok "doctor block fails closed with no config (fresh shell)" \
+  || bad "doctor block no-config path wrong: $OUT1"
+
+# doctor block, config present but keys UNSET -> must stop at the :? guard BEFORE any network call
+mkdir -p "$WORK/home/.scoutflo"
+printf 'datadog:\n  api_key_env: DATADOG_API_KEY\n' > "$WORK/home/.scoutflo/toolkit.yaml"
+if OUT2="$(cd "$WORK/home" && env -i HOME="$WORK/home" PATH="$PATH" sh "$DOCTOR" 2>&1)"; then
+  bad "doctor block passed with unset keys (empty-header risk)"
+else
+  printf '%s' "$OUT2" | grep -q 'source key missing' \
+    && ok "doctor block fails closed on unset keys (E5 lock, pre-network)" \
+    || bad "doctor block unset-key message wrong: $OUT2"
+fi
+
+# sizing block, fresh shell, MULTI-LABEL layout -> must count across both layouts (v0.1.194 dual-glob lock)
+SZDIR="$WORK/sizing"; mkdir -p "$SZDIR/datadog/orgA/$DATE" "$SZDIR/datadog/orgB/$DATE"
+printf '{"items":[{"n":1},{"n":2},{"n":3}]}' | jq '{items: [.items[]]}' > "$SZDIR/datadog/orgA/$DATE/inventory.json"
+printf '{"items":[{"n":4}]}' > "$SZDIR/datadog/orgB/$DATE/inventory.json"
+OUT3="$(env -i HOME="$WORK" PATH="$PATH" SCOUTFLO_AUDIT_DIR="$SZDIR" RUN_DATE="$DATE" CLAUDE_PLUGIN_ROOT="$ROOT" sh "$SIZING" 2>&1 || true)"
+printf '%s' "$OUT3" | grep -q 'estate: 4 source objects' \
+  && ok "sizing block dual-globs a labeled source (counts 4)" \
+  || bad "sizing block multi-label count wrong: $OUT3"
+# one-level layout still counted
+SZ2="$WORK/sizing2"; mkdir -p "$SZ2/datadog/$DATE"
+printf '{"items":[{"n":1}]}' > "$SZ2/datadog/$DATE/inventory.json"
+OUT4="$(env -i HOME="$WORK" PATH="$PATH" SCOUTFLO_AUDIT_DIR="$SZ2" RUN_DATE="$DATE" CLAUDE_PLUGIN_ROOT="$ROOT" sh "$SIZING" 2>&1 || true)"
+printf '%s' "$OUT4" | grep -q 'estate: 1 source objects' \
+  && ok "sizing block still counts the one-level layout (counts 1)" \
+  || bad "sizing block one-level count wrong: $OUT4"
+
 echo "migration-plan: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

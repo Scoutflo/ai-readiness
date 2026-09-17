@@ -23,6 +23,17 @@ Two enforcement layers:
 If you add a new contract, add a row here **and** its guard. If a guard here
 names a gate/case that no longer exists, that is itself a defect.
 
+Two more pre-ship steps apply to **every new or substantially changed skill, in
+every lane (harness included)**, because the gates below check structure and
+consistency, not judgment or semantics: (1) the **maintainer rubric review**
+(kept outside this repo, per the governance principles) with its outcome
+recorded in the maintainers' review ledger, and (2) **executing every SKILL.md
+bash block in a fresh shell, in flow order, over a realistic sandbox** (both
+audit-artifact layouts; the fail-closed paths of any doctor gate) — `sh -n` and
+the cross-block gate cannot catch a semantically wrong command that parses
+cleanly. One release shipped with every gate green while defects of exactly
+these two classes existed; these steps are what caught them.
+
 ---
 
 ## C1 — Per-audit output: findings.json / report.md / report.html / inventory.json
@@ -40,8 +51,12 @@ names a gate/case that no longer exists, that is itself a defect.
   with the scorecard (weight-normalized sum over included categories); weights
   sum 100; `severity_counts` = histogram of **non-suppressed** findings; every
   non-`info` finding carries a concrete `affected` resource; one **registered**
-  ID prefix per audit; each run also writes `report.md`, `report.html`, and
-  `inventory.json` (`scoutflo-inventory/v1`).
+  ID prefix per audit; each run also writes `report.md`, `report.html`,
+  `inventory.json` (`scoutflo-inventory/v1`), and appends exactly one line to the
+  per-target `history.jsonl` ledger (append-only; trend/delta comparisons are
+  valid ONLY across runs whose `scoring_model` + `check_set` match — an
+  incompatible score must never leak into a trend; guarded by
+  `tests/test-report-viz.sh` Test 7a).
 - **SSOT:** `report-standard/findings-schema.md`, `inventory-schema.md`,
   `report-template.md`, `severity-and-scoring.md`, `README.md`.
 - **Guards:** `report-standard/check-findings.sh` (reconciliation, histogram,
@@ -216,7 +231,11 @@ names a gate/case that no longer exists, that is itself a defect.
   has a row in `audit-all`'s Phase-1 config→audit map; `schedule-audits`
   delegates entirely to `audit-all`, so an unmapped provider is silently skipped
   by "audit everything" and every scheduled run.
-- **Guards:** `ci/audit-all-map-check.sh`.
+- **Brief invariant:** `audit-all` emits exactly **one** combined Slack brief per
+  run — titles-only and safe to leak (no evidence values, hostnames, endpoints) —
+  and the redaction pass runs over the roll-up report and brief before any send.
+- **Guards:** `ci/audit-all-map-check.sh`; the redaction lib tests
+  (`skills/redaction/tests/`).
 
 ## C11 — Surface/catalog consistency
 
@@ -548,3 +567,53 @@ PR; the live smoke against a real estate is a hard merge gate (`AGENTS.md`).
   with evidence, source-only banner, gap alternatives, history honesty,
   self-contained HTML); pressure scenarios under
   `tests/pressure-scenarios/migration-plan/`.
+
+## C20 — Triage fast pass + the executive one-pager
+
+- **Producer:** `report-standard/triage-mode.md` defines the `SCOUTFLO_TRIAGE`
+  contract (smallest scope, each provider's high-signal cheap-to-read subset,
+  bulk reads over per-resource fan-out, never background a sweep); a triage run
+  emits its normal `findings.json` marked `scope: "triage"`.
+  `render-report-viz.sh exec-summary` renders the one-pager from the per-target
+  findings (+ `alert-fatigue.json` for the AF-004 reachability headline).
+- **Consumers:** the top of the `audit-all` combined report; a standalone fast
+  pass before a deep run.
+- **Invariants:** ranking is **severity-first → recoverable points → $ as an
+  in-band tiebreaker — never a blended cross-domain score**, and a dollar figure
+  never promotes a lesser finding above a critical one; a triage subset is
+  **stamped TRIAGE and never presented as a full assessment or an all-clear**;
+  dollar figures are provider-native only.
+- **SSOT:** `report-standard/triage-mode.md`.
+- **Guards:** `tests/test-report-viz.sh` Tests 16–17 (severity-first ordering,
+  the $-never-promotes case, the TRIAGE stamp, the reachability denominator);
+  pressure scenario `tests/pressure-scenarios/audit-all/`; selftest exec-summary
+  locks.
+
+## C21 — RCA answer (live-first, never-invented)
+
+- **Producer:** `rca` answers "why is X failing" by correlating the per-audit
+  findings + `correlation.json` + `topology-export.json` + business context,
+  then making **read-only** live checks (via the `live-evidence` lib) for
+  current-state evidence.
+- **Invariants:** every named cause is **evidence-cited** (finding IDs, live
+  reads); the answer carries a **confidence level and an honest list of what it
+  could not determine**; it never invents a cause, never mutates anything, and
+  degrades to report-only when no live access exists; reports are reference,
+  topology is the blast-radius map, live reads are the proof.
+- **SSOT:** `skills/rca/SKILL.md`.
+- **Guards:** `ci/liveness-readonly-check.sh` (live checks stay read-only);
+  `tests/pressure-scenarios/rca/`; the C4/C5/C7 producer contracts it consumes.
+
+## C22 — Service→repo map (scoutflo-repo-map/v1)
+
+- **Producer:** `map-repos` writes `repo-map.json` (`scoutflo-repo-map/v1`) +
+  `repo-map.md`, mapping services to VCS repositories.
+- **Consumers:** downstream platform imports (dry-run → hash-gated apply) and
+  any skill that wants service→repo joins.
+- **Invariants:** **every mapping is explicitly human-confirmed — the skill
+  never auto-accepts a match, even an obvious one**; entries key on the
+  immutable repository id, not the name; unresolved services are listed as
+  unresolved, never guessed.
+- **SSOT:** `skills/map-repos/SKILL.md`.
+- **Guards:** `tests/pressure-scenarios/map-repos/` (never-auto-accept); the
+  catalog gate (user-facing skill rows).

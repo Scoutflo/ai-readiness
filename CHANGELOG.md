@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.195
+
+**Coverage institutionalized: contract map completed, customer docs brought current, and this month's verification lessons turned into standing machinery** — so "is everything covered?" has a written, mechanically-guarded answer instead of a per-session prompt.
+
+- **`docs/CONTRACTS.md` — the coverage holes closed:** new **C20** (triage fast pass + the executive one-pager: severity-first ranking, $ never promotes, the TRIAGE stamp, never an all-clear from a subset), **C21** (the RCA answer: live-first, evidence-cited, confidence + honest gaps, never invents a cause, read-only live checks), **C22** (service→repo map: every mapping human-confirmed, never auto-accepted, keyed on immutable repo ids); **C1 extended** with the `history.jsonl` ledger invariants (append-only; trends only across matching `scoring_model` + `check_set`); **C10 extended** with the one-brief-per-run + titles-only/safe-to-leak + redaction-pass invariant. The header now states the two pre-ship steps the gates cannot do — the maintainer rubric review (every lane) and the fresh-shell execution of every SKILL bash block — with the shipped proof of why.
+- **Customer-guidance docs brought current** (they had drifted behind the shipped capabilities): README **flow diagram** gains the `migration-plan` node and edges; **"What's new"** now leads with migration-plan, triage + the executive one-pager, and measured alert-fatigue; the **use-case table** gains triage / alert-fatigue / migration rows; **`docs/faq.md`** answers "Can it migrate me from Datadog to SigNoz?" (plan-only, with the two honest limits); **`docs/token-costs.md`** adds the migration-plan cost profile (artifact-first skeleton ≈ free; cost concentrates in bounded detail pulls + enrichment).
+- **The v0.1.194 flow bugs are now regression-locked in CI:** `test-migration-plan.sh` extracts the SKILL's own bash blocks and executes them hermetically — the doctor gate's fail-closed paths (no config; unset keys stop at the `:?` guard **before** any network call) and the estate-sizing dual-glob (labeled source counts 4; one-level counts 1). 35 checks total.
+
+**Verification:** all four repo gates green; selftest green including the new **rubric-review ledger lock** (every shipped skill must have a row in the maintainers' review ledger — a silently skipped review is now a red build). Maintainer-side (outside this repo): the review ledger and SMOKE-MATRIX seeded; the integration playbook/checklist gained the docs-currency and every-lane review/flow-run steps.
+
 ## 0.1.194
 
 **migration-plan: two real bugs caught by the end-to-end flow verification (every SKILL block executed in fresh shells over a realistic sandbox).**
