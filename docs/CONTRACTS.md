@@ -498,3 +498,53 @@ PR; the live smoke against a real estate is a hard merge gate (`AGENTS.md`).
   `tests/test-check-cost.sh`; `ci/multi-target-consumer-check.sh` (the
   cost-analysis glob shape); selftest: the audit-cost stays-`scoutflo-cost/v1`
   case and the cost-analysis suite (`skills/cost-analysis/tests/`).
+
+## C19 — Migration plan (plan-only cross-provider synthesis: scoutflo-migration-plan/v1)
+
+- **Producer (deterministic skeleton):** `skills/migration-plan/lib/migration-plan.sh`
+  (`migration_plan_run <source> <target> [date]`) writes
+  `${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/migration-plans/<source>-to-<target>/<date>/migration-plan.json`
+  (`scoutflo-migration-plan/v1`) — one evidence-cited disposition per source object
+  (`migrate` / `fix-then-migrate` / `drop-candidate` / `already-covered` /
+  `no-equivalent`, precedence in that reverse order), built **artifact-first** from
+  the source audit's `inventory.json` + `findings.json` (dual-glob, both layout
+  levels), the optional `fatigue-signals.json` (measured never-fired / dead-end
+  evidence), and the target's `inventory.json` (absent → `mode: "source-only"`).
+  **Zero provider calls in the library.**
+- **Producer (enrichment, in the skill lane):** `skills/migration-plan/SKILL.md`
+  makes bounded **read-only** detail pulls per the pair catalog
+  (`skills/migration-plan/references/<source>-to-<target>.md` — the only source of
+  truth for equivalences), appends the kinds the audit inventory does not carry
+  (dashboards, synthetics, log pipelines), recomputes totals, and sets per-object
+  `equivalence` ∈ `direct|approximate|manual|none` + `target_shape` + gaps'
+  alternatives + the cutover playbook.
+- **Consumers:** `report-standard/render-report-viz.sh` (`migration-plan` +
+  `migration-plan-html` modes) renders the human plan next to the JSON; the plan
+  is the scope document for a (human/service) execution engagement — no skill
+  executes it; the file is otherwise terminal (nothing scores it).
+- **Invariants:** **plan-only and read-only on both providers** (never creates,
+  edits, mutes, deletes, or test-fires anything); a `drop-candidate` /
+  `fix-then-migrate` **never ships without evidence**, and every cited finding-id
+  must exist in this run's source findings; `already-covered` is **forbidden in
+  source-only mode** (no fabricated target coverage) and must name its
+  `matched_target`; equivalence classes come only from the pair catalog and an
+  unsupported pair **refuses to run** (no improvised mappings);
+  `cutover.historical_telemetry` must equal `"does-not-transfer"` (config carries
+  over; history never does — continuity is the dual-write/parallel-run window and
+  the audit-parity sunset gate: re-run source + target audits + correlation, sunset
+  only on coverage parity with no true-gap regressions); totals reconcile with the
+  inventory; non-scored (no 0-100, no finding-ID prefix — objects keep their
+  provider-native names).
+- **SSOT:** `skills/migration-plan/SKILL.md` (protocol) +
+  `skills/migration-plan/references/datadog-to-signoz.md` (the datadog→signoz
+  pair catalog, research-grounded with VERIFIED/UNVERIFIED flags).
+- **Guards:** `report-standard/check-migration-plan.sh` (the honesty gate: schema,
+  disposition enum + reasons, evidence-presence AND ghost-finding-id cross-check,
+  source-only vs already-covered, equivalence enum, real gap alternatives, the
+  history lock, totals reconciliation) — a hard gate before rendering;
+  `skills/migration-plan/tests/test-migration-plan.sh` (run by `ci/run-tests.sh`:
+  disposition rules + precedence, source-only honesty, unsupported-pair refusal,
+  validator red paths); `tests/test-report-viz.sh` Test 18 (rendered dispositions
+  with evidence, source-only banner, gap alternatives, history honesty,
+  self-contained HTML); pressure scenarios under
+  `tests/pressure-scenarios/migration-plan/`.
