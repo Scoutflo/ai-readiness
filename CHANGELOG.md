@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.193
+
+**migration-plan: rubric-review hardening (the maintainer review v0.1.192 shipped without — run post-ship, gaps fixed).** The maintainer rubric review (Governance Principle #1) was run against the new skill after it shipped; it caught four real gaps none of the CI gates can see, all fixed here:
+
+- **E5 (auth-header discipline):** the pair catalog's read block now guards every key (`set -eu` + `:?` asserts) — an unset `DATADOG_API_KEY`/`DATADOG_APP_KEY` can never send an empty auth header.
+- **A2 (identity + target gate):** the doctor gate now *verifies identity against the configured target* before any real pull — the canonical Datadog `validate` probe against the configured `site`, stop on mismatch — instead of only checking key presence.
+- **D3 (resume rule):** stated the resume behavior the design already implied — the plan JSON is the worklist; on re-entry enrich only objects still missing `equivalence`/`target_shape` (with the exact `jq` to list what remains), never re-pull enriched ones.
+- **H2/H3 (voice + thresholds):** three consultant-voice instances ("the customer …") rewritten to self-service voice; the inline scope threshold marked as a tune-this example.
+
+**Verification:** all four repo gates green; `test-migration-plan.sh` 31/0; selftest locks green. Review notes flagged for maintainer discussion (not improvised): the rubric's em-dash row vs the repo's house style, and a possible future "planner-lane" rubric row formalizing plan-artifact honesty (what C19 + `check-migration-plan.sh` already enforce).
+
 ## 0.1.192
 
 **New skill: `/scoutflo:migration-plan` — the plugin's first migration capability (Datadog → SigNoz), plan-only and evidence-cited.** Promised to a live customer on the 2026-09-08 audit call ("a skill that compares Datadog and SigNoz and creates a migration inventory — with the audit's bias"). Positioned deliberately as a **planner in the synthesis family**: the plugin plans, a confirm-then-verify engagement executes — the plan is the scope document, and this skill changes **nothing on either side**. Architecture is generic (one skill + per-pair catalogs) so future pairs add a reference file instead of a new skill; an unsupported pair refuses to improvise.
