@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.194
+
+**migration-plan: two real bugs caught by the end-to-end flow verification (every SKILL block executed in fresh shells over a realistic sandbox).**
+
+- **Doctor-gate site parse (identity gate targeting the wrong host):** the `awk` that reads `datadog.site` never reset at the next top-level config block — with no `site:` under `datadog:`, it silently grabbed a `site:` from a LATER block and pointed the identity probe at the wrong host. Fixed to scope strictly to the `datadog:` block (falls back to the default site); verified against both config shapes.
+- **Estate-sizing dual-glob (C2 class):** the sizing block counted only the one-level `datadog/<date>/` layout — a labeled multi-target source sized as `0` objects and could never trigger the scope checkpoint. Now counts both layouts (verified: multi-label sandbox sizes correctly; one-level unchanged).
+- **Multi-label behavior documented:** a labeled source concatenates every label into ONE plan — stated in Prerequisites, with the single-org guidance (keep/run only that label's artifacts for the date).
+
+**Verification (the full sweep this release closes out):** all four repo gates green; `test-migration-plan.sh` 31/0; selftest green incl. the 8 migration-plan locks; **every SKILL bash block executed in a fresh shell** in flow order (doctor gate fail-closed on all three paths — no config / unset keys / invalid key+site; sizing; Phase-1 lib; totals recompute; resume-rule jq; validate+render) over a multi-label + one-level sandbox; contract C19 guards re-verified present; SMOKE-MATRIX row + selftest PLAYBOOK §4d added (local trackers) so migration-plan is part of every future live sweep.
+
 ## 0.1.193
 
 **migration-plan: rubric-review hardening (the maintainer review v0.1.192 shipped without — run post-ship, gaps fixed).** The maintainer rubric review (Governance Principle #1) was run against the new skill after it shipped; it caught four real gaps none of the CI gates can see, all fixed here:
