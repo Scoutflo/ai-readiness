@@ -46,7 +46,7 @@ if [ ! -f "$CFG" ]; then
   # toolkit.yaml but named variants (toolkit-prod.yaml, toolkit-nonprod.yaml). List
   # them so the choice is directed, not a dead stall — but NEVER auto-pick an
   # environment (auditing the wrong one is worse than asking).
-  ENVCFGS=$(for d in "./.scoutflo" "$HOME/.scoutflo"; do ls "$d"/toolkit-*.yaml 2>/dev/null; done)
+  ENVCFGS=$(for d in "./.scoutflo" "$HOME/.scoutflo"; do ls "$d"/toolkit-*.yaml 2>/dev/null; done || true)
   if [ -n "$ENVCFGS" ]; then
     echo "no default config at $CFG, but found environment-specific configs:"
     printf '%s\n' "$ENVCFGS" | sed 's/^/  - /'

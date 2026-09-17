@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.1.196
+
+**A repo-wide silent-failure fix found by the standing-checks walk, plus the New
+Relic skills' hermetic block suites and rubric closure.**
+
+- **Fixed in 23 skills: the no-default-config branch died SILENTLY.** Under
+  `set -e`, `ENVCFGS=$(for … ls toolkit-*.yaml …; done)` propagated `ls`'s
+  failure status through the assignment and killed the doctor gate before the
+  "missing config; run /scoutflo:connect" message (or the multi-environment
+  config listing) could print — in every skill that carried the pattern,
+  including the exemplar, since the branch was introduced. One-line fix
+  (`|| true` inside the substitution); the exemplar's no-config path now
+  speaks. Found by executing the SKILL's own blocks hermetically — the exact
+  check class v0.1.194 institutionalized.
+- **New hermetic test suites executing the NR skills' own SKILL blocks**
+  (`test-audit-newrelic.sh` 7 checks, `test-setup-newrelic.sh` 6): doctor
+  fail-closed on no-config / unset-key (naming the variable) / invalid region,
+  live-safety and backup blocks stopping at the key guard, sizing's
+  false-zero-on-401 guard, the `nrq` empty-auth-header guard, findings-load
+  refusing to plan from nothing and excluding non-scored findings from the
+  change plan. Run by `ci/run-tests.sh` (now 35 suites).
+- **Suite-caught real bug, fixed: `setup-newrelic`'s live-safety gate was
+  missing the key-presence guard** — an unset key variable reached the network
+  as an empty `API-Key` header instead of stopping with the doctor-gate hint.
+- **`setup-newrelic` E7 completed**: the condition-restore rollback is now a
+  worked, self-resolving command (backup file → jq-built variables → the update
+  mutation) — and it was proven live with an idempotent restore round-trip
+  (post-restore re-read equals the backup field-for-field).
+
 ## 0.1.195
 
 **Coverage institutionalized: contract map completed, customer docs brought current, and this month's verification lessons turned into standing machinery** — so "is everything covered?" has a written, mechanically-guarded answer instead of a per-session prompt.
