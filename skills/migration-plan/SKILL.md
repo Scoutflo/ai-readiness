@@ -18,7 +18,7 @@ A migration is the one moment an estate gets to shed years of accumulated alerti
 | Requirement | Check |
 | --- | --- |
 | Source + target blocks in `~/.scoutflo/toolkit.yaml` | `datadog` block (API+app key envs); `signoz` block optional — absent/unreachable target ⇒ **source-only mode**, stated on the plan |
-| A source audit run for the plan date (artifact-first) | `${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/datadog/<date>/inventory.json` exists — run `/scoutflo:audit-datadog` first if not; this skill never re-derives what the audit already read |
+| A source audit run for the plan date (artifact-first) | `${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/datadog/<date>/inventory.json` exists (or `datadog/<label>/<date>/` for a labeled list) — run `/scoutflo:audit-datadog` first if not; this skill never re-derives what the audit already read. **A labeled multi-target source concatenates every label into ONE plan** — to plan a single org's migration, run/keep only that label's artifacts for the date |
 | For the drop-the-noise bias (optional, recommended) | today's `fatigue-signals.json` from the alert-fatigue fire-history lane — measured never-fired / dead-end evidence |
 | `jq` | `command -v jq` |
 
@@ -40,7 +40,7 @@ done
 # Identity + target, verified before any real pull: the key must validate against
 # the CONFIGURED site (the same canonical probe /scoutflo:doctor uses). Stop on
 # mismatch — never proceed on "probably the right org".
-DD_SITE_CFG="$(awk '/^datadog:/{f=1} f && /site:/{print $2; exit}' "$CFG")"
+DD_SITE_CFG="$(awk '/^datadog:/{f=1; next} /^[^ #]/{f=0} f && $1=="site:"{print $2; exit}' "$CFG")"
 DD_SITE="${DD_SITE_CFG:-datadoghq.com}"
 VALID="$(curl -fsS --max-time 15 "https://api.${DD_SITE}/api/v1/validate" -H "DD-API-KEY: ${DATADOG_API_KEY}" | jq -r '.valid // false')"
 [ "$VALID" = "true" ] || { echo "identity gate: key does NOT validate against site ${DD_SITE} — wrong site or key; stopping"; exit 1; }
@@ -63,7 +63,13 @@ Monitor counts scale into the hundreds; dashboards multiply widgets. Size the es
 set -eu
 AUDITS_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}"
 RUN_DATE="${RUN_DATE:-$(date -u +%F)}"
-TOTAL="$(jq -r '(.items | length) // 0' "$AUDITS_DIR/datadog/$RUN_DATE/inventory.json" 2>/dev/null || echo 0)"
+# Dual-glob (C2): a labeled datadog list writes datadog/<label>/<date>/ — count BOTH layouts
+TOTAL=0
+for f in "$AUDITS_DIR/datadog/$RUN_DATE/inventory.json" "$AUDITS_DIR"/datadog/*/"$RUN_DATE"/inventory.json; do
+  [ -f "$f" ] || continue
+  n="$(jq -r '(.items | length) // 0' "$f" 2>/dev/null || echo 0)"
+  TOTAL=$((TOTAL + n))
+done
 . "${CLAUDE_PLUGIN_ROOT}/skills/cli-interactive/lib/cli-interactive.sh" 2>/dev/null || true
 if [ "$TOTAL" -gt 500 ] && command -v cli_pause_before_audit >/dev/null 2>&1; then   # 500 = example threshold, tune to your estate (shared thresholds: estate-scope-checkpoint.md)
   cli_pause_before_audit "migration-plan" "$TOTAL" "scope the plan (e.g. production monitors first) or proceed with all $TOTAL objects"
