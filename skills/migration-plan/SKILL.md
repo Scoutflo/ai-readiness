@@ -35,10 +35,19 @@ done
 [ -n "$CFG" ] || { echo "no toolkit.yaml — run /scoutflo:connect first"; exit 1; }
 # shellcheck disable=SC1090
 [ -f "$HOME/.scoutflo/env" ] && . "$HOME/.scoutflo/env"
-echo "doctor gate: config at $CFG; source datadog keys $([ -n "${DATADOG_API_KEY:-}" ] && echo present || echo MISSING)"
+: "${DATADOG_API_KEY:?source key missing — run /scoutflo:connect (never send an empty auth header)}"
+: "${DATADOG_APP_KEY:?source app key missing — run /scoutflo:connect}"
+# Identity + target, verified before any real pull: the key must validate against
+# the CONFIGURED site (the same canonical probe /scoutflo:doctor uses). Stop on
+# mismatch — never proceed on "probably the right org".
+DD_SITE_CFG="$(awk '/^datadog:/{f=1} f && /site:/{print $2; exit}' "$CFG")"
+DD_SITE="${DD_SITE_CFG:-datadoghq.com}"
+VALID="$(curl -fsS --max-time 15 "https://api.${DD_SITE}/api/v1/validate" -H "DD-API-KEY: ${DATADOG_API_KEY}" | jq -r '.valid // false')"
+[ "$VALID" = "true" ] || { echo "identity gate: key does NOT validate against site ${DD_SITE} — wrong site or key; stopping"; exit 1; }
+echo "doctor gate: config at $CFG; source = datadog @ ${DD_SITE} (key validated); target = signoz (optional — absent selects source-only mode)"
 ```
 
-Run `/scoutflo:doctor` for the full per-provider probes if anything is unclear. The plan needs the **source audit artifacts** more than it needs live source access — a fresh audit run is the real doctor here.
+Run `/scoutflo:doctor` for the full per-provider probes if anything is unclear. The plan needs the **source audit artifacts** more than it needs live source access — a fresh audit run is the real doctor here, and Phase 1's artifacts must come from the same configured target this gate just verified.
 
 ## Live-safety gate
 
@@ -56,7 +65,7 @@ AUDITS_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}"
 RUN_DATE="${RUN_DATE:-$(date -u +%F)}"
 TOTAL="$(jq -r '(.items | length) // 0' "$AUDITS_DIR/datadog/$RUN_DATE/inventory.json" 2>/dev/null || echo 0)"
 . "${CLAUDE_PLUGIN_ROOT}/skills/cli-interactive/lib/cli-interactive.sh" 2>/dev/null || true
-if [ "$TOTAL" -gt 500 ] && command -v cli_pause_before_audit >/dev/null 2>&1; then
+if [ "$TOTAL" -gt 500 ] && command -v cli_pause_before_audit >/dev/null 2>&1; then   # 500 = example threshold, tune to your estate (shared thresholds: estate-scope-checkpoint.md)
   cli_pause_before_audit "migration-plan" "$TOTAL" "scope the plan (e.g. production monitors first) or proceed with all $TOTAL objects"
 fi
 echo "estate: $TOTAL source objects"
@@ -98,6 +107,8 @@ jq '.totals = {
 
 Every appended object follows the same rules: a drop/fix needs evidence; a kind with no equivalent gets the catalog's alternative.
 
+**Resume rule (large estates).** The plan file itself is the worklist: enrichment is idempotent over `migration-plan.json`, so on re-entry (a new session, an interrupted run) enrich **only** the objects still missing `equivalence`/`target_shape` and pull **only** their details — never re-pull or re-enrich objects already carrying them. `jq '[.inventory[] | select(.disposition == "migrate" and (has("equivalence") | not)) | .name]' "$PLAN"` lists exactly what remains.
+
 ## Phase 3 — Equivalence enrichment (the pair catalog is the only source of truth)
 
 For each `migrate` object, set from the catalog: `equivalence` (`direct/approximate/manual/none`), a `target_shape` sketch (e.g. the SigNoz rule type, windowed match-type, channel mapping), and `notes` naming anything manual. This is also where the **best-practice bias** lands: a migrated alert adopts the target-side hygiene the methodology doctrine prescribes (windowed evaluation instead of a flappy default, no broadcast handles, severity labels that route) — each improvement noted on the object, never silently applied. Fill every `gaps[].alternative` with the catalog's real alternative (a `pending-catalog` placeholder fails validation), and write `cutover.parallel_run` from the catalog's cutover playbook.
@@ -122,14 +133,14 @@ Show the operator the rendered plan (worst-first: fix-then-migrate and drop-cand
 
 ## The cutover playbook (what "no data loss" honestly means)
 
-- **Config: nothing silently lost.** Every source object appears in the plan with a disposition; drops are explicit, evidenced proposals the customer confirms.
+- **Config: nothing silently lost.** Every source object appears in the plan with a disposition; drops are explicit, evidenced proposals that you confirm.
 - **History: does not transfer.** Dashboards/alerts recreate; old telemetry stays in the source until its retention ends. The plan never claims otherwise.
 - **Continuity: dual-write, then parity, then sunset.** Ingest to both backends during the parallel-run window (the pair catalog names the mechanism), keep the target's new alerts in a shakedown state so one incident doesn't page through both tools, then **sunset the source only when the audit-parity gate passes**: re-run the source and target audits + the correlation engine, and require target coverage parity with no true-gap regressions. Our own audits are the objective "safe to sunset" criterion.
 
 ## Outputs
 
 - `<audits-dir>/migration-plans/<source>-to-<target>/<date>/migration-plan.json` (`scoutflo-migration-plan/v1`) — the machine plan: per-object dispositions with evidence, equivalence classes, gaps with alternatives, cutover.
-- `migration-plan.md` + `migration-plan.html` next to it — the human plan (the customer deliverable), rendered by [render-report-viz.sh](../../report-standard/render-report-viz.sh) (`migration-plan` / `migration-plan-html` modes).
+- `migration-plan.md` + `migration-plan.html` next to it — the human plan (the deliverable you share and act on), rendered by [render-report-viz.sh](../../report-standard/render-report-viz.sh) (`migration-plan` / `migration-plan-html` modes).
 
 ## Common Failure Modes
 

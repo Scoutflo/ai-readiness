@@ -9,6 +9,11 @@ The single source of truth for `migration-plan` equivalences on this pair. Every
 The audit's `inventory.json` carries monitors/SLOs/downtimes as rows; the plan's detail pass pulls full definitions **only for objects the plan needs** (bounded per-disposition, never a per-estate sweep). All GETs; the app key needs read access to dashboards/SLOs/synthetics/logs-config in addition to the audit's scopes (probe a single GET and treat a 403 as a named scope gap, not a failure).
 
 ```bash
+set -eu
+# shellcheck disable=SC1090
+[ -f "$HOME/.scoutflo/env" ] && . "$HOME/.scoutflo/env"
+: "${DATADOG_API_KEY:?run /scoutflo:connect — never send an empty auth header}"
+: "${DATADOG_APP_KEY:?run /scoutflo:connect — never send an empty auth header}"
 # Monitors (full definitions incl. options/thresholds/message) — reuse the audit's pull if kept
 curl -fsS "https://api.${DD_SITE:-datadoghq.com}/api/v1/monitor?page_size=1000" \
   -H "DD-API-KEY: ${DATADOG_API_KEY}" -H "DD-APPLICATION-KEY: ${DATADOG_APP_KEY}"
@@ -163,7 +168,7 @@ Verified SigNoz model: `{name, schedule{timezone, startTime, endTime, recurrence
 
 ## 10. Cutover playbook (fills `cutover.parallel_run`)
 
-1. **Freeze + plan** — this skill's output: dispositions confirmed with the customer (drops approved, fix-list agreed).
+1. **Freeze + plan** — this skill's output: dispositions confirmed by you and your team (drops approved, fix-list agreed).
 2. **Bridge up** — OTel Collector deployed; DD Agent dual-ships metrics via `DD_ADDITIONAL_ENDPOINTS`; OTel SDK rollout for traces service-by-service; logs to SigNoz per its logs guide. Tags normalized to OTel semconv first.
 3. **Recreate per plan** — fix-then-migrate items get their fixes at creation; migrated alerts adopt the target-side hygiene noted on each object (windowed match-type, per-threshold channels, severity labels).
 4. **Shakedown (parallel run)** — **paging duty stays on Datadog**; SigNoz rules run with channels live but pages shadowed (scoped planned-maintenance on the paging channels, or a shadow channel) so one incident never pages through both tools.
