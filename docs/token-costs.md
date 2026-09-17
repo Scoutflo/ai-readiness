@@ -247,6 +247,12 @@ For these, Sonnet 5 is a good middle ground (3–10× more reasoning power, 3.75
 > "X% faster" wall-time claim, for the same reason as above. A triage report is a
 > subset, not a full assessment — run the deep audit when you want complete coverage.
 
+> **Migration-plan is artifact-first, so its skeleton is nearly free.** The
+> disposition skeleton is local `jq` over audit artifacts already on disk (zero
+> provider reads); token cost concentrates in the bounded detail pulls (only the
+> objects the plan needs) and the equivalence enrichment against the pair
+> catalog. Source-only mode (target not readable yet) reads even less.
+
 ## Efficiency, measured
 
 The claims here are reproducible: run `sh tests/measure-efficiency.sh` from the

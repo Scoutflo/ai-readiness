@@ -35,6 +35,7 @@ flowchart TD
     subgraph CORRELATE["③ Understand across everything — read-only analysis"]
         corr["/scoutflo:correlation-engine<br/>overlaps + cause-to-effect cascades"]
         rca["/scoutflo:rca<br/>why is X failing? evidence-cited<br/>root cause + confidence + honest gaps"]
+        mig["/scoutflo:migration-plan<br/>plan a provider migration (Datadog→SigNoz):<br/>evidence-cited inventory + cutover — plan-only"]
     end
 
     subgraph FIX["④ Fix — only with your explicit yes"]
@@ -56,6 +57,8 @@ flowchart TD
     topo -. blast radius .-> rca
     bctx -. what is critical .-> rca
     findings --> rca
+    findings --> mig
+    mig -.->|the plan scopes the execution| setup
     rca -->|next safe action| setup
     findings -->|each finding maps to its fix| setup
     setup -->|re-run audit to confirm| aud
@@ -63,7 +66,7 @@ flowchart TD
     classDef ro fill:#e6f4ea,stroke:#137333,color:#0b3d1a;
     classDef write fill:#fef7e0,stroke:#b06000,color:#5c3400;
     classDef data fill:#e8f0fe,stroke:#1a56c4,color:#0b2e6b;
-    class start,connect,doctor,topo,bctx,aud,cost,all,corr,rca ro;
+    class start,connect,doctor,topo,bctx,aud,cost,all,corr,rca,mig ro;
     class setup write;
     class findings data;
 ```
@@ -80,12 +83,18 @@ Green = read-only (safe, changes nothing) · amber = write, gated behind your co
 | Ask *"why is `<service>` failing — give me the RCA?"* | `/scoutflo:rca` (step ③, after audits + topology + business-context) |
 | See redundant monitoring / cascade risk across stacks | `/scoutflo:correlation-engine` |
 | Actually fix a finding | the matching `setup-*` skill (step ④, with your yes) |
+| Short on time — worst findings first, fast | ask for a **triage pass** (`SCOUTFLO_TRIAGE=1`) → the executive one-pager |
+| Measure alert noise / fatigue (or audit one alerting tool standalone) | `/scoutflo:alert-fatigue` — noise findings with the exact fix, plus measured fire-history |
+| Plan a migration off Datadog onto SigNoz | `/scoutflo:migration-plan` — evidence-cited migrate/fix/drop inventory + cutover playbook (plan-only) |
 | Run it on a schedule | `/scoutflo:schedule-audits` |
 
 ---
 
 ## What's new (latest release)
 
+- **`/scoutflo:migration-plan` — plan a provider migration (Datadog → SigNoz first).** A complete, evidence-cited inventory: what to migrate (with the SigNoz target shape), what to fix first (broken routing the audits found), what to drop (dead weight, with the audit's proof, pending your confirmation), what the target already covers, and what has no native equivalent (each with a real alternative) — plus the dual-write parallel-run and cutover playbook. Plan-only and read-only on both sides; historical telemetry never transfers and the plan says so.
+- **Triage mode + an executive one-pager.** Ask for a fast pass (`SCOUTFLO_TRIAGE=1`) and get the worst findings across the estate in minutes — a posture grade, the top 5–7 worst things (what · where · $ · the fix), ranked severity-first (a big dollar figure never outranks a critical), stamped as a subset, never an all-clear. The same one-pager opens every `audit-all` combined report.
+- **Alert noise & fatigue, measured.** `alert-fatigue` runs standalone against a single alerting integration or as the cross-audit roll-up, adds a read-only fire-history tier (how often each alert actually fired, flapping, stuck-for-months, and how many alerting objects can't reach a human at all), and renders a worst-first problem→fix report + dashboard. Three honest tiers — config, fire-history, incident-feed — and a ratio that is never fabricated.
 - **Honest, evidence-aware scoring.** A check the plugin couldn't run — a denied API, a missing permission — is now recorded as *unassessed* and kept **out** of the score, instead of looking like a broken service and dragging the number down. A fully-blocked audit reads **"Unassessed"**, never a misleading `0/100` or `100/100`, and every report shows its **assessment coverage** (how much was actually checked) next to the score — so a high number can't hide a half-checked estate.
 - **Two report views from the same findings.** Each report's **Findings by purpose** section splits into a **General audit** view (operational reliability) and an **AI SRE readiness** view (telemetry quality, service identity, topology, routing evidence — what trustworthy AI-assisted diagnosis needs). Each finding is shown with its severity, what's wrong, why it matters, and the recommended action. Same evidence, one score, no duplication — just the right lens for the right reader.
 - **More accurate audits, fewer overreaches.** AWS is engine-aware (RDS vs Aurora vs DocumentDB scored correctly); an `INSUFFICIENT_DATA` alarm isn't called "broken" without evidence; notification *configuration* is no longer treated as proof a human was paged; and a failed ELK/Grafana API read can no longer show up as an "empty estate" (full pagination, partial results preserved).
