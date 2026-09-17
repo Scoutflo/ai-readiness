@@ -127,6 +127,7 @@ NR_REGION=$(sh "$TT" "$CFG" newrelic get "$NR_IDX" region); NR_REGION="${NR_REGI
 case "$NR_REGION" in US|us) NR_API_HOST="api.newrelic.com" ;; EU|eu) NR_API_HOST="api.eu.newrelic.com" ;; esac
 NR_KEY_VAR=$(sh "$TT" "$CFG" newrelic get "$NR_IDX" api_key_env); NR_KEY_VAR="${NR_KEY_VAR:-NEW_RELIC_USER_API_KEY}"
 NEW_RELIC_USER_KEY="$(printenv "$NR_KEY_VAR" 2>/dev/null || true)"; export NEW_RELIC_USER_KEY
+[ -n "${NEW_RELIC_USER_KEY:-}" ] || { echo "${NR_KEY_VAR} is not set — run the doctor gate first"; exit 1; }
 LSB="$(mktemp)"
 LSM="$(curl -s -o "$LSB" -w '%{http_code} %{content_type}' --max-time 15 \
   -X POST "https://${NR_API_HOST}/graphql" -H 'Content-Type: application/json' -H "API-Key: ${NEW_RELIC_USER_KEY}" \
@@ -286,8 +287,36 @@ jq -e '.id' "$BK/condition-<condition-id>.json" >/dev/null && echo "backup: $BK/
 3. Verify: re-read the condition and `jq -e` the exact fields you changed
    (`[.terms[].priority] | index("WARNING")`, `.signal.aggregationDelay >= <n>`,
    duration `% window == 0`).
-4. **Restore pair:** the same update mutation with the backed-up body's values,
-   taken byte-for-byte from `$BK/condition-<condition-id>.json`.
+4. **Restore pair (worked):** the same update mutation, its `condition` body
+   built byte-for-byte from the backup:
+
+```bash
+set -eu
+# Self-resolve target + key (fresh shell; nothing carries over from earlier blocks).
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.scoutflo/env" ]; then SCOUTFLO_ENV="./.scoutflo/env"; else SCOUTFLO_ENV="$HOME/.scoutflo/env"; fi; }
+[ -f "$SCOUTFLO_ENV" ] && . "$SCOUTFLO_ENV" || true
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+NR_KIND=$(sh "$TT" "$CFG" newrelic kind); NR_N=$(sh "$TT" "$CFG" newrelic count)
+NR_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$NR_N" ]; do [ "$(sh "$TT" "$CFG" newrelic label "$_i")" = "$SCOUTFLO_TARGET" ] && { NR_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+NR_ACCT=$(sh "$TT" "$CFG" newrelic get "$NR_IDX" account_id)
+NR_REGION=$(sh "$TT" "$CFG" newrelic get "$NR_IDX" region); NR_REGION="${NR_REGION:-US}"
+case "$NR_REGION" in US|us) NR_API_HOST="api.newrelic.com" ;; EU|eu) NR_API_HOST="api.eu.newrelic.com" ;; esac
+NR_KEY_VAR=$(sh "$TT" "$CFG" newrelic get "$NR_IDX" api_key_env); NR_KEY_VAR="${NR_KEY_VAR:-NEW_RELIC_USER_API_KEY}"
+NEW_RELIC_USER_KEY="$(printenv "$NR_KEY_VAR" 2>/dev/null || true)"
+[ -n "${NEW_RELIC_USER_KEY:-}" ] || { echo "${NR_KEY_VAR} is not set — run the doctor gate first"; exit 1; }
+BK_FILE="<the backup path step 1 printed>"
+RESTORE_VARS=$(jq -n --argjson acct "$NR_ACCT" --arg id "<condition-id>" \
+  --argjson terms "$(jq '.terms' "$BK_FILE")" \
+  --argjson signal "$(jq '.signal' "$BK_FILE")" \
+  --argjson exp "$(jq '.expiration' "$BK_FILE")" \
+  '{acct:$acct, id:$id, condition:{terms:$terms, signal:$signal, expiration:$exp}}')
+curl -sS --max-time 30 -X POST "https://${NR_API_HOST}/graphql" \
+  -H 'Content-Type: application/json' -H "API-Key: ${NEW_RELIC_USER_KEY}" \
+  --data "$(jq -n --arg q 'mutation($acct: Int!, $id: ID!, $condition: AlertsNrqlConditionUpdateStaticInput!) { alertsNrqlConditionStaticUpdate(accountId: $acct, id: $id, condition: $condition) { id } }' --argjson v "$RESTORE_VARS" '{query:$q,variables:$v}')" \
+  | jq -e '.data.alertsNrqlConditionStaticUpdate.id and (.errors == null)' && echo "restored from $BK_FILE"
+# Verify the restore exactly as step 3 verified the change; the re-read must equal the backup's fields.
+```
 
 ## Set loss-of-signal handling
 

@@ -78,7 +78,7 @@ CFG="${SCOUTFLO_CONFIG:-}"
 [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done
 [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
 if [ ! -f "$CFG" ]; then
-  ENVCFGS=$(for d in "./.scoutflo" "$HOME/.scoutflo"; do ls "$d"/toolkit-*.yaml 2>/dev/null; done)
+  ENVCFGS=$(for d in "./.scoutflo" "$HOME/.scoutflo"; do ls "$d"/toolkit-*.yaml 2>/dev/null; done || true)
   if [ -n "$ENVCFGS" ]; then
     echo "no default config at $CFG, but found environment-specific configs:"
     printf '%s\n' "$ENVCFGS" | sed 's/^/  - /'
