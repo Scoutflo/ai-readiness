@@ -179,3 +179,19 @@ A `USES` edge to a `vcs` resource should carry, in `attributes`, the repo label 
 The Scoutflo platform correlates a signal (alert, error, log line) to a service only when a service/workload/app name AND a namespace (or pod/container) can be string-matched between the topology and the signal. The non-negotiable minimum per service is therefore: `service_name` + `namespace` + `cluster_id` on the service, the four mandatory attributes on its workload, and at least one attribute-complete observability edge at confidence >= 8. The report standard's Scoutflo Topology Readiness section scores exactly this.
 
 Contract note: the import contract fields and enums are maintained by Scoutflo and are strict on import; verify against current Scoutflo topology documentation before running an actual import.
+
+## Non-Kubernetes estates
+
+An estate without a Kubernetes cluster still exports legally — services are
+relationship endpoints (`entity_type: service`), not `kubernetes_*` resources,
+so a valid export can carry services, integration backends, and the evidenced
+`SENDS_*`/`MONITORED_BY`/`CALLS` edges with **no workload resources at all**.
+What it must NOT do is fabricate one: the workload `resource_type` list above is
+Kubernetes-only by the import contract, and an invented `kubernetes_deployment`
+for an ECS service or a VM is a lie the platform then trusts. Emit the services
+and edges the sources evidenced, put the Sentry `project` (+ `environment`)
+attributes on the Sentry `MONITORED_BY` edge — that pair is a correlation anchor
+the platform accepts, the strongest non-Kubernetes match-confidence path today —
+and let the Topology Readiness section state the workload-mapping limit
+honestly. Discovery recipes and merge rules:
+[non-k8s-sources.md](non-k8s-sources.md).
