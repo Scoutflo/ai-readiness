@@ -1,13 +1,20 @@
 ---
 name: map-topology
-description: Builds a read-only service topology map from Istio or plain Kubernetes and writes topology.md plus a Scoutflo-aligned topology-export.json with routes, entry points, and re-run deltas. Use when the user asks to map services or the cluster, build or refresh a service map or topology, list entry points, ingress routes, or who calls whom, or update topology.md after a deploy. Do not use to score observability coverage (use audit-all or an audit-* skill); it never changes cluster state.
+description: Builds a read-only service topology map from the best available source — Istio or plain Kubernetes when a cluster is configured, and otherwise cloud inventories (AWS ECS/EC2/Lambda/ALB, DigitalOcean), APM-derived service maps (New Relic entities + span-derived call edges, Sentry projects), or a guided capture — and writes topology.md plus a Scoutflo-aligned topology-export.json with routes, entry points, and re-run deltas. Use when the user asks to map services, the cluster, or a non-Kubernetes estate, build or refresh a service map or topology, list entry points or who calls whom, or update topology.md after a deploy. Do not use to score observability coverage (use audit-all or an audit-* skill); it never changes any live state.
 ---
 
 # map-topology
 
-Maps how traffic moves through your cluster and writes the result to `./scoutflo-audits/topology.md`. When Istio is installed, the map is read **directly from the Istio CRDs in your cluster** — `VirtualServices`, `DestinationRules`, `Gateways`, `ServiceEntries`, and sidecar coverage on pods — via `kubectl get`/`list` (and `istioctl proxy-status` where available). It does **not** use Kiali, a service-mesh dashboard, Prometheus, or any external topology source; if you don't run Kiali, that changes nothing here. Without a mesh, the map comes from plain Kubernetes: Services, Ingresses, workloads, and Endpoints. Every cluster operation is read-only (`get` and `list` only); the only write is the local `topology.md` file.
+Maps how traffic moves through your estate and writes the result to `./scoutflo-audits/topology.md`. The map comes from the **best source you actually have** — Kubernetes is the richest, not the requirement:
 
-Full command recipes live in [references/istio-queries.md](references/istio-queries.md). This file holds the workflow; go to the cookbook for the exact `kubectl`, `istioctl`, and `jq` blocks each phase names.
+- **Istio on Kubernetes**: read directly from the Istio CRDs (`VirtualServices`, `DestinationRules`, `Gateways`, `ServiceEntries`, sidecar coverage) via `kubectl get`/`list` (and `istioctl proxy-status` where available). No Kiali, no dashboard, no Prometheus needed.
+- **Plain Kubernetes**: Services, Ingresses, workloads, and Endpoints.
+- **No Kubernetes at all**: services from your cloud inventory (AWS ECS/EC2/Lambda + ALB entry points, DigitalOcean apps), call edges from an APM that observes them (New Relic's span-derived service map), and platform-grade correlation anchors from Sentry projects — merged into one honest map. A rule of thumb the merge follows: infrastructure sources name the services; APM sources connect them.
+- **Nothing configured**: a guided capture builds an operator-asserted map instead of a dead-end.
+
+Every operation is read-only (`get`/`list`/GraphQL-and-REST reads only); the only write is the local `topology.md` file.
+
+Full command recipes live in [references/istio-queries.md](references/istio-queries.md) (the Kubernetes/Istio paths) and [references/non-k8s-sources.md](references/non-k8s-sources.md) (the cloud/APM/guided paths, merge rules, and non-Kubernetes export rules). This file holds the workflow; go to the cookbooks for the exact blocks each phase names.
 
 ## What topology.md is used for
 
@@ -32,12 +39,13 @@ Keep `./scoutflo-audits/` out of public version control. The map names your name
 
 | Requirement | Why | Required |
 | --- | --- | --- |
-| `kubectl` | every cluster read | yes |
-| `jq` | JSON parsing | yes |
-| `istioctl` | proxy sync status on the mesh path | no; the mesh path degrades to `kubectl`-only checks, the fallback path never needs it |
-| `kubernetes` in `~/.scoutflo/toolkit.yaml` — a single block with one `context`, **or** a labeled list of targets each with its own `context` | names the cluster(s) to map; map-topology maps **one** per run | yes |
+| `jq` | JSON parsing, every path | yes |
+| **At least one topology source** in `~/.scoutflo/toolkit.yaml`: `kubernetes` (richest), or any of `aws`, `digitalocean`, `newrelic`, `sentry` | names what to map; Phase 0 routes to the best configured source | yes — with **none**, the guided capture runs instead of a dead-end |
+| `kubectl` | every cluster read | only on the Kubernetes path |
+| `istioctl` | proxy sync status on the mesh path | no; the mesh path degrades to `kubectl`-only checks, the other paths never need it |
+| provider CLI/keys for a non-Kubernetes source (`aws` CLI + profile, `doctl`, the New Relic User key, the Sentry token) | the cloud/APM discovery reads | only for the sources you route through; each is the same read-only credential its audit already uses |
 
-Credentials: none beyond your kubeconfig. The kubeconfig user needs `get` and `list` on namespaces, pods, services, endpoints, deployments, statefulsets, daemonsets, and ingresses, plus the `networking.istio.io` resources when the mesh path runs. This is the read-only tier; no elevated access, no secrets, no `*_env` variables.
+Credentials on the Kubernetes path: none beyond your kubeconfig. The kubeconfig user needs `get` and `list` on namespaces, pods, services, endpoints, deployments, statefulsets, daemonsets, and ingresses, plus the `networking.istio.io` resources when the mesh path runs. This is the read-only tier; no elevated access, no secrets, no `*_env` variables.
 
 Managed clusters (EKS, GKE, AKS) whose context is not yet in your kubeconfig: fetch it once with the provider CLI as shown in `/scoutflo:connect` (Kubernetes → Fetching a cluster context). AKS with Microsoft Entra integration also needs `kubelogin` (`az aks install-cli`). Once the context exists this skill maps it unchanged — AKS is just another context.
 
@@ -45,9 +53,37 @@ map-topology is **per-cluster**: one run maps one cluster and writes one `topolo
 
 If `/scoutflo:doctor` is set up, run it first; it validates the same context this skill depends on.
 
-## Phase 0: Preflight and live-safety gate
+## Phase 0: Preflight, source routing, and live-safety gate
 
-Never map a cluster you have not positively identified. Every command in this skill pins `--context "${KUBE_CONTEXT}"`; the ambient kubeconfig default is never trusted.
+**Route to a source first — never assume Kubernetes, never dead-end without it.**
+
+```bash
+set -eu
+CFG="${SCOUTFLO_CONFIG:-}"
+[ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done
+[ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+[ -f "$CFG" ] || { echo "missing $CFG; run /scoutflo:connect"; exit 1; }
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+SOURCES=""
+for src in kubernetes aws digitalocean newrelic sentry; do
+  n=$(sh "$TT" "$CFG" "$src" count 2>/dev/null || echo 0)
+  [ "${n:-0}" -ge 1 ] && SOURCES="$SOURCES $src"
+done
+SOURCES="${SOURCES# }"
+if [ -z "$SOURCES" ]; then
+  echo "no topology source configured (kubernetes, aws, digitalocean, newrelic, or sentry) — running the GUIDED CAPTURE instead: the map will be built from your answers, marked operator-asserted (see references/non-k8s-sources.md, Guided capture), and upgraded automatically when a source is connected later"
+else
+  echo "topology sources configured: ${SOURCES}"
+  case " $SOURCES " in
+    *" kubernetes "*) echo "route: Kubernetes path (richest) — Phases 1-2C; other sources may add out-of-cluster services in Phase 2D" ;;
+    *) echo "route: non-Kubernetes path — Phase 2D discovery from: ${SOURCES} (see references/non-k8s-sources.md)" ;;
+  esac
+fi
+```
+
+With `kubernetes` among the sources, continue below exactly as before. Without it, skip to [Phase 2D](#phase-2d-non-kubernetes-discovery) after verifying each routed source's identity the same way its audit's doctor gate does (AWS: `sts get-caller-identity` with the config's own profile/region; New Relic/Sentry: the authed JSON probe from the cookbook — every probe keeps the body and content-type and fails closed on non-JSON). Never map an account you have not positively identified — the wrong-account hazard is the same off-cluster as on.
+
+**Kubernetes path only, from here to Phase 2C.** Never map a cluster you have not positively identified. Every command pins `--context "${KUBE_CONTEXT}"`; the ambient kubeconfig default is never trusted.
 
 ```bash
 set -eu
@@ -62,7 +98,7 @@ CFG="${SCOUTFLO_CONFIG:-}"
 # cluster per run — re-run once per label for a multi-cluster estate (see Prerequisites).
 TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 K8S_N=$(sh "$TT" "$CFG" kubernetes count)
-[ "${K8S_N:-0}" -ge 1 ] || { echo "no kubernetes target configured in $CFG; run /scoutflo:connect"; exit 1; }
+[ "${K8S_N:-0}" -ge 1 ] || { echo "no kubernetes target configured in $CFG — this block is the Kubernetes route; use the Phase-0 source routing (a non-Kubernetes estate maps via Phase 2D, never a dead-end)"; exit 1; }
 K8S_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$K8S_N" ]; do [ "$(sh "$TT" "$CFG" kubernetes label "$_i")" = "$SCOUTFLO_TARGET" ] && { K8S_IDX=$_i; break; }; _i=$((_i+1)); done; fi
 K8S_LABEL=$(sh "$TT" "$CFG" kubernetes label "$K8S_IDX"); KUBE_CONTEXT=$(sh "$TT" "$CFG" kubernetes get "$K8S_IDX" context)
 [ -n "$KUBE_CONTEXT" ] || { echo "kubernetes target '${K8S_LABEL:-?}' has no context in $CFG; run /scoutflo:connect"; exit 1; }
@@ -205,6 +241,45 @@ These are **candidates, not mappings**. This skill never verifies them against G
 
 Until those are wired, capture Tier 3 only; a workload with no resolvable candidate simply carries an empty `source_repo_evidence` array.
 
+## Phase 2D: Non-Kubernetes discovery
+
+Runs when the Phase-0 routing selected non-Kubernetes sources — and also after
+2A-2C when other sources are configured alongside a cluster (a Lambda or a
+legacy VM lives outside the cluster; the cluster map alone would miss it).
+Exact blocks, per-source honesty ceilings, and the merge rules are in
+[references/non-k8s-sources.md](references/non-k8s-sources.md); the workflow:
+
+1. **Services from infrastructure**: AWS ECS services, Lambda functions, EC2
+   instances grouped by their Name/service tag (the grouping tag is recorded in
+   the map header; `untagged` rows stay visible as exactly that), DigitalOcean
+   App Platform components and droplets.
+2. **Services and call edges from APM**: New Relic service entities from BOTH
+   entity domains (OpenTelemetry `EXT` + agent `APM` — one alone misses half an
+   estate), and its span-derived `CALLS` relationships — the only non-Kubernetes
+   source that gives the Traffic map real edges. Sentry projects join as
+   service identities whose `project`/`environment` attributes are
+   platform-accepted correlation anchors.
+3. **Merge** per the cookbook's rules: infrastructure names the services, APM
+   connects them; every service row records its `sources`; name conflicts are
+   surfaced as open questions, never guessed; edges come only from sources that
+   observe calls — co-location, shared tags, and naming similarity are never
+   edges.
+4. **Entry points** from internet-facing ALBs/NLBs (listeners + target groups)
+   and App Platform ingress, in place of Ingress/Gateway rows.
+5. **Guided capture** when nothing is configured: build the map from the
+   operator's answers, every row marked `asserted`, the header stating so. An
+   asserted map still gives every audit its canonical service names — most of
+   this file's daily value.
+
+The Phase-3 export on this path follows the cookbook's **non-Kubernetes export
+rules**: services, integration backends, and evidenced edges are emitted;
+`kubernetes_*` workload resources and `DEPLOYED_AS` edges are **never
+fabricated** for cloud workloads (the platform import's workload types are
+Kubernetes-only today — an invented "deployment" would be a lie the platform
+then trusts). The Topology Readiness section renders the consequence honestly:
+workload mapping reads as a current platform limit for these services, while a
+Sentry-anchored service still reaches full match confidence.
+
 ## Large clusters: worklist, batches, and resume
 
 Runs on the large path only. All state lives under a run-ID-keyed run directory `./scoutflo-audits/map-topology/runs/<RUN_ID>/` (see [Run-ID keying](#run-id-keying) below), not a calendar-date directory: the worklist, the raw per-namespace pulls, the step TSVs, and the partial map. It is working state, not a report; delete the run directory after `topology.md` is written, or delete it to force a fresh start.
@@ -264,8 +339,8 @@ Compose the new map in a temp file first (`${TMP}/topology.new.md`); Phase 4 nee
 
 | | |
 | --- | --- |
-| Cluster context | <KUBE_CONTEXT> |
-| Mesh | istio <version> \| none \| CRDs present, control plane not running |
+| Topology sources | <KUBE_CONTEXT> \| aws+newrelic+sentry \| guided capture (asserted) |
+| Mesh | istio <version> \| none \| CRDs present, control plane not running \| n/a (non-Kubernetes) |
 | Generated (UTC) | <YYYY-MM-DD> |
 | Generated by | /scoutflo:map-topology |
 | Estate | <ns> namespaces, <wl> workloads; <small \| medium \| large> path |
@@ -437,3 +512,7 @@ Close by telling the user, in the terminal:
 | Two invocations pull the same batch of namespaces at once and corrupt the worklist | Acquire `worklist.lock` before claiming a batch; treat a lock older than `LOCK_STALE_MINUTES` as abandoned and reclaim it |
 | Mesh path chosen correctly (CRDs present, istiod ready) but the cluster is mesh-inert everywhere except a small sandbox namespace, so mesh-derived rows are near-empty | The gate is right even when its yield is thin: sidecar coverage and VirtualService/DestinationRule/Gateway/ServiceEntry counts near zero outside one namespace mean the mesh is installed but barely adopted, not a bug. Report the true sidecar coverage ratio rather than assuming the mesh path implies mesh-wide routing data. Confirmed live: a real cluster with Istio CRDs + a ready istiod had 0 sidecars across 27 namespaces except one `istio-injection=enabled` test namespace, where all mesh objects (1 VirtualService, 1 DestinationRule, 1 Gateway, 1 ServiceEntry) also lived. |
 | Two same-named Services in different namespaces collapse into one map row / one watchpoints row | Qualify every colliding service as `<service>.<namespace>` in the map and the export (`attributes.service_name` keeps the bare name); the watchpoints table carries a Namespace column and carry-forward keys on Namespace + Service |
+| A non-Kubernetes estate treated as "can't proceed" | Phase-0 routing maps from aws/digitalocean/newrelic/sentry, or runs the guided capture — the kubernetes block is the richest source, not a prerequisite |
+| A workload object fabricated for an ECS/Lambda/VM service | The platform import's workload types are Kubernetes-only today; the export ships services + evidenced edges and states the limit — never an invented `kubernetes_deployment` |
+| An edge inferred from placement (shared SG/subnet/tag/name) | Only call-observing sources (Istio, New Relic spans) produce Traffic-map edges; infrastructure proximity is placement, not traffic |
+| New Relic queried on one entity domain only | OTel services are `EXT`, agent services are `APM` — query both or half the estate is invisible |

@@ -36,6 +36,21 @@ This matters beyond politeness: a customer who cannot make sense of unfamiliar j
 
 T4 and T6 check different things internally, so a field that satisfies T4 does not automatically satisfy T6. T4 confirms a signal connection carries the provider's own identifying fields (for example Prometheus `jobLabel`/`namespace`/`metricsPath`, Sentry `project`). T6 confirms those values are carried in a form the platform can actually anchor a signal on: a service/workload/app identity plus a Kubernetes anchor (`namespace`, `pod`, or `container`) or, for Sentry, a `project`/`environment`. The practical rule for a clean export: carry the service identity on a plain snake_case `service` or `service_name` attribute, alongside a `namespace` (or `pod`/`container`). A camelCase or provider-specific field — for example `serviceName` on CloudWatch, VictoriaLogs, Tempo, or VictoriaTraces — can satisfy that provider's own schema (so it passes T4) while still not anchoring correlation (so it fails T6). When a provider's identity field is camelCase, also emit a literal `service_name` with the same value so the anchor is unambiguous.
 
+### Estates without Kubernetes
+
+When a service does not run on Kubernetes (it lives on ECS, a VM, a serverless
+function, or a managed app platform), the "Workload mapping" check will
+currently read as not passing — not because the customer did anything wrong,
+but because the platform's automatic matching does not yet model those
+infrastructure objects. The report says that plainly ("the platform does not
+yet model non-Kubernetes workloads; this is a platform limit, not a gap in your
+setup") instead of leaving an unexplained failure. Two things still work fully
+for such services: their identity and connections (so audits, triage, and the
+service map all function), and — when the service reports errors to Sentry with
+a project and environment recorded on its monitoring connection — automatic
+alert matching can still reach full confidence through that route. Say which of
+the two applies per service.
+
 ## Verdict per service
 
 - **ready** — all six checks pass.

@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.1.197
+
+**map-topology loses its Kubernetes requirement** (customer-driven: a real
+AWS + Sentry + GitHub estate hit "can't proceed as-is" for lack of a
+`kubernetes.context` — a live-observed dead-end):
+
+- **Phase-0 source routing**: the skill now maps from the best source you
+  actually have. `kubernetes` remains the richest path (Istio/plain phases are
+  byte-unchanged), but without it the map comes from **cloud inventories**
+  (AWS ECS services, Lambda, EC2 tag groups + ALB/NLB entry points;
+  DigitalOcean App Platform + droplets) and **APM-derived sources** (New Relic
+  service entities from BOTH entity domains plus its span-derived CALLS edges —
+  the only non-Kubernetes source that gives the Traffic map real rows; Sentry
+  projects as service identities). Nothing configured → a **guided capture**
+  builds an operator-asserted map. Never a dead-end.
+- New cookbook `references/non-k8s-sources.md`: per-source recipes (all
+  read-only, identity-gated, JSON-asserted), a what-each-source-can-and-cannot
+  table, and merge rules — infrastructure names the services, APM connects
+  them; conflicts surface as open questions; edges come only from
+  call-observing sources (placement, tags, and naming are never traffic).
+- **Honest export for non-Kubernetes estates** (contract + readiness updated):
+  services, backends, and evidenced edges ship; `kubernetes_*` workload
+  resources are **never fabricated** for ECS/VM/serverless services (the
+  platform import's workload types are Kubernetes-only today). The Topology
+  Readiness section states that limit in plain language — and notes the
+  platform-accepted path that still works: a service whose Sentry connection
+  carries `project`/`environment` reaches full match confidence.
+- Verified: the routing block flow-run in fresh shells across four config
+  shapes (the exact reported customer shape routes to the cloud/APM path; empty
+  config fails closed; no sources → guided capture), and the AWS + New Relic
+  discovery blocks executed live against real estates (a real ECS service, EC2
+  tag groups with the honest `untagged`-style rows, 95 New Relic entities).
+  Two new pressure scenarios (non-Kubernetes never-a-dead-end; mixed-estate
+  merge honesty).
+
 ## 0.1.196
 
 **A repo-wide silent-failure fix found by the standing-checks walk, plus the New
