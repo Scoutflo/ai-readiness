@@ -309,7 +309,7 @@ cookbook and apply verbatim everywhere:
 | --- | --- | --- |
 | AWS | [references/cloud-mode-aws.md](references/cloud-mode-aws.md) | live-proven |
 | DigitalOcean | [references/cloud-mode-digitalocean.md](references/cloud-mode-digitalocean.md) | live-proven |
-| Azure | [references/cloud-mode-azure.md](references/cloud-mode-azure.md) | doc-verified; live smoke owed |
+| Azure | [references/cloud-mode-azure.md](references/cloud-mode-azure.md) | live-proven core (app-lane first rows owed) |
 | GCP | [references/cloud-mode-gcp.md](references/cloud-mode-gcp.md) | live-proven (core lanes; Memorystore/Functions rows owed) |
 | APM overlay (any estate) | [references/cloud-mode-apm-overlay.md](references/cloud-mode-apm-overlay.md) | CALLS lane live-proven; datastore rows verify-on-first-live-row |
 

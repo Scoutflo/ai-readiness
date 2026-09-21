@@ -31,9 +31,8 @@ re-researches them.
 Same auth and identity gate as `audit-newrelic` (User key, region host).
 Verification status: the `relatedEntities` read pattern is live-proven (the
 CALLS lane shipped on it in v0.1.197); the datastore-instance identity below
-is doc-cited — **verify the first live datastore row before bulk-trusting**
-(this estate's key is pending rotation, so the first post-rotation run is the
-proof point).
+is doc-cited — **verify the first live datastore row before bulk-trusting**,
+then treat the shape as locked for that estate.
 
 ```bash
 set -eu

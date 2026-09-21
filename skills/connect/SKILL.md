@@ -64,6 +64,31 @@ Two conventions are rules, not suggestions:
 
 Configure only what you run. Unconfigured integrations are skipped cleanly by every skill; they are not failures.
 
+**Detect what this machine already has (run first — a cloud login without a
+config block is invisible to every skill).** The toolkit routes everything
+through `~/.scoutflo/toolkit.yaml`; an `az login` / `gcloud auth` / AWS
+profile / `doctl` token that never got its block will be reported as "not
+configured" forever, however valid it is. One cheap read-only sweep names
+what to offer:
+
+```bash
+set -eu
+command -v az >/dev/null && az account show --output json 2>/dev/null \
+  | jq -r '"azure login found: subscription \"" + .name + "\" (" + .id + ") — offer an azure: block with this subscription_id"' \
+  || echo "azure: no CLI or no login"
+command -v gcloud >/dev/null && ACC=$(gcloud auth list --filter=status:ACTIVE --format="value(account)" 2>/dev/null | head -n1) && [ -n "$ACC" ] \
+  && echo "gcloud login found: ${ACC} — offer a gcp: block (ask which project)" || echo "gcp: no CLI or no login"
+command -v aws >/dev/null && P=$(aws configure list-profiles 2>/dev/null | head -5 | tr '\n' ' ') && [ -n "$P" ] \
+  && echo "aws profiles found: ${P}— offer an aws: block (ask which profile/region)" || echo "aws: no CLI or no profiles"
+command -v doctl >/dev/null && doctl account get --output json 2>/dev/null | jq -e '.status=="active"' >/dev/null \
+  && echo "digitalocean auth found — offer a digitalocean: block (token still goes to token_env)" || echo "digitalocean: no CLI or no auth"
+```
+
+Detected logins are **offers, not decisions**: confirm each with the user
+before writing a block (the login may belong to a different scope than the
+estate being connected — never assume ambient credentials are the intended
+target).
+
 **Multiple targets of one integration (same environment).** If you run several instances of the same integration in one environment — e.g. 3 HyperDX instances, N Azure subscriptions, multiple AWS accounts or GCP projects — make that integration's block a **YAML list**, where each item is the normal mapping plus a required `label:` (a unique slug), each with its own `*_env` variable name for its own secret. The audit runs once per target and writes to `<integration>/<label>/<date>/`; a plain single block is unchanged and writes the flat `<integration>/<date>/`. See the worked example at the top of [templates/toolkit.yaml.example](../../templates/toolkit.yaml.example). For a *different* environment (prod vs staging) keep using a separate `toolkit-<env>.yaml` selected with `SCOUTFLO_CONFIG` — that is environment isolation, distinct from multiple targets in one environment.
 
 Ask which integrations to configure as a plain numbered list in a normal chat message, per the "Asking questions" rule above — this table has many rows, well past the option ceiling that rule warns about.

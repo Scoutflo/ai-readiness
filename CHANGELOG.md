@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.1.200
+
+**Azure Cloud Mode live-verified + connect now detects existing cloud logins:**
+
+- Azure cookbook upgraded from doc-verified to **live-proven core**: identity
+  gate, all eight catalog reads, private endpoints, and the service-side
+  enumerations ran clean against a real subscription; the extension-absence
+  guard was exercised for real. The app-dependent blocks (managed identity,
+  Service Connector, Container Apps, elevated lane, App Insights) await their
+  first live rows on an estate that runs App-Service-family apps — stated in
+  the banner.
+- **connect Step 1 gains a detection sweep**: a read-only probe for existing
+  `az` / `gcloud` / AWS-profile / `doctl` logins, so a valid cloud login
+  without its `toolkit.yaml` block can no longer sit invisible to every skill
+  (the exact failure that kept a live Azure subscription "undetected" —
+  detected logins are offers to confirm, never auto-written).
+- APM overlay doc generalized (removed an estate-specific verification note).
+
 ## 0.1.199
 
 **Cloud Mode goes multi-cloud: DigitalOcean, Azure, GCP — plus an APM overlay
