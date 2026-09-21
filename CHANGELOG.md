@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.1.202
+
+**Cloud Mode learns to use network traffic, recognizes more sources at the
+start, and never shows a dead end on a denial:**
+
+- **Network flow-log lanes** (the strongest no-secrets observed source —
+  connection metadata only, no payload, no config access): AWS VPC Flow Logs
+  via CloudWatch Logs Insights (discovery via describe-flow-logs live-proven;
+  fields doc-verified; S3-delivered logs honestly out of scope), GCP VPC Flow
+  Logs via Cloud Logging (**live-proven on a real project with real
+  service→datastore connections found**; two live-caught traps encoded: the
+  time filter must be the freshness flag, and instance annotations are often
+  absent so the IP-catalog join is the reliable path; BOTH config surfaces
+  probed — the NM-API kind does not set the subnet flag), and Azure VNet flow
+  logs via Traffic Analytics (NTANetAnalytics schema doc-verified; aggregation
+  and blank-public-IP caveats encoded; NSG flow logs documented as retiring).
+  The AWS IP→owner join table (network interfaces) is live-proven.
+- **Tempo service-graphs become a first-class topology source**: one metric
+  probe against the estate's metrics store (prometheus/mimir/victoriametrics
+  blocks now route in Phase 0) yields service names AND trace-derived call
+  edges AND database edges from a single query (connection_type split,
+  doc-verified) — an estate whose only tool is its metrics store is no longer
+  a guided-capture-only estate.
+- **Candidate sources named at the start**: Datadog, Groundcover, ClickStack,
+  Elastic APM, and SigNoz are recognized and told to the user with exactly
+  what a verification pass would unlock (SigNoz's service endpoints confirmed
+  ABSENT from its official public API spec — stays verify-first, stated).
+- **The fallback playbook** (`references/cloud-mode-fallbacks.md`): every
+  denial, missing tool, or absent source now answers with three things — what
+  CAN be mapped right now, the single smallest unlock, and the workaround —
+  never "access denied" as the headline. Wired into Phase 2E, locked by tests
+  and a pressure scenario.
+- Two new pressure scenarios (denial-fallback UX; network-flows identity
+  honesty) and expanded suite locks.
+
 ## 0.1.201
 
 **rca now ranks Cloud-Mode resource connections as root-cause suspects** (found

@@ -68,19 +68,31 @@ the shared table, TTL semantics on.
 
 ## Grafana Tempo service-graph edges
 
-When the estate's Tempo (or the metrics store its service-graphs write to) is
-configured, the service-graph metrics carry database client edges. One
-bounded instant query against the Prometheus-compatible endpoint the config
-already names:
+When the estate's Tempo writes service-graph metrics to a Prometheus-compatible
+store (prometheus / mimir / victoriametrics — whichever block the config
+already has), ONE bounded instant query yields BOTH edge kinds at once
+(doc-verified: every series carries `client`, `server`, and `connection_type`;
+plain service→service calls have `connection_type` UNSET, database edges have
+`connection_type="database"`):
 
 ```bash
 set -eu
-PROM_URL="your-metrics-endpoint"      # the same endpoint the lgtm lane already uses
-Q='sum by (client, server, connection_type) (rate(traces_service_graph_request_total{connection_type="database"}[15m]))'
+PROM_URL="your-metrics-endpoint"      # the prometheus/mimir/victoriametrics endpoint from the config
+Q='sum by (client, server, connection_type) (rate(traces_service_graph_request_total[15m]))'
 TB=$(curl -s --max-time 30 -G "${PROM_URL}/api/v1/query" --data-urlencode "query=${Q}" 2>/dev/null) || TB=""
-[ -n "$TB" ] && printf '%s' "$TB" | jq -r '.data.result[]? | [.metric.client, .metric.server, .metric.connection_type] | @tsv' \
-  || echo "tempo service-graph metrics: unavailable — skipping (observed lane)"
+[ -n "$TB" ] && printf '%s' "$TB" | jq -e '.data.result | length > 0' >/dev/null \
+  || { echo "tempo service-graph metrics: unavailable/empty — skipping (observed lane)"; exit 0; }
+# service→service CALLS edges (Traffic-map lane; a call-observing source per the merge rules)
+printf '%s' "$TB" | jq -r '.data.result[]? | select((.metric.connection_type // "") == "") | [.metric.client, .metric.server, "CALLS"] | @tsv'
+# (connection_type="virtual_node" rows are synthetic boundary peers — list them separately if present, never as service calls)
+# database edges (this overlay's resource lane)
+printf '%s' "$TB" | jq -r '.data.result[]? | select(.metric.connection_type == "database") | [.metric.client, .metric.server, "database"] | @tsv'
+# messaging edges exist too (connection_type="messaging_system") — queue-edge candidates, same rules
 ```
+
+The `client`/`server` values on call rows are also SERVICE NAMES — on an
+estate whose only configured tool is its metrics store, this is a legitimate
+service-discovery source (Phase 0 routes through it; the probe above decides).
 
 ⚠️ The `server` label for database edges carries the peer identity under
 Tempo's DEFAULT label mapping, which still uses the old `db.name`-era

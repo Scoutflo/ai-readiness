@@ -12,8 +12,8 @@ and the webapp/functionapp enumerations ran clean against a real
 subscription; the extension-absence guard was exercised for real
 (containerapp CLI extension missing — the block skips and the gap is
 recorded). The managed-identity, Service Connector, Container Apps, elevated,
-and App Insights blocks remain doc-verified only because that subscription
-runs no App-Service-family apps — on their first live rows, confirm the
+App Insights, and VNet-flow-log blocks remain doc-verified only because that
+subscription runs no App-Service-family apps (nor Traffic Analytics) — on their first live rows, confirm the
 output shape before trusting a surprising result.
 
 **Shared rules** (identical across clouds, defined once in
@@ -165,6 +165,41 @@ az webapp list --subscription "$AZ_SUB" --output json \
 An Approved private endpoint whose `privateLinkServiceId` matches a catalog
 resource, in a subnet an app integrates with, is `reachable` corroboration —
 same composition rules as everywhere.
+
+## Observed lane: VNet flow logs
+
+Connection metadata only, no secrets, no config access — the current-gen
+Azure path (NSG flow logs retire 2027-09-30 and already refuse new creation;
+document the VNet path only). Needs a VNet flow log with **Traffic Analytics**
+enabled writing to Log Analytics; storage-only flow logs are not KQL-queryable:
+
+```bash
+set -eu
+AZ_SUB="your-subscription-id"; AZ_REGION="your-region"   # Network Watcher is per-region
+# Discovery: does a VNet flow log with Traffic Analytics exist here?
+FLB=$(az network watcher flow-log list --location "$AZ_REGION" --subscription "$AZ_SUB" --output json 2>/dev/null) || FLB=""
+[ -n "$FLB" ] && WSID=$(printf '%s' "$FLB" | jq -r '[.[] | select(.enabled == true)
+  | .flowAnalyticsConfiguration.networkWatcherFlowAnalyticsConfiguration
+  | select(.enabled == true)] | .[0].workspaceId // empty') || WSID=""
+[ -n "$WSID" ] || { echo "vnet flow logs: none with Traffic Analytics in ${AZ_REGION} — skipping (the unlock: enable a VNet flow log with Traffic Analytics on the networks that matter)"; exit 0; }
+# Bounded KQL on the NTANetAnalytics table (needs the log-analytics CLI extension;
+# -w takes the workspace GUID from the flow-log config above, not an ARM id)
+TB=$(az monitor log-analytics query -w "$WSID" --subscription "$AZ_SUB" \
+  --analytics-query "NTANetAnalytics | where SubType == 'FlowLog' and FlowStatus == 'A' | summarize Bytes=sum(BytesSrcToDest) by SrcIp, DestIp, DestPort, FlowDirection | top 100 by Bytes" \
+  -t P1D --output json 2>/dev/null) || TB=""
+[ -n "$TB" ] && printf '%s' "$TB" | jq -r '.[] | [(.SrcIp // "-"), (.DestIp // "-"), ((.DestPort // 0)|tostring), (.FlowDirection // "-"), ((.Bytes // 0)|tostring)] | @tsv' | head -40 \
+  || echo "traffic-analytics query unavailable (extension missing or access denied) — skipping; the gap is recorded in the map header"
+```
+
+Join rules: match `DestIp:DestPort` against the endpoint catalog and resolve
+the other side through the estate's address table (`SrcVm`/`DestVm`/`SrcNic`
+columns help when populated). Caveats (all doc-verified): records are
+AGGREGATED per interval (a record is not one flow — never present record
+counts as connection counts); `SrcIp`/`DestIp` are BLANK for public flow
+types (the public addresses live in separate bar-separated columns — note
+them, never guess identities from them); keep `SubType == 'FlowLog'` in every
+query. Verification status: doc-verified with exact official schema; first
+live rows owed with the rest of this cookbook's app lanes.
 
 ## Observed lane: Application Insights dependencies
 

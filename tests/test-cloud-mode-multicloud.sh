@@ -49,10 +49,31 @@ grep -q "cloud-mode-digitalocean.md" "$SKILL" || fail "SKILL: DO cookbook not wi
 grep -q "cloud-mode-azure.md" "$SKILL" || fail "SKILL: Azure cookbook not wired"
 grep -q "cloud-mode-gcp.md" "$SKILL" || fail "SKILL: GCP cookbook not wired"
 grep -q "cloud-mode-apm-overlay.md" "$SKILL" || fail "SKILL: overlay cookbook not wired"
-grep -q "for src in kubernetes aws digitalocean azure gcp newrelic sentry" "$SKILL" || fail "SKILL: Phase-0 routing loop missing azure/gcp"
+grep -q "for src in kubernetes aws digitalocean azure gcp newrelic sentry prometheus mimir victoriametrics" "$SKILL" || fail "SKILL: Phase-0 routing loop missing azure/gcp/metrics-stores"
 grep -q "APM overlay" "$SKILL" || fail "SKILL: overlay step missing from Phase 2E"
 RCA="$ROOT/skills/rca/SKILL.md"
 grep -q "STORES_DATA_IN|CACHES_IN" "$RCA" || fail "rca: classifier lost the resource-dependency suspect branch (C7 promise)"
+
+# --- 6b. fallback playbook: every denial has a next move ----------------------
+FB="$REF/cloud-mode-fallbacks.md"
+[ -f "$FB" ] || fail "cloud-mode-fallbacks.md missing"
+grep -q "never present a denial as a dead end" "$FB" || fail "fallbacks: the operating rule sentence missing"
+grep -q "The fallback matrix" "$FB" || fail "fallbacks: matrix section missing"
+grep -qi "zero access" "$FB" || fail "fallbacks: zero-access row missing"
+grep -q "cloud-mode-fallbacks.md" "$SKILL" || fail "SKILL: fallback playbook not wired"
+grep -q "retried" "$FB" || fail "fallbacks: no-retry rule missing"
+
+# --- 6c. network flow-log lanes + tempo split ---------------------------------
+grep -q "Observed lane: VPC flow logs" "$REF/cloud-mode-aws.md" || fail "AWS: flow-log lane missing"
+grep -q "Observed lane: VPC flow logs" "$GC" || fail "GCP: flow-log lane missing"
+grep -q "Observed lane: VNet flow logs" "$AZ" || fail "Azure: flow-log lane missing"
+grep -q "freshness" "$GC" || fail "GCP: the freshness-flag trap note missing"
+grep -q "network-management vpc-flow-logs-configs" "$GC" || fail "GCP: NM-API second-surface probe missing"
+grep -q "SubType == .FlowLog." "$AZ" || fail "Azure: SubType FlowLog filter missing"
+grep -q "AGGREGATED" "$AZ" || fail "Azure: aggregation caveat missing"
+grep -q "describe-flow-logs" "$REF/cloud-mode-aws.md" || fail "AWS: flow-log discovery missing"
+grep -q "connection_type" "$AP" || fail "overlay: connection_type split missing"
+grep -q "Tempo service-graphs" "$ROOT/skills/map-topology/references/non-k8s-sources.md" || fail "sources: tempo service-graph section missing"
 
 # --- 7. redaction behavior on the GCP/Azure-style env extraction --------------
 command -v jq >/dev/null || { echo "SKIP: jq not installed"; exit 0; }

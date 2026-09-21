@@ -143,6 +143,50 @@ done
 
 Corroboration/refutation only, per the shared composition rules.
 
+## Observed lane: VPC flow logs
+
+The strongest no-secrets observed source on GCP: connection metadata only
+(who talked to whom, on which port), no payload, no configuration access
+needed — only log read. Live-verified on a real project (real flow records
+returned, including genuine service→datastore connections). Availability
+check first, then a bounded read:
+
+```bash
+set -eu
+GCP_PROJECT="your-project-id"
+# Are flow logs enabled anywhere? (per-subnet setting)
+N=$(gcloud compute networks subnets list --project "$GCP_PROJECT" --format="value(enableFlowLogs)" 2>/dev/null | grep -c True || true)
+# ⚠️ Two config surfaces exist (doc-verified): the classic per-subnet setting AND
+# Network Management API configs — the NM-API kind does NOT set enableFlowLogs on
+# subnets, so a zero count here does not prove flow logs are off. Probe both.
+NM=$(gcloud network-management vpc-flow-logs-configs list --location=global --project "$GCP_PROJECT" --filter="state:ENABLED" --format="value(name)" 2>/dev/null | grep -c . || true)
+[ "$(( ${N:-0} + ${NM:-0} ))" -gt 0 ] || { echo "vpc flow logs: not enabled (subnet setting and NM-API configs both empty) — skipping (the unlock: enable flow logs on the subnets that matter)"; exit 0; }
+echo "flow-log config: subnet-enabled=${N} nm-api-configs=${NM}"
+# Bounded read. ⚠️ Use --freshness for the window — an in-query timestamp
+# string fails SILENTLY on gcloud logging read (live-caught).
+FB=$(gcloud logging read 'logName:"compute.googleapis.com%2Fvpc_flows"' \
+  --project "$GCP_PROJECT" --limit 200 --freshness=2h --format=json 2>/dev/null) || FB=""
+# NM-API-configured flow logs write to a different log name — read it too when the classic one is empty
+[ "$FB" = "[]" ] || [ -z "$FB" ] && { FB=$(gcloud logging read 'logName:"networkmanagement.googleapis.com%2Fvpc_flows"' \
+  --project "$GCP_PROJECT" --limit 200 --freshness=2h --format=json 2>/dev/null) || FB=""; } || true
+[ -n "$FB" ] && printf '%s' "$FB" | jq -r '.[] | .jsonPayload
+  | [(.connection.src_ip // "-"), (.connection.dest_ip // "-"),
+     ((.connection.dest_port // 0)|tostring),
+     (.src_instance.vm_name // "-"), (.dest_instance.vm_name // "-")] | @tsv' \
+  | sort | uniq -c | sort -rn | head -40 \
+  || echo "vpc flow logs: enabled but no readable entries — check log-read access"
+```
+
+Join rules: keep rows whose `dest_port` matches an engine port from the
+endpoint catalog (5432/3306/6379/9092/27017/6333…), then resolve identities —
+`src_instance`/`dest_instance` names when present, otherwise join the IPs
+against the estate's own address catalog (instance/service/resource private
+IPs). ⚠️ The instance annotations are often ABSENT (live-confirmed: load
+balancer and health-check flows carry none) — the IP-catalog join is the
+reliable path, not a fallback. Each matched pair is an `observed` edge
+(`mechanism: gcp.vpc-flow-logs`) with the standard TTL semantics; unmatched
+public IPs are noted, never guessed into identities.
+
 ## Observed lane: Data Access audit logs
 
 Default-OFF on GCP and needs `roles/logging.privateLogViewer` — probe once,
