@@ -21,7 +21,7 @@ Maps how traffic moves through your estate and writes the result to `./scoutflo-
 
 Every operation is read-only (`get`/`list`/GraphQL-and-REST reads only); the only write is the local `topology.md` file.
 
-Full command recipes live in [references/istio-queries.md](references/istio-queries.md) (the Kubernetes/Istio paths), [references/non-k8s-sources.md](references/non-k8s-sources.md) (the cloud/APM/guided paths, merge rules, and non-Kubernetes export rules), and the Cloud Mode cookbooks — [references/cloud-mode-aws.md](references/cloud-mode-aws.md) (also home of the shared rules: evidence composition, access tiers, redaction), [references/cloud-mode-digitalocean.md](references/cloud-mode-digitalocean.md), [references/cloud-mode-azure.md](references/cloud-mode-azure.md), [references/cloud-mode-gcp.md](references/cloud-mode-gcp.md), and [references/cloud-mode-apm-overlay.md](references/cloud-mode-apm-overlay.md). This file holds the workflow; go to the cookbooks for the exact blocks each phase names.
+Full command recipes live in [references/istio-queries.md](references/istio-queries.md) (the Kubernetes/Istio paths), [references/non-k8s-sources.md](references/non-k8s-sources.md) (the cloud/APM/guided paths, merge rules, and non-Kubernetes export rules), and the Cloud Mode cookbooks — [references/cloud-mode-aws.md](references/cloud-mode-aws.md) (also home of the shared rules: evidence composition, access tiers, redaction), [references/cloud-mode-digitalocean.md](references/cloud-mode-digitalocean.md), [references/cloud-mode-azure.md](references/cloud-mode-azure.md), [references/cloud-mode-gcp.md](references/cloud-mode-gcp.md), [references/cloud-mode-apm-overlay.md](references/cloud-mode-apm-overlay.md), and [references/cloud-mode-fallbacks.md](references/cloud-mode-fallbacks.md) (every denial's next move). This file holds the workflow; go to the cookbooks for the exact blocks each phase names.
 
 ## What topology.md is used for
 
@@ -47,7 +47,7 @@ Keep `./scoutflo-audits/` out of public version control. The map names your name
 | Requirement | Why | Required |
 | --- | --- | --- |
 | `jq` | JSON parsing, every path | yes |
-| **At least one topology source** in `~/.scoutflo/toolkit.yaml`: `kubernetes` (richest), or any of `aws`, `digitalocean`, `azure`, `gcp`, `newrelic`, `sentry` | names what to map; Phase 0 routes to the best configured source | yes — with **none**, the guided capture runs instead of a dead-end |
+| **At least one topology source** in `~/.scoutflo/toolkit.yaml`: `kubernetes` (richest), or any of `aws`, `digitalocean`, `azure`, `gcp`, `newrelic`, `sentry` — or a metrics store (`prometheus`/`mimir`/`victoriametrics`) carrying Tempo service-graph data | names what to map; Phase 0 routes to the best configured source (a metrics store counts only when its one-metric probe finds service-graph data) | yes — with **none**, the guided capture runs instead of a dead-end |
 | `kubectl` | every cluster read | only on the Kubernetes path |
 | `istioctl` | proxy sync status on the mesh path | no; the mesh path degrades to `kubectl`-only checks, the other paths never need it |
 | provider CLI/keys for a non-Kubernetes source (`aws` CLI + profile, `doctl`, the New Relic User key, the Sentry token) | the cloud/APM discovery reads | only for the sources you route through; each is the same read-only credential its audit already uses |
@@ -72,7 +72,7 @@ CFG="${SCOUTFLO_CONFIG:-}"
 [ -f "$CFG" ] || { echo "missing $CFG; run /scoutflo:connect"; exit 1; }
 TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 SOURCES=""
-for src in kubernetes aws digitalocean azure gcp newrelic sentry; do
+for src in kubernetes aws digitalocean azure gcp newrelic sentry prometheus mimir victoriametrics; do
   n=$(sh "$TT" "$CFG" "$src" count 2>/dev/null || echo 0)
   [ "${n:-0}" -ge 1 ] && SOURCES="$SOURCES $src"
 done
@@ -266,8 +266,11 @@ Exact blocks, per-source honesty ceilings, and the merge rules are in
    GKE and AKS clusters stay on the Kubernetes path.
 2. **Services and call edges from APM**: New Relic service entities from BOTH
    entity domains (OpenTelemetry `EXT` + agent `APM` — one alone misses half an
-   estate), and its span-derived `CALLS` relationships — the only non-Kubernetes
-   source that gives the Traffic map real edges. Sentry projects join as
+   estate), and its span-derived `CALLS` relationships; and Tempo
+   service-graph metrics read from the estate's metrics store (one probe
+   query yields service names AND call edges — the second call-observing
+   source). These are the non-Kubernetes sources that give the Traffic map
+   real edges. Sentry projects join as
    service identities whose `project`/`environment` attributes are
    platform-accepted correlation anchors.
 3. **Merge** per the cookbook's rules: infrastructure names the services, APM
@@ -322,7 +325,11 @@ cookbook and apply verbatim everywhere:
    the audits' estate checkpoint: show `services / resources / regions`,
    offer full scope or a selection (`cli_pause_before_audit` +
    `cli_prompt_exclude_services`). The announced access posture is written
-   into the map header and decides which lanes below run.
+   into the map header and decides which lanes below run. **Every denial or
+   missing source follows the fallback playbook** (cookbook: "The fallback
+   matrix"): the user is told what CAN be mapped right now, the single
+   smallest unlock for more, and the workaround — never a dead end, never
+   "access denied" as the headline.
 1. **Declared lane** (access permitting): per in-scope service, read config
    declarations — AWS task definitions and functions (cookbook: "Declared
    configuration: ECS" and "Declared configuration: Lambda"), resource-side

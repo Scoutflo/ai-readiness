@@ -17,6 +17,7 @@ content-type and fail closed on non-JSON, exactly like the audits' doctor gates.
 | AWS | ECS services, Lambda functions, EC2 groups by tag | no (infrastructure sees placement, not calls) | ALB/NLB listeners + target groups | **no** — never fabricate; see the export rules below |
 | DigitalOcean | App Platform apps/components, tagged droplets | no | app ingress / load balancers | no |
 | New Relic | service entities (OTel `EXT` + agent `APM` domains) | **yes** — span-derived `relatedEntities` CALLS edges | no | no |
+| Tempo service-graphs (via the `prometheus`/`mimir`/`victoriametrics` block) | **yes** — the metric's `client`/`server` values are service names | **yes** — trace-derived call edges | no | no |
 | Sentry | projects (+ environments) | no | no | no — but a Sentry `project` is a platform-accepted correlation anchor, so these services still correlate |
 | Guided capture (no source configured) | user-asserted list | user-asserted | user-asserted | no |
 
@@ -32,8 +33,10 @@ Pick sources in Phase 0 from what `toolkit.yaml` actually configures:
    cluster (a Lambda, a legacy VM) — merged per the rules below, never replacing
    cluster truth.
 2. No `kubernetes` → run every configured source below and merge. At least one
-   infrastructure source (aws/digitalocean) OR one APM source (newrelic/sentry)
-   is required to proceed automatically.
+   infrastructure source (aws/digitalocean/azure/gcp) OR one APM source
+   (newrelic/sentry) OR a metrics store carrying Tempo service-graph data
+   (prometheus/mimir/victoriametrics — a one-metric probe decides; see the
+   section below) is required to proceed automatically.
 3. Nothing configured → **guided capture** (below). Never a dead-end, never a
    fabricated map.
 
@@ -125,6 +128,19 @@ agent-instrumented ones are `APM` — query only one and half the estate is
 invisible. `alertSeverity: NOT_CONFIGURED` per service is worth carrying into
 the watchpoints table (it means no alerting evaluates that service).
 
+## Tempo service-graphs (services + call edges from the metrics store)
+
+When the estate's tracing writes Tempo service-graph metrics into its metrics
+store, the store alone is a real topology source: one instant query returns
+service names AND who-calls-whom, trace-derived. The availability probe IS the
+query — metric present means the source is live, absent means skip with the
+honest note ("your metrics store has no service-graph data; enabling Tempo's
+metrics-generator unlocks this"). The exact query, the `connection_type`
+split (empty = service calls, `database` = resource edges, `messaging_system`
+= queue candidates), and the join rules live in
+[cloud-mode-apm-overlay.md](cloud-mode-apm-overlay.md) — one recipe serves
+both this discovery step and the overlay.
+
 ## Sentry (projects as service identities)
 
 ```bash
@@ -148,6 +164,25 @@ A Sentry project is more than a service hint: `project` (+ `environment`) is a
 estate, a service whose `MONITORED_BY` edge carries the Sentry `project`
 attribute can still reach full match confidence. This is the strongest
 correlation path a non-Kubernetes estate has today; say so in the map header.
+
+## Candidate sources the run recognizes but does not read yet (verify-first)
+
+Named at the start so an estate's real tools are never ignored silently — but
+none of these becomes a lane until its API surface is verified against current
+docs on a real instance (the standing verify-first rule):
+
+| Tool (config block) | What it could give | Why it is not a lane yet |
+| --- | --- | --- |
+| Datadog (`datadog`) | APM service list + dependency map | the relevant catalog/dependency APIs are preview-stability; verify live first |
+| Groundcover (`groundcover`) | eBPF-observed service map | no verified service-map API in its documented surface today |
+| ClickStack/HyperDX (`clickstack`) | OTel trace-derived services | the v2 REST surface is session-cookie-auth and undocumented for this use |
+| Elastic APM (`elk`) | service map | API surface unverified for this use |
+| SigNoz (`signoz`) | OTel-native service list + dependencies | checked against the official public API spec (2026-09-21): no service-list or dependency endpoint is documented — only the generic query surface; stays verify-first until SigNoz documents one |
+
+When one of these is the ONLY thing an estate has, say exactly that — "your
+<tool> likely knows your services; reading it needs a one-time verification
+pass" — and offer the guided capture meanwhile. Never scrape an unverified
+endpoint and present the result as fact.
 
 ## Guided capture (no source configured)
 

@@ -388,6 +388,50 @@ observed edge older than the estate's re-run cadence degrades back to whatever
 its declared/permitted evidence supports — absence of traffic is not absence
 of dependency (batch jobs, DR paths).
 
+## Observed lane: VPC flow logs
+
+The strongest no-secrets observed source: connection metadata only (who talked
+to whom, on which port) — no payload, no config access, just log read. Runs
+only when flow logs already exist and land in CloudWatch Logs; the discovery
+read is live-proven (a clean "none" on an estate without them):
+
+```bash
+set -eu
+AWS_PROFILE_CFG="your-aws-profile"; AWS_REGION_CFG="your-aws-region"   # from toolkit.yaml aws block (Phase 0)
+A() { aws --profile "${AWS_PROFILE_CFG}" --region "${AWS_REGION_CFG}" "$@"; }
+# Discovery: which flow logs exist, and where do they deliver?
+FL=$(A ec2 describe-flow-logs --output json)
+N=$(printf '%s' "$FL" | jq '.FlowLogs | length')
+[ "${N:-0}" -gt 0 ] || { echo "vpc flow logs: none configured — skipping (the unlock: enable flow logs on the VPCs that matter, destination CloudWatch Logs)"; exit 0; }
+LG=$(printf '%s' "$FL" | jq -r '[.FlowLogs[] | select(.LogDestinationType == "cloud-watch-logs" and .FlowLogStatus == "ACTIVE")] | .[0].LogGroupName // empty')
+[ -n "$LG" ] || { echo "vpc flow logs exist but deliver to S3/Firehose — the CloudWatch-Logs read path does not apply (S3-delivered logs are queryable with Athena; out of scope here)"; exit 0; }
+echo "flow-log group: ${LG}"
+# Bounded Logs Insights query (fields are auto-discovered camelCase on the
+# default format + Standard log class: srcAddr dstAddr dstPort action).
+QID=$(A logs start-query --log-group-name "$LG" \
+  --start-time $(( $(date +%s) - 3600 )) --end-time "$(date +%s)" \
+  --query-string 'filter action = "ACCEPT" | stats sum(bytes) as b by srcAddr, dstAddr, dstPort | sort b desc | limit 100' \
+  --output text --query queryId)
+i=0; while [ $i -lt 20 ]; do
+  QR=$(A logs get-query-results --query-id "$QID" --output json)
+  ST=$(printf '%s' "$QR" | jq -r '.status')
+  [ "$ST" = "Complete" ] && break
+  [ "$ST" = "Failed" ] || [ "$ST" = "Cancelled" ] || [ "$ST" = "Timeout" ] && { echo "flow-log query ${ST} — skipping"; exit 0; }
+  sleep 3; i=$((i+1))
+done
+printf '%s' "$QR" | jq -r '.results[] | from_entries | [.srcAddr, .dstAddr, .dstPort, .b] | @tsv' | head -40
+```
+
+Join rules: keep rows whose `dstAddr:dstPort` matches an endpoint-catalog row
+(engine ports), and resolve `srcAddr` through the estate's own address table —
+one `describe-network-interfaces` call maps every private IP to its owner
+(ELB/RDS/Lambda/K8s-node ENI descriptions; live-proven). Each matched pair is
+an `observed` edge (`mechanism: aws.vpc-flow-logs`) with TTL semantics.
+Caveats: custom flow-log formats need `parse` on `@message` (default format
+assumed; say so when a custom `LogFormat` is detected); non-Standard log-class
+groups do not auto-discover fields; unmatched public IPs are noted, never
+guessed into identities.
+
 ## IaC-in-repo lane
 
 When `repo-map.json` exists (map-repos ran), the mapped repos' IaC and compose
