@@ -78,3 +78,11 @@ probe now shows `restartCount: 47` with `OOMKilled`.
 (`report showed 0 restarts [report@<date>]; live now shows 47, OOMKilled
 [live@<now>]`), and treats the divergence as high-value signal that the resource
 is actively degrading — never presents the stale `0` as current truth.
+
+**Cloud-Mode addendum (v0.1.201):** when the export carries resource
+connections, the target's database/cache/queue (`STORES_DATA_IN`, `CACHES_IN`,
+`SUBSCRIBES_TO`, ...) rank as upstream suspects exactly like a failing service
+dependency — a dead database is the classic root cause and must never sit in
+an ignored "other" bucket. Probing a ranked resource suspect goes through its
+provider (audit read lane, provider status/events), never kubectl; the edge's
+`evidence_class` and `assertion_type` weigh into the ranking.

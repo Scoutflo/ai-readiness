@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.1.201
+
+**rca now ranks Cloud-Mode resource connections as root-cause suspects** (found
+by a consumer-verification pass against a cloud-mode export): the edge
+classifier previously filed `STORES_DATA_IN`/`CACHES_IN`/queue/config edges
+under an unranked "other" bucket, so a failing database never entered the
+suspect list despite the contract's promise. The classifier now treats them
+with the same direction rule as `CALLS` (the target's database/cache/queue is
+an upstream suspect; the resources' dependents are blast radius), with the
+probe-time difference stated: cloud resources are verified through their
+provider, not kubectl, and the edge's evidence class weighs into the ranking.
+Scenario extended + a suite lock added so the branch cannot regress.
+
 ## 0.1.200
 
 **Azure Cloud Mode live-verified + connect now detects existing cloud logins:**

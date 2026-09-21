@@ -51,6 +51,8 @@ grep -q "cloud-mode-gcp.md" "$SKILL" || fail "SKILL: GCP cookbook not wired"
 grep -q "cloud-mode-apm-overlay.md" "$SKILL" || fail "SKILL: overlay cookbook not wired"
 grep -q "for src in kubernetes aws digitalocean azure gcp newrelic sentry" "$SKILL" || fail "SKILL: Phase-0 routing loop missing azure/gcp"
 grep -q "APM overlay" "$SKILL" || fail "SKILL: overlay step missing from Phase 2E"
+RCA="$ROOT/skills/rca/SKILL.md"
+grep -q "STORES_DATA_IN|CACHES_IN" "$RCA" || fail "rca: classifier lost the resource-dependency suspect branch (C7 promise)"
 
 # --- 7. redaction behavior on the GCP/Azure-style env extraction --------------
 command -v jq >/dev/null || { echo "SKIP: jq not installed"; exit 0; }
