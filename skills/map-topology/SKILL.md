@@ -1,6 +1,6 @@
 ---
 name: map-topology
-description: Builds a read-only service topology map from the best available source — Istio or plain Kubernetes when a cluster is configured, and otherwise cloud inventories (AWS ECS/EC2/Lambda/ALB, DigitalOcean), APM-derived service maps (New Relic entities + span-derived call edges, Sentry projects), or a guided capture — and writes topology.md plus a Scoutflo-aligned topology-export.json with routes, entry points, and re-run deltas. Use when the user asks to map services, the cluster, or a non-Kubernetes estate, build or refresh a service map or topology, list entry points or who calls whom, or update topology.md after a deploy. Do not use to score observability coverage (use audit-all or an audit-* skill); it never changes any live state.
+description: Builds a read-only service topology map from the best available source — Istio or plain Kubernetes when a cluster is configured, and otherwise cloud inventories (AWS ECS/EC2/Lambda/ALB, DigitalOcean), APM-derived service maps (New Relic entities + span-derived call edges, Sentry projects), or a guided capture — and, on AWS estates, Cloud Mode maps the resources behind services (databases, caches, queues, buckets) with evidence-classed service→resource connections reviewed in batches. Writes topology.md plus a Scoutflo-aligned topology-export.json with routes, entry points, resources, connections, and re-run deltas. Use when the user asks to map services, the cluster, or a non-Kubernetes estate, map which service uses which database or resource, build or refresh a service map or topology, list entry points or who calls whom, or update topology.md after a deploy. Do not use to score observability coverage (use audit-all or an audit-* skill); it never changes any live state.
 ---
 
 # map-topology
@@ -11,10 +11,15 @@ Maps how traffic moves through your estate and writes the result to `./scoutflo-
 - **Plain Kubernetes**: Services, Ingresses, workloads, and Endpoints.
 - **No Kubernetes at all**: services from your cloud inventory (AWS ECS/EC2/Lambda + ALB entry points, DigitalOcean apps), call edges from an APM that observes them (New Relic's span-derived service map), and platform-grade correlation anchors from Sentry projects — merged into one honest map. A rule of thumb the merge follows: infrastructure sources name the services; APM sources connect them.
 - **Nothing configured**: a guided capture builds an operator-asserted map instead of a dead-end.
+- **Cloud Mode (AWS)**: beyond the services themselves, map the resources they
+  depend on — databases, caches, queues, topics, buckets — and the
+  service→resource connections, every edge carrying its evidence class
+  (declared / observed / permitted / reachable) and reviewed with you in
+  batches before it lands in the map (Phase 2E).
 
 Every operation is read-only (`get`/`list`/GraphQL-and-REST reads only); the only write is the local `topology.md` file.
 
-Full command recipes live in [references/istio-queries.md](references/istio-queries.md) (the Kubernetes/Istio paths) and [references/non-k8s-sources.md](references/non-k8s-sources.md) (the cloud/APM/guided paths, merge rules, and non-Kubernetes export rules). This file holds the workflow; go to the cookbooks for the exact blocks each phase names.
+Full command recipes live in [references/istio-queries.md](references/istio-queries.md) (the Kubernetes/Istio paths), [references/non-k8s-sources.md](references/non-k8s-sources.md) (the cloud/APM/guided paths, merge rules, and non-Kubernetes export rules), and [references/cloud-mode-aws.md](references/cloud-mode-aws.md) (Cloud Mode: resource catalog, edge lanes, evidence composition, access tiers, redaction). This file holds the workflow; go to the cookbooks for the exact blocks each phase names.
 
 ## What topology.md is used for
 
@@ -280,6 +285,88 @@ then trusts). The Topology Readiness section renders the consequence honestly:
 workload mapping reads as a current platform limit for these services, while a
 Sentry-anchored service still reaches full match confidence.
 
+## Phase 2E: Cloud Mode — resources and service→resource edges (AWS)
+
+Runs when `aws` is a configured source (with or without a cluster): after 2D's
+service rows exist, map the **resources** behind them — databases, caches,
+queues, topics, buckets — and the **service→resource edges**, each edge
+carrying its evidence. Exact blocks live in
+[references/cloud-mode-aws.md](references/cloud-mode-aws.md); this phase is
+the workflow and the review protocol. These are not call edges: the Traffic
+map's rules are untouched, and an edge with no join evidence does not exist.
+
+0. **Access tier + scope checkpoint.** Run the cookbook's identity and
+   access-tier gate (cookbook: "Identity and access-tier gate"), then the
+   cheap counts — endpoint catalog (cookbook: "Resource endpoint catalog")
+   plus 2D's service list — and pause before any per-service read, exactly
+   like the audits' estate checkpoint: show `services / resources / regions`,
+   offer full scope or a selection (`cli_pause_before_audit` +
+   `cli_prompt_exclude_services`). The announced tier (`full-read`,
+   `no-config-read`, `inventory-only`) is written into the map header and
+   decides which lanes below run.
+1. **Declared lane** (tier permitting): per in-scope service, read config
+   declarations (cookbook: "Declared configuration: ECS" and "Declared
+   configuration: Lambda"), resource-side wiring (cookbook: "Reverse event
+   wiring"), and resolution hops (cookbook: "Resolution chains"). Extraction
+   is redaction-first — keys/hosts/refs only, never values (cookbook:
+   "Redaction discipline for configuration values").
+2. **Corroboration lanes**: IAM role policies per distinct role (cookbook:
+   "Permitted lane: IAM" — wildcard demotion is a hard rule) and network
+   reachability (cookbook: "Reachable lane: security groups and VPC
+   endpoints"). Opportunistic observed probes run once and skip cleanly when
+   the estate has them disabled (cookbook: "Observed lane: opportunistic
+   probes"). When `repo-map.json` exists, the IaC lane adds declared joins
+   with zero live-config access (cookbook: "IaC-in-repo lane").
+3. **Synthesize edges** (cookbook: "Declared-edge synthesis" then "Evidence
+   composition and confidence"): one edge per service↔resource pair, lanes
+   appended as evidence on the same edge, confidence per the composition
+   table.
+4. **Review — in batches, never an interrogation.** Present three groups:
+   - **Tier A** (declared+corroborated, ESM/reverse-wired): one table, each
+     row showing its join thread (`checkout → payments-db: env DATABASE_URL
+     host = <rds endpoint> [declared+reachable]`) — one bulk confirm with
+     per-row opt-outs.
+   - **Tier B** (single-witness: permitted-only, reachable-only,
+     logical-name-only): candidates confirmed per group; never silently drawn.
+   - **Tier C** (refutations: declared but unresolvable/no network path):
+     surfaced as probable-stale-config questions — never silently drawn AND
+     never silently dropped.
+   Confirmed rows get `evidence: asserted` appended (the user's answer is
+   evidence); rejected rows are recorded as rejected so re-runs do not
+   re-propose them unchanged.
+5. **The two orphan lists, one batched question each**: resources with no
+   edge ("unclaimed — cost/orphan candidates; also read by audit-cost") and
+   in-scope services with no resource edge ("stateless, or a gap at this
+   access tier?"). Answers land in the map, marked asserted.
+6. **Guided capture for connections** (extends 2D's guided capture): when a
+   tier or a permission leaves discovery blind for some service, offer —
+   pick-from-catalog (numbered list of discovered resources), paste
+   keys/hosts in the operator's own words, import an existing catalog file,
+   or skip. Everything captured this way is `asserted`, upgraded
+   automatically when a later run finds real evidence. For a zero-access
+   estate, also offer the self-serve script the operator runs inside their
+   own boundary (cookbook: "Zero-access discovery pack") — its output
+   imports through the same review, never around it.
+7. **Tag propagation**: capture each resource's `env`/`team`/`service` tags
+   and its containment (account/VPC), and record top-level tags once — a tag
+   set on the VPC/account propagates to contained resources in the map
+   (overridable per resource, precedence resource > container > global, the
+   same precedence business-context's computed metadata uses). Untagged
+   groups get ONE batched question, never per-resource interrogation.
+
+On a large estate (in-scope services above the same large-path threshold
+Phase 1 uses — example, tune to your estate), the per-service declared lane
+runs through the same run-directory worklist/lock/resume mechanism as the
+large cluster path, with one row per service instead of per namespace — an
+interrupted cloud mapping resumes at the service that failed, never from
+zero.
+
+Multi-target discipline: with a labeled `aws` list, Phase 2E runs per label
+through the shared enumerator exactly as Phase 0 does — one map per target,
+never a merged account soup. DigitalOcean/Azure/GCP get their own cookbook
+files in later versions; nothing in this phase assumes AWS beyond the named
+cookbook.
+
 ## Large clusters: worklist, batches, and resume
 
 Runs on the large path only. All state lives under a run-ID-keyed run directory `./scoutflo-audits/map-topology/runs/<RUN_ID>/` (see [Run-ID keying](#run-id-keying) below), not a calendar-date directory: the worklist, the raw per-namespace pulls, the step TSVs, and the partial map. It is working state, not a report; delete the run directory after `topology.md` is written, or delete it to force a fresh start.
@@ -330,7 +417,7 @@ Two hard rules:
 
 ## Phase 3: Write topology.md and topology-export.json
 
-Two artifacts, same inventory: `topology.md` for humans and audits, and `./scoutflo-audits/topology-export.json`, the machine-readable form aligned to the Scoutflo platform's topology import contract. Compose the JSON per [references/scoutflo-export.md](references/scoutflo-export.md): every service with its correlation attributes (`service_name`, `namespace`, `cluster_id`, `app`), every workload resource with its four mandatory attributes plus its optional `image`, `image_digest`, and `source_repo_evidence[]` (the Tier-3 candidates from Phase 2C — a build-origin breadcrumb for `map-repos` to verify, never a repo identity by itself), one resource per watchpoints backend, and the edge families (`DEPLOYED_AS`, `PART_OF`, `ROUTES_TO`, `CALLS`, `SENDS_METRICS_TO`, `SENDS_LOGS_TO`, `SENDS_TRACES_TO`, `MONITORED_BY`, `USES`). Validate with `jq empty` before moving it into place. Audits read this file for the Scoutflo Topology Readiness section of their reports.
+Two artifacts, same inventory: `topology.md` for humans and audits, and `./scoutflo-audits/topology-export.json`, the machine-readable form aligned to the Scoutflo platform's topology import contract. Compose the JSON per [references/scoutflo-export.md](references/scoutflo-export.md): every service with its correlation attributes (`service_name`, `namespace`, `cluster_id`, `app`), every workload resource with its four mandatory attributes plus its optional `image`, `image_digest`, and `source_repo_evidence[]` (the Tier-3 candidates from Phase 2C — a build-origin breadcrumb for `map-repos` to verify, never a repo identity by itself), one resource per watchpoints backend, and the edge families (`DEPLOYED_AS`, `PART_OF`, `ROUTES_TO`, `CALLS`, `SENDS_METRICS_TO`, `SENDS_LOGS_TO`, `SENDS_TRACES_TO`, `MONITORED_BY`, `USES`). When Phase 2E ran, also emit the cloud resources and the reviewed service→resource connections per the export cookbook's **Cloud Mode** section (additive; Tier-C questions and unconfirmed low-tier candidates are never exported as edges). Validate with `jq empty` before moving it into place. Audits read this file for the Scoutflo Topology Readiness section of their reports.
 
 Compose the new map in a temp file first (`${TMP}/topology.new.md`); Phase 4 needs both old and new before the final write. On the large path, compose from the step TSVs in the run directory, and only after the worklist shows zero pending rows. Structure:
 
@@ -371,6 +458,23 @@ is yours to edit, everything else is regenerated.
 | --- | --- | --- | --- | --- |
 | shop/public-gw | istio gateway | shop.example.com | 443/HTTPS | checkout, search |
 
+## Cloud resources and connections
+
+Access tier: full-read. Confirmed 12 of 14 proposed connections (2 opted out);
+2 open questions below.
+
+| Service | Resource | Kind | Relation | Evidence | Join thread | Status |
+| --- | --- | --- | --- | --- | --- | --- |
+| checkout | payments-db | database (postgres) | STORES_DATA_IN | declared+reachable | env DATABASE_URL host = rds endpoint | confirmed |
+| worker | order-events | message_queue (sqs) | SUBSCRIBES_TO | declared (esm) | lambda event source mapping | confirmed |
+| reports | analytics-db | database (mysql) | STORES_DATA_IN | permitted | role may read, no config visible | candidate |
+
+Unclaimed resources (no service connects): legacy-cache (cache), old-exports
+(object_storage) — cost/orphan candidates, also read by /scoutflo:cost-analysis.
+Open questions: orders declares db host `db.legacy.internal` which resolves to
+nothing (stale config?); api has no resource edge (stateless, or a gap at this
+access tier?).
+
 ## Integration watchpoints
 
 Fill these in: which monitoring covers which service. Audits use the
@@ -395,6 +499,12 @@ Rules:
 - Fallback-path traffic map: Ingress -> Service rows and Service -> workload rows only.
 - Every service gets one pre-seeded watchpoints row with `unknown` in each cell.
 - First run: the Changes section reads `First run, no previous map.`
+- The Cloud resources and connections section appears only when Phase 2E ran;
+  its header states the access tier verbatim and the confirm/opt-out counts.
+  `Status` is `confirmed` (user accepted), `candidate` (Tier B, awaiting an
+  answer), or `question` (Tier C refutations and the orphan lists) — a
+  candidate is never silently promoted. Kubernetes-only estates: the section
+  is absent, not empty.
 
 ## Phase 4: Delta on re-run
 
@@ -410,7 +520,14 @@ TMP="${TMP:-$(mktemp -d)}"
 1. **Added / removed services**: extract `namespace/service` keys from the Services tables of both files, `sort`, `comm`. Added services appear in the new file only; removed in the old only.
 2. **Rewired**: diff the Traffic map and Entry points sections. A service present in both runs whose route rows changed (different destination, subset, weight, gateway, or ingress backend) is rewired; name the service and the change in one line each.
 3. **Watchpoints carry-forward**: extract the old Integration watchpoints rows. Keep every row whose service still exists, exactly as the user wrote it. Append fresh `unknown` rows for added services. List removed services' rows under the Changes section so the user deletes them deliberately; never drop user-entered data silently.
-4. Write the final `topology.md`: new inventory sections, carried-forward watchpoints, and the Changes section with the previous run date from the old header.
+4. **Connection carry-forward (Cloud Mode)**: keyed on `service + resource`.
+   A `confirmed` or opted-out row whose evidence still holds carries forward
+   as-is — the user is never re-asked. A carried row whose evidence CHANGED
+   (the join thread disappeared, the endpoint moved, a lane was refuted)
+   resurfaces in the review with the old and new evidence side by side. New
+   pairs enter as Tier A/B/C per Phase 2E; nothing previously rejected is
+   re-proposed unless its evidence changed.
+5. Write the final `topology.md`: new inventory sections, carried-forward watchpoints and connections, and the Changes section with the previous run date from the old header.
 
 ## Phase 5: Verify and summarize
 
@@ -450,7 +567,7 @@ Expected: `worklist pending: 0` on a completed large run, and exit 0. A nonzero 
 
 ### T1/T2 pre-check: catch structural gaps before any audit runs
 
-This skill is the only place in the toolkit that can check [topology-readiness.md](../../report-standard/topology-readiness.md)'s T1 (service identity) and T2 (workload attributes) without any live provider call — everything both checks need is already in `topology-export.json`, because this skill just wrote it. Every audit skill re-derives the same T1/T2 verdict later per critical service; running it once here means a customer sees an identity or workload gap immediately; on the first map, not after connecting a provider and waiting for an audit to reach that service.
+This skill is the only place in the toolkit that can check [topology-readiness.md](../../report-standard/topology-readiness.md)'s T1 (service identity) and T2 (workload attributes) without any live provider call — everything both checks need is already in `topology-export.json`, because this skill just wrote it. Every audit skill re-derives the same T1/T2 verdict later per critical service; running it once here means you see an identity or workload gap immediately; on the first map, not after connecting a provider and waiting for an audit to reach that service.
 
 ```bash
 set -eu
@@ -479,7 +596,7 @@ EXPORT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/topology-export.json"
 
 Expected: one row per service. A service failing T1 is missing a required field or a correlation attribute (`service_name`/`namespace`/`cluster_id`) — usually a `service_type`, `environment`, or `business_criticality` that was never confirmed with the user (never invent these; ask once per run, per this skill's own rule above). A service failing T2 has no `DEPLOYED_AS` edge, or its workload resource is missing one of the four mandatory attributes — both mean the service-to-workload join in Phase 2B (or 2A) didn't find a backing object; check the Endpoint backing check output for that service.
 
-State the count in the terminal close-out ("N of M services pass T1/T2 structural checks") and, when any service fails, name it and the exact missing field — this is what a customer fixes before an audit's own Topology Readiness section can move past `not-ready` for that service, since T1/T2 gate T3-T6 (a `not-ready` verdict never evaluates the observability-edge checks). Do not compute T3-T6 here: those need each provider's live state, which only the matching audit skill can verify.
+State the count in the terminal close-out ("N of M services pass T1/T2 structural checks") and, when any service fails, name it and the exact missing field — this is what you fix before an audit's own Topology Readiness section can move past `not-ready` for that service, since T1/T2 gate T3-T6 (a `not-ready` verdict never evaluates the observability-edge checks). Do not compute T3-T6 here: those need each provider's live state, which only the matching audit skill can verify.
 
 Close by telling the user, in the terminal:
 
@@ -516,3 +633,10 @@ Close by telling the user, in the terminal:
 | A workload object fabricated for an ECS/Lambda/VM service | The platform import's workload types are Kubernetes-only today; the export ships services + evidenced edges and states the limit — never an invented `kubernetes_deployment` |
 | An edge inferred from placement (shared SG/subnet/tag/name) | Only call-observing sources (Istio, New Relic spans) produce Traffic-map edges; infrastructure proximity is placement, not traffic |
 | New Relic queried on one entity domain only | OTel services are `EXT`, agent services are `APM` — query both or half the estate is invisible |
+| A service→resource edge drawn from a name guess or tag co-location | Cloud Mode edges exist only with a join thread (host/logical-name/ref match, ESM, IAM ARN, SG path); intent-class signals never materialize an edge (cookbook: "Evidence composition and confidence") |
+| A raw task definition / function config (env values included) written to disk or echoed | Extraction is in-stream: key + host + port + db name survive, values never do; temp files deleted in-block (cookbook: "Redaction discipline for configuration values") |
+| An IAM `Resource: "*"` statement fanned out into edges to every queue/table in the account | Wildcard demotion is a hard rule — at most one intent-class note on the service, never per-resource edges |
+| A declared edge whose endpoint no longer resolves (or has no network path) silently drawn — or silently dropped | Tier C: surfaced as a probable-stale-config question in the review; the user decides |
+| Every proposed edge asked one by one — twenty questions for a twelve-edge estate | Review runs in tier batches: one bulk confirm for Tier A with per-row opt-outs; Tier B per group; re-runs never re-ask unchanged confirmations (connection carry-forward) |
+| AccessDenied on config reads retried, worked around, or treated as a bug | The access-tier gate treats denial as an answer: the run degrades to the tier's lanes and the map header states the ceiling (cookbook: "Identity and access-tier gate") |
+| `secretsmanager:GetSecretValue` / `ssm:GetParameter` called to "complete" a join | Never called, any lane, any tier — secret references are join keys by name; values are out of scope by construction |

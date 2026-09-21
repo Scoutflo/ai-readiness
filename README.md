@@ -164,7 +164,7 @@ Then **fully restart** Claude Code / Claude.app so the new skills load — or, i
 
 1. **`/scoutflo:connect`** — tell it which integrations you use (Grafana, Sentry, PagerDuty, Datadog, ELK/Kibana, JSM Operations, Zenduty, groundcover, Prometheus, DigitalOcean, GCP, AWS, whatever applies). For each one it shows you the exact click-path to create a minimal-scope, read-only credential in that provider's own UI, and the exact command to export it in your own shell. It never asks you to paste a token into the chat, and never runs that command for you.
 2. **`/scoutflo:doctor`** — validates every credential you just set up with one cheap, read-only call per integration. Tells you exactly what's broken and how to fix it if anything is.
-3. **`/scoutflo:map-topology`** (recommended, one time) — builds a real map of your services from Kubernetes/Istio. Once this exists, every audit report uses your actual service names instead of generic ones.
+3. **`/scoutflo:map-topology`** (recommended, one time) — builds a real map of your services from the best source you have: Kubernetes/Istio, or your cloud inventory + APM on a non-Kubernetes estate; on AWS, Cloud Mode also maps the databases/caches/queues behind your services and the evidence-backed connections to them. Once this exists, every audit report uses your actual service names instead of generic ones.
 4. **Run your first audit** — pick whichever matches what you connected: `/scoutflo:audit-prometheus` (the deep **Prometheus** server + rule-engine plane — scrape/`up` coverage, TSDB cardinality, WAL/compaction, remote-write, config reload, rule health), `/scoutflo:audit-lgtm` (the LGTM/VictoriaMetrics stores; pair with `/scoutflo:audit-alertmanager` for the Prometheus→Alertmanager paging path), `/scoutflo:audit-grafana`, `/scoutflo:audit-sentry`, `/scoutflo:audit-pagerduty`, `/scoutflo:audit-datadog`, `/scoutflo:audit-elk`, `/scoutflo:audit-jsm`, `/scoutflo:audit-zenduty`, `/scoutflo:audit-groundcover`, `/scoutflo:audit-alertmanager`, `/scoutflo:audit-digitalocean`, `/scoutflo:audit-gcp`, `/scoutflo:audit-azure`, or `/scoutflo:audit-aws`. Or run everything you've configured at once with `/scoutflo:audit-all`.
 5. **Read the report** in `./scoutflo-audits/<target>/<date>/report.md` — a scored, evidence-backed breakdown of what's healthy and what isn't, with a direct pointer to the fix for each finding.
 
@@ -192,7 +192,7 @@ Secrets live only in environment variables you export yourself. `~/.scoutflo/too
 | `/scoutflo:start` | Orientation: what's installed, what to do first, where reports land |
 | `/scoutflo:connect` | Guided credential setup per integration, two token tiers |
 | `/scoutflo:doctor` | Preflight: config parses, env vars are set, one live check per integration |
-| `/scoutflo:map-topology` | Builds your real service map from Kubernetes/Istio |
+| `/scoutflo:map-topology` | Builds your real service map (Kubernetes/Istio, cloud inventories, APM) — on AWS incl. service→resource connections |
 | `/scoutflo:map-repos` | Maps each of your services to its GitHub repository — you confirm every match, it never auto-picks even an obvious one |
 | `/scoutflo:business-context` | Captures your SLAs, critical services, per-environment rules, and exclusions into one `business_context.md` that every audit reads to tune severity and scope |
 | `/scoutflo:audit-all` | Runs every audit you've configured, then correlates across them, into one combined report and Slack brief |
