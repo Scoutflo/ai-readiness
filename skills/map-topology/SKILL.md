@@ -1,6 +1,6 @@
 ---
 name: map-topology
-description: Builds a read-only service topology map from the best available source — Istio or plain Kubernetes when a cluster is configured, and otherwise cloud inventories (AWS ECS/EC2/Lambda/ALB, DigitalOcean), APM-derived service maps (New Relic entities + span-derived call edges, Sentry projects), or a guided capture — and, on AWS estates, Cloud Mode maps the resources behind services (databases, caches, queues, buckets) with evidence-classed service→resource connections reviewed in batches. Writes topology.md plus a Scoutflo-aligned topology-export.json with routes, entry points, resources, connections, and re-run deltas. Use when the user asks to map services, the cluster, or a non-Kubernetes estate, map which service uses which database or resource, build or refresh a service map or topology, list entry points or who calls whom, or update topology.md after a deploy. Do not use to score observability coverage (use audit-all or an audit-* skill); it never changes any live state.
+description: Builds a read-only service topology map from the best available source — Istio or plain Kubernetes when a cluster is configured, and otherwise cloud inventories (AWS ECS/EC2/Lambda/ALB, DigitalOcean), APM-derived service maps (New Relic entities + span-derived call edges, Sentry projects), or a guided capture — and, on AWS/DigitalOcean/Azure/GCP estates, Cloud Mode maps the resources behind services (databases, caches, queues, buckets) with evidence-classed service→resource connections reviewed in batches — plus an APM overlay that adds observed database edges on any estate including Kubernetes. Writes topology.md plus a Scoutflo-aligned topology-export.json with routes, entry points, resources, connections, and re-run deltas. Use when the user asks to map services, the cluster, or a non-Kubernetes estate, map which service uses which database or resource, build or refresh a service map or topology, list entry points or who calls whom, or update topology.md after a deploy. Do not use to score observability coverage (use audit-all or an audit-* skill); it never changes any live state.
 ---
 
 # map-topology
@@ -11,15 +11,17 @@ Maps how traffic moves through your estate and writes the result to `./scoutflo-
 - **Plain Kubernetes**: Services, Ingresses, workloads, and Endpoints.
 - **No Kubernetes at all**: services from your cloud inventory (AWS ECS/EC2/Lambda + ALB entry points, DigitalOcean apps), call edges from an APM that observes them (New Relic's span-derived service map), and platform-grade correlation anchors from Sentry projects — merged into one honest map. A rule of thumb the merge follows: infrastructure sources name the services; APM sources connect them.
 - **Nothing configured**: a guided capture builds an operator-asserted map instead of a dead-end.
-- **Cloud Mode (AWS)**: beyond the services themselves, map the resources they
-  depend on — databases, caches, queues, topics, buckets — and the
-  service→resource connections, every edge carrying its evidence class
-  (declared / observed / permitted / reachable) and reviewed with you in
-  batches before it lands in the map (Phase 2E).
+- **Cloud Mode (AWS, DigitalOcean, Azure, GCP)**: beyond the services
+  themselves, map the resources they depend on — databases, caches, queues,
+  topics, buckets — and the service→resource connections, every edge carrying
+  its evidence class (declared / observed / permitted / reachable) and
+  reviewed with you in batches before it lands in the map (Phase 2E). An APM
+  overlay adds observed database edges on ANY estate — including a pure
+  Kubernetes one.
 
 Every operation is read-only (`get`/`list`/GraphQL-and-REST reads only); the only write is the local `topology.md` file.
 
-Full command recipes live in [references/istio-queries.md](references/istio-queries.md) (the Kubernetes/Istio paths), [references/non-k8s-sources.md](references/non-k8s-sources.md) (the cloud/APM/guided paths, merge rules, and non-Kubernetes export rules), and [references/cloud-mode-aws.md](references/cloud-mode-aws.md) (Cloud Mode: resource catalog, edge lanes, evidence composition, access tiers, redaction). This file holds the workflow; go to the cookbooks for the exact blocks each phase names.
+Full command recipes live in [references/istio-queries.md](references/istio-queries.md) (the Kubernetes/Istio paths), [references/non-k8s-sources.md](references/non-k8s-sources.md) (the cloud/APM/guided paths, merge rules, and non-Kubernetes export rules), and the Cloud Mode cookbooks — [references/cloud-mode-aws.md](references/cloud-mode-aws.md) (also home of the shared rules: evidence composition, access tiers, redaction), [references/cloud-mode-digitalocean.md](references/cloud-mode-digitalocean.md), [references/cloud-mode-azure.md](references/cloud-mode-azure.md), [references/cloud-mode-gcp.md](references/cloud-mode-gcp.md), and [references/cloud-mode-apm-overlay.md](references/cloud-mode-apm-overlay.md). This file holds the workflow; go to the cookbooks for the exact blocks each phase names.
 
 ## What topology.md is used for
 
@@ -45,7 +47,7 @@ Keep `./scoutflo-audits/` out of public version control. The map names your name
 | Requirement | Why | Required |
 | --- | --- | --- |
 | `jq` | JSON parsing, every path | yes |
-| **At least one topology source** in `~/.scoutflo/toolkit.yaml`: `kubernetes` (richest), or any of `aws`, `digitalocean`, `newrelic`, `sentry` | names what to map; Phase 0 routes to the best configured source | yes — with **none**, the guided capture runs instead of a dead-end |
+| **At least one topology source** in `~/.scoutflo/toolkit.yaml`: `kubernetes` (richest), or any of `aws`, `digitalocean`, `azure`, `gcp`, `newrelic`, `sentry` | names what to map; Phase 0 routes to the best configured source | yes — with **none**, the guided capture runs instead of a dead-end |
 | `kubectl` | every cluster read | only on the Kubernetes path |
 | `istioctl` | proxy sync status on the mesh path | no; the mesh path degrades to `kubectl`-only checks, the other paths never need it |
 | provider CLI/keys for a non-Kubernetes source (`aws` CLI + profile, `doctl`, the New Relic User key, the Sentry token) | the cloud/APM discovery reads | only for the sources you route through; each is the same read-only credential its audit already uses |
@@ -70,7 +72,7 @@ CFG="${SCOUTFLO_CONFIG:-}"
 [ -f "$CFG" ] || { echo "missing $CFG; run /scoutflo:connect"; exit 1; }
 TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 SOURCES=""
-for src in kubernetes aws digitalocean newrelic sentry; do
+for src in kubernetes aws digitalocean azure gcp newrelic sentry; do
   n=$(sh "$TT" "$CFG" "$src" count 2>/dev/null || echo 0)
   [ "${n:-0}" -ge 1 ] && SOURCES="$SOURCES $src"
 done
@@ -257,7 +259,11 @@ Exact blocks, per-source honesty ceilings, and the merge rules are in
 1. **Services from infrastructure**: AWS ECS services, Lambda functions, EC2
    instances grouped by their Name/service tag (the grouping tag is recorded in
    the map header; `untagged` rows stay visible as exactly that), DigitalOcean
-   App Platform components and droplets.
+   App Platform components and droplets. On Azure and GCP the app enumerations
+   in their Cloud Mode cookbooks are the service source — App Service /
+   Function Apps / Container Apps and Cloud Run / Cloud Functions
+   respectively (each cookbook's "Declared configuration" section lists them);
+   GKE and AKS clusters stay on the Kubernetes path.
 2. **Services and call edges from APM**: New Relic service entities from BOTH
    entity domains (OpenTelemetry `EXT` + agent `APM` — one alone misses half an
    estate), and its span-derived `CALLS` relationships — the only non-Kubernetes
@@ -285,38 +291,64 @@ then trusts). The Topology Readiness section renders the consequence honestly:
 workload mapping reads as a current platform limit for these services, while a
 Sentry-anchored service still reaches full match confidence.
 
-## Phase 2E: Cloud Mode — resources and service→resource edges (AWS)
+## Phase 2E: Cloud Mode — resources and service→resource edges
 
-Runs when `aws` is a configured source (with or without a cluster): after 2D's
-service rows exist, map the **resources** behind them — databases, caches,
-queues, topics, buckets — and the **service→resource edges**, each edge
-carrying its evidence. Exact blocks live in
-[references/cloud-mode-aws.md](references/cloud-mode-aws.md); this phase is
-the workflow and the review protocol. These are not call edges: the Traffic
-map's rules are untouched, and an edge with no join evidence does not exist.
+Runs when a **cloud source** is configured (`aws`, `digitalocean`, `azure`,
+`gcp` — with or without a cluster), and its **APM overlay** step runs on ANY
+estate with `newrelic` configured, Kubernetes included: after 2D's service
+rows exist, map the **resources** behind them — databases, caches, queues,
+topics, buckets — and the **service→resource edges**, each edge carrying its
+evidence. These are not call edges: the Traffic map's rules are untouched,
+and an edge with no join evidence does not exist.
 
-0. **Access tier + scope checkpoint.** Run the cookbook's identity and
-   access-tier gate (cookbook: "Identity and access-tier gate"), then the
-   cheap counts — endpoint catalog (cookbook: "Resource endpoint catalog")
-   plus 2D's service list — and pause before any per-service read, exactly
-   like the audits' estate checkpoint: show `services / resources / regions`,
+One cookbook per cloud holds the exact blocks; the shared rules (evidence
+classes, composition, review tiers, redaction) are defined once in the AWS
+cookbook and apply verbatim everywhere:
+
+| Cloud | Cookbook | Live-proof status (see its header) |
+| --- | --- | --- |
+| AWS | [references/cloud-mode-aws.md](references/cloud-mode-aws.md) | live-proven |
+| DigitalOcean | [references/cloud-mode-digitalocean.md](references/cloud-mode-digitalocean.md) | live-proven |
+| Azure | [references/cloud-mode-azure.md](references/cloud-mode-azure.md) | doc-verified; live smoke owed |
+| GCP | [references/cloud-mode-gcp.md](references/cloud-mode-gcp.md) | live-proven (core lanes; Memorystore/Functions rows owed) |
+| APM overlay (any estate) | [references/cloud-mode-apm-overlay.md](references/cloud-mode-apm-overlay.md) | CALLS lane live-proven; datastore rows verify-on-first-live-row |
+
+0. **Access gate + scope checkpoint.** Run the cloud's identity gate — AWS
+   also probes its permission tier (cookbook: "Identity and access-tier
+   gate"); DigitalOcean/Azure/GCP verify account/subscription/project
+   (cookbook: "Identity and access gate") — then the cheap counts: the
+   endpoint catalog (cookbook: "Resource endpoint catalog", per cloud) plus
+   2D's service list — and pause before any per-service read, exactly like
+   the audits' estate checkpoint: show `services / resources / regions`,
    offer full scope or a selection (`cli_pause_before_audit` +
-   `cli_prompt_exclude_services`). The announced tier (`full-read`,
-   `no-config-read`, `inventory-only`) is written into the map header and
-   decides which lanes below run.
-1. **Declared lane** (tier permitting): per in-scope service, read config
-   declarations (cookbook: "Declared configuration: ECS" and "Declared
-   configuration: Lambda"), resource-side wiring (cookbook: "Reverse event
-   wiring"), and resolution hops (cookbook: "Resolution chains"). Extraction
-   is redaction-first — keys/hosts/refs only, never values (cookbook:
-   "Redaction discipline for configuration values").
-2. **Corroboration lanes**: IAM role policies per distinct role (cookbook:
-   "Permitted lane: IAM" — wildcard demotion is a hard rule) and network
-   reachability (cookbook: "Reachable lane: security groups and VPC
-   endpoints"). Opportunistic observed probes run once and skip cleanly when
-   the estate has them disabled (cookbook: "Observed lane: opportunistic
-   probes"). When `repo-map.json` exists, the IaC lane adds declared joins
-   with zero live-config access (cookbook: "IaC-in-repo lane").
+   `cli_prompt_exclude_services`). The announced access posture is written
+   into the map header and decides which lanes below run.
+1. **Declared lane** (access permitting): per in-scope service, read config
+   declarations — AWS task definitions and functions (cookbook: "Declared
+   configuration: ECS" and "Declared configuration: Lambda"), resource-side
+   wiring (cookbook: "Reverse event wiring") and resolution hops (cookbook:
+   "Resolution chains"); DigitalOcean app specs, Azure Service Connector /
+   Container Apps, GCP Cloud Run specs (each cloud's cookbook: "Declared
+   configuration"). Extraction is redaction-first — keys/hosts/refs only,
+   never values (cookbook: "Redaction discipline for configuration values").
+2. **Corroboration lanes**: identity permissions per distinct principal —
+   AWS roles (cookbook: "Permitted lane: IAM"), Azure managed identities and
+   GCP service accounts (their cookbooks: "Permitted lane"), DigitalOcean
+   trusted sources (cookbook: "Permitted and reachable lane: trusted
+   sources") — wildcard/default-principal demotion is a hard rule
+   everywhere. Network reachability per cloud (AWS cookbook: "Reachable
+   lane: security groups and VPC endpoints"; the others: "Reachable lane").
+   Observed probes run once and skip cleanly when the estate has them
+   disabled (AWS cookbook: "Observed lane: opportunistic probes"; Azure/GCP:
+   "Observed lane"). When `repo-map.json` exists, the IaC lane adds declared
+   joins with zero live-config access (cookbook: "IaC-in-repo lane").
+2b. **APM overlay** (any estate shape, including pure Kubernetes): when
+   `newrelic` is configured, read each in-scope service's observed datastore
+   connections (cookbook: "New Relic datastore edges"); when the estate's
+   Tempo service-graphs are reachable, add its database edges (cookbook:
+   "Grafana Tempo service-graph edges"). Observed edges expire — carry
+   `valid_from` and re-verify on re-runs; on a Kubernetes estate this step
+   simply enriches the existing K8s map with resource edges.
 3. **Synthesize edges** (cookbook: "Declared-edge synthesis" then "Evidence
    composition and confidence"): one edge per service↔resource pair, lanes
    appended as evidence on the same edge, confidence per the composition
@@ -361,11 +393,11 @@ large cluster path, with one row per service instead of per namespace — an
 interrupted cloud mapping resumes at the service that failed, never from
 zero.
 
-Multi-target discipline: with a labeled `aws` list, Phase 2E runs per label
-through the shared enumerator exactly as Phase 0 does — one map per target,
-never a merged account soup. DigitalOcean/Azure/GCP get their own cookbook
-files in later versions; nothing in this phase assumes AWS beyond the named
-cookbook.
+Multi-target discipline: with a labeled cloud list (`aws` profiles, `azure`
+subscriptions), Phase 2E runs per label through the shared enumerator exactly
+as Phase 0 does — one map per target, never a merged account soup. A
+single-block `digitalocean` (one token) or `gcp` (one project) is one target
+by construction.
 
 ## Large clusters: worklist, batches, and resume
 
@@ -596,7 +628,7 @@ EXPORT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/topology-export.json"
 
 Expected: one row per service. A service failing T1 is missing a required field or a correlation attribute (`service_name`/`namespace`/`cluster_id`) — usually a `service_type`, `environment`, or `business_criticality` that was never confirmed with the user (never invent these; ask once per run, per this skill's own rule above). A service failing T2 has no `DEPLOYED_AS` edge, or its workload resource is missing one of the four mandatory attributes — both mean the service-to-workload join in Phase 2B (or 2A) didn't find a backing object; check the Endpoint backing check output for that service.
 
-State the count in the terminal close-out ("N of M services pass T1/T2 structural checks") and, when any service fails, name it and the exact missing field — this is what you fix before an audit's own Topology Readiness section can move past `not-ready` for that service, since T1/T2 gate T3-T6 (a `not-ready` verdict never evaluates the observability-edge checks). Do not compute T3-T6 here: those need each provider's live state, which only the matching audit skill can verify.
+State the count in the terminal close-out ("N of M services pass T1/T2 structural checks"; when Phase 2E ran, add the connection line: "K confirmed resource connections across J services; L candidates / open questions pending in the map") and, when any service fails, name it and the exact missing field — this is what you fix before an audit's own Topology Readiness section can move past `not-ready` for that service, since T1/T2 gate T3-T6 (a `not-ready` verdict never evaluates the observability-edge checks). Do not compute T3-T6 here: those need each provider's live state, which only the matching audit skill can verify.
 
 Close by telling the user, in the terminal:
 
@@ -640,3 +672,8 @@ Close by telling the user, in the terminal:
 | Every proposed edge asked one by one — twenty questions for a twelve-edge estate | Review runs in tier batches: one bulk confirm for Tier A with per-row opt-outs; Tier B per group; re-runs never re-ask unchanged confirmations (connection carry-forward) |
 | AccessDenied on config reads retried, worked around, or treated as a bug | The access-tier gate treats denial as an answer: the run degrades to the tier's lanes and the map header states the ceiling (cookbook: "Identity and access-tier gate") |
 | `secretsmanager:GetSecretValue` / `ssm:GetParameter` called to "complete" a join | Never called, any lane, any tier — secret references are join keys by name; values are out of scope by construction |
+| A raw `doctl databases list -o json` dump printed or saved — it contains the connection PASSWORD | Every DigitalOcean recipe pipes to a jq field selection in the same command; the password field never survives (cookbook: "Traps") |
+| Azure app settings read "because the credential worked" | The elevated lane is explicit opt-in per run — a working credential is not consent; Reader-tier is the default posture and a denial is the expected answer |
+| GCP default compute service account's bindings fanned out into edges to everything | Default-SA demotion is a hard rule — one intent-class note, never per-resource edges (same class as the AWS wildcard rule) |
+| An APM-observed datastore edge kept forever after traffic stopped | Observed edges carry `valid_from` and expire; absence of traffic is not absence of dependency, and stale observed evidence degrades to whatever other lanes support |
+| Tempo service-graph `server` label treated as a hostname | Under the default label mapping it often carries a LOGICAL database name — join at logical-name tier (one review tier weaker), verify the label shape per estate |

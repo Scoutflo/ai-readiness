@@ -1,5 +1,47 @@
 # Changelog
 
+## 0.1.199
+
+**Cloud Mode goes multi-cloud: DigitalOcean, Azure, GCP — plus an APM overlay
+that adds observed database edges on ANY estate, Kubernetes included** (the
+approved plan's Phases 2 and 3, shipped together):
+
+- Three new per-cloud cookbooks sharing the AWS cookbook's rules (evidence
+  classes, composition, review tiers, redaction):
+  `references/cloud-mode-digitalocean.md` (app-spec declarations,
+  trusted-source firewall joins by app ID, VPC-members API — live-proven on a
+  real estate, incl. two real app→database edges and a live-caught doctl gap),
+  `references/cloud-mode-azure.md` (managed-identity role assignments,
+  Service Connector + Container Apps, private endpoints, App Insights
+  dependencies; the app-settings read is an explicit OPT-IN elevated lane —
+  doc-verified, live smoke owed), and `references/cloud-mode-gcp.md`
+  (Cloud SQL connectionName joins, Cloud Run specs, asset-inventory IAM
+  search, peering containment, audit-log probe; default-compute-SA demotion
+  is a hard rule — live-proven core lanes, incl. real per-secret
+  CONFIGURED_BY bindings).
+- `references/cloud-mode-apm-overlay.md`: New Relic datastore relationships +
+  Tempo service-graph database edges as observed service→resource evidence on
+  any estate shape — a pure-Kubernetes map gains database edges for free.
+  Observed edges carry `valid_from` and expire; datastore rows never enter
+  the Traffic map.
+- Phase 2E generalized: per-cloud routing (azure and gcp now route in
+  Phase 0), one access gate per cloud, the same batch-review protocol and
+  carry-forward everywhere; multi-target discipline extended (azure labeled
+  subscriptions; DO/GCP single-target by construction).
+- AWS closeout: the Lambda declared block is now live-verified against a real
+  function (previously the one verify-pending item), plus a
+  capture-then-branch consistency fix on its destinations read.
+- New suite `tests/test-cloud-mode-multicloud.sh` (per-cloud secret-safety
+  locks: DO password field-selection, Azure opt-in gate + no vault reads, GCP
+  no-secret-resolution + default-SA rule, overlay TTL/key guards, SKILL
+  routing, and a GCP-style extraction behavior test) + two pressure scenarios
+  (per-cloud secret boundaries under convenience pressure; APM overlay
+  enriches without corrupting).
+- Live smokes this release: DigitalOcean full-lane run (4-cluster catalog,
+  app-rule joins, VPC members via the API) and GCP core-lane run (15-row
+  catalog, Cloud Run spec, real IAM bindings, skip paths) — both read-only on
+  our own estates. Azure ships doc-verified with the live smoke honestly owed.
+
 ## 0.1.198
 
 **map-topology Cloud Mode (AWS): the resources behind your services, and the

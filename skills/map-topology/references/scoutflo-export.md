@@ -209,7 +209,9 @@ Resources: one entry per catalogued cloud resource, `resource_type` from the
 platform's existing enum — `database`, `cache`, `message_queue`,
 `object_storage`, `load_balancer`, `serverless_function`, `compute_instance` —
 with `attributes` carrying `endpoint_host`, `endpoint_port`, `engine`,
-`region`, the resource's own tags, and its containment (`account`, `vpc`).
+`region`, the resource's own tags, and its containment (`account`/`vpc` on
+AWS; team/VPC on DigitalOcean; subscription/resource-group on Azure;
+project/network on GCP).
 Never a `kubernetes_*` type for a cloud resource.
 
 Connections: one relationship per reviewed service↔resource pair:
