@@ -29,7 +29,8 @@ grep -q "OPT-IN GATE" "$AZ" || fail "Azure: elevated lane lost its opt-in gate m
 grep -q "az keyvault secret" "$AZ" && fail "Azure: a Key Vault secret read appeared" || ok "Azure: no vault secret reads"
 n=$(grep -cF '(?i)password|passwd|secret|token|api_?key|private|credential' "$AZ" || true)
 [ "$n" -ge 2 ] || fail "Azure: secret-key skip filter must guard both extraction blocks (found $n)"
-grep -q "doc-verified, live smoke owed" "$AZ" || fail "Azure: honesty banner missing"
+grep -q "Verification status:" "$AZ" || fail "Azure: honesty banner missing"
+grep -q "owed" "$AZ" || fail "Azure: banner must state what verification is still owed"
 
 # --- 4. GCP: default-SA demotion; secret refs never resolved ------------------
 GC="$REF/cloud-mode-gcp.md"

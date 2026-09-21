@@ -6,12 +6,15 @@ flexible servers, Cache for Redis, Cosmos DB, Service Bus, Event Hubs, and
 Storage as the resource side; managed-identity role assignments, private
 endpoints, and Service Connector as the connecting threads.
 
-**Verification status: doc-verified, live smoke owed.** Every recipe here was
-built from current official Azure CLI documentation, but has not yet run
-against a live subscription from this toolkit. On first live use, confirm a
-command's output shape before trusting a surprising result, and treat a
-mismatch as a bug to report. (The AWS and DigitalOcean cookbooks are the
-live-proven references for the shared behavior.)
+**Verification status: live-proven core (2026-09-21), app-lane first rows
+owed.** The identity gate, all eight catalog reads, the private-endpoint pass,
+and the webapp/functionapp enumerations ran clean against a real
+subscription; the extension-absence guard was exercised for real
+(containerapp CLI extension missing — the block skips and the gap is
+recorded). The managed-identity, Service Connector, Container Apps, elevated,
+and App Insights blocks remain doc-verified only because that subscription
+runs no App-Service-family apps — on their first live rows, confirm the
+output shape before trusting a surprising result.
 
 **Shared rules** (identical across clouds, defined once in
 [cloud-mode-aws.md](cloud-mode-aws.md)): evidence classes, the composition
