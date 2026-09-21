@@ -1,5 +1,54 @@
 # Changelog
 
+## 0.1.198
+
+**map-topology Cloud Mode (AWS): the resources behind your services, and the
+service→resource connections — every edge with its evidence** (the approved
+Topology-Cloud-Mode plan's Phase 1):
+
+- New Phase 2E + `references/cloud-mode-aws.md`: resource endpoint catalog
+  (RDS/Aurora, ElastiCache, SQS/SNS, S3, MSK, OpenSearch), resolution chains
+  (Route53 CNAMEs, RDS Proxy), declared configuration (ECS task definitions,
+  Lambda env + event source mappings + DLQ/destinations), reverse event wiring
+  (S3 notifications, SNS subscriptions, EventBridge targets), IAM permitted
+  lane (action-verb→relation map with a hard wildcard-demotion rule), network
+  reachable lane (security-group joins incl. the same-SG/self-rule nuance, VPC
+  endpoints), opportunistic observed probes (App Signals, X-Ray, RDS
+  Performance Insights — skip-clean when disabled), and an IaC-in-repo lane
+  over repo-map'd repositories.
+- Evidence classes on every edge (`declared`/`observed`/`permitted`/
+  `reachable`/`intent`) with explicit composition rules; an edge with no join
+  thread does not exist; a declared edge with no network path surfaces as a
+  probable-stale-config question instead of being drawn or dropped.
+- Review UX: one bulk confirm for high-evidence edges (per-row opt-outs),
+  per-group confirmation for single-witness candidates, batched orphan
+  questions (unclaimed resources; services with no resource edge), and re-run
+  carry-forward keyed on service+resource so nothing confirmed is ever
+  re-asked.
+- Access-tier gate: `full-read` / `no-config-read` / `inventory-only` detected
+  up front (AccessDenied is an answer, not an obstacle), the map header states
+  the ceiling, and three requestable policy postures are documented — no
+  secret-value permission is requested or used at any tier
+  (`GetSecretValue`/`GetParameter` never called; secret references join by
+  name). Plus a zero-access discovery pack (a self-contained read-only script the
+  credential holder runs; fail-closed output scan).
+- Redaction hardening, live-behavior-tested: URL userinfo stripped before host
+  extraction, secret-named env keys skipped without parsing, extractions kept
+  as temp join probes (never printed/exported; only catalog-matched endpoints
+  reach the map).
+- Export contract: additive Cloud Mode section in `scoutflo-export.md`
+  (cloud resource entities + `STORES_DATA_IN`/`CACHES_IN`/`PUBLISHES_TO`/
+  `SUBSCRIBES_TO`/`CONSUMES` connections with join-key attributes); C7 updated
+  (resource-dependency edge class; per-target wording).
+- Live-smoked on a real AWS estate: caught and fixed a `--max-items`
+  NextToken artifact that misreported access tier, a BSD-sed `\t` bug in the
+  SQS catalog line, and probe fallbacks silenced by `jq`'s exit-0-on-empty;
+  found a genuine Tier-B reachable-only candidate (shared-SG service↔RDS).
+- New test suite `tests/test-cloud-mode-aws.sh` (redaction behavior with a
+  dotted-password fixture, no-secret-calls lock, wiring locks) and two
+  pressure scenarios (edge-evidence honesty under pressure; review batching /
+  tier honesty / carry-forward).
+
 ## 0.1.197
 
 **map-topology loses its Kubernetes requirement** (customer-driven: a real

@@ -195,3 +195,60 @@ the platform accepts, the strongest non-Kubernetes match-confidence path today �
 and let the Topology Readiness section state the workload-mapping limit
 honestly. Discovery recipes and merge rules:
 [non-k8s-sources.md](non-k8s-sources.md).
+
+## Cloud Mode — resources and service→resource connections (additive)
+
+When Phase 2E ran, the export additionally carries the cloud resources and the
+reviewed connections. All of this is **additive** to the shapes above —
+consumers that predate it (readiness renderers, rca, correlation-engine,
+mermaid renderers) ignore unknown resource types, relations, and attribute
+keys safely, and the platform's attribute validation accepts unknown schema
+keys in compatibility mode.
+
+Resources: one entry per catalogued cloud resource, `resource_type` from the
+platform's existing enum — `database`, `cache`, `message_queue`,
+`object_storage`, `load_balancer`, `serverless_function`, `compute_instance` —
+with `attributes` carrying `endpoint_host`, `endpoint_port`, `engine`,
+`region`, the resource's own tags, and its containment (`account`, `vpc`).
+Never a `kubernetes_*` type for a cloud resource.
+
+Connections: one relationship per reviewed service↔resource pair:
+
+```json
+{
+  "from": { "entity_type": "service", "name": "checkout" },
+  "to":   { "entity_type": "resource", "name": "payments-db" },
+  "relation": "STORES_DATA_IN",
+  "assertion_type": "inferred",
+  "confidence": 9,
+  "attributes": {
+    "engine": "postgres", "endpoint_host": "<rds-endpoint>", "endpoint_port": 5432,
+    "logical_name": "orders", "access_mode": "read-write", "auth_mode": "secret-ref",
+    "network_path": "vpc", "join_key": "env:DATABASE_URL→host",
+    "matched_value": "<rds-endpoint>:5432", "resolution_chain": [],
+    "mechanism": "aws.ecs.taskdef-env", "evidence_class": "declared+reachable",
+    "region": "<region>"
+  }
+}
+```
+
+- Relations by resource kind: `database → STORES_DATA_IN` · `cache →
+  CACHES_IN` · `message_queue → PUBLISHES_TO` / `SUBSCRIBES_TO` / `CONSUMES`
+  (direction only when a mechanism proves it; otherwise `USES`) ·
+  `object_storage → USES` · secrets/parameter store → `CONFIGURED_BY` ·
+  entry LB → `EXPOSED_VIA`. These are **not** `CALLS` edges and never appear
+  in the Traffic map.
+- `assertion_type`: `inferred` for lane-derived edges, `asserted` once the
+  user confirmed (or supplied) it, `observed` only when an observed-lane probe
+  itself evidenced the pair. User-asserted never masquerades as declared: the
+  `evidence_class` attribute keeps the lane truth even after confirmation.
+- `confidence` on the 0-10 export scale, from the cookbook's composition
+  table: declared+corroborated / platform-maintained declarations → 9;
+  declared alone → 8; permitted(IAM-gated)+reachable → 7; permitted alone →
+  6; reachable-only / logical-name-only → 4 (below the actionable threshold
+  by design — they ship only after user confirmation raises them). Tier C
+  refutations and intent-only signals are never exported as edges.
+- `evidence` on each connection names the exact read + matched value, same
+  discipline as every audit's findings.
+- Unclaimed resources export as resources without edges — their absence of
+  connections is the signal (cost/orphan candidates), not a gap to paper over.

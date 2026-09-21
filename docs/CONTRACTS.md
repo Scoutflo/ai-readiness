@@ -187,16 +187,23 @@ these two classes existed; these steps are what caught them.
   every audit's **Topology Readiness** section, `render-report-viz mermaid-topo`.
 - **Invariants:** edge semantics are fixed — `DEPLOYED_AS`/`PART_OF`/`ROUTES_TO`
   are **identity** edges (never a candidate cause); `CALLS`/`ServiceEntry` are
-  **dependency** edges. `map-topology` emits the canonical `relationships[]`;
-  consumers read `relationships[]` **and** tolerate a legacy `edges[]` shape as a
-  fallback (older or hand-authored exports). Keep the `edges[]` fallback in
-  `rca`/`render-report-viz` — it is backward-compat, not dead code — and do not add
-  a *third* divergent reader. `map-topology` is
-  **per-cluster** (re-run per labeled kubernetes context; one shared `topology.md`
-  describes the wrong cluster for the others).
+  **dependency** edges; the Cloud-Mode connections (`STORES_DATA_IN`/`CACHES_IN`/
+  `PUBLISHES_TO`/`SUBSCRIBES_TO`/`CONSUMES`/`USES`-to-infra) are
+  **resource-dependency** edges — legitimate candidate causes (a service's DB is
+  a cause candidate) but never Traffic-map/`CALLS` rows, additive to the schema
+  so pre-Cloud-Mode consumers ignore them safely; only reviewed edges export
+  (Tier-C questions and unconfirmed low-tier candidates never do). `map-topology`
+  emits the canonical `relationships[]`; consumers read `relationships[]` **and**
+  tolerate a legacy `edges[]` shape as a fallback (older or hand-authored
+  exports). Keep the `edges[]` fallback in `rca`/`render-report-viz` — it is
+  backward-compat, not dead code — and do not add a *third* divergent reader.
+  `map-topology` is **per-target** (re-run per labeled kubernetes context or
+  cloud target; one shared `topology.md` describes the wrong estate for the
+  others).
 - **SSOT:** `skills/map-topology/references/scoutflo-export.md`.
 - **Guards:** the G6 topology-readiness maintainer review; `rca`/`render-report-viz`
-  edge handling. (Add a schema-agreement test when the export schema changes.)
+  edge handling; `tests/test-cloud-mode-aws.sh` (export-section + redaction +
+  no-secret-calls locks).
 
 ## C8 — Topology Readiness headline string
 
