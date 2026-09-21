@@ -204,9 +204,10 @@ A lambda get-function-configuration --function-name "$FN" --query '{dlq:DeadLett
 # Event source mappings: the PLATFORM polls the source for you — a SUBSCRIBES_TO/CONSUMES edge with near-zero noise
 A lambda list-event-source-mappings --function-name "$FN" \
   --query 'EventSourceMappings[].{src:EventSourceArn,state:State}' --output json | jq -c '.[]'
-# On-failure/on-success destinations
-A lambda get-function-event-invoke-config --function-name "$FN" --output json 2>/dev/null \
-| jq -r '.DestinationConfig // {} | to_entries[] | select(.value.Destination != null) | [.key, .value.Destination] | @tsv' || true
+# On-failure/on-success destinations (capture-then-branch: jq exits 0 on empty input)
+EIC=$(A lambda get-function-event-invoke-config --function-name "$FN" --output json 2>/dev/null) || EIC=""
+[ -n "$EIC" ] && printf '%s' "$EIC" | jq -r '.DestinationConfig // {} | to_entries[] | select(.value.Destination != null) | [.key, .value.Destination] | @tsv' \
+  || echo "no event-invoke destinations configured"
 ```
 
 An event source mapping in state `Enabled` is the strongest declared edge AWS
@@ -214,11 +215,10 @@ offers (`mechanism: aws.lambda.esm`): the platform itself maintains the
 connection. Emit `SUBSCRIBES_TO` (SQS/Kafka/MQ) or `CONSUMES`
 (Kinesis/DynamoDB streams) accordingly.
 
-Honesty note: this block's extraction pipeline is behavior-tested, but the
-Lambda API responses themselves were verified against documentation, not a
-live function (the smoke estate had none) — on first use against a real
-Lambda estate, confirm the response fields before trusting a surprising
-result, and treat a shape mismatch as a bug to report, not to paper over.
+Live-verified (2026-09-21): this block ran against a real function in a real
+account — `GetFunctionConfiguration` (env extraction, DLQ/role/VPC fields),
+`ListEventSourceMappings`, and the event-invoke-config read all returned the
+shapes coded here, with zero value leakage through the extraction.
 
 ## Reverse event wiring
 
