@@ -125,6 +125,7 @@ Read `topology-export.json` and classify **every** edge touching the target by r
 
 - **Identity / resolution** — `DEPLOYED_AS` (service→workload), `PART_OF`, `ROUTES_TO` where `to` is a workload. Resolve the probe target; **never a candidate cause.**
 - **Dependency** — `CALLS` (service→service), external `ServiceEntry`. Direction is load-bearing: for `A -CALLS-> B`, if the target is `A` then `B` is an **upstream SUSPECT** (a failing dependency can be the cause); if the target is `B` then `A` is **downstream BLAST RADIUS** (breaks if the target is down), never a cause.
+- **Resource dependency** — the Cloud-Mode connections (`STORES_DATA_IN`, `CACHES_IN`, `PUBLISHES_TO`, `SUBSCRIBES_TO`, `CONSUMES`, `USES`, `CONFIGURED_BY`, `EXPOSED_VIA`): same direction rule as CALLS, so the target's database, cache, queue, bucket, config store, or entry LB ranks as an **upstream SUSPECT** exactly like a failing service dependency (a dead database is the classic root cause). One difference at probe time: a cloud resource is not kubectl-probable — verify a ranked resource suspect through its provider (the matching audit's read lane, provider status/events), and weigh the edge's `evidence_class`/`assertion_type` in the ranking (an observed edge outranks an asserted one).
 - **Observation** — `MONITORED_BY` / `SENDS_METRICS_TO|LOGS_TO|TRACES_TO`. Tells you which backend holds the target's signal; a **missing** observation edge is itself a root-cause-class answer ("a crash here would have paged no one").
 
 Build a ranked upstream-suspect list (edge `confidence` × observed-vs-asserted × whether a finding already names the neighbor × business-criticality × hop-proximity). Treat `topology-export.json` as a possibly-stale **hypothesis source** (tag `[topology@<generated_at>]`): it says *where to look*; the live probe confirms or exonerates. State plainly "topology may be incomplete; only topology-named suspects were probed" so a missing edge is never read as exoneration.
@@ -142,6 +143,8 @@ jq -r --arg t "$TARGET" '
   | .[] | select(.from == $t or .to == $t)
   | (if   (.rel|test("DEPLOYED_AS|PART_OF|ROUTES_TO"))       then "identity   "
      elif (.rel|test("CALLS|ServiceEntry"))                  then (if .from==$t then "suspect(up)" else "blast(down)" end)
+     elif (.rel|test("STORES_DATA_IN|CACHES_IN|PUBLISHES_TO|SUBSCRIBES_TO|CONSUMES|USES|CONFIGURED_BY|EXPOSED_VIA"))
+                                                             then (if .from==$t then "suspect(up)" else "blast(down)" end)
      elif (.rel|test("MONITORED_BY|SENDS_"))                 then "observation"
      else "other      " end) as $role
   | "\($role)\t\(.from) -\(.rel)-> \(.to)  (conf \(.conf))"' "$TOPO" | sort
