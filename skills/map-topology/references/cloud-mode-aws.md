@@ -214,6 +214,12 @@ offers (`mechanism: aws.lambda.esm`): the platform itself maintains the
 connection. Emit `SUBSCRIBES_TO` (SQS/Kafka/MQ) or `CONSUMES`
 (Kinesis/DynamoDB streams) accordingly.
 
+Honesty note: this block's extraction pipeline is behavior-tested, but the
+Lambda API responses themselves were verified against documentation, not a
+live function (the smoke estate had none) — on first use against a real
+Lambda estate, confirm the response fields before trusting a surprising
+result, and treat a shape mismatch as a bug to report, not to paper over.
+
 ## Reverse event wiring
 
 Resource-side declarations that point AT services — these work even at the
