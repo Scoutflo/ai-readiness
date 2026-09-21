@@ -77,6 +77,9 @@ Yes. Hosts and regions come from your `~/.scoutflo/toolkit.yaml`; nothing assume
 **Can I silence a finding we have accepted?**
 Yes: add it to `./scoutflo-audits/exemptions.yaml` with a reason and an expiry date. It moves to the report's Suppressed appendix instead of vanishing, and returns automatically when the exemption expires.
 
+**Can it map which service talks to which database or queue?**
+Yes, on AWS today (more clouds planned). Run `/scoutflo:map-topology` with an `aws` block configured: Cloud Mode catalogs your databases, caches, queues, topics, and buckets, then proposes service→resource connections it can actually prove — from what the service's configuration declares, what its IAM role is permitted to reach, what the network allows, and what live traffic shows. Every proposed connection shows its evidence, you confirm or reject them in batches (never one-by-one interrogation), and re-runs only ask about what changed. It works at three access levels — including a reduced mode for security-restricted accounts — and it never reads or asks for secret values: a secret's *name* is enough to make the connection.
+
 **What is the "Scoutflo Topology Readiness" section?**
 An optional parallel verdict: whether each critical service's topology data is complete enough for Scoutflo's platform to sync and correlate it. Useful if you plan to adopt the Scoutflo platform; ignorable if you do not. It never affects your audit score.
 
