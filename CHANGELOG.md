@@ -17,6 +17,9 @@
   (the exact failure that kept a live Azure subscription "undetected" —
   detected logins are offers to confirm, never auto-written).
 - APM overlay doc generalized (removed an estate-specific verification note).
+- Post-merge self-caught fix folded in: the detection sweep's az probe now
+  captures-then-branches, so "installed but logged out" prints its fallback
+  instead of silence (the jq-exits-0-on-empty class).
 
 ## 0.1.199
 

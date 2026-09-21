@@ -73,8 +73,8 @@ what to offer:
 
 ```bash
 set -eu
-command -v az >/dev/null && az account show --output json 2>/dev/null \
-  | jq -r '"azure login found: subscription \"" + .name + "\" (" + .id + ") — offer an azure: block with this subscription_id"' \
+AZB=""; command -v az >/dev/null && AZB=$(az account show --output json 2>/dev/null) || true
+[ -n "$AZB" ] && printf '%s' "$AZB" | jq -r '"azure login found: subscription \"" + .name + "\" (" + .id + ") — offer an azure: block with this subscription_id"' \
   || echo "azure: no CLI or no login"
 command -v gcloud >/dev/null && ACC=$(gcloud auth list --filter=status:ACTIVE --format="value(account)" 2>/dev/null | head -n1) && [ -n "$ACC" ] \
   && echo "gcloud login found: ${ACC} — offer a gcp: block (ask which project)" || echo "gcp: no CLI or no login"
