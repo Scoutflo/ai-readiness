@@ -110,6 +110,8 @@ prometheus:
   url: https://prometheus.example.com
   alertmanager_url: https://alertmanager.example.com
   # token_env: PROM_TOKEN                   # optional, if endpoints require auth
+  # basic_user_env: PROM_BASIC_USER          # optional pair for basic-auth-fronted endpoints (covers alertmanager_url/vmalert_url reads too)
+  # basic_pass_env: PROM_BASIC_PASS          # when both are set, basic auth overrides the bearer token
 
 clickstack:
   clickhouse_url: https://your-clickhouse-host:8123  # ClickHouse HTTP endpoint
@@ -138,18 +140,27 @@ newrelic:
 loki:
   url: https://loki.example.com
   # token_env: LOKI_TOKEN
+  # basic_user_env: LOKI_BASIC_USER          # optional pair for basic-auth-fronted endpoints
+  # basic_pass_env: LOKI_BASIC_PASS
 
 tempo:
   url: https://tempo.example.com
   # token_env: TEMPO_TOKEN
+  # basic_user_env: TEMPO_BASIC_USER
+  # basic_pass_env: TEMPO_BASIC_PASS
 
 mimir:
   url: https://mimir.example.com
   # token_env: MIMIR_TOKEN
+  # basic_user_env: MIMIR_BASIC_USER
+  # basic_pass_env: MIMIR_BASIC_PASS
   # tenant_id: your-tenant                  # if multi-tenant
 
 victoriametrics:
   url: https://vm.example.com
+  # token_env: VM_TOKEN                     # optional, if endpoints require auth
+  # basic_user_env: VM_BASIC_USER            # optional pair for basic-auth-fronted endpoints
+  # basic_pass_env: VM_BASIC_PASS
   # vmalert_url: https://vmalert.example.com
   # token_env: VM_TOKEN
 

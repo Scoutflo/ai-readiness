@@ -78,8 +78,12 @@ plain service→service calls have `connection_type` UNSET, database edges have
 ```bash
 set -eu
 PROM_URL="your-metrics-endpoint"      # the prometheus/mimir/victoriametrics endpoint from the config
+MS_TOKEN="${MS_TOKEN:-}"              # that block's token_env value, if any
+AUTH="Authorization: Bearer ${MS_TOKEN}"
+[ -n "$MS_TOKEN" ] || AUTH="Accept: application/json"
+if [ -n "${MS_BASIC_USER:-}" ] && [ -n "${MS_BASIC_PASS:-}" ]; then AUTH="Authorization: Basic $(printf '%s:%s' "$MS_BASIC_USER" "$MS_BASIC_PASS" | base64 | tr -d '\n')"; fi   # the block's basic_user_env/basic_pass_env pair
 Q='sum by (client, server, connection_type) (rate(traces_service_graph_request_total[15m]))'
-TB=$(curl -s --max-time 30 -G "${PROM_URL}/api/v1/query" --data-urlencode "query=${Q}" 2>/dev/null) || TB=""
+TB=$(curl -s --max-time 30 -G -H "$AUTH" "${PROM_URL}/api/v1/query" --data-urlencode "query=${Q}" 2>/dev/null) || TB=""
 [ -n "$TB" ] && printf '%s' "$TB" | jq -e '.data.result | length > 0' >/dev/null \
   || { echo "tempo service-graph metrics: unavailable/empty — skipping (observed lane)"; exit 0; }
 # service→service CALLS edges (Traffic-map lane; a call-observing source per the merge rules)

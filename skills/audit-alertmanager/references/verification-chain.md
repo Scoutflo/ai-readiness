@@ -11,6 +11,7 @@ set -eu
 PROM_TOKEN="${PROM_TOKEN:-}"   # value of the var named by prometheus.token_env, if set; presence-checked, never printed, never logged
 AUTH="Authorization: Bearer ${PROM_TOKEN}"
 [ -n "$PROM_TOKEN" ] || AUTH="Accept: application/json"   # harmless placeholder header; never an empty bearer
+if [ -n "${PROM_BASIC_USER:-}" ] && [ -n "${PROM_BASIC_PASS:-}" ]; then AUTH="Authorization: Basic $(printf '%s:%s' "$PROM_BASIC_USER" "$PROM_BASIC_PASS" | base64 | tr -d '\n')"; fi   # prom basic_user_env/basic_pass_env override (basic auth beats bearer)
 ```
 
 Every block below re-declares `PROM_TOKEN` and `AUTH` this way (stateless blocks cannot share a prior block's variables) and passes `-H "$AUTH"` on every `curl` to `PROM_URL` or `AM_URL`.
@@ -32,6 +33,7 @@ AM_LOCAL_PORT="9093"                 # local port for the forward, example, tune
 PROM_TOKEN="${PROM_TOKEN:-}"         # value of the var named by prometheus.token_env, if set
 AUTH="Authorization: Bearer ${PROM_TOKEN}"
 [ -n "$PROM_TOKEN" ] || AUTH="Accept: application/json"
+if [ -n "${PROM_BASIC_USER:-}" ] && [ -n "${PROM_BASIC_PASS:-}" ]; then AUTH="Authorization: Basic $(printf '%s:%s' "$PROM_BASIC_USER" "$PROM_BASIC_PASS" | base64 | tr -d '\n')"; fi   # prom basic_user_env/basic_pass_env override (basic auth beats bearer)
 
 kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" port-forward svc/alertmanager-operated "${AM_LOCAL_PORT}:9093" >/tmp/alertmanager-port-forward.log 2>&1 &
 AM_PF_PID=$!
@@ -53,6 +55,7 @@ AM_URL="https://alertmanager.example.com"         # prometheus.alertmanager_url
 PROM_TOKEN="${PROM_TOKEN:-}"                      # value of the var named by prometheus.token_env, if set
 AUTH="Authorization: Bearer ${PROM_TOKEN}"
 [ -n "$PROM_TOKEN" ] || AUTH="Accept: application/json"
+if [ -n "${PROM_BASIC_USER:-}" ] && [ -n "${PROM_BASIC_PASS:-}" ]; then AUTH="Authorization: Basic $(printf '%s:%s' "$PROM_BASIC_USER" "$PROM_BASIC_PASS" | base64 | tr -d '\n')"; fi   # prom basic_user_env/basic_pass_env override (basic auth beats bearer)
 
 dig +short "$(printf '%s' "$PROM_URL" | sed -E 's#^https?://([^/]+).*#\1#')" || \
   nslookup "$(printf '%s' "$PROM_URL" | sed -E 's#^https?://([^/]+).*#\1#')"
@@ -150,6 +153,7 @@ RULE_GROUP="your-rule-group"                # spec.groups[].name from the select
 PROM_TOKEN="${PROM_TOKEN:-}"                # value of the var named by prometheus.token_env, if set
 AUTH="Authorization: Bearer ${PROM_TOKEN}"
 [ -n "$PROM_TOKEN" ] || AUTH="Accept: application/json"
+if [ -n "${PROM_BASIC_USER:-}" ] && [ -n "${PROM_BASIC_PASS:-}" ]; then AUTH="Authorization: Basic $(printf '%s:%s' "$PROM_BASIC_USER" "$PROM_BASIC_PASS" | base64 | tr -d '\n')"; fi   # prom basic_user_env/basic_pass_env override (basic auth beats bearer)
 
 CODE=$(curl -s -o /tmp/alr-rules.json -w '%{http_code}' --max-time 10 -H "$AUTH" "${PROM_URL}/api/v1/rules")
 echo "rules API: ${CODE}"
@@ -179,6 +183,7 @@ AM_URL="https://alertmanager.example.com"   # prometheus.alertmanager_url
 PROM_TOKEN="${PROM_TOKEN:-}"         # value of the var named by prometheus.token_env, if set
 AUTH="Authorization: Bearer ${PROM_TOKEN}"
 [ -n "$PROM_TOKEN" ] || AUTH="Accept: application/json"
+if [ -n "${PROM_BASIC_USER:-}" ] && [ -n "${PROM_BASIC_PASS:-}" ]; then AUTH="Authorization: Basic $(printf '%s:%s' "$PROM_BASIC_USER" "$PROM_BASIC_PASS" | base64 | tr -d '\n')"; fi   # prom basic_user_env/basic_pass_env override (basic auth beats bearer)
 
 # Layer 1: the declared object.
 # NEVER pull .webhookConfigs[].url (or any *_url) into output — a webhook URL is
@@ -223,6 +228,7 @@ AM_URL="https://alertmanager.example.com"   # prometheus.alertmanager_url
 PROM_TOKEN="${PROM_TOKEN:-}"                # value of the var named by prometheus.token_env, if set
 AUTH="Authorization: Bearer ${PROM_TOKEN}"
 [ -n "$PROM_TOKEN" ] || AUTH="Accept: application/json"
+if [ -n "${PROM_BASIC_USER:-}" ] && [ -n "${PROM_BASIC_PASS:-}" ]; then AUTH="Authorization: Basic $(printf '%s:%s' "$PROM_BASIC_USER" "$PROM_BASIC_PASS" | base64 | tr -d '\n')"; fi   # prom basic_user_env/basic_pass_env override (basic auth beats bearer)
 
 curl -fsS --max-time 10 -H "$AUTH" "${AM_URL}/api/v2/status" | jq -r '.cluster.status, .versionInfo.version'
 curl -fsS --max-time 10 -H "$AUTH" "${PROM_URL}/api/v1/query?query=alertmanager_config_last_reload_successful" \
@@ -259,6 +265,7 @@ PROM_URL="https://prometheus.example.com"   # prometheus.url
 PROM_TOKEN="${PROM_TOKEN:-}"                # value of the var named by prometheus.token_env, if set
 AUTH="Authorization: Bearer ${PROM_TOKEN}"
 [ -n "$PROM_TOKEN" ] || AUTH="Accept: application/json"
+if [ -n "${PROM_BASIC_USER:-}" ] && [ -n "${PROM_BASIC_PASS:-}" ]; then AUTH="Authorization: Basic $(printf '%s:%s' "$PROM_BASIC_USER" "$PROM_BASIC_PASS" | base64 | tr -d '\n')"; fi   # prom basic_user_env/basic_pass_env override (basic auth beats bearer)
 
 curl -fsS --max-time 10 -H "$AUTH" "${AM_URL}/api/v2/alerts" \
   | jq -r '.[] | "\(.labels.alertname) ns=\(.labels.namespace // "-") severity=\(.labels.severity // "-") receivers=\([.receivers[]?.name] | join(","))"'
@@ -282,6 +289,7 @@ LONG_FIRING_HOURS="24"   # example, tune to your environment: how long is "too l
 PROM_TOKEN="${PROM_TOKEN:-}"                # value of the var named by prometheus.token_env, if set
 AUTH="Authorization: Bearer ${PROM_TOKEN}"
 [ -n "$PROM_TOKEN" ] || AUTH="Accept: application/json"
+if [ -n "${PROM_BASIC_USER:-}" ] && [ -n "${PROM_BASIC_PASS:-}" ]; then AUTH="Authorization: Basic $(printf '%s:%s' "$PROM_BASIC_USER" "$PROM_BASIC_PASS" | base64 | tr -d '\n')"; fi   # prom basic_user_env/basic_pass_env override (basic auth beats bearer)
 
 curl -fsS --max-time 10 -H "$AUTH" "${AM_URL}/api/v2/alerts" \
   | jq --arg hrs "$LONG_FIRING_HOURS" -r '
@@ -311,6 +319,7 @@ RECENT_WINDOW="1h"   # example, tune to your alert volume: window for judging "i
 PROM_TOKEN="${PROM_TOKEN:-}"                # value of the var named by prometheus.token_env, if set
 AUTH="Authorization: Bearer ${PROM_TOKEN}"
 [ -n "$PROM_TOKEN" ] || AUTH="Accept: application/json"
+if [ -n "${PROM_BASIC_USER:-}" ] && [ -n "${PROM_BASIC_PASS:-}" ]; then AUTH="Authorization: Basic $(printf '%s:%s' "$PROM_BASIC_USER" "$PROM_BASIC_PASS" | base64 | tr -d '\n')"; fi   # prom basic_user_env/basic_pass_env override (basic auth beats bearer)
 
 # CRITICAL: these query Prometheus for Alertmanager self-metrics — but many clusters DON'T scrape
 # Alertmanager, so all three return HTTP 200 with `result: []`. An empty vector is NOT zero
@@ -399,6 +408,7 @@ CONFIRMATION_QUERY="your-confirmation-query"   # from the rule's confirmation_qu
 PROM_TOKEN="${PROM_TOKEN:-}"                # value of the var named by prometheus.token_env, if set
 AUTH="Authorization: Bearer ${PROM_TOKEN}"
 [ -n "$PROM_TOKEN" ] || AUTH="Accept: application/json"
+if [ -n "${PROM_BASIC_USER:-}" ] && [ -n "${PROM_BASIC_PASS:-}" ]; then AUTH="Authorization: Basic $(printf '%s:%s' "$PROM_BASIC_USER" "$PROM_BASIC_PASS" | base64 | tr -d '\n')"; fi   # prom basic_user_env/basic_pass_env override (basic auth beats bearer)
 
 CODE=$(curl -s -o /tmp/alr-confirm.json -w '%{http_code}' --max-time 10 -H "$AUTH" \
   --data-urlencode "query=${CONFIRMATION_QUERY}" "${PROM_URL}/api/v1/query")
@@ -557,6 +567,7 @@ STUCK_FRACTION="90"   # example, tune it: firing percent of the window above whi
 PROM_TOKEN="${PROM_TOKEN:-}"
 AUTH="Authorization: Bearer ${PROM_TOKEN}"
 [ -n "$PROM_TOKEN" ] || AUTH="Accept: application/json"
+if [ -n "${PROM_BASIC_USER:-}" ] && [ -n "${PROM_BASIC_PASS:-}" ]; then AUTH="Authorization: Basic $(printf '%s:%s' "$PROM_BASIC_USER" "$PROM_BASIC_PASS" | base64 | tr -d '\n')"; fi   # prom basic_user_env/basic_pass_env override (basic auth beats bearer)
 
 END="$(date -u +%s)"
 case "$LOOKBACK" in
@@ -600,6 +611,7 @@ PROM_URL="https://prometheus.example.com"   # prometheus.url
 PROM_TOKEN="${PROM_TOKEN:-}"
 AUTH="Authorization: Bearer ${PROM_TOKEN}"
 [ -n "$PROM_TOKEN" ] || AUTH="Accept: application/json"
+if [ -n "${PROM_BASIC_USER:-}" ] && [ -n "${PROM_BASIC_PASS:-}" ]; then AUTH="Authorization: Basic $(printf '%s:%s' "$PROM_BASIC_USER" "$PROM_BASIC_PASS" | base64 | tr -d '\n')"; fi   # prom basic_user_env/basic_pass_env override (basic auth beats bearer)
 
 CODE=$(curl -s -o /tmp/alr-rules-hygiene.json -w '%{http_code}' --max-time 15 -H "$AUTH" "${PROM_URL}/api/v1/rules")
 [ "$CODE" = "200" ] || { echo "rules API ${CODE}: ALR-012/ALR-014 blocked, not clean"; exit 0; }
@@ -624,6 +636,7 @@ LOOKBACK="14d"   # example, match 13.1
 PROM_TOKEN="${PROM_TOKEN:-}"
 AUTH="Authorization: Bearer ${PROM_TOKEN}"
 [ -n "$PROM_TOKEN" ] || AUTH="Accept: application/json"
+if [ -n "${PROM_BASIC_USER:-}" ] && [ -n "${PROM_BASIC_PASS:-}" ]; then AUTH="Authorization: Basic $(printf '%s:%s' "$PROM_BASIC_USER" "$PROM_BASIC_PASS" | base64 | tr -d '\n')"; fi   # prom basic_user_env/basic_pass_env override (basic auth beats bearer)
 
 # Notification volume per integration over the window (which delivery channels absorb the most
 # pages). NOTE: `alertmanager_notifications_total` carries an `integration` label (webhook/slack/
@@ -653,6 +666,7 @@ AM_URL="https://alertmanager.example.com"   # prometheus.alertmanager_url
 PROM_TOKEN="${PROM_TOKEN:-}"
 AUTH="Authorization: Bearer ${PROM_TOKEN}"
 [ -n "$PROM_TOKEN" ] || AUTH="Accept: application/json"
+if [ -n "${PROM_BASIC_USER:-}" ] && [ -n "${PROM_BASIC_PASS:-}" ]; then AUTH="Authorization: Basic $(printf '%s:%s' "$PROM_BASIC_USER" "$PROM_BASIC_PASS" | base64 | tr -d '\n')"; fi   # prom basic_user_env/basic_pass_env override (basic auth beats bearer)
 
 CODE=$(curl -s -o /tmp/alr-am-status.json -w '%{http_code}' --max-time 15 -H "$AUTH" "${AM_URL}/api/v2/status")
 [ "$CODE" = "200" ] || { echo "status ${CODE}: ALR-016/ALR-018 blocked, not clean"; exit 0; }
@@ -680,6 +694,7 @@ AM_URL="https://alertmanager.example.com"   # prometheus.alertmanager_url
 PROM_TOKEN="${PROM_TOKEN:-}"
 AUTH="Authorization: Bearer ${PROM_TOKEN}"
 [ -n "$PROM_TOKEN" ] || AUTH="Accept: application/json"
+if [ -n "${PROM_BASIC_USER:-}" ] && [ -n "${PROM_BASIC_PASS:-}" ]; then AUTH="Authorization: Basic $(printf '%s:%s' "$PROM_BASIC_USER" "$PROM_BASIC_PASS" | base64 | tr -d '\n')"; fi   # prom basic_user_env/basic_pass_env override (basic auth beats bearer)
 
 # Alertmanager dedup only holds while the HA cluster is healthy.
 curl -s -H "$AUTH" "${AM_URL}/api/v2/status" \
@@ -700,6 +715,7 @@ AM_URL="https://alertmanager.example.com"   # prometheus.alertmanager_url
 PROM_TOKEN="${PROM_TOKEN:-}"
 AUTH="Authorization: Bearer ${PROM_TOKEN}"
 [ -n "$PROM_TOKEN" ] || AUTH="Accept: application/json"
+if [ -n "${PROM_BASIC_USER:-}" ] && [ -n "${PROM_BASIC_PASS:-}" ]; then AUTH="Authorization: Basic $(printf '%s:%s' "$PROM_BASIC_USER" "$PROM_BASIC_PASS" | base64 | tr -d '\n')"; fi   # prom basic_user_env/basic_pass_env override (basic auth beats bearer)
 
 # List active silences with their window, author, and matchers; a very-far-future endsAt
 # or a silence renewed for months is hiding real alerts, not managing noise.
@@ -721,6 +737,7 @@ AM_URL="https://alertmanager.example.com"   # prometheus.alertmanager_url
 PROM_TOKEN="${PROM_TOKEN:-}"
 AUTH="Authorization: Bearer ${PROM_TOKEN}"
 [ -n "$PROM_TOKEN" ] || AUTH="Accept: application/json"
+if [ -n "${PROM_BASIC_USER:-}" ] && [ -n "${PROM_BASIC_PASS:-}" ]; then AUTH="Authorization: Basic $(printf '%s:%s' "$PROM_BASIC_USER" "$PROM_BASIC_PASS" | base64 | tr -d '\n')"; fi   # prom basic_user_env/basic_pass_env override (basic auth beats bearer)
 
 # Version gate: this trap only bites on Prometheus 3.x. Capture the HTTP code — a 401/403
 # is an auth finding (ALR-019 BLOCKED, scores 0, stays in the denominator), NEVER a silent
@@ -767,6 +784,7 @@ AM_URL="https://alertmanager.example.com"   # prometheus.alertmanager_url
 PROM_TOKEN="${PROM_TOKEN:-}"
 AUTH="Authorization: Bearer ${PROM_TOKEN}"
 [ -n "$PROM_TOKEN" ] || AUTH="Accept: application/json"
+if [ -n "${PROM_BASIC_USER:-}" ] && [ -n "${PROM_BASIC_PASS:-}" ]; then AUTH="Authorization: Basic $(printf '%s:%s' "$PROM_BASIC_USER" "$PROM_BASIC_PASS" | base64 | tr -d '\n')"; fi   # prom basic_user_env/basic_pass_env override (basic auth beats bearer)
 
 # Receivers still carrying an msteams_configs block (the deprecated path).
 curl -s -H "$AUTH" "${AM_URL}/api/v2/status" \

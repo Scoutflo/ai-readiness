@@ -27,6 +27,7 @@ PROM_URL=$(sh "$TT" "$CFG" prometheus get 0 url); PROM_URL="${PROM_URL%/}"
 PROM_TOKEN_VAR=$(sh "$TT" "$CFG" prometheus get 0 token_env)
 PROM_TOKEN=""; [ -n "$PROM_TOKEN_VAR" ] && PROM_TOKEN=$(printenv "$PROM_TOKEN_VAR" 2>/dev/null || true)
 AUTH="Authorization: Bearer ${PROM_TOKEN}"; [ -n "$PROM_TOKEN" ] || AUTH="Accept: application/json"
+if [ -n "${PROM_BASIC_USER:-}" ] && [ -n "${PROM_BASIC_PASS:-}" ]; then AUTH="Authorization: Basic $(printf '%s:%s' "$PROM_BASIC_USER" "$PROM_BASIC_PASS" | base64 | tr -d '\n')"; fi   # prom basic_user_env/basic_pass_env override (basic auth beats bearer)
 
 # pq  <path>          -> GET a raw API path (e.g. /api/v1/targets?state=active). GET only.
 # pqq <promql>        -> GET an instant query, url-encoded. GET only, no writes possible.

@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.1.203
+
+**Basic-auth support for the metrics family** (prometheus, loki, tempo, mimir,
+victoriametrics — including the prometheus block's alertmanager/vmalert
+reads): each block may now name a `basic_user_env` + `basic_pass_env` pair
+alongside (or instead of) `token_env`; when both are set, basic auth overrides
+the bearer token. Driven by a real estate whose metrics ingress uses basic
+auth — previously inexpressible. The override is a one-line, set-eu-safe
+addition to every existing auth construction (39 sites), behavior-tested
+(no-creds pass-through, override, exact base64), with a drift lock so a new
+auth site cannot ship without the override. The map-topology APM overlay's
+metrics-store query gains the same support, and doctor's auth-scheme
+documentation covers the pair.
+
 ## 0.1.202
 
 **Cloud Mode learns to use network traffic, recognizes more sources at the
