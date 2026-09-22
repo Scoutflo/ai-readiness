@@ -12,6 +12,7 @@ LOKI_URL="https://loki.example.com"    # loki.url
 LOKI_TOKEN="${LOKI_TOKEN:-}"           # loki.token_env; leave unset for open endpoints
 AUTH="Authorization: Bearer ${LOKI_TOKEN}"
 [ -n "$LOKI_TOKEN" ] || AUTH="Accept: application/json"
+if [ -n "${LOKI_BASIC_USER:-}" ] && [ -n "${LOKI_BASIC_PASS:-}" ]; then AUTH="Authorization: Basic $(printf '%s:%s' "$LOKI_BASIC_USER" "$LOKI_BASIC_PASS" | base64 | tr -d '\n')"; fi   # loki basic_user_env/basic_pass_env override (basic auth beats bearer)
 ```
 
 - Presence-check tokens only; never echo, log, or write a secret value anywhere.
@@ -230,6 +231,7 @@ MIMIR_TENANT="your-tenant"              # mimir.tenant_id; "anonymous" is a comm
 MIMIR_TOKEN="${MIMIR_TOKEN:-}"          # mimir.token_env, if set
 AUTH="Authorization: Bearer ${MIMIR_TOKEN}"
 [ -n "$MIMIR_TOKEN" ] || AUTH="Accept: application/json"
+if [ -n "${MIMIR_BASIC_USER:-}" ] && [ -n "${MIMIR_BASIC_PASS:-}" ]; then AUTH="Authorization: Basic $(printf '%s:%s' "$MIMIR_BASIC_USER" "$MIMIR_BASIC_PASS" | base64 | tr -d '\n')"; fi   # mimir basic_user_env/basic_pass_env override (basic auth beats bearer)
 
 curl -fsS --max-time 10 -H "$AUTH" "${MIMIR_URL}/ready"
 curl -fsS --max-time 10 -H "$AUTH" -H "X-Scope-OrgID: ${MIMIR_TENANT}" --get --data-urlencode 'query=up' \
@@ -253,6 +255,7 @@ VM_TENANT="0"                          # tenant for cluster mode; example, tune 
 VM_TOKEN="${VM_TOKEN:-}"               # victoriametrics.token_env, if set
 AUTH="Authorization: Bearer ${VM_TOKEN}"
 [ -n "$VM_TOKEN" ] || AUTH="Accept: application/json"
+if [ -n "${VM_BASIC_USER:-}" ] && [ -n "${VM_BASIC_PASS:-}" ]; then AUTH="Authorization: Basic $(printf '%s:%s' "$VM_BASIC_USER" "$VM_BASIC_PASS" | base64 | tr -d '\n')"; fi   # vm basic_user_env/basic_pass_env override (basic auth beats bearer)
 
 # LGTM-001: health; both single-node and cluster components answer /health with OK
 curl -fsS --max-time 10 -H "$AUTH" "${VM_URL}/health"
@@ -274,6 +277,7 @@ VMALERT_URL="https://vmalert.example.com"   # victoriametrics.vmalert_url
 VM_TOKEN="${VM_TOKEN:-}"                    # victoriametrics.token_env, if set
 AUTH="Authorization: Bearer ${VM_TOKEN}"
 [ -n "$VM_TOKEN" ] || AUTH="Accept: application/json"
+if [ -n "${VM_BASIC_USER:-}" ] && [ -n "${VM_BASIC_PASS:-}" ]; then AUTH="Authorization: Basic $(printf '%s:%s' "$VM_BASIC_USER" "$VM_BASIC_PASS" | base64 | tr -d '\n')"; fi   # vm basic_user_env/basic_pass_env override (basic auth beats bearer)
 
 # LGTM-004 / LGTM-012: rule groups load, evaluation errors, firing alerts
 curl -fsS --max-time 10 -H "$AUTH" "${VMALERT_URL}/api/v1/rules" \
@@ -296,6 +300,7 @@ VMALERT_URL="https://vmalert.example.com"   # victoriametrics.vmalert_url
 VM_TOKEN="${VM_TOKEN:-}"
 AUTH="Authorization: Bearer ${VM_TOKEN}"
 [ -n "$VM_TOKEN" ] || AUTH="Accept: application/json"
+if [ -n "${VM_BASIC_USER:-}" ] && [ -n "${VM_BASIC_PASS:-}" ]; then AUTH="Authorization: Basic $(printf '%s:%s' "$VM_BASIC_USER" "$VM_BASIC_PASS" | base64 | tr -d '\n')"; fi   # vm basic_user_env/basic_pass_env override (basic auth beats bearer)
 
 # Bucket GROUPS by datasource type so a vlogs (VictoriaLogs/LogsQL) group is not judged as
 # PromQL. The datasource type lives at the GROUP level (.data.groups[].type = prometheus /
@@ -320,6 +325,7 @@ LOKI_URL="https://loki.example.com"    # loki.url
 LOKI_TOKEN="${LOKI_TOKEN:-}"           # loki.token_env, if set
 AUTH="Authorization: Bearer ${LOKI_TOKEN}"
 [ -n "$LOKI_TOKEN" ] || AUTH="Accept: application/json"
+if [ -n "${LOKI_BASIC_USER:-}" ] && [ -n "${LOKI_BASIC_PASS:-}" ]; then AUTH="Authorization: Basic $(printf '%s:%s' "$LOKI_BASIC_USER" "$LOKI_BASIC_PASS" | base64 | tr -d '\n')"; fi   # loki basic_user_env/basic_pass_env override (basic auth beats bearer)
 # Multi-tenant Loki also needs: -H "X-Scope-OrgID: <tenant>" on every call.
 SERVICE_LABEL="service"                # your canonical service label; tune
 TRACED_SERVICE="checkout"              # one topology.md service that emits traces
@@ -405,6 +411,7 @@ TEMPO_URL="https://tempo.example.com"   # tempo.url
 TEMPO_TOKEN="${TEMPO_TOKEN:-}"          # tempo.token_env, if set
 AUTH="Authorization: Bearer ${TEMPO_TOKEN}"
 [ -n "$TEMPO_TOKEN" ] || AUTH="Accept: application/json"
+if [ -n "${TEMPO_BASIC_USER:-}" ] && [ -n "${TEMPO_BASIC_PASS:-}" ]; then AUTH="Authorization: Basic $(printf '%s:%s' "$TEMPO_BASIC_USER" "$TEMPO_BASIC_PASS" | base64 | tr -d '\n')"; fi   # tempo basic_user_env/basic_pass_env override (basic auth beats bearer)
 LOOKBACK_S="3600"                       # search window in seconds; example, tune to your sampling
 
 # LGTM-040: readiness
@@ -442,7 +449,9 @@ TEMPO_TOKEN="${TEMPO_TOKEN:-}"          # tempo.token_env, if set
 LOKI_URL="https://loki.example.com"     # loki.url
 LOKI_TOKEN="${LOKI_TOKEN:-}"            # loki.token_env, if set
 TAUTH="Authorization: Bearer ${TEMPO_TOKEN}"; [ -n "$TEMPO_TOKEN" ] || TAUTH="Accept: application/json"
+if [ -n "${TEMPO_BASIC_USER:-}" ] && [ -n "${TEMPO_BASIC_PASS:-}" ]; then TAUTH="Authorization: Basic $(printf '%s:%s' "$TEMPO_BASIC_USER" "$TEMPO_BASIC_PASS" | base64 | tr -d '\n')"; fi   # tempo basic_user_env/basic_pass_env override (basic auth beats bearer)
 LAUTH="Authorization: Bearer ${LOKI_TOKEN}";  [ -n "$LOKI_TOKEN" ]  || LAUTH="Accept: application/json"
+if [ -n "${LOKI_BASIC_USER:-}" ] && [ -n "${LOKI_BASIC_PASS:-}" ]; then LAUTH="Authorization: Basic $(printf '%s:%s' "$LOKI_BASIC_USER" "$LOKI_BASIC_PASS" | base64 | tr -d '\n')"; fi   # loki basic_user_env/basic_pass_env override (basic auth beats bearer)
 TRACE_SAMPLE="10"                       # traces sampled for the pivot; one trace proves nothing, tune upward on busy estates
 LOOKBACK_S="3600"                       # search window in seconds; example, tune to your sampling
 
@@ -690,7 +699,9 @@ TEMPO_URL="https://tempo.example.com"          # tempo.url
 METRICS_TOKEN="${PROM_TOKEN:-}"; LOKI_TOKEN="${LOKI_TOKEN:-}"; TEMPO_TOKEN="${TEMPO_TOKEN:-}"
 MAUTH="Authorization: Bearer ${METRICS_TOKEN}"; [ -n "$METRICS_TOKEN" ] || MAUTH="Accept: application/json"
 LAUTH="Authorization: Bearer ${LOKI_TOKEN}";    [ -n "$LOKI_TOKEN" ]    || LAUTH="Accept: application/json"
+if [ -n "${LOKI_BASIC_USER:-}" ] && [ -n "${LOKI_BASIC_PASS:-}" ]; then LAUTH="Authorization: Basic $(printf '%s:%s' "$LOKI_BASIC_USER" "$LOKI_BASIC_PASS" | base64 | tr -d '\n')"; fi   # loki basic_user_env/basic_pass_env override (basic auth beats bearer)
 TAUTH="Authorization: Bearer ${TEMPO_TOKEN}";   [ -n "$TEMPO_TOKEN" ]   || TAUTH="Accept: application/json"
+if [ -n "${TEMPO_BASIC_USER:-}" ] && [ -n "${TEMPO_BASIC_PASS:-}" ]; then TAUTH="Authorization: Basic $(printf '%s:%s' "$TEMPO_BASIC_USER" "$TEMPO_BASIC_PASS" | base64 | tr -d '\n')"; fi   # tempo basic_user_env/basic_pass_env override (basic auth beats bearer)
 
 # LGTM-032: recent metric series for this service (existence), keyed namespace+service
 curl -fsS --max-time 10 -H "$MAUTH" --get \
@@ -750,7 +761,9 @@ TEMPO_URL="https://tempo.example.com"          # tempo.url
 METRICS_TOKEN="${PROM_TOKEN:-}"; LOKI_TOKEN="${LOKI_TOKEN:-}"; TEMPO_TOKEN="${TEMPO_TOKEN:-}"
 MAUTH="Authorization: Bearer ${METRICS_TOKEN}"; [ -n "$METRICS_TOKEN" ] || MAUTH="Accept: application/json"
 LAUTH="Authorization: Bearer ${LOKI_TOKEN}";    [ -n "$LOKI_TOKEN" ]    || LAUTH="Accept: application/json"
+if [ -n "${LOKI_BASIC_USER:-}" ] && [ -n "${LOKI_BASIC_PASS:-}" ]; then LAUTH="Authorization: Basic $(printf '%s:%s' "$LOKI_BASIC_USER" "$LOKI_BASIC_PASS" | base64 | tr -d '\n')"; fi   # loki basic_user_env/basic_pass_env override (basic auth beats bearer)
 TAUTH="Authorization: Bearer ${TEMPO_TOKEN}";   [ -n "$TEMPO_TOKEN" ]   || TAUTH="Accept: application/json"
+if [ -n "${TEMPO_BASIC_USER:-}" ] && [ -n "${TEMPO_BASIC_PASS:-}" ]; then TAUTH="Authorization: Basic $(printf '%s:%s' "$TEMPO_BASIC_USER" "$TEMPO_BASIC_PASS" | base64 | tr -d '\n')"; fi   # tempo basic_user_env/basic_pass_env override (basic auth beats bearer)
 curl -fsS --max-time 10 -H "$MAUTH" "${METRICS_URL}/api/v1/label/${SERVICE_LABEL}/values" \
   | jq -r '.data[]' | sort > "$OUT/services-metrics.txt"
 curl -fsS --max-time 10 -H "$LAUTH" "${LOKI_URL}/loki/api/v1/label/${SERVICE_LABEL}/values" \
@@ -778,6 +791,7 @@ VM_URL="https://vm.example.com"             # victoriametrics.url (vmsingle/vmse
 VM_TOKEN="${VM_TOKEN:-}"                     # victoriametrics.token_env, if set
 AUTH="Authorization: Bearer ${VM_TOKEN}"
 [ -n "$VM_TOKEN" ] || AUTH="Accept: application/json"
+if [ -n "${VM_BASIC_USER:-}" ] && [ -n "${VM_BASIC_PASS:-}" ]; then AUTH="Authorization: Basic $(printf '%s:%s' "$VM_BASIC_USER" "$VM_BASIC_PASS" | base64 | tr -d '\n')"; fi   # vm basic_user_env/basic_pass_env override (basic auth beats bearer)
 MIN_RESEND_S="10"     # example, tune it: -rule.resendDelay below this re-pushes firing alerts aggressively
 LIMIT_EXPECTED="0"    # example, tune it: a high-cardinality paging rule with group limit==0 is unbounded fan-out
 
@@ -810,6 +824,7 @@ LOKI_URL="https://loki.example.com"    # loki.url
 LOKI_TOKEN="${LOKI_TOKEN:-}"           # loki.token_env, if set
 AUTH="Authorization: Bearer ${LOKI_TOKEN}"
 [ -n "$LOKI_TOKEN" ] || AUTH="Accept: application/json"
+if [ -n "${LOKI_BASIC_USER:-}" ] && [ -n "${LOKI_BASIC_PASS:-}" ]; then AUTH="Authorization: Basic $(printf '%s:%s' "$LOKI_BASIC_USER" "$LOKI_BASIC_PASS" | base64 | tr -d '\n')"; fi   # loki basic_user_env/basic_pass_env override (basic auth beats bearer)
 # Multi-tenant Loki also needs: -H "X-Scope-OrgID: <tenant>" on every call.
 
 # LGTM-071: per-group limit (0/absent = unbounded emission) and per-rule for
@@ -842,6 +857,7 @@ MIMIR_TENANT="your-tenant"              # mimir.tenant_id; "anonymous" is a comm
 MIMIR_TOKEN="${MIMIR_TOKEN:-}"          # mimir.token_env, if set
 AUTH="Authorization: Bearer ${MIMIR_TOKEN}"
 [ -n "$MIMIR_TOKEN" ] || AUTH="Accept: application/json"
+if [ -n "${MIMIR_BASIC_USER:-}" ] && [ -n "${MIMIR_BASIC_PASS:-}" ]; then AUTH="Authorization: Basic $(printf '%s:%s' "$MIMIR_BASIC_USER" "$MIMIR_BASIC_PASS" | base64 | tr -d '\n')"; fi   # mimir basic_user_env/basic_pass_env override (basic auth beats bearer)
 
 # LGTM-070 / LGTM-071 / LGTM-072: per-tenant ruler rules (for, keepFiringFor, group limit)
 curl -fsS --max-time 15 -H "$AUTH" -H "X-Scope-OrgID: ${MIMIR_TENANT}" \
@@ -864,6 +880,7 @@ TEMPO_URL="https://tempo.example.com"   # tempo.url
 TEMPO_TOKEN="${TEMPO_TOKEN:-}"          # tempo.token_env, if set
 AUTH="Authorization: Bearer ${TEMPO_TOKEN}"
 [ -n "$TEMPO_TOKEN" ] || AUTH="Accept: application/json"
+if [ -n "${TEMPO_BASIC_USER:-}" ] && [ -n "${TEMPO_BASIC_PASS:-}" ]; then AUTH="Authorization: Basic $(printf '%s:%s' "$TEMPO_BASIC_USER" "$TEMPO_BASIC_PASS" | base64 | tr -d '\n')"; fi   # tempo basic_user_env/basic_pass_env override (basic auth beats bearer)
 
 # Global metrics-generator config (span-metrics / service-graph cardinality controls)
 curl -fsS --max-time 10 -H "$AUTH" "${TEMPO_URL}/status/config" \

@@ -75,6 +75,19 @@ grep -q "describe-flow-logs" "$REF/cloud-mode-aws.md" || fail "AWS: flow-log dis
 grep -q "connection_type" "$AP" || fail "overlay: connection_type split missing"
 grep -q "Tempo service-graphs" "$ROOT/skills/map-topology/references/non-k8s-sources.md" || fail "sources: tempo service-graph section missing"
 
+# --- 6d. basic-auth override: drift lock + behavior ---------------------------
+for pair in "skills/audit-alertmanager/references/verification-chain.md" "skills/audit-lgtm/references/backend-checks.md" "skills/audit-prometheus/references/prometheus-checks.md" "skills/audit-prometheus/SKILL.md" "skills/audit-alertmanager/SKILL.md"; do
+  bc=$(grep -cE 'Bearer \$\{(PROM|LOKI|TEMPO|MIMIR|VM)_TOKEN\}' "$ROOT/$pair" || true)
+  oc=$(grep -c "_BASIC_USER:-" "$ROOT/$pair" || true)
+  [ "$bc" -eq "$oc" ] || fail "basic-auth override drift in $pair (bearer:$bc overrides:$oc)"
+done
+OUT=$(sh -eu -c 'LOKI_TOKEN=""; AUTH="Authorization: Bearer "; LOKI_BASIC_USER=u; LOKI_BASIC_PASS=p
+if [ -n "${LOKI_BASIC_USER:-}" ] && [ -n "${LOKI_BASIC_PASS:-}" ]; then AUTH="Authorization: Basic $(printf "%s:%s" "$LOKI_BASIC_USER" "$LOKI_BASIC_PASS" | base64 | tr -d "\n")"; fi
+printf "%s" "$AUTH"' )
+printf '%s' "$OUT" | grep -q "Basic dTpw" || fail "basic-auth override behavior broken (expected base64 of u:p)"
+grep -q "MS_BASIC_USER" "$AP" || fail "overlay: metrics-store basic-auth support missing"
+ok "basic-auth override locks"
+
 # --- 7. redaction behavior on the GCP/Azure-style env extraction --------------
 command -v jq >/dev/null || { echo "SKIP: jq not installed"; exit 0; }
 OUT=$(printf '%s' '[{"metadata":{"name":"checkout"},"spec":{"template":{"spec":{"containers":[{"env":[

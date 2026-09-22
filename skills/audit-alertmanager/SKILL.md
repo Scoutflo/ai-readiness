@@ -161,6 +161,7 @@ AM_URL="https://alertmanager.example.com"   # prometheus.alertmanager_url
 PROM_TOKEN="${PROM_TOKEN:-}"                # value of the var named by prometheus.token_env, if set
 AUTH="Authorization: Bearer ${PROM_TOKEN}"
 [ -n "$PROM_TOKEN" ] || AUTH="Accept: application/json"
+if [ -n "${PROM_BASIC_USER:-}" ] && [ -n "${PROM_BASIC_PASS:-}" ]; then AUTH="Authorization: Basic $(printf '%s:%s' "$PROM_BASIC_USER" "$PROM_BASIC_PASS" | base64 | tr -d '\n')"; fi   # prom basic_user_env/basic_pass_env override (basic auth beats bearer)
 
 RULES="$(kubectl --context "$KUBE_CONTEXT" get prometheusrule -A -o json 2>/dev/null \
   | jq '[.items[]?.spec.groups[]?.rules[]?] | length' 2>/dev/null || echo 0)"

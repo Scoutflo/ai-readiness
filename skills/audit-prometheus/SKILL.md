@@ -88,6 +88,7 @@ if [ -n "$PROM_TOKEN_VAR" ] && [ -z "$PROM_TOKEN" ]; then
   echo "prometheus.token_env names ${PROM_TOKEN_VAR} but that variable is not set in ${SCOUTFLO_ENV}; add it via /scoutflo:connect (the audit will not send an empty Bearer header)"; exit 1
 fi
 AUTH="Authorization: Bearer ${PROM_TOKEN}"; [ -n "$PROM_TOKEN" ] || AUTH="Accept: application/json"
+if [ -n "${PROM_BASIC_USER:-}" ] && [ -n "${PROM_BASIC_PASS:-}" ]; then AUTH="Authorization: Basic $(printf '%s:%s' "$PROM_BASIC_USER" "$PROM_BASIC_PASS" | base64 | tr -d '\n')"; fi   # prom basic_user_env/basic_pass_env override (basic auth beats bearer)
 echo "prometheus target: ${PROM_URL}"
 
 # One cheap authed live call: vector(1) tests the API, not the fleet (it succeeds on a server with zero
@@ -202,6 +203,7 @@ TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 PROM_URL=$(sh "$TT" "$CFG" prometheus get 0 url); PROM_URL="${PROM_URL%/}"
 PROM_TOKEN_VAR=$(sh "$TT" "$CFG" prometheus get 0 token_env); PROM_TOKEN=""; [ -n "$PROM_TOKEN_VAR" ] && PROM_TOKEN=$(printenv "$PROM_TOKEN_VAR" 2>/dev/null || true)
 AUTH="Authorization: Bearer ${PROM_TOKEN}"; [ -n "$PROM_TOKEN" ] || AUTH="Accept: application/json"
+if [ -n "${PROM_BASIC_USER:-}" ] && [ -n "${PROM_BASIC_PASS:-}" ]; then AUTH="Authorization: Basic $(printf '%s:%s' "$PROM_BASIC_USER" "$PROM_BASIC_PASS" | base64 | tr -d '\n')"; fi   # prom basic_user_env/basic_pass_env override (basic auth beats bearer)
 SMALL_MAX_OBJECTS="100"    # example, tune to your environment
 MEDIUM_MAX_OBJECTS="500"   # example, tune to your environment
 # Active scrape targets (guard the fetch: an auth failure must surface, not silently count as zero).
