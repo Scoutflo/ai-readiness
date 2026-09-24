@@ -638,6 +638,7 @@ HTMLFOOT
     echo "## Inventory (by environment)"
     echo
     if [ ! -f "$T" ]; then echo "_No \`topology-export.json\` — run \`/scoutflo:map-topology\`._"; exit 0; fi
+    jq empty "$T" 2>/dev/null || { echo "_\`topology-export.json\` is not valid JSON — re-run \`/scoutflo:map-topology\`._"; exit 0; }
     jq -r '
       def envof($n): (($n // "")|ascii_downcase) as $l
         | if   ($l|test("pre-?_?prod|(^|[-_])pp([-_]|$)")) then "pre-prod"
@@ -680,6 +681,7 @@ HTMLFOOT
     # by environment. Renders only resource-dependency edges (never CALLS/traffic).
     T="${1:?topology-export.json}"
     [ -f "$T" ] || { echo "> _No topology-export.json — run \`/scoutflo:map-topology\` for a service map._"; exit 0; }
+    jq empty "$T" 2>/dev/null || { echo "> _topology-export.json is not valid JSON — re-run \`/scoutflo:map-topology\`._"; exit 0; }
     echo '```mermaid'
     echo 'flowchart LR'
     jq -r '
@@ -690,7 +692,7 @@ HTMLFOOT
       | ( [ $edges[].from.name ] | unique | .[] | "  " + id(.) + "[\"" + . + "\"]" ),
         # datastore nodes as cylinders, with engine·port config when present
         ( $res[] | (.attributes // {}) as $a
-          | (($a.engine // $a.kind // "") ) as $eng
+          | (($a.engine // $a.kind // "" | tostring)) as $eng
           | (($a.endpoint_port // $a.port // "") | tostring) as $port
           | (if ($eng != "" or $port != "") then "<br/>" + ($eng) + (if $port != "" then " · " + $port else "" end) else "" end) as $cfg
           | "  " + id(.name) + "[(\"" + .name + $cfg + "\")]" ),

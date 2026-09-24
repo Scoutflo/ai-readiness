@@ -410,6 +410,19 @@ printf '%s' "$MM" | grep -q 'class api_pp ppenv;' || fail "mermaid-mesh: pre-pro
 printf '%s' "$MM" | grep -q 'class orders_db_prod prodenv;' || fail "mermaid-mesh: prod env class not assigned"
 printf '%s' "$MM" | grep -q 'CALLS' && fail "mermaid-mesh: rendered a CALLS/traffic edge (must be service→datastore only)" || true
 printf '%s' "$(sh "$VIZ" mermaid-mesh "$WORK/nope.json")" | grep -qi 'No .*topology-export.json' || fail "mermaid-mesh: missing-file degrade wrong"
+# N1: a non-string engine must NOT silently vanish the whole diagram (coerced to string)
+printf '%s' '{"version":"scoutflo-topology-export/v1","services":[{"name":"cache-client-prod"}],
+  "resources":[{"name":"cache-prod","attributes":{"engine":6379}}],
+  "relationships":[{"from":{"name":"cache-client-prod"},"to":{"name":"cache-prod"},"relation":"CACHES_IN"}]}' > "$WORK/mesh-numeng.json"
+MN="$(sh "$VIZ" mermaid-mesh "$WORK/mesh-numeng.json")"
+printf '%s' "$MN" | grep -q 'cache_client_prod -->|CACHES_IN| cache_prod' || fail "mermaid-mesh: a numeric engine silently vanished the diagram (missing tostring coercion)"
+printf '%s' "$MN" | grep -q '6379' || fail "mermaid-mesh: numeric engine config not rendered"
+# N2: invalid JSON degrades cleanly, no unclosed mermaid fence
+printf 'not json{' > "$WORK/bad-export.json"
+MB="$(sh "$VIZ" mermaid-mesh "$WORK/bad-export.json")"
+printf '%s' "$MB" | grep -qi 'not valid JSON' || fail "mermaid-mesh: invalid JSON did not degrade to a clear message"
+printf '%s' "$MB" | grep -q '```mermaid' && fail "mermaid-mesh: invalid JSON left an unclosed mermaid fence" || true
+printf '%s' "$(sh "$VIZ" topology-inventory "$WORK/bad-export.json")" | grep -qi 'not valid JSON' || fail "topology-inventory: invalid JSON did not degrade cleanly"
 echo "PASS"
 
 echo
