@@ -166,6 +166,17 @@ An Approved private endpoint whose `privateLinkServiceId` matches a catalog
 resource, in a subnet an app integrates with, is `reachable` corroboration —
 same composition rules as everywhere.
 
+**Public-IP allowlist openings** (when the estate exposes them): Azure SQL
+server firewall rules (`az sql server firewall-rule list` →
+`startIpAddress`/`endIpAddress`) and storage-account `ipRules` are recorded as
+*unattributed* openings — host `/32` only, a wide range is a finding. When
+another cloud is also configured, those host openings feed the cross-cloud
+attribution pass (shared rules, cookbook: "Cross-cloud IP attribution" in the
+AWS cookbook); extend its combined catalog with Azure public IPs
+(`az network public-ip list`). Verification status: the pattern is the shared
+one; the first Azure↔other-cloud attribution row is owed on a live estate that
+has one.
+
 ## Observed lane: VNet flow logs
 
 Connection metadata only, no secrets, no config access — the current-gen

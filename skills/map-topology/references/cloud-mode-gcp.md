@@ -143,6 +143,29 @@ done
 
 Corroboration/refutation only, per the shared composition rules.
 
+**Public-IP allowlist openings** (the rows the cross-cloud pass consumes): a
+public-IP Cloud SQL lists `authorizedNetworks`, and a firewall rule lists
+`sourceRanges`. Each is recorded as an *unattributed* opening — host `/32`
+only; a wide range is a finding (`0.0.0.0/0` = open to the internet), never a
+per-owner edge. When another cloud is also configured, those host `/32`
+openings feed the cross-cloud attribution pass (shared rules, cookbook:
+"Cross-cloud IP attribution" in the AWS cookbook — live-proven: GCP VM IPs on
+one side, DO managed-DB allowlists on the other):
+
+```bash
+set -eu
+GCP_PROJECT="your-project-id"
+# Cloud SQL public-IP authorized networks -> ip<TAB>instance (unattributed openings)
+gcloud sql instances list --project "$GCP_PROJECT" --format=json 2>/dev/null \
+| jq -r '.[] | .name as $i | ((.settings.ipConfiguration.authorizedNetworks // [])[]
+    | [.value, $i] | @tsv)' || true
+# Firewall source ranges guarding db-tier tags -> range<TAB>target-tag
+gcloud compute firewall-rules list --project "$GCP_PROJECT" --format=json 2>/dev/null \
+| jq -r '.[] | select(.direction=="INGRESS") | .name as $r
+    | ((.sourceRanges // [])[]) as $sr | ((.targetTags // ["*"])[])
+    | [$sr, .] | @tsv' || true
+```
+
 ## Observed lane: VPC flow logs
 
 The strongest no-secrets observed source on GCP: connection metadata only

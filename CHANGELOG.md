@@ -1,5 +1,53 @@
 # Changelog
 
+## 0.1.205
+
+**Cross-cloud IP attribution in Cloud Mode** (from the own-mesh dogfood, where
+this join was done by hand): when two or more clouds are configured, a resource
+in one cloud is often reached by a service in another and the only evidence is
+an IP allowlist entry — a DigitalOcean managed DB trusting a raw `ip_addr`, a
+Cloud SQL authorized network, an AWS security-group CIDR. Each cloud's own lane
+could only record that as an *unattributed* opening. map-topology now resolves
+those openings automatically:
+
+- **New Phase 2E step (2c):** build one combined `IP → owner` catalog across the
+  configured clouds and resolve each cloud's IP-shaped openings against it. A
+  host `/32` that matches an owner becomes a `reachable`-class service→resource
+  edge; a `/32` that matches nothing stays an unattributed opening (a finding,
+  never a guessed edge). Shared recipe in the AWS cookbook
+  ("Cross-cloud IP attribution"), live-proven on our own estate (DO managed-DB
+  allowlist IPs resolved to GCP VM public IPs).
+- **Honesty rules (locked):** `reachable` class only — never upgraded to
+  declared/observed on IP evidence alone; wide CIDRs are demoted, never expanded
+  per owner; a shared-NAT IP that matches several owners is recorded once as
+  ambiguous, never duplicated.
+- **Openings now emitted by each cloud's reachable lane:** the GCP cookbook adds
+  Cloud SQL `authorizedNetworks` + firewall `sourceRanges`; the DigitalOcean
+  `ip` trusted-source and (pattern) Azure SQL/storage IP-firewall openings feed
+  the same pass. New pressure scenario + a behavioral test lock (a `/32` hit
+  resolves, a no-match stays unattributed, a wide CIDR is not expanded).
+
+**Environment-coverage check in Cloud Mode** (from the own-mesh dogfood, where a
+first pass mapped prod thoroughly but under-mapped the near-identical pre-prod
+twin): map-topology's Phase 5 verify now reports per-environment coverage and
+flags a lopsided or mislabeled map instead of leaving it for a human to notice.
+
+- **Three-signal environment inference, never one:** every service and resource
+  is assigned an environment from its name convention, the platform label, AND
+  what it actually connects to. The platform label is the weakest signal and is
+  never trusted alone — a real DigitalOcean estate labeled `-pp` apps
+  `environment: Production` — and the name matcher tests
+  `pre-prod`/`preprod`/`pp` before `prod` (a naive `*prod*` match buckets
+  `preprod` as production).
+- **Three review questions, never an auto-edit:** a twin base present in more
+  than one environment where one side has `NO-EDGES` ("under-mapped twin or real
+  config difference?"); a label-vs-name conflict ("platform said X, name says
+  Y"); and a service whose edges land mostly in another environment (a mislabel,
+  or a `testing` service reaching `prod` datastores — a security finding).
+- Shared recipe in the AWS cookbook ("Environment coverage"), wired into Phase 5
+  and surfaced in the close-out; new pressure scenario + a behavioral test lock
+  that runs the shipped recipe against a fixture carrying every trap.
+
 ## 0.1.204
 
 **Cloud Mode hardening from the own-mesh dogfood** (mapping Scoutflo's real
