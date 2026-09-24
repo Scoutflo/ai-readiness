@@ -279,6 +279,18 @@ direction — emit `USES` and let review upgrade it) · `object_storage → USES
 One edge per service↔resource pair; additional mechanisms append to the SAME
 edge's evidence, never duplicate rows.
 
+**Merge every lane before you decide coverage (dogfood-caught, 2026-09-24).**
+Coverage is the UNION of all lanes, not any single one. A pair seen by two
+lanes (declared config AND a permitting firewall rule) is ONE edge whose
+evidence class is upgraded (`declared+permitted+reachable`, near-certain), not
+two rows and not a coin-flip between lanes. Critically, a pair that ONLY the
+declared lane saw must still land: a real dogfood run drew zero pre-prod
+service→DB edges from the firewall lane alone, and only the config/env lane
+recovered them — a single-lane synthesis silently under-reports the estate.
+So: run every lane the access tier allows, union by `service↔resource`, and
+never let a service that one lane connected disappear because another lane
+missed it.
+
 ## Permitted lane: IAM
 
 For each **distinct** task/function role (dedupe first — many services share a
@@ -488,6 +500,14 @@ credentials embedded in URLs. Hard rules, mirroring
   `ssm:GetParameter` are never called by any lane, any tier.
 - At `no-config-read` tier this section is moot by construction — that is the
   point of offering that tier to security-conscious estates.
+- **Control characters in env values (dogfood-caught, 2026-09-24).** Real
+  config values sometimes contain raw control characters (a stray newline, a
+  tab in a pasted cert/DSN). Do the whole extraction in ONE `jq` over the
+  provider's JSON — `provider ... --output json | jq -r '<extract>'` — which
+  parses control chars correctly. NEVER emit intermediate JSON and re-parse it
+  line-by-line in a shell `while read` loop: that pattern chokes on an embedded
+  control char (`jq: Invalid string: control characters ... must be escaped`)
+  and silently drops that service's edges. Single-pass jq, never re-parse.
 
 ## Bounded reads
 
