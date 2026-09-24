@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.1.206
+
+**Inventory-first: a complete per-environment catalog, and a typed service map.**
+An estate almost always runs the same stack in more than one environment, and a
+map that only shows what has *connections* hides the servers that don't — so a
+pre-prod that mirrors prod can look empty. This wave makes the inventory a
+first-class, reusable view and adds a shareable service map, both rendered
+deterministically (never hand-written) so they can't drift from the data.
+
+- **By-environment paired view for every inventory.** `render-report-viz.sh
+  inventory` now renders a *By environment* section from any `inventory.json`:
+  per-environment object counts + kinds, and *environment twins* pairing the same
+  base name across environments (a base in only one environment is flagged — the
+  "why does pre-prod look smaller than prod" answer). Environment comes from an
+  explicit `env` field (normalized: `Production`→`prod`, `-pp`→`pre-prod`), else
+  the name, else the covered service; the matcher tests `pre-prod`/`pp` **before**
+  `prod`. It's display-only (never touches counts or the score) and emits nothing
+  when no environment is derivable, so flat estates get no forced section.
+- **map-topology writes an Inventory (by environment) section** from its saved
+  `topology-export.json` (new `topology-inventory` renderer mode): the complete
+  server + datastore catalog per environment, **listed whether or not an edge was
+  found** — so a lopsided or mislabeled estate is visible at a glance, and a
+  re-run refreshes it deterministically.
+- **Typed service map** (new `mermaid-mesh` renderer mode): a Mermaid diagram
+  with **directional arrows labelled by connection type + evidence class**,
+  **datastore cylinders carrying `engine · port` config**, and **nodes coloured by
+  environment** — renders inline on GitHub/Obsidian and exports to PNG. Shows only
+  service→datastore edges, never traffic/CALLS.
+- `inventory-schema.md` documents the optional `env` field; `test-report-viz.sh`
+  locks all three (env counts, label normalization, twins, no-force-on-flat;
+  topology per-env grid; the typed/directional mesh with config).
+
 ## 0.1.205
 
 **Cross-cloud IP attribution in Cloud Mode** (from the own-mesh dogfood, where

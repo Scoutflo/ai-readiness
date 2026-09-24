@@ -394,5 +394,23 @@ printf '%s' "$TI" | grep -q '`deploy-api`: pre-prod only' || fail "topology-inve
 printf '%s' "$(sh "$VIZ" topology-inventory "$WORK/nope.json")" | grep -qi 'No .*topology-export.json' || fail "topology-inventory: missing-file degrade wrong"
 echo "PASS"
 
+echo "Test: mermaid-mesh renders a typed/directional service map with datastore config + env classes"
+printf '%s' '{"version":"scoutflo-topology-export/v1","services":[{"name":"api-prod"},{"name":"api-pp"}],
+  "resources":[{"name":"orders-db-prod","attributes":{"engine":"mongodb","endpoint_port":27017}},{"name":"orders-db-pp","attributes":{"engine":"mongodb","endpoint_port":27017}}],
+  "relationships":[
+    {"from":{"name":"api-prod"},"to":{"name":"orders-db-prod"},"relation":"STORES_DATA_IN","attributes":{"evidence_class":"declared+reachable"}},
+    {"from":{"name":"api-pp"},"to":{"name":"orders-db-pp"},"relation":"STORES_DATA_IN","attributes":{"evidence_class":"declared"}},
+    {"from":{"name":"api-prod"},"to":{"name":"api-pp"},"relation":"CALLS"}]}' > "$WORK/mesh-export.json"
+MM="$(sh "$VIZ" mermaid-mesh "$WORK/mesh-export.json")"
+printf '%s' "$MM" | grep -q '```mermaid' || fail "mermaid-mesh: no mermaid fence"
+printf '%s' "$MM" | grep -q 'flowchart LR' || fail "mermaid-mesh: no flowchart"
+printf '%s' "$MM" | grep -qE 'orders_db_prod\[\("orders-db-prod<br/>mongodb · 27017"\)\]' || fail "mermaid-mesh: datastore cylinder + config detail missing"
+printf '%s' "$MM" | grep -qE 'api_prod -->\|STORES_DATA_IN · declared\+reachable\| orders_db_prod' || fail "mermaid-mesh: typed directional edge (relation · evidence) missing"
+printf '%s' "$MM" | grep -q 'class api_pp ppenv;' || fail "mermaid-mesh: pre-prod env class not assigned"
+printf '%s' "$MM" | grep -q 'class orders_db_prod prodenv;' || fail "mermaid-mesh: prod env class not assigned"
+printf '%s' "$MM" | grep -q 'CALLS' && fail "mermaid-mesh: rendered a CALLS/traffic edge (must be service→datastore only)" || true
+printf '%s' "$(sh "$VIZ" mermaid-mesh "$WORK/nope.json")" | grep -qi 'No .*topology-export.json' || fail "mermaid-mesh: missing-file degrade wrong"
+echo "PASS"
+
 echo
 echo "=== report-viz self-test passed ==="

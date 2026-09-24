@@ -15,6 +15,7 @@
 #   render-report-viz.sh lanes            <findings.json>
 #   render-report-viz.sh mermaid-topo     <topology-export.json> <target>
 #   render-report-viz.sh topology-inventory <topology-export.json>
+#   render-report-viz.sh mermaid-mesh      <topology-export.json>
 #   render-report-viz.sh html             <findings.json> <out.html> [history.jsonl]
 #   render-report-viz.sh overlaps         <correlation.json>
 #   render-report-viz.sh rollup           <audits-dir> <run-date>
@@ -670,6 +671,46 @@ HTMLFOOT
              else empty end)
     ' "$T" 2>/dev/null
     echo
+    ;;
+
+  mermaid-mesh)
+    # Full service→datastore mesh (not target-scoped like mermaid-topo): a service
+    # map with DIRECTIONAL arrows LABELLED by connection type + evidence class,
+    # datastore cylinders carrying config detail (engine·port), and nodes coloured
+    # by environment. Renders only resource-dependency edges (never CALLS/traffic).
+    T="${1:?topology-export.json}"
+    [ -f "$T" ] || { echo "> _No topology-export.json — run \`/scoutflo:map-topology\` for a service map._"; exit 0; }
+    echo '```mermaid'
+    echo 'flowchart LR'
+    jq -r '
+      def id($n): ($n|gsub("[^a-zA-Z0-9_]";"_"));
+      (.resources // []) as $res | ($res | map(.name)) as $rn
+      # service nodes (only those with a resource edge, keeps the map focused)
+      | ((.relationships // []) | map(select(.to.name as $t | $rn|index($t))) ) as $edges
+      | ( [ $edges[].from.name ] | unique | .[] | "  " + id(.) + "[\"" + . + "\"]" ),
+        # datastore nodes as cylinders, with engine·port config when present
+        ( $res[] | (.attributes // {}) as $a
+          | (($a.engine // $a.kind // "") ) as $eng
+          | (($a.endpoint_port // $a.port // "") | tostring) as $port
+          | (if ($eng != "" or $port != "") then "<br/>" + ($eng) + (if $port != "" then " · " + $port else "" end) else "" end) as $cfg
+          | "  " + id(.name) + "[(\"" + .name + $cfg + "\")]" ),
+        # edges: direction native, label = relation · evidence
+        ( $edges[] | .from.name as $f | .to.name as $t | (.relation // "USES") as $r
+          | (.attributes.evidence_class // "") as $ev
+          | "  " + id($f) + " -->|" + $r + (if $ev != "" then " · " + $ev else "" end) + "| " + id($t) )
+    ' "$T" 2>/dev/null | awk '!seen[$0]++'   # stable de-dup, keep first-seen order
+    # environment node classes
+    jq -r '
+      def id($n): ($n|gsub("[^a-zA-Z0-9_]";"_"));
+      def envcls($n): (($n//"")|ascii_downcase) as $l
+        | if ($l|test("pre-?_?prod|(^|[-_])pp([-_]|$)|test|stag|(^|[-_])dev([-_]|$)")) then "ppenv"
+          elif ($l|test("prod|prd")) then "prodenv" else "unkenv" end;
+      ( [ (.services//[])[].name ] + [ (.resources//[])[].name ] ) | unique | .[] | "  class " + id(.) + " " + envcls(.) + ";"
+    ' "$T" 2>/dev/null
+    echo '  classDef prodenv fill:#e6f0ff,stroke:#2b6cb0,color:#0b2e6b;'
+    echo '  classDef ppenv fill:#fff7e6,stroke:#b7791f,color:#5c3400;'
+    echo '  classDef unkenv fill:#f0f0f0,stroke:#888,color:#333;'
+    echo '```'
     ;;
 
   inventory-rollup)
