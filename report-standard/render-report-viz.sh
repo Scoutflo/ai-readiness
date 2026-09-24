@@ -588,6 +588,43 @@ HTMLFOOT
         done
       echo
     done
+    # --- Per-environment view: the "PP vs Prod at a glance" grid, reusable for any target. ---
+    # Env per item: an explicit env field wins; else derived from the name, else the covered
+    # service. The matcher tests pre-prod/pp BEFORE prod ("preprod" contains the substring "prod").
+    # Emits nothing when no environment is derivable, so it never forces a section on flat estates.
+    ENVSECT="$(jq -r '
+      def envof($n): (($n // "")|ascii_downcase) as $l
+        | if   ($l|test("pre-?_?prod|(^|[-_])pp([-_]|$)")) then "pre-prod"
+          elif ($l|test("stag|(^|[-_])stg([-_]|$)"))       then "staging"
+          elif ($l|test("test|(^|[-_])qa([-_]|$)"))        then "testing"
+          elif ($l|test("(^|[-_])dev([-_]|$)"))            then "dev"
+          elif ($l|test("prod|(^|[-_])prd([-_]|$)"))       then "prod"
+          else "unspecified" end;
+      def baseof($n): (($n // "")|ascii_downcase)
+        | gsub("[-_](pre-?_?prod|preprod|prod|prd|pp|staging|stg|testing|test|qa|dev)([-_].*)?$";"");
+      def norm($x): ($x|ascii_downcase|gsub("[-_ ]";"")) as $c
+        | if   ($c=="pp" or $c=="preprod")                 then "pre-prod"
+          elif ($c=="prod" or $c=="prd" or $c=="production") then "prod"
+          elif ($c|startswith("stag"))                     then "staging"
+          elif ($c=="qa" or ($c|startswith("test")))       then "testing"
+          elif ($c=="dev" or ($c|startswith("develop")))   then "dev"
+          else $c end;
+      def e2($it): (($it.env // $it.attrs.env // $it.attrs.environment) // null) as $x
+        | (if $x != null then norm($x)
+           else (envof($it.name) as $en | if $en!="unspecified" then $en else envof($it.covers) end) end);
+      ([.items[] | . + {e: e2(.), b: baseof(.name)}]) as $it
+      | if (($it | map(select(.e!="unspecified")) | length) == 0) then empty else
+          "### By environment", "",
+          "Objects grouped by environment; a marker in the name or an `env` field decides it, unmarked objects are `unspecified`.", "",
+          "| environment | objects | kinds |", "| --- | --- | --- |",
+          ($it | group_by(.e)[] | "| " + .[0].e + " | " + (length|tostring) + " | " + ([.[].kind]|unique|join(", ")) + " |"),
+          "", "**Environment twins** — same base name in more than one environment (the core stack should mirror; a base in only one environment is flagged to confirm):", "",
+          ($it | group_by(.b)[] | ([.[].e]|unique) as $es
+             | if   ($es|length) > 1        then "- `" + .[0].b + "`: " + ($es|join(" + "))
+               elif ($es[0] != "unspecified") then "- `" + .[0].b + "`: " + $es[0] + " only — no twin (intended, or a missing environment?)"
+               else empty end),
+          "" end' "$INV" 2>/dev/null)"
+    [ -n "$ENVSECT" ] && printf '%s\n' "$ENVSECT"
     ;;
 
   inventory-rollup)

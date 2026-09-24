@@ -358,5 +358,25 @@ grep -qE 'src="http|href="http|<link |<img ' "$MPD/plan.html" && fail "migration
 printf '%s' "$(sh "$VIZ" migration-plan "$WORK/does-not-exist.json")" | grep -qi 'No .*migration-plan.json' || fail "missing-file degrade wrong"
 echo "PASS"
 
+echo "Test: inventory By-environment paired view (env from name/label, twins, flat estate emits none)"
+INVENV="$WORK/inv-env.json"
+printf '%s' '{"schema":"scoutflo-inventory/v1","target":"aws","generated_at":"x","counts":{"total":6,"by_kind":{"vm":4,"database":2}},"items":[
+ {"name":"api-server-prod","kind":"vm","covers":"api"},
+ {"name":"api-server-pp","kind":"vm","covers":"api"},
+ {"name":"worker-prod","kind":"vm","covers":"worker"},
+ {"name":"orders-db-prod","kind":"database","covers":"orders"},
+ {"name":"orders-db-pp","kind":"database","covers":"orders"},
+ {"name":"legacy-batch","kind":"vm","covers":"batch","attrs":{"environment":"Production"}}]}' > "$INVENV"
+IE="$(sh "$VIZ" inventory "$INVENV")"
+printf '%s' "$IE" | grep -q '### By environment' || fail "inventory: By-environment section missing"
+printf '%s' "$IE" | grep -qE '\| pre-prod \| 2 \|' || fail "inventory: pre-prod count wrong"
+printf '%s' "$IE" | grep -qE '\| prod \| 4 \|' || fail "inventory: prod count wrong (Production label not normalized to prod?)"
+printf '%s' "$IE" | grep -qE '\| production \|' && fail "inventory: platform label 'Production' not normalized (leaked a separate bucket)" || true
+printf '%s' "$IE" | grep -q '`api-server`: pre-prod + prod' || fail "inventory: twin pairing missing"
+printf '%s' "$IE" | grep -q '`worker`: prod only' || fail "inventory: prod-only (no-twin) flag missing"
+printf '%s' '{"schema":"scoutflo-inventory/v1","target":"grafana","generated_at":"x","counts":{"total":2,"by_kind":{"alert_rule":2}},"items":[{"name":"cpu-high","kind":"alert_rule","covers":"-"},{"name":"mem-high","kind":"alert_rule","covers":"-"}]}' > "$WORK/inv-flat.json"
+sh "$VIZ" inventory "$WORK/inv-flat.json" | grep -q '### By environment' && fail "inventory: forced a By-environment section on a flat (no-env) estate" || true
+echo "PASS"
+
 echo
 echo "=== report-viz self-test passed ==="
