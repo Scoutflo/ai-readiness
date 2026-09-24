@@ -378,5 +378,21 @@ printf '%s' '{"schema":"scoutflo-inventory/v1","target":"grafana","generated_at"
 sh "$VIZ" inventory "$WORK/inv-flat.json" | grep -q '### By environment' && fail "inventory: forced a By-environment section on a flat (no-env) estate" || true
 echo "PASS"
 
+echo "Test: topology-inventory renders per-env server/datastore grid + twins from topology-export.json"
+TEXP="$WORK/topo-export.json"
+printf '%s' '{"version":"scoutflo-topology-export/v1","services":[
+   {"name":"api-server-prod"},{"name":"api-server-pp"},{"name":"worker-prod"},{"name":"deploy-api-pp"}],
+  "resources":[{"name":"orders-db-prod","attributes":{"kind":"database"}},{"name":"orders-db-pp","attributes":{"kind":"database"}}],
+  "relationships":[]}' > "$TEXP"
+TI="$(sh "$VIZ" topology-inventory "$TEXP")"
+printf '%s' "$TI" | grep -q '## Inventory (by environment)' || fail "topology-inventory: heading missing"
+printf '%s' "$TI" | grep -qE '\| prod \| 2 \| 1 \| 3 \|' || fail "topology-inventory: prod svc/datastore/total counts wrong"
+printf '%s' "$TI" | grep -qE '\| pre-prod \| 2 \| 1 \| 3 \|' || fail "topology-inventory: pre-prod counts wrong"
+printf '%s' "$TI" | grep -q '`api-server`: pre-prod + prod' || fail "topology-inventory: twin pairing missing"
+printf '%s' "$TI" | grep -q '`worker`: prod only' || fail "topology-inventory: prod-only (no-twin) flag missing"
+printf '%s' "$TI" | grep -q '`deploy-api`: pre-prod only' || fail "topology-inventory: naming-mismatch base not surfaced as one-environment"
+printf '%s' "$(sh "$VIZ" topology-inventory "$WORK/nope.json")" | grep -qi 'No .*topology-export.json' || fail "topology-inventory: missing-file degrade wrong"
+echo "PASS"
+
 echo
 echo "=== report-viz self-test passed ==="

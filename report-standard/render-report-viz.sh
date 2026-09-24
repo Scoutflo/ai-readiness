@@ -14,6 +14,7 @@
 #   render-report-viz.sh scorecard        <findings.json>
 #   render-report-viz.sh lanes            <findings.json>
 #   render-report-viz.sh mermaid-topo     <topology-export.json> <target>
+#   render-report-viz.sh topology-inventory <topology-export.json>
 #   render-report-viz.sh html             <findings.json> <out.html> [history.jsonl]
 #   render-report-viz.sh overlaps         <correlation.json>
 #   render-report-viz.sh rollup           <audits-dir> <run-date>
@@ -625,6 +626,50 @@ HTMLFOOT
                else empty end),
           "" end' "$INV" 2>/dev/null)"
     [ -n "$ENVSECT" ] && printf '%s\n' "$ENVSECT"
+    ;;
+
+  topology-inventory)
+    # The topology's own inventory, grouped by environment: the complete
+    # server/datastore catalog from topology-export.json (already saved + reused
+    # by map-topology), rendered as the "PP vs Prod at a glance" paired grid.
+    # A server is listed whether or not an edge was found for it.
+    T="${1:?topology-export.json}"
+    echo "## Inventory (by environment)"
+    echo
+    if [ ! -f "$T" ]; then echo "_No \`topology-export.json\` — run \`/scoutflo:map-topology\`._"; exit 0; fi
+    jq -r '
+      def envof($n): (($n // "")|ascii_downcase) as $l
+        | if   ($l|test("pre-?_?prod|(^|[-_])pp([-_]|$)")) then "pre-prod"
+          elif ($l|test("stag|(^|[-_])stg([-_]|$)"))       then "staging"
+          elif ($l|test("test|(^|[-_])qa([-_]|$)"))        then "testing"
+          elif ($l|test("(^|[-_])dev([-_]|$)"))            then "dev"
+          elif ($l|test("prod|(^|[-_])prd([-_]|$)"))       then "prod"
+          else "unspecified" end;
+      def baseof($n): (($n // "")|ascii_downcase)
+        | gsub("[-_](pre-?_?prod|preprod|prod|prd|pp|staging|stg|testing|test|qa|dev)([-_].*)?$";"");
+      def norm($x): ($x|ascii_downcase|gsub("[-_ ]";"")) as $c
+        | if   ($c=="pp" or $c=="preprod")                 then "pre-prod"
+          elif ($c=="prod" or $c=="prd" or $c=="production") then "prod"
+          elif ($c|startswith("stag"))                     then "staging"
+          elif ($c=="qa" or ($c|startswith("test")))       then "testing"
+          elif ($c=="dev" or ($c|startswith("develop")))   then "dev"
+          else $c end;
+      def e2($it): (($it.attributes.env // $it.attributes.environment // $it.environment) // null) as $x
+        | (if $x != null then norm($x) else envof($it.name) end);
+      ( [ .services[]?  | {name, k:"service",   e: e2(.), b: baseof(.name)} ]
+      + [ .resources[]? | {name, k:"datastore", e: e2(.), b: baseof(.name)} ] ) as $it
+      | "Complete server + datastore inventory grouped by environment (from the topology map). A row is listed whether or not a connection was found for it.", "",
+        "| environment | services | datastores | total |", "| --- | --- | --- | --- |",
+        ($it | group_by(.e)[]
+           | "| " + .[0].e + " | " + ([.[]|select(.k=="service")]|length|tostring)
+             + " | " + ([.[]|select(.k=="datastore")]|length|tostring) + " | " + (length|tostring) + " |"),
+        "", "**Environment twins** — same base name in more than one environment (a base in only one is flagged: intended, or a missing environment?):", "",
+        ($it | group_by(.b)[] | ([.[].e]|unique) as $es
+           | if   ($es|length) > 1        then "- `" + .[0].b + "`: " + ($es|join(" + "))
+             elif ($es[0] != "unspecified") then "- `" + .[0].b + "`: " + $es[0] + " only — no twin"
+             else empty end)
+    ' "$T" 2>/dev/null
+    echo
     ;;
 
   inventory-rollup)
