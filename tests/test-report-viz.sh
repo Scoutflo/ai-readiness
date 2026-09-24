@@ -358,5 +358,72 @@ grep -qE 'src="http|href="http|<link |<img ' "$MPD/plan.html" && fail "migration
 printf '%s' "$(sh "$VIZ" migration-plan "$WORK/does-not-exist.json")" | grep -qi 'No .*migration-plan.json' || fail "missing-file degrade wrong"
 echo "PASS"
 
+echo "Test: inventory By-environment paired view (env from name/label, twins, flat estate emits none)"
+INVENV="$WORK/inv-env.json"
+printf '%s' '{"schema":"scoutflo-inventory/v1","target":"aws","generated_at":"x","counts":{"total":6,"by_kind":{"vm":4,"database":2}},"items":[
+ {"name":"api-server-prod","kind":"vm","covers":"api"},
+ {"name":"api-server-pp","kind":"vm","covers":"api"},
+ {"name":"worker-prod","kind":"vm","covers":"worker"},
+ {"name":"orders-db-prod","kind":"database","covers":"orders"},
+ {"name":"orders-db-pp","kind":"database","covers":"orders"},
+ {"name":"legacy-batch","kind":"vm","covers":"batch","attrs":{"environment":"Production"}}]}' > "$INVENV"
+IE="$(sh "$VIZ" inventory "$INVENV")"
+printf '%s' "$IE" | grep -q '### By environment' || fail "inventory: By-environment section missing"
+printf '%s' "$IE" | grep -qE '\| pre-prod \| 2 \|' || fail "inventory: pre-prod count wrong"
+printf '%s' "$IE" | grep -qE '\| prod \| 4 \|' || fail "inventory: prod count wrong (Production label not normalized to prod?)"
+printf '%s' "$IE" | grep -qE '\| production \|' && fail "inventory: platform label 'Production' not normalized (leaked a separate bucket)" || true
+printf '%s' "$IE" | grep -q '`api-server`: pre-prod + prod' || fail "inventory: twin pairing missing"
+printf '%s' "$IE" | grep -q '`worker`: prod only' || fail "inventory: prod-only (no-twin) flag missing"
+printf '%s' '{"schema":"scoutflo-inventory/v1","target":"grafana","generated_at":"x","counts":{"total":2,"by_kind":{"alert_rule":2}},"items":[{"name":"cpu-high","kind":"alert_rule","covers":"-"},{"name":"mem-high","kind":"alert_rule","covers":"-"}]}' > "$WORK/inv-flat.json"
+sh "$VIZ" inventory "$WORK/inv-flat.json" | grep -q '### By environment' && fail "inventory: forced a By-environment section on a flat (no-env) estate" || true
+echo "PASS"
+
+echo "Test: topology-inventory renders per-env server/datastore grid + twins from topology-export.json"
+TEXP="$WORK/topo-export.json"
+printf '%s' '{"version":"scoutflo-topology-export/v1","services":[
+   {"name":"api-server-prod"},{"name":"api-server-pp"},{"name":"worker-prod"},{"name":"deploy-api-pp"}],
+  "resources":[{"name":"orders-db-prod","attributes":{"kind":"database"}},{"name":"orders-db-pp","attributes":{"kind":"database"}}],
+  "relationships":[]}' > "$TEXP"
+TI="$(sh "$VIZ" topology-inventory "$TEXP")"
+printf '%s' "$TI" | grep -q '## Inventory (by environment)' || fail "topology-inventory: heading missing"
+printf '%s' "$TI" | grep -qE '\| prod \| 2 \| 1 \| 3 \|' || fail "topology-inventory: prod svc/datastore/total counts wrong"
+printf '%s' "$TI" | grep -qE '\| pre-prod \| 2 \| 1 \| 3 \|' || fail "topology-inventory: pre-prod counts wrong"
+printf '%s' "$TI" | grep -q '`api-server`: pre-prod + prod' || fail "topology-inventory: twin pairing missing"
+printf '%s' "$TI" | grep -q '`worker`: prod only' || fail "topology-inventory: prod-only (no-twin) flag missing"
+printf '%s' "$TI" | grep -q '`deploy-api`: pre-prod only' || fail "topology-inventory: naming-mismatch base not surfaced as one-environment"
+printf '%s' "$(sh "$VIZ" topology-inventory "$WORK/nope.json")" | grep -qi 'No .*topology-export.json' || fail "topology-inventory: missing-file degrade wrong"
+echo "PASS"
+
+echo "Test: mermaid-mesh renders a typed/directional service map with datastore config + env classes"
+printf '%s' '{"version":"scoutflo-topology-export/v1","services":[{"name":"api-prod"},{"name":"api-pp"}],
+  "resources":[{"name":"orders-db-prod","attributes":{"engine":"mongodb","endpoint_port":27017}},{"name":"orders-db-pp","attributes":{"engine":"mongodb","endpoint_port":27017}}],
+  "relationships":[
+    {"from":{"name":"api-prod"},"to":{"name":"orders-db-prod"},"relation":"STORES_DATA_IN","attributes":{"evidence_class":"declared+reachable"}},
+    {"from":{"name":"api-pp"},"to":{"name":"orders-db-pp"},"relation":"STORES_DATA_IN","attributes":{"evidence_class":"declared"}},
+    {"from":{"name":"api-prod"},"to":{"name":"api-pp"},"relation":"CALLS"}]}' > "$WORK/mesh-export.json"
+MM="$(sh "$VIZ" mermaid-mesh "$WORK/mesh-export.json")"
+printf '%s' "$MM" | grep -q '```mermaid' || fail "mermaid-mesh: no mermaid fence"
+printf '%s' "$MM" | grep -q 'flowchart LR' || fail "mermaid-mesh: no flowchart"
+printf '%s' "$MM" | grep -qE 'orders_db_prod\[\("orders-db-prod<br/>mongodb · 27017"\)\]' || fail "mermaid-mesh: datastore cylinder + config detail missing"
+printf '%s' "$MM" | grep -qE 'api_prod -->\|STORES_DATA_IN · declared\+reachable\| orders_db_prod' || fail "mermaid-mesh: typed directional edge (relation · evidence) missing"
+printf '%s' "$MM" | grep -q 'class api_pp ppenv;' || fail "mermaid-mesh: pre-prod env class not assigned"
+printf '%s' "$MM" | grep -q 'class orders_db_prod prodenv;' || fail "mermaid-mesh: prod env class not assigned"
+printf '%s' "$MM" | grep -q 'CALLS' && fail "mermaid-mesh: rendered a CALLS/traffic edge (must be service→datastore only)" || true
+printf '%s' "$(sh "$VIZ" mermaid-mesh "$WORK/nope.json")" | grep -qi 'No .*topology-export.json' || fail "mermaid-mesh: missing-file degrade wrong"
+# N1: a non-string engine must NOT silently vanish the whole diagram (coerced to string)
+printf '%s' '{"version":"scoutflo-topology-export/v1","services":[{"name":"cache-client-prod"}],
+  "resources":[{"name":"cache-prod","attributes":{"engine":6379}}],
+  "relationships":[{"from":{"name":"cache-client-prod"},"to":{"name":"cache-prod"},"relation":"CACHES_IN"}]}' > "$WORK/mesh-numeng.json"
+MN="$(sh "$VIZ" mermaid-mesh "$WORK/mesh-numeng.json")"
+printf '%s' "$MN" | grep -q 'cache_client_prod -->|CACHES_IN| cache_prod' || fail "mermaid-mesh: a numeric engine silently vanished the diagram (missing tostring coercion)"
+printf '%s' "$MN" | grep -q '6379' || fail "mermaid-mesh: numeric engine config not rendered"
+# N2: invalid JSON degrades cleanly, no unclosed mermaid fence
+printf 'not json{' > "$WORK/bad-export.json"
+MB="$(sh "$VIZ" mermaid-mesh "$WORK/bad-export.json")"
+printf '%s' "$MB" | grep -qi 'not valid JSON' || fail "mermaid-mesh: invalid JSON did not degrade to a clear message"
+printf '%s' "$MB" | grep -q '```mermaid' && fail "mermaid-mesh: invalid JSON left an unclosed mermaid fence" || true
+printf '%s' "$(sh "$VIZ" topology-inventory "$WORK/bad-export.json")" | grep -qi 'not valid JSON' || fail "topology-inventory: invalid JSON did not degrade cleanly"
+echo "PASS"
+
 echo
 echo "=== report-viz self-test passed ==="
