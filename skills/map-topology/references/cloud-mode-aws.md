@@ -578,3 +578,200 @@ import its output file. Rules for the generated script:
 - The credential holder reads the file, then hands it over; its rows import exactly
   like live-lane output with `mechanism: zero-access-pack` on the evidence,
   and the review protocol (Tier batches) applies unchanged.
+
+## Cross-cloud IP attribution
+
+A resource in one cloud is often reached by a service in ANOTHER cloud, and the
+only evidence is an IP allowlist entry: a DigitalOcean managed DB trusts a raw
+`ip_addr`, a Cloud SQL lists an authorized network, an AWS security group / RDS
+allows a CIDR. Each cloud's own lane records that opening as **unattributed**
+(it cannot name the owner from its own inventory). This pass resolves those
+openings against the OTHER configured clouds' address catalogs — turning
+"unknown IP opening" into a real cross-cloud service→resource edge. Live-proven
+on our own estate (DO managed-DB allowlist IPs resolved to GCP VM public IPs).
+
+Runs only when the estate has two or more clouds configured, after each cloud's
+own discovery, before the review.
+
+1. **Build one combined `IP → owner` catalog** across every configured cloud
+   (each entry: `ip  owner-name  cloud  kind`):
+   - AWS: `aws ec2 describe-network-interfaces` → `PrivateIpAddress` +
+     `Association.PublicIp`; `aws ec2 describe-addresses` → `PublicIp`→its
+     instance/ENI. (owner = the ENI's attachment: instance id / ELB / RDS.)
+   - GCP: `gcloud compute instances list` → `networkInterfaces[0].networkIP`
+     (internal) + `accessConfigs[0].natIP` (public). (owner = instance name.)
+   - DigitalOcean: `doctl compute droplet list` → public + private v4;
+     `doctl apps list` egress where exposed. (owner = droplet/app name.)
+2. **Collect each cloud's IP-shaped openings** (the unattributed rows its own
+   lane already produced): DO `trusted-source(ip_addr)`, GCP Cloud SQL
+   `authorizedNetworks[].value` and firewall `sourceRanges`, AWS SG ingress
+   `IpRanges[].CidrIp` (host `/32` only — a wide CIDR is not one owner).
+3. **Join opening.ip against the combined catalog.** A hit becomes an edge
+   `owner-service → the resource whose allowlist named the IP`,
+   `evidence_class: reachable`, `mechanism: <src-cloud>.allowlist->` +
+   `<dst-cloud>.instance-ip`, `join_key: allowlist-ip→instance-ip`,
+   `matched_value: <ip>`. A `/32` that matches nothing stays an unattributed
+   opening (a finding-shaped fact — "prod DB allows an IP we can't identify"),
+   never a guessed edge.
+
+Hard rules (same honesty as every lane): this is **`reachable` class only** —
+an allowlist proves a network path is permitted, not that traffic flows; never
+upgrade it to declared/observed on IP evidence alone, and it stays review-tier
+until a declared/observed lane corroborates it or the operator confirms. Strip
+`/32` before matching; never expand a non-host CIDR into per-owner edges
+(that is the wildcard-demotion rule, cross-cloud). A public IP that matches
+more than one owner (shared NAT) is recorded as ambiguous, not duplicated into
+several edges.
+
+```bash
+set -eu
+# combined IP->owner catalog (extend per configured cloud; AWS+GCP+DO shown)
+CAT="${TMPDIR:-/tmp}/xcloud-ipcat.tsv"; : > "$CAT"
+# AWS (needs the aws block + identity gate above)
+A ec2 describe-network-interfaces --query 'NetworkInterfaces[].{ip:PrivateIpAddress,pub:Association.PublicIp,own:Description,inst:Attachment.InstanceId}' --output json 2>/dev/null \
+  | jq -r '.[] | [(.ip//empty),( .own // .inst // "aws-eni"),"aws"] | @tsv' >> "$CAT" || true
+# GCP (needs --configuration; both internal + nat IP)
+gcloud --configuration="${GCP_CONFIG:-}" compute instances list --project "${GCP_PROJECT:-}" \
+  --format="json(name,networkInterfaces)" 2>/dev/null \
+  | jq -r '.[] | .name as $n | .networkInterfaces[]? | [(.networkIP//empty),$n,"gcp"], [((.accessConfigs[]?.natIP)//empty),$n,"gcp"] | select(.[0]!="") | @tsv' >> "$CAT" || true
+# DigitalOcean
+doctl compute droplet list --output json 2>/dev/null \
+  | jq -r '.[] | .name as $n | (.networks.v4[]?) | [(.ip_address//empty),$n,"do"] | select(.[0]!="") | @tsv' >> "$CAT" || true
+sort -u "$CAT" -o "$CAT"
+# resolve one cloud's openings (openings file: ip<TAB>resource, per that cloud's lane)
+OPENINGS="${1:?openings tsv: ip<TAB>resource}"
+while IFS="$(printf '\t')" read -r ip resource; do
+  ipx=${ip%/32}
+  owner=$(awk -F'\t' -v i="$ipx" '$1==i{print $2" ("$3")"}' "$CAT" | head -1)
+  if [ -n "$owner" ]; then echo "EDGE  ${owner} -> ${resource}  [reachable · cross-cloud IP-attributed · ${ipx}]"
+  else echo "OPEN  ${resource} allows ${ipx} — owner not in any configured cloud (finding, not an edge)"; fi
+done < "$OPENINGS"
+```
+
+## Environment coverage
+
+An estate almost always runs the same stack in more than one environment —
+`prod` alongside `pre-prod`/`staging`/`testing` — usually near-symmetric: the
+same services and datastores under different names, differing only in config. A
+map that discovers `prod` thoroughly but only skims a non-prod twin ships a lie
+by omission — the reader sees a sparse pre-prod and assumes it has few
+dependencies, when it is really the same shape. This check runs in Phase 5
+(verify), after the map is written, and turns lopsided coverage into an explicit
+flag instead of something a human has to catch by eye. Live-caught on our own
+estate, where a first pass mapped every prod resource but silently dropped the
+pre-prod twins.
+
+**Environment is corroborated from three independent signals, never one — a
+platform label is the weakest:**
+
+1. **Name convention** (`-prod`, `-pp`, `-preprod`, `-testing`). The matcher
+   tests `pre-prod`/`preprod`/`pp` and `staging`/`testing`/`dev` **before**
+   `prod`, because `preprod` contains the substring `prod` — a naive `*prod*`
+   match mislabels every pre-prod resource as production (live-caught:
+   `langfuse-preprod`, the `-pp` apps).
+2. **Platform label / tag** (`env` tag, a cloud's `environment` field). **Do not
+   trust it** — live-caught: DigitalOcean showed `environment: Production` for
+   `deploy-client-pp` and `deploy-gateway-server-pp`, which are pre-prod. When
+   the label disagrees with the name, surface the conflict and prefer the name
+   plus connectivity evidence; never silently bucket by the label.
+3. **Connectivity** — what the service actually connects to. A real pre-prod
+   service talks to `-pp` datastores; a service whose edges land mostly in a
+   different environment is either mislabeled or a genuine cross-environment
+   access (a `testing` service reaching `prod` datastores — a security finding,
+   not a mapping quirk). This behavioral signal is the tie-breaker: evidence
+   over declaration, the same rule the evidence classes use.
+
+Environment is a **heuristic** here: the check flags for confirmation, it never
+silently drops or re-buckets an entity.
+
+```bash
+set -eu
+EXPORT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/topology-export.json"
+jq -r '
+  def norm($e): ($e|ascii_downcase|gsub("[-_ ]";"")) as $c
+    | if   ($c=="pp" or $c=="preprod")                   then "preprod"
+      elif ($c=="prd" or $c=="production" or $c=="prod") then "prod"
+      elif ($c|startswith("stag"))                       then "staging"
+      elif ($c=="qa" or ($c|startswith("test")))         then "testing"
+      elif ($c=="dev" or ($c|startswith("develop")))     then "dev"
+      else $c end;
+  def envof($n): ($n|ascii_downcase) as $l            # preprod BEFORE prod
+    | if   ($l|test("pre-?_?prod|(^|[-_])pp([-_]|$)")) then "preprod"
+      elif ($l|test("stag|(^|[-_])stg([-_]|$)"))       then "staging"
+      elif ($l|test("test|(^|[-_])qa([-_]|$)"))        then "testing"
+      elif ($l|test("(^|[-_])dev([-_]|$)"))            then "dev"
+      elif ($l|test("prod|(^|[-_])prd([-_]|$)"))       then "prod"
+      else "unknown" end;
+  def baseof($n): ($n|ascii_downcase)
+    | gsub("[-_](pre-?_?prod|preprod|prod|prd|pp|staging|stg|testing|test|qa|dev)([-_].*)?$"; "");
+  . as $root
+  | ( [$root.services[]?|.name] ) as $svc
+  | ( reduce ($root.relationships[]?) as $r ({};
+        .[$r.from.name] = ((.[$r.from.name]//[]) + [$r.to.name])
+      | .[$r.to.name]   = ((.[$r.to.name]//[]) + [$r.from.name]) ) ) as $adj
+  | ( [ $root.relationships[]? | .from.name, .to.name ]
+      | reduce .[] as $x ({}; .[$x]=((.[$x]//0)+1)) ) as $deg
+  | ( [ $root.services[]?, $root.resources[]? ]
+      | map( .name as $n
+        | (.attributes.env // .attributes.environment // .environment // null) as $lbl
+        | ( ($adj[$n]//[]) | map(envof(.)) | map(select(.!="unknown")) ) as $ce
+        | { name:$n, type:(if ($n|IN($svc[])) then "service" else "resource" end),
+            deg:($deg[$n]//0), base:baseof($n),
+            nameenv:envof($n), labelenv:($lbl|if .==null then null else norm(.) end),
+            connenv:($ce|if length==0 then null else (group_by(.)|max_by(length)|.[0]) end) }
+        | .env = (if .nameenv!="unknown" then .nameenv elif .labelenv!=null then .labelenv else "unknown" end) ) ) as $ent
+  | "== per-environment coverage ==",
+    ( $ent|group_by(.env)[] | "  \(.[0].env)\tsvc=\([.[]|select(.type=="service")]|length)\tres=\([.[]|select(.type=="resource")]|length)\twith-edges=\([.[]|select(.deg>0)]|length)\tno-edges=\([.[]|select(.deg==0)]|length)" ),
+    "== twin coverage (same base in >1 environment; NO-EDGES = under-mapped twin) ==",
+    ( $ent|group_by(.base)[] | . as $g | select(($g|map(.env)|unique|length)>1)
+      | "  \($g[0].base)\t" + ($g|group_by(.env)|map("\(.[0].env):\(if any(.[];.deg>0) then "edges" else "NO-EDGES" end)")|join("  ")) ),
+    "== label vs name conflicts (label is unreliable — trust name+connectivity) ==",
+    ( ($ent|map(select(.labelenv!=null and .nameenv!="unknown" and .labelenv!=.nameenv))) | if length==0 then "  (none)" else .[]|"  \(.name): name=>\(.nameenv) label=>\(.labelenv)" end ),
+    "== cross-environment connections (talks to another env: mislabel or cross-env access) ==",
+    ( ($ent|map(select(.type=="service" and .connenv!=null and .nameenv!="unknown" and .connenv!=.nameenv))) | if length==0 then "  (none)" else .[]|"  \(.name) [\(.nameenv)] -> mostly [\(.connenv)] resources" end ),
+    "== prod bases with NO non-prod twin (when the estate is twinned: expected, or a missing twin?) ==",
+    ( ($ent|map(select(.env|IN("preprod","staging","testing","dev")))|length) as $np
+      | ($ent|map(select(.env=="prod"))|map(.base)|unique) as $pb
+      | ($ent|map(select(.env|IN("preprod","staging","testing","dev")))|map(.base)|unique) as $nb
+      | if $np < 2 then "  (estate not clearly twinned — skipped)"
+        else (($pb - $nb) | if length==0 then "  (none — every prod base has a non-prod twin)" else (.[]|"  \(.) — prod only") end) end )
+' "$EXPORT"
+```
+
+Read the output as four questions the operator answers, never the map decides:
+a twin row with one environment `NO-EDGES` while its sibling has `edges` is
+"under-mapped twin — real config difference or discovery gap?"; a label-conflict
+row is "the platform said X, the name says Y — which is real?"; a
+cross-environment row is either a mislabel or a genuine cross-env dependency to
+confirm (and often a security finding); and a **prod base with no non-prod
+twin**, when the estate is otherwise twinned, is "prod runs this and pre-prod
+does not — intended, or a whole service/environment missed?" This last one is
+the direct answer to "why does pre-prod look smaller than prod": it names
+exactly which prod services have no counterpart (a gateway named
+`gateway-server-prod` whose pre-prod peer is `deploy-gateway-server-pp` shows as
+prod-only until the naming mismatch is confirmed). None of these auto-edit the
+map; each is surfaced for the batched review.
+
+**When every signal is denied — ask, never guess.** The three signals degrade
+independently: a name can carry no marker, the label can be wrong, and the
+connectivity signal is empty whenever the edges themselves could not be
+discovered (an empty database allowlist plus config/networking/`.env` reads that
+the access tier refuses — the exact shape of our own pre-prod databases). Follow
+the fallback ladder in order and stop at the first that resolves:
+
+1. **Name convention** — the cheapest signal; use it when it carries a marker.
+2. **Platform label** — corroborate only, never decide; flag on conflict.
+3. **Connectivity** — what it actually connects to; the behavioral tie-breaker.
+4. **Deeper lanes already in this skill** — declared config (env/app spec),
+   networking (VPC/subnet/firewall), and the IaC-in-repo lane — when a lane's
+   access is permitted, it often disambiguates a `unknown`/conflicted entity.
+5. **Operator confirmation via the CLI review** — when the deeper lanes are
+   access-denied or absent, the environment is `unconfirmed`; it is NOT guessed.
+   It goes into the same batched review and guided-capture prompt Phase 2E uses
+   for connections (pick-from-list / paste-in-your-own-words / import / skip),
+   labeled with what was tried and what was denied and the single smallest
+   unlock (per the fallback matrix). The operator's answer is recorded as
+   `evidence: asserted` — the human is evidence — and a later run that gains the
+   denied access upgrades it automatically. An `unconfirmed` environment is
+   reported as such in the coverage table; it is never silently folded into
+   `prod` or `unknown` to make the map look complete.

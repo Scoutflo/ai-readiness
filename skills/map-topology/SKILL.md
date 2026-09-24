@@ -356,6 +356,18 @@ cookbook and apply verbatim everywhere:
    "Grafana Tempo service-graph edges"). Observed edges expire — carry
    `valid_from` and re-verify on re-runs; on a Kubernetes estate this step
    simply enriches the existing K8s map with resource edges.
+2c. **Cross-cloud attribution** (runs only when two or more clouds are
+   configured): a resource in one cloud is often reached by a service in
+   another, and the only evidence is an IP allowlist entry — a DigitalOcean
+   managed DB trusting a raw `ip_addr`, a Cloud SQL authorized network, an AWS
+   security-group CIDR — that each cloud's own reachable lane could only record
+   as an *unattributed* opening. Build one combined `IP → owner` catalog across
+   the configured clouds and resolve those openings against it
+   (cookbook: "Cross-cloud IP attribution"): a hit becomes a `reachable`-class
+   service→resource edge; a host `/32` that matches no owner stays an
+   unattributed opening (a finding, never a guessed edge). `reachable` class
+   only — never upgraded on IP evidence alone — and wide CIDRs are demoted, not
+   expanded per owner.
 3. **Synthesize edges** (cookbook: "Declared-edge synthesis" then "Evidence
    composition and confidence"): one edge per service↔resource pair, lanes
    appended as evidence on the same edge, confidence per the composition
@@ -637,12 +649,48 @@ Expected: one row per service. A service failing T1 is missing a required field 
 
 State the count in the terminal close-out ("N of M services pass T1/T2 structural checks"; when Phase 2E ran, add the connection line: "K confirmed resource connections across J services; L candidates / open questions pending in the map") and, when any service fails, name it and the exact missing field — this is what you fix before an audit's own Topology Readiness section can move past `not-ready` for that service, since T1/T2 gate T3-T6 (a `not-ready` verdict never evaluates the observability-edge checks). Do not compute T3-T6 here: those need each provider's live state, which only the matching audit skill can verify.
 
+### Environment coverage: catch a lopsided or mislabeled map
+
+An estate usually runs the same stack in more than one environment (`prod`
+alongside `pre-prod`/`staging`/`testing`), near-symmetric but for config. A run
+that maps prod thoroughly and only skims a non-prod twin ships a sparse
+pre-prod that reads as "few dependencies" when it is really the same shape —
+live-caught on our own estate. Compute per-environment coverage and corroborate
+each entity's environment from THREE signals — name convention, platform label,
+and what it actually connects to — never one (cookbook: "Environment coverage").
+The platform label is the weakest and is never trusted on its own: a real
+DigitalOcean estate reported `environment: Production` for pre-prod apps, and a
+naive `*prod*` name match buckets `preprod` as prod — the matcher tests
+`pre-prod`/`pp` before `prod` for exactly that reason.
+
+Surface four questions for the batched review, never an automatic edit: a twin
+whose one environment shows `NO-EDGES` beside a sibling's `edges` ("under-mapped
+twin, or a real config difference?"); a label-vs-name conflict ("the platform
+said X, the name says Y"); a service whose edges land mostly in a *different*
+environment ("mislabeled, or a genuine cross-env dependency" — a `testing`
+service reaching `prod` datastores is a security finding, not a mapping quirk);
+and, when the estate is otherwise twinned, a **prod base with no non-prod twin**
+("prod runs this and pre-prod does not — intended, or a whole service missed?").
+That last one is the direct answer to "why does pre-prod look smaller than prod"
+— it names exactly which prod services have no pre-prod counterpart.
+State the per-environment counts in the close-out; when a twin is flagged
+`NO-EDGES`, say so plainly rather than presenting the thin side as complete.
+When all three signals fail together — no name marker, a label that can't be
+trusted, and no connectivity because the edges themselves were access-denied
+(empty allowlist plus config/networking/`.env` reads the tier refuses) — the
+environment is `unconfirmed`, never guessed: it enters the same batched review
+and guided capture Phase 2E uses (labeled with what was tried, what was denied,
+and the smallest unlock), and the operator's answer is recorded as `asserted`
+(cookbook: "Environment coverage").
+
 Close by telling the user, in the terminal:
 
 - The resolved **absolute** paths of `topology.md` and `topology-export.json` (resolve `${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}` first) with the OS open command (macOS `open`, Linux `xdg-open`, Windows `start`), plus mesh or fallback path taken, namespaces scanned and excluded.
 - Sizing path taken (small, medium, or large) with the namespace and workload counts that drove it.
 - Service, entry-point, and external-dependency counts.
 - The T1/T2 pre-check summary above.
+- The environment-coverage summary: the per-environment counts and any twin,
+  label-conflict, or cross-environment flags (or "single environment").
 - The delta summary (or "first run").
 - The two follow-ups: fill the Integration watchpoints rows, and run an audit (`audit-all` or a specific one) so findings can use the new map.
 

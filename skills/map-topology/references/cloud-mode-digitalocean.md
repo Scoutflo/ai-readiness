@@ -127,7 +127,11 @@ the primary edge lane. A `droplet` rule is a `permitted+reachable` edge
 candidate to that droplet's service row; a `tag` rule fans out ONLY to droplets carrying
 the tag at read time (record the tag in the edge's `join_key`); an `ip` rule
 is recorded as an unattributed opening (a finding-shaped fact when it is
-`0.0.0.0/0`), never an edge to a guessed host. `k8s` rules point at DOKS
+`0.0.0.0/0`), never an edge to a guessed host. When another cloud is also
+configured, a host `/32` `ip` rule is handed to the cross-cloud attribution
+pass, which may resolve it to a service in that other cloud (shared rules,
+cookbook: "Cross-cloud IP attribution" in the AWS cookbook — live-proven here:
+DO managed-DB allowlist IPs resolved to GCP VM public IPs). `k8s` rules point at DOKS
 clusters — the cluster's services stay in K8s Mode; note the edge at cluster
 granularity only.
 

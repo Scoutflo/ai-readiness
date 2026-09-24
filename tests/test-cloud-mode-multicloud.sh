@@ -95,6 +95,51 @@ grep -q "Control characters in env values" "$AWSC" || fail "aws cookbook: contro
 grep -q "never re-parse" "$AWSC" || grep -q "never a re-parsed shell" "$AWSC" || true
 [ -f "$ROOT/tests/pressure-scenarios/map-topology/cloud-mode-multi-lane-merge-coverage.md" ] || fail "multi-lane-merge scenario missing"
 
+# --- 6f. cross-cloud IP attribution: shared rules + honesty + join behavior ---
+grep -q "^## Cross-cloud IP attribution$" "$AWSC" || fail "aws cookbook: cross-cloud attribution section heading missing/renamed"
+grep -q 'reachable` class only' "$AWSC" || fail "cross-cloud: reachable-class-only rule missing (no upgrade on IP evidence)"
+grep -q "never expand a non-host CIDR" "$AWSC" || fail "cross-cloud: /32-strip / wildcard-demotion rule missing"
+grep -q "stays an unattributed" "$AWSC" || fail "cross-cloud: no-match-stays-unattributed rule missing"
+grep -q "recorded as ambiguous, not duplicated" "$AWSC" || fail "cross-cloud: ambiguous shared-NAT rule missing"
+# SKILL wiring: the step exists in Phase 2E and points at the cookbook section
+grep -q "2c. \*\*Cross-cloud attribution\*\*" "$SKILL" || fail "SKILL: cross-cloud attribution step (2c) not wired into Phase 2E"
+grep -q 'cookbook: "Cross-cloud IP attribution"' "$SKILL" || fail "SKILL: cross-cloud step does not reference the cookbook section"
+# each multi-cloud cookbook hands its IP openings to the pass
+grep -q "Cross-cloud IP attribution" "$DO" || fail "DO: no pointer feeding ip openings to the cross-cloud pass"
+grep -q "Cross-cloud IP attribution" "$GC" || fail "GCP: no pointer feeding ip openings to the cross-cloud pass"
+grep -q "authorizedNetworks" "$GC" || fail "GCP: public-IP allowlist openings (authorizedNetworks) lane missing"
+[ -f "$ROOT/tests/pressure-scenarios/map-topology/cloud-mode-cross-cloud-attribution.md" ] || fail "cross-cloud attribution scenario missing"
+# behavior: /32 hit resolves; no-match stays OPEN; wide CIDR is never expanded
+XOUT=$(sh -eu -c '
+# RFC5737 documentation IPs (never real infra; not matched by the leak scan)
+CAT=$(printf "192.0.2.10\tvm-prod\tgcp\n198.51.100.5\tvm-pp\tgcp\n")
+resolve() { ip=$1; res=$2; ipx=${ip%/32};
+  case "$ipx" in */*) echo "OPEN  $res allows $ipx (wide CIDR — finding, not an edge)"; return;; esac
+  owner=$(printf "%s\n" "$CAT" | awk -F"\t" -v i="$ipx" "\$1==i{print \$2\" (\"\$3\")\"}" | head -1)
+  if [ -n "$owner" ]; then echo "EDGE  $owner -> $res  [reachable]"; else echo "OPEN  $res allows $ipx — owner not in any configured cloud"; fi; }
+resolve "192.0.2.10/32"  mongo-prod
+resolve "203.0.113.7/32" mongo-pp
+resolve "0.0.0.0/0"      mongo-x
+')
+printf '%s\n' "$XOUT" | grep -q "EDGE  vm-prod (gcp) -> mongo-prod" || fail "cross-cloud join: a /32 hit did not resolve to the catalog owner"
+printf '%s\n' "$XOUT" | grep -q "OPEN  mongo-pp allows 203.0.113.7 — owner not in any" || fail "cross-cloud join: a no-match /32 was not kept as an unattributed opening"
+printf '%s\n' "$XOUT" | grep -q "OPEN  mongo-x allows 0.0.0.0/0 (wide CIDR" || fail "cross-cloud join: a wide CIDR was not demoted (must not expand per-owner)"
+printf '%s\n' "$XOUT" | grep -q "vm-pp -> mongo" && fail "cross-cloud join: resolved an owner never named by any opening (invented edge)" || ok "cross-cloud attribution locks"
+
+# --- 6g. environment coverage: three-signal env inference + wiring -----------
+grep -q "^## Environment coverage$" "$AWSC" || fail "env-coverage: cookbook section heading missing/renamed"
+grep -q 'cookbook: "Environment coverage"' "$SKILL" || fail "env-coverage: SKILL Phase 5 does not reference the cookbook section"
+grep -q "### Environment coverage" "$SKILL" || fail "env-coverage: SKILL Phase 5 step missing"
+grep -q "contains the substring" "$AWSC" || fail "env-coverage: preprod-before-prod rationale (naive *prod* match) missing"
+grep -qi "weakest" "$AWSC" || fail "env-coverage: 'label is the weakest signal / never trust alone' rule missing"
+grep -q "what the service actually connects to" "$AWSC" || fail "env-coverage: connectivity (third) signal missing"
+grep -qi "ask, never guess" "$AWSC" || fail "env-coverage: access-denied fallback (ask the operator) missing"
+grep -qi "unconfirmed" "$AWSC" || fail "env-coverage: 'unconfirmed' env state (not guessed) missing in cookbook"
+grep -qi "unconfirmed" "$SKILL" || fail "env-coverage: SKILL step does not route unconfirmed env to operator review"
+grep -q "prod bases with NO non-prod twin" "$AWSC" || fail "env-coverage: missing-twin (prod-only base) section missing from cookbook"
+grep -qi "no non-prod twin" "$SKILL" || fail "env-coverage: SKILL step does not mention the prod-only/missing-twin flag"
+[ -f "$ROOT/tests/pressure-scenarios/map-topology/environment-coverage-symmetry.md" ] || fail "env-coverage scenario missing"
+
 # --- 7. redaction behavior on the GCP/Azure-style env extraction --------------
 command -v jq >/dev/null || { echo "SKIP: jq not installed"; exit 0; }
 OUT=$(printf '%s' '[{"metadata":{"name":"checkout"},"spec":{"template":{"spec":{"containers":[{"env":[
@@ -112,5 +157,43 @@ echo "$OUT" | grep -q "db.internal.test	5432" || fail "gcp-style extraction lost
 echo "$OUT" | grep -q "my.secret.pw" && fail "gcp-style extraction leaked a userinfo credential" || ok "userinfo stripped"
 echo "$OUT" | grep -q "dotted.secret.value" && fail "gcp-style extraction leaked a secret-named key" || ok "secret key skipped"
 echo "$OUT" | grep -q "cache-dsn" && fail "secretKeyRef resolved instead of skipped" || ok "secretRef entries excluded from value parsing"
+
+# --- 7b. env-coverage: run the SHIPPED recipe against a fixture with the traps -
+# Extract the jq program from the cookbook's "## Environment coverage" block so
+# this locks the actual shipped behavior, not a copy that can drift.
+ECJQ="${TMPDIR:-/tmp}/envcov-shipped.jq"
+awk '/^## Environment coverage/{s=1} s&&/^jq -r '\''/{c=1;next} c&&/^'\'' "\$EXPORT"/{exit} c{print}' "$AWSC" > "$ECJQ"
+[ -s "$ECJQ" ] || fail "env-coverage: could not extract the shipped jq recipe from the cookbook"
+# Fixture with every trap: a -pp app the platform mislabels "Production",
+# a preprod resource, and a testing service that connects to a prod resource.
+ECFIX="${TMPDIR:-/tmp}/envcov-fixture.json"
+cat > "$ECFIX" <<'JSON'
+{ "version":"scoutflo-topology-export/v1",
+  "services":[
+    {"name":"web-prod","attributes":{"runtime":"do-app-platform"}},
+    {"name":"web-pp","attributes":{"runtime":"do-app-platform","environment":"Production"}},
+    {"name":"api-testing","attributes":{"runtime":"gcp-vm"}},
+    {"name":"billing-prod","attributes":{"runtime":"gcp-vm"}}
+  ],
+  "resources":[ {"name":"db-prod"}, {"name":"db-pp"} ],
+  "relationships":[
+    {"from":{"name":"web-prod"},"to":{"name":"db-prod"},"relation":"STORES_DATA_IN"},
+    {"from":{"name":"web-pp"},"to":{"name":"db-pp"},"relation":"STORES_DATA_IN"},
+    {"from":{"name":"api-testing"},"to":{"name":"db-prod"},"relation":"STORES_DATA_IN"},
+    {"from":{"name":"billing-prod"},"to":{"name":"db-prod"},"relation":"STORES_DATA_IN"}
+  ] }
+JSON
+EC=$(jq -r -f "$ECJQ" "$ECFIX" 2>&1) || fail "env-coverage: shipped recipe failed to run"
+# preprod is a real bucket and web-pp landed in it (NOT mislabeled to prod by the "Production" label)
+printf '%s\n' "$EC" | grep -Eq 'preprod[[:space:]]+svc=1' || fail "env-coverage: -pp app not bucketed as preprod (label trap or naive *prod* match)"
+# the platform label conflict is surfaced, name is preferred
+printf '%s\n' "$EC" | grep -q "web-pp: name=>preprod label=>prod" || fail "env-coverage: wrong platform label ('Production' on a -pp app) not flagged"
+# connectivity catches the testing->prod cross-environment access
+printf '%s\n' "$EC" | grep -q "api-testing \[testing\] -> mostly \[prod\]" || fail "env-coverage: cross-environment access (testing service -> prod resource) not flagged"
+# twin coverage names the shared base across environments
+printf '%s\n' "$EC" | grep -Eq 'db[[:space:]]+(preprod:edges[[:space:]]+prod:edges|prod:edges[[:space:]]+preprod:edges)' || fail "env-coverage: twin coverage did not pair db-prod/db-pp"
+# the missing-twin flag names a prod-only base (billing has no non-prod twin) and does NOT flag web/db (both twinned)
+printf '%s\n' "$EC" | grep -q "billing — prod only" || fail "env-coverage: prod-only base (missing pre-prod twin) not flagged"
+printf '%s\n' "$EC" | grep -Eq '(web|db) — prod only' && fail "env-coverage: a twinned base wrongly flagged as prod-only" || ok "env-coverage: shipped recipe classifies envs + flags the missing prod-only twin"
 
 [ "$fails" -eq 0 ] && echo "PASS: cloud-mode multicloud locks" || { echo "FAILURES: $fails"; exit 1; }
