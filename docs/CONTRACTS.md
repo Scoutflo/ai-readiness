@@ -184,7 +184,10 @@ these two classes existed; these steps are what caught them.
   (`scoutflo-topology-export/v1`, `relationships[]` with `{from{name},to{name},relation}`);
   `map-repos` → `repo-map.json`.
 - **Consumers:** `rca` (Phase 3 edge classification), `correlation-engine`,
-  every audit's **Topology Readiness** section, `render-report-viz mermaid-topo`.
+  every audit's **Topology Readiness** section, and `render-report-viz`
+  (`mermaid-topo` blast-radius graph, `topology-inventory` per-environment
+  server/datastore inventory, `mermaid-mesh` typed/directional service map) — the
+  render modes are read-only over the export and never write back to it.
 - **Invariants:** edge semantics are fixed — `DEPLOYED_AS`/`PART_OF`/`ROUTES_TO`
   are **identity** edges (never a candidate cause); `CALLS`/`ServiceEntry` are
   **dependency** edges; the Cloud-Mode connections (`STORES_DATA_IN`/`CACHES_IN`/

@@ -626,7 +626,7 @@ HTMLFOOT
                elif ($es[0] != "unspecified") then "- `" + .[0].b + "`: " + $es[0] + " only — no twin (intended, or a missing environment?)"
                else empty end),
           "" end' "$INV" 2>/dev/null)"
-    [ -n "$ENVSECT" ] && printf '%s\n' "$ENVSECT"
+    if [ -n "$ENVSECT" ]; then printf '%s\n' "$ENVSECT"; fi   # if (not &&): a false test must not trip set -e and blank the whole section
     ;;
 
   topology-inventory)
