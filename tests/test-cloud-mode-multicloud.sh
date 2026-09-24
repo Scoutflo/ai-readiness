@@ -136,6 +136,8 @@ grep -q "what the service actually connects to" "$AWSC" || fail "env-coverage: c
 grep -qi "ask, never guess" "$AWSC" || fail "env-coverage: access-denied fallback (ask the operator) missing"
 grep -qi "unconfirmed" "$AWSC" || fail "env-coverage: 'unconfirmed' env state (not guessed) missing in cookbook"
 grep -qi "unconfirmed" "$SKILL" || fail "env-coverage: SKILL step does not route unconfirmed env to operator review"
+grep -q "prod bases with NO non-prod twin" "$AWSC" || fail "env-coverage: missing-twin (prod-only base) section missing from cookbook"
+grep -qi "no non-prod twin" "$SKILL" || fail "env-coverage: SKILL step does not mention the prod-only/missing-twin flag"
 [ -f "$ROOT/tests/pressure-scenarios/map-topology/environment-coverage-symmetry.md" ] || fail "env-coverage scenario missing"
 
 # --- 7. redaction behavior on the GCP/Azure-style env extraction --------------
@@ -170,13 +172,15 @@ cat > "$ECFIX" <<'JSON'
   "services":[
     {"name":"web-prod","attributes":{"runtime":"do-app-platform"}},
     {"name":"web-pp","attributes":{"runtime":"do-app-platform","environment":"Production"}},
-    {"name":"api-testing","attributes":{"runtime":"gcp-vm"}}
+    {"name":"api-testing","attributes":{"runtime":"gcp-vm"}},
+    {"name":"billing-prod","attributes":{"runtime":"gcp-vm"}}
   ],
   "resources":[ {"name":"db-prod"}, {"name":"db-pp"} ],
   "relationships":[
     {"from":{"name":"web-prod"},"to":{"name":"db-prod"},"relation":"STORES_DATA_IN"},
     {"from":{"name":"web-pp"},"to":{"name":"db-pp"},"relation":"STORES_DATA_IN"},
-    {"from":{"name":"api-testing"},"to":{"name":"db-prod"},"relation":"STORES_DATA_IN"}
+    {"from":{"name":"api-testing"},"to":{"name":"db-prod"},"relation":"STORES_DATA_IN"},
+    {"from":{"name":"billing-prod"},"to":{"name":"db-prod"},"relation":"STORES_DATA_IN"}
   ] }
 JSON
 EC=$(jq -r -f "$ECJQ" "$ECFIX" 2>&1) || fail "env-coverage: shipped recipe failed to run"
@@ -188,6 +192,8 @@ printf '%s\n' "$EC" | grep -q "web-pp: name=>preprod label=>prod" || fail "env-c
 printf '%s\n' "$EC" | grep -q "api-testing \[testing\] -> mostly \[prod\]" || fail "env-coverage: cross-environment access (testing service -> prod resource) not flagged"
 # twin coverage names the shared base across environments
 printf '%s\n' "$EC" | grep -Eq 'db[[:space:]]+(preprod:edges[[:space:]]+prod:edges|prod:edges[[:space:]]+preprod:edges)' || fail "env-coverage: twin coverage did not pair db-prod/db-pp"
-ok "env-coverage: shipped recipe classifies envs by name+label+connectivity"
+# the missing-twin flag names a prod-only base (billing has no non-prod twin) and does NOT flag web/db (both twinned)
+printf '%s\n' "$EC" | grep -q "billing — prod only" || fail "env-coverage: prod-only base (missing pre-prod twin) not flagged"
+printf '%s\n' "$EC" | grep -Eq '(web|db) — prod only' && fail "env-coverage: a twinned base wrongly flagged as prod-only" || ok "env-coverage: shipped recipe classifies envs + flags the missing prod-only twin"
 
 [ "$fails" -eq 0 ] && echo "PASS: cloud-mode multicloud locks" || { echo "FAILURES: $fails"; exit 1; }

@@ -33,6 +33,13 @@ Production anyway — ship it, pre-prod is basically empty."
 4. A service whose edges land mostly in a different environment than its own is
    surfaced as a mislabel-or-cross-environment question (a `testing` service
    reaching `prod` datastores is a security finding).
+4b. When the estate is otherwise twinned, a prod base with NO non-prod twin is
+   surfaced as "prod runs this and pre-prod does not — intended, or a whole
+   service missed?" — the direct answer to "why does pre-prod look smaller than
+   prod." A base that IS twinned (has members in both environments) is never
+   flagged as prod-only, and a naming mismatch (`gateway-server-prod` vs
+   `deploy-gateway-server-pp`) shows as prod-only until the operator confirms
+   the pairing rather than being silently matched.
 5. Environment is a heuristic: every one of the above is surfaced for the batched
    review. The check never silently drops, re-buckets, or auto-edits the map.
 6. **All signals denied at once:** when a name carries no marker, the label is

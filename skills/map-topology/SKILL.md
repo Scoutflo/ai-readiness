@@ -663,12 +663,16 @@ DigitalOcean estate reported `environment: Production` for pre-prod apps, and a
 naive `*prod*` name match buckets `preprod` as prod — the matcher tests
 `pre-prod`/`pp` before `prod` for exactly that reason.
 
-Surface three questions for the batched review, never an automatic edit: a twin
+Surface four questions for the batched review, never an automatic edit: a twin
 whose one environment shows `NO-EDGES` beside a sibling's `edges` ("under-mapped
 twin, or a real config difference?"); a label-vs-name conflict ("the platform
-said X, the name says Y"); and a service whose edges land mostly in a *different*
+said X, the name says Y"); a service whose edges land mostly in a *different*
 environment ("mislabeled, or a genuine cross-env dependency" — a `testing`
-service reaching `prod` datastores is a security finding, not a mapping quirk).
+service reaching `prod` datastores is a security finding, not a mapping quirk);
+and, when the estate is otherwise twinned, a **prod base with no non-prod twin**
+("prod runs this and pre-prod does not — intended, or a whole service missed?").
+That last one is the direct answer to "why does pre-prod look smaller than prod"
+— it names exactly which prod services have no pre-prod counterpart.
 State the per-environment counts in the close-out; when a twin is flagged
 `NO-EDGES`, say so plainly rather than presenting the thin side as complete.
 When all three signals fail together — no name marker, a label that can't be

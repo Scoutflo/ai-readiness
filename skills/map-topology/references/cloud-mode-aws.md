@@ -728,17 +728,29 @@ jq -r '
     "== label vs name conflicts (label is unreliable — trust name+connectivity) ==",
     ( ($ent|map(select(.labelenv!=null and .nameenv!="unknown" and .labelenv!=.nameenv))) | if length==0 then "  (none)" else .[]|"  \(.name): name=>\(.nameenv) label=>\(.labelenv)" end ),
     "== cross-environment connections (talks to another env: mislabel or cross-env access) ==",
-    ( ($ent|map(select(.type=="service" and .connenv!=null and .nameenv!="unknown" and .connenv!=.nameenv))) | if length==0 then "  (none)" else .[]|"  \(.name) [\(.nameenv)] -> mostly [\(.connenv)] resources" end )
+    ( ($ent|map(select(.type=="service" and .connenv!=null and .nameenv!="unknown" and .connenv!=.nameenv))) | if length==0 then "  (none)" else .[]|"  \(.name) [\(.nameenv)] -> mostly [\(.connenv)] resources" end ),
+    "== prod bases with NO non-prod twin (when the estate is twinned: expected, or a missing twin?) ==",
+    ( ($ent|map(select(.env|IN("preprod","staging","testing","dev")))|length) as $np
+      | ($ent|map(select(.env=="prod"))|map(.base)|unique) as $pb
+      | ($ent|map(select(.env|IN("preprod","staging","testing","dev")))|map(.base)|unique) as $nb
+      | if $np < 2 then "  (estate not clearly twinned — skipped)"
+        else (($pb - $nb) | if length==0 then "  (none — every prod base has a non-prod twin)" else (.[]|"  \(.) — prod only") end) end )
 ' "$EXPORT"
 ```
 
-Read the output as three questions the operator answers, never the map decides:
+Read the output as four questions the operator answers, never the map decides:
 a twin row with one environment `NO-EDGES` while its sibling has `edges` is
 "under-mapped twin — real config difference or discovery gap?"; a label-conflict
 row is "the platform said X, the name says Y — which is real?"; a
 cross-environment row is either a mislabel or a genuine cross-env dependency to
-confirm (and often a security finding). None of these auto-edit the map; each is
-surfaced for the batched review.
+confirm (and often a security finding); and a **prod base with no non-prod
+twin**, when the estate is otherwise twinned, is "prod runs this and pre-prod
+does not — intended, or a whole service/environment missed?" This last one is
+the direct answer to "why does pre-prod look smaller than prod": it names
+exactly which prod services have no counterpart (a gateway named
+`gateway-server-prod` whose pre-prod peer is `deploy-gateway-server-pp` shows as
+prod-only until the naming mismatch is confirmed). None of these auto-edit the
+map; each is surfaced for the batched review.
 
 **When every signal is denied — ask, never guess.** The three signals degrade
 independently: a name can carry no marker, the label can be wrong, and the

@@ -39,11 +39,15 @@ flags a lopsided or mislabeled map instead of leaving it for a human to notice.
   `environment: Production` — and the name matcher tests
   `pre-prod`/`preprod`/`pp` before `prod` (a naive `*prod*` match buckets
   `preprod` as production).
-- **Three review questions, never an auto-edit:** a twin base present in more
+- **Four review questions, never an auto-edit:** a twin base present in more
   than one environment where one side has `NO-EDGES` ("under-mapped twin or real
   config difference?"); a label-vs-name conflict ("platform said X, name says
-  Y"); and a service whose edges land mostly in another environment (a mislabel,
-  or a `testing` service reaching `prod` datastores — a security finding).
+  Y"); a service whose edges land mostly in another environment (a mislabel, or
+  a `testing` service reaching `prod` datastores — a security finding); and,
+  when the estate is otherwise twinned, a **prod base with no non-prod twin**
+  ("prod runs this and pre-prod does not — intended, or a whole service
+  missed?") — the direct answer to "why does pre-prod look smaller than prod,"
+  naming exactly which prod services have no counterpart.
 - Shared recipe in the AWS cookbook ("Environment coverage"), wired into Phase 5
   and surfaced in the close-out; new pressure scenario + a behavioral test lock
   that runs the shipped recipe against a fixture carrying every trap.
