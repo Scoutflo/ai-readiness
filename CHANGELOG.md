@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.1.204
+
+**Cloud Mode hardening from the own-mesh dogfood** (mapping Scoutflo's real
+PP+Prod estate surfaced two ways a run could under-report):
+
+- **Merge-all-lanes coverage rule** (map-topology synthesis + a new pressure
+  scenario): coverage is the UNION of the declared/permitted/reachable/observed
+  lanes, not any single one. A real dogfood run drew zero pre-prod service→DB
+  edges from the firewall lane alone; only the config/env lane recovered them.
+  The synthesis must union by service↔resource, upgrade (not duplicate) a pair
+  two lanes agree on, and never drop a pair one lane connected. A single-lane
+  run is reported as partial, not as the whole map.
+- **Control-character guard in env extraction**: real config values can carry
+  raw control characters; the extraction must be a single `jq` pass over the
+  provider JSON, never an intermediate-JSON re-parse in a shell loop (which
+  chokes on a control char and silently drops that service's edges).
+- New lock in `tests/test-cloud-mode-multicloud.sh` for both notes + the new
+  scenario.
+
+Both were found by dogfooding Cloud Mode on our own cross-cloud mesh (read-only)
+and confirmed the design's honesty otherwise held (no invented edges, no
+PP↔Prod leak, unattributed IPs stayed unattributed until a catalog resolved them).
+
 ## 0.1.203
 
 **Basic-auth support for the metrics family** (prometheus, loki, tempo, mimir,

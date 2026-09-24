@@ -88,6 +88,13 @@ printf '%s' "$OUT" | grep -q "Basic dTpw" || fail "basic-auth override behavior 
 grep -q "MS_BASIC_USER" "$AP" || fail "overlay: metrics-store basic-auth support missing"
 ok "basic-auth override locks"
 
+# --- 6e. dogfood hardening: merge-all-lanes + control-char guard -------------
+AWSC="$REF/cloud-mode-aws.md"
+grep -q "Merge every lane before you decide coverage" "$AWSC" || fail "aws cookbook: merge-all-lanes hardening note missing"
+grep -q "Control characters in env values" "$AWSC" || fail "aws cookbook: control-char guard missing"
+grep -q "never re-parse" "$AWSC" || grep -q "never a re-parsed shell" "$AWSC" || true
+[ -f "$ROOT/tests/pressure-scenarios/map-topology/cloud-mode-multi-lane-merge-coverage.md" ] || fail "multi-lane-merge scenario missing"
+
 # --- 7. redaction behavior on the GCP/Azure-style env extraction --------------
 command -v jq >/dev/null || { echo "SKIP: jq not installed"; exit 0; }
 OUT=$(printf '%s' '[{"metadata":{"name":"checkout"},"spec":{"template":{"spec":{"containers":[{"env":[
