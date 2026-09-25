@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.1.208
+
+**Three onboarding cheap wins — clearer health checks and discoverability.** A
+batch of small, high-signal fixes from the improvement tracker.
+
+- **doctor now recognizes cluster-mode VictoriaMetrics.** A cluster VM (vmselect)
+  400/404s on a bare `GET /health` and serves reads under
+  `/select/<tenant>/prometheus`, so a perfectly healthy cluster store used to show
+  `victoriametrics health: fail`. doctor now probes the root `/health` first and,
+  on a non-200 (not a transport failure), retries the tenant-0 query path
+  (`/select/0/prometheus/api/v1/query?query=1`), passing on a `{"status":"success"}`
+  JSON body. Single-node VM is unchanged; a genuine transport failure still fails
+  cleanly.
+- **doctor prints the exact GCP Recommender unlock.** When the Recommender API/
+  viewer role isn't confirmed (so `audit-cost` can't produce GCP dollar figures),
+  the `cost-permissions` hint now includes the two copy-paste commands —
+  `gcloud services enable recommender.googleapis.com` and the
+  `roles/recommender.viewer` IAM binding — instead of only naming the gap. Still
+  read-only; doctor prints the fix, never runs it.
+- **VictoriaLogs / VictoriaTraces are now discoverable.** They were already
+  audited by `audit-lgtm` (VictoriaLogs as a `loki:` block with LogsQL
+  auto-detected, VictoriaTraces as a `tempo:` block with the Jaeger-shaped API
+  auto-detected), but they weren't named anywhere a customer looks, so
+  Victoria-stack shops assumed they were unsupported. They're now called out in
+  the connect catalog, `references/providers.md`, the config template, and the
+  start catalog — with a clear "configure it here" pointer. No re-architecture:
+  the audit-by-question consolidation is intentional.
+
 ## 0.1.207
 
 **Connect onboarding UX — the secret-writer is a real command, and a 3-move quick

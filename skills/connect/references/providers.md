@@ -828,6 +828,8 @@ victoriametrics:
 
 Configure only the stores you actually run. URL discovery works the same as for Prometheus: ingress, private LB, or port-forward.
 
+**VictoriaLogs and VictoriaTraces have no block of their own — and need none.** Configure **VictoriaLogs** under `loki:` (its LogsQL API is auto-detected) and **VictoriaTraces** under `tempo:` (its Jaeger-shaped API is auto-detected); `audit-lgtm` identifies the real backend from the live endpoint before it scores, so pointing the `loki:` / `tempo:` blocks at your Victoria endpoints is all it takes. **VictoriaMetrics** keeps its own `victoriametrics:` block above.
+
 ### Tenancy and tokens
 
 - Multi-tenant Loki, Tempo, and Mimir expect an `X-Scope-OrgID` header on query paths. Set `tenant_id` where the block supports it and keep the tenant name handy; the audit skills send the header when it is configured.
