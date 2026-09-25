@@ -23,6 +23,10 @@
 # export into your current shell; load it here with `. <store>` (printed at the
 # end) or open a new terminal — doctor/audits read the file directly either way.
 set -eu
+# Tighten the mode of anything we create (the store, its dir, and the temp file
+# that briefly holds the secret) to owner-only, so a secret is never group- or
+# world-readable even for the sub-millisecond before the explicit chmod 600.
+umask 077
 
 _n="${1:-}"
 case "$_n" in

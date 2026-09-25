@@ -18,12 +18,13 @@ awk '/^missing_hint\(\) \{/,/^\}/' "$D" > "$WORK/fn.sh"
 grep -q 'missing_hint()' "$WORK/fn.sh" || fail "could not extract missing_hint from doctor.sh"
 . "$WORK/fn.sh"
 
-# A. correctly export-prefixed line present but did not load -> malformed
+# A. correctly export-prefixed line present but did not load -> did-not-parse
 printf "export GRAFANA_TOKEN='sekret'\n" > "$SCOUTFLO_ENV"
 MA=$(missing_hint GRAFANA_TOKEN)
-printf '%s' "$MA" | grep -q "malformed" || fail "prefixed-but-unloaded should say malformed: $MA"
+printf '%s' "$MA" | grep -q "failed to parse" || fail "prefixed-but-unloaded should say it failed to parse: $MA"
+printf '%s' "$MA" | grep -q "addsecret.sh GRAFANA_TOKEN" || fail "branch A should point at the shipped writer: $MA"
 printf '%s' "$MA" | grep -q "sekret" && fail "hint A leaked the value" || :
-ok "branch A: malformed line"
+ok "branch A: unparseable line (points at addsecret)"
 
 # B. line present WITHOUT export prefix -> missing-export, points at addsecret
 printf "GRAFANA_TOKEN=sekret\n" > "$SCOUTFLO_ENV"

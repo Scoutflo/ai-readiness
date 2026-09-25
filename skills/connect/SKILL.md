@@ -64,7 +64,7 @@ Two conventions are rules, not suggestions:
 
 For the common case — a single environment, one instance of each tool — connecting is three moves, and the agent drives most of it. Steps 1–8 below are the full reference the agent follows; you rarely need to read them.
 
-1. **Pick your integrations.** The agent shows a numbered list of what's supported and detects what you're already logged into (`gcloud` / `az` / AWS / `doctl`, kube contexts); you say which to include, and it writes `~/.scoutflo/toolkit.yaml` for you.
+1. **Pick your integrations.** The agent shows a numbered list of what's supported and detects the cloud CLIs you're already logged into (`gcloud` / `az` / AWS / `doctl`); you say which to include, and it writes `~/.scoutflo/toolkit.yaml` for you.
 2. **Give each one its credential.** For each integration that needs a token, the agent hands you two copy-paste lines: one to **create** a read-only token (from [references/providers.md](references/providers.md)), and one to **store** it with the shipped writer — which prompts silently, escapes the value, writes it where the plugin reads, and never echoes it:
 
    ```bash

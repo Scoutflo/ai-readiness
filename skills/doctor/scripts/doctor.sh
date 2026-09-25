@@ -280,7 +280,7 @@ row() {
 
 # missing_hint <VAR>: the uniform env-missing hint. The plugin runs in its own
 # process and cannot see a shell `export`; credentials must live in the secret store
-# connect writes ($SCOUTFLO_ENV), which doctor sources above. Distinguishes four
+# connect writes ($SCOUTFLO_ENV), which doctor sources above. Distinguishes three
 # reasons the variable did not load, so the fix is precise, not a generic "set it":
 #   1. a correctly `export`-prefixed line exists but didn't load -> malformed line;
 #   2. the line exists WITHOUT the `export ` prefix -> the plugin can't load it;
@@ -290,7 +290,7 @@ row() {
 missing_hint() {
   mh_var="$1"
   if [ -f "$SCOUTFLO_ENV" ] && grep -qE "^[[:space:]]*export[[:space:]]+${mh_var}=" "$SCOUTFLO_ENV" 2>/dev/null; then
-    printf '%s' "${mh_var} appears in ${SCOUTFLO_ENV} but did not load — that line is malformed (a space in the name from a wrapped paste like HDX_E U_KEY, or a doubled =); fix that one line, then rerun doctor."
+    printf '%s' "${mh_var} appears in ${SCOUTFLO_ENV} but did not load — that line failed to parse, most often because the value has an unbalanced quote or backtick. Re-add it with: sh ${ADDSECRET} ${mh_var} (which escapes the value correctly), or fix that one line, then rerun doctor."
   elif [ -f "$SCOUTFLO_ENV" ] && grep -qE "^[[:space:]]*${mh_var}=" "$SCOUTFLO_ENV" 2>/dev/null; then
     printf '%s' "${mh_var} is in ${SCOUTFLO_ENV} but its line is missing the 'export ' prefix, so the plugin can't load it. Re-add it with: sh ${ADDSECRET} ${mh_var} (or prepend 'export ' to that one line), then rerun doctor."
   else
