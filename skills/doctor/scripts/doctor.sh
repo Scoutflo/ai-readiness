@@ -1189,7 +1189,21 @@ else
   VM_URL="${VM_URL%/}"
   resolve_token victoriametrics
   if token_gate victoriametrics health vmalert-health; then
-    live_check victoriametrics health "${VM_URL}/health" "${TOKEN_VAR:-none}" "$TOKEN"
+    # Single-node VM answers /health at the root. Cluster VM serves reads through vmselect
+    # under /select/<tenant>/prometheus (audit-lgtm uses tenant 0), and vmselect 400/404s on
+    # a bare /health — so a perfectly healthy cluster store used to false-fail here. Probe the
+    # root first; on a non-200 (not a transport failure), retry the tenant-0 vmselect query
+    # path before calling it unhealthy. http_get is the shared status helper; the retry uses
+    # live_check's JSON-asserting path (query engine returns {"status":"success"}).
+    http_get "${VM_URL}/health" "$TOKEN"
+    if [ "$CURL_RC" -eq 0 ] && [ "$HTTP_CODE" = "200" ]; then
+      row victoriametrics health yes "${TOKEN_VAR:-none}" pass "$HTTP_CODE" "-"
+    elif [ "$CURL_RC" -ne 0 ]; then
+      row victoriametrics health yes "${TOKEN_VAR:-none}" fail "000" "$(transport_hint "$CURL_RC") (${VM_URL}/health)"
+    else
+      note "doctor: victoriametrics ${VM_URL}/health returned ${HTTP_CODE}; retrying cluster-mode vmselect path (/select/0/prometheus — assumes tenant 0; a non-default tenant serves under /select/<tenant>)"
+      live_check victoriametrics health "${VM_URL}/select/0/prometheus/api/v1/query?query=1" "${TOKEN_VAR:-none}" "$TOKEN" '.status=="success"'
+    fi
     VMALERT_URL="$(cfg victoriametrics vmalert_url)"
     if [ -n "$VMALERT_URL" ]; then
       VMALERT_URL="${VMALERT_URL%/}"
@@ -1433,7 +1447,7 @@ else
             if [ "$GCP_REC_CODE" = "200" ]; then
               row "$GCP_INT" cost-permissions yes "${GCP_CRED_VAR:-none}" pass "$GCP_REC_CODE" -
             else
-              row "$GCP_INT" cost-permissions yes "${GCP_CRED_VAR:-none}" skipped "$GCP_REC_CODE" "Recommender API/viewer role not confirmed (HTTP ${GCP_REC_CODE}); audit-cost will report GCP native-dollar checks excluded with this reason, presence-fact checks still run"
+              row "$GCP_INT" cost-permissions yes "${GCP_CRED_VAR:-none}" skipped "$GCP_REC_CODE" "Recommender API/viewer role not confirmed (HTTP ${GCP_REC_CODE}); audit-cost will report GCP native-dollar checks excluded with this reason, presence-fact checks still run. Unlock: gcloud services enable recommender.googleapis.com --project ${GCP_PROJECT} ; then grant your audit identity: gcloud projects add-iam-policy-binding ${GCP_PROJECT} --member='serviceAccount:<your-audit-SA>@${GCP_PROJECT}.iam.gserviceaccount.com' --role=roles/recommender.viewer"
             fi
           fi
         fi

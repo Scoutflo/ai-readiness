@@ -1,6 +1,6 @@
 ---
 name: connect
-description: Guided credential setup; creates minimal-scope tokens per tier for Grafana, Sentry, PagerDuty, Datadog, ELK/Kibana, JSM Operations, Zenduty, Groundcover, Prometheus, Loki, Tempo, Mimir, VictoriaMetrics, ClickStack (ClickHouse + HyperDX), SigNoz, New Relic, DigitalOcean, GCP, Azure, AWS, Kubernetes, and Slack, and writes ~/.scoutflo/toolkit.yaml. Use when the user wants to connect or onboard the toolkit, add an integration, rotate a token, or set up credentials, including the audit-brief Slack webhook. Do not use for alert-delivery webhooks (Grafana contact points, Alertmanager receivers; use setup-grafana or setup-lgtm) or to verify reachability (use doctor).
+description: Guided credential setup; creates minimal-scope tokens per tier for Grafana, Sentry, PagerDuty, Datadog, ELK/Kibana, JSM Operations, Zenduty, Groundcover, Prometheus, Loki, Tempo, Mimir, VictoriaMetrics (plus VictoriaLogs and VictoriaTraces via the loki/tempo blocks), ClickStack (ClickHouse + HyperDX), SigNoz, New Relic, DigitalOcean, GCP, Azure, AWS, Kubernetes, and Slack, and writes ~/.scoutflo/toolkit.yaml. Use when the user wants to connect or onboard the toolkit, add an integration, rotate a token, or set up credentials, including the audit-brief Slack webhook. Do not use for alert-delivery webhooks (Grafana contact points, Alertmanager receivers; use setup-grafana or setup-lgtm) or to verify reachability (use doctor).
 ---
 
 # Connect: Credential and Config Setup
@@ -125,8 +125,8 @@ Ask which integrations to configure as a plain numbered list in a normal chat me
 | ClickStack (ClickHouse + HyperDX) | audit-clickstack, setup-clickstack | `clickstack:` | `CH_KEY` (ClickHouse read-only user password) + `HDX_API_KEY` (HyperDX **Personal API Access Key**, not the ingestion key) | ClickHouse: a read-only user with `SELECT` on the telemetry db + `system.*`; HyperDX: the per-user Personal API Access Key (Settings → API Keys) that reads the external API v2 (`GET /api/v2/alerts`, `/api/v2/dashboards`, `/api/v2/sources`) via `Authorization: Bearer` |
 | SigNoz (ClickHouse-backed) | audit-signoz | `signoz:` | `SIGNOZ_API_KEY` (Service Account token assigned the read-only `signoz-viewer` role) + optional `SIGNOZ_CH_KEY` (ClickHouse read-only user password) | A `signoz-viewer`-role service-account token (Settings → Service Accounts → Roles) that can `GET /api/v1/rules`, `/api/v1/channels`, `/api/v2/dashboards` and `POST /api/v3/query_range`; optionally a read-only ClickHouse user with `SELECT` on `signoz_*` + `system.*` for the deep backend lane |
 | New Relic | audit-newrelic | `newrelic:` | `NEW_RELIC_USER_API_KEY` (a **User** API key, `NRAK-…` — never a license/ingest key) | one.newrelic.com → API keys → create a User key under the auditing user; NerdGraph reads only (queries, never mutations); note the account's region (US or EU) — a wrong-region key fails with a diagnosable 403 |
-| Loki | audit-lgtm, setup-lgtm | `loki:` | `LOKI_TOKEN` (optional) | URL; optional tenant and token |
-| Tempo | audit-lgtm, setup-lgtm | `tempo:` | `TEMPO_TOKEN` (optional) | URL; optional tenant and token |
+| Loki | audit-lgtm, setup-lgtm | `loki:` | `LOKI_TOKEN` (optional) | URL; optional tenant and token. **Running VictoriaLogs? It goes here** — configure it as your `loki:` block; `audit-lgtm` auto-detects LogsQL. |
+| Tempo | audit-lgtm, setup-lgtm | `tempo:` | `TEMPO_TOKEN` (optional) | URL; optional tenant and token. **Running VictoriaTraces? It goes here** — configure it as your `tempo:` block; `audit-lgtm` auto-detects the Jaeger-shaped API. |
 | Mimir | audit-lgtm, setup-lgtm | `mimir:` | `MIMIR_TOKEN` (optional) | URL; `tenant_id` when multi-tenant |
 | VictoriaMetrics | audit-lgtm, setup-lgtm | `victoriametrics:` | `VM_TOKEN` (optional) | URL; `vmalert_url` when you run vmalert |
 | DigitalOcean | audit-digitalocean, setup-digitalocean | `digitalocean:` | `DIGITALOCEAN_ACCESS_TOKEN` | read-only token; `doctl` honors it natively |
@@ -136,6 +136,8 @@ Ask which integrations to configure as a plain numbered list in a normal chat me
 | Kubernetes | map-topology, audit-kubernetes, audit-lgtm, setup-lgtm | `kubernetes:` | none (kubeconfig context) | read-only context for audits |
 | GitHub | map-repos | `github:` | `GITHUB_TOKEN` | fine-grained PAT with Contents:Read + Metadata:Read, or classic `repo` read on private repos |
 | Slack | the per-run brief from every audit skill | `slack:` | `SCOUTFLO_SLACK_WEBHOOK` | the webhook URL is itself the secret |
+
+> **VictoriaMetrics family (VictoriaLogs / VictoriaTraces / VictoriaMetrics) — all audited by `audit-lgtm`, no separate skill or block to hunt for.** Configure **VictoriaLogs** as your `loki:` block and **VictoriaTraces** as your `tempo:` block (the audit auto-detects LogsQL and the Jaeger-shaped API from the live endpoint); **VictoriaMetrics** uses its own `victoriametrics:` block. A VM-stack shop is fully covered — point the LGTM-family blocks at your Victoria endpoints and `audit-lgtm` handles the rest.
 
 ## Step 2: Gather the configuration
 
@@ -156,8 +158,8 @@ Judgment step: collect the non-secret facts for every integration you picked bef
 | ClickStack | `clickstack.clickhouse_url` / `clickstack.clickhouse_user` / `clickstack.clickhouse_password_env` **optional (ClickHouse lane)**; `clickstack.hyperdx_url` / `clickstack.hyperdx_api_key_env` **optional (HyperDX lane)** — configure at least one lane; a HyperDX-only or ClickHouse-only ClickStack config is valid and the audit scores the lane you have | `clickhouse_url: https://your-clickhouse-host:8123` |
 | SigNoz | `signoz.url`, `signoz.api_key_env`, and optional `signoz.clickhouse_url`, `signoz.clickhouse_user`, `signoz.clickhouse_password_env` | `url: https://your-signoz-host` |
 | New Relic | `newrelic.account_id`, `newrelic.api_key_env`, optional `newrelic.region` (`US` default, or `EU`) | `account_id: 1234567` |
-| Loki | `loki.url`; optional `token_env` and `tier` | `url: https://loki.example.com` |
-| Tempo | `tempo.url`; optional `token_env` and `tier` | `url: https://tempo.example.com` |
+| Loki *(or VictoriaLogs — same block)* | `loki.url`; optional `token_env` and `tier` | `url: https://loki.example.com` |
+| Tempo *(or VictoriaTraces — same block)* | `tempo.url`; optional `token_env` and `tier` | `url: https://tempo.example.com` |
 | Mimir | `mimir.url`; optional `tenant_id`, `token_env`, `tier` | `tenant_id: your-tenant` |
 | VictoriaMetrics | `victoriametrics.url`; optional `vmalert_url`, `token_env`, `tier` | `vmalert_url: https://vmalert.example.com` |
 | GCP | `gcp.project`, `gcp.tier`; optional `credentials_env` | resolve `project` in Step 2a / the recipe in [references/providers.md](references/providers.md#google-cloud-gcp) — never hand-type it |

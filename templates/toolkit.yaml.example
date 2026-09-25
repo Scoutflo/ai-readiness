@@ -138,12 +138,14 @@ newrelic:
   tier: read-only                           # NerdGraph query documents only; the audit sends no mutations
 
 loki:
+  # Running VictoriaLogs? Configure it here — audit-lgtm auto-detects LogsQL (no separate block).
   url: https://loki.example.com
   # token_env: LOKI_TOKEN
   # basic_user_env: LOKI_BASIC_USER          # optional pair for basic-auth-fronted endpoints
   # basic_pass_env: LOKI_BASIC_PASS
 
 tempo:
+  # Running VictoriaTraces? Configure it here — audit-lgtm auto-detects the Jaeger-shaped API.
   url: https://tempo.example.com
   # token_env: TEMPO_TOKEN
   # basic_user_env: TEMPO_BASIC_USER
