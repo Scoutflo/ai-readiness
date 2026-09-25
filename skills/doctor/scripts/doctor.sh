@@ -664,10 +664,10 @@ else
         DD_API_KEY="$(printenv "$DD_API_VAR" 2>/dev/null || true)"
         DD_APP_KEY="$(printenv "$DD_APP_VAR" 2>/dev/null || true)"
         if [ -z "$DD_API_KEY" ]; then
-          row "$DD_INT" env yes "$DD_API_VAR" env-missing - "add it once to ~/.scoutflo/env: echo 'export ${DD_API_VAR}=\"<paste>\"' >> ~/.scoutflo/env (Windows PowerShell: setx ${DD_API_VAR} \"<paste>\"), then rerun doctor; created per connect references/providers.md"
+          row "$DD_INT" env yes "$DD_API_VAR" env-missing - "$(missing_hint "$DD_API_VAR")"
           DD_BLOCKED=1
         elif [ -z "$DD_APP_KEY" ]; then
-          row "$DD_INT" env yes "$DD_APP_VAR" env-missing - "add it once to ~/.scoutflo/env: echo 'export ${DD_APP_VAR}=\"<paste>\"' >> ~/.scoutflo/env (Windows PowerShell: setx ${DD_APP_VAR} \"<paste>\"), then rerun doctor; the app key is the second half of the pair"
+          row "$DD_INT" env yes "$DD_APP_VAR" env-missing - "$(missing_hint "$DD_APP_VAR") The app key is the second half of the pair (api_key_env + app_key_env)."
           DD_BLOCKED=1
         else
           row "$DD_INT" env yes "${DD_API_VAR}+${DD_APP_VAR}" pass - -

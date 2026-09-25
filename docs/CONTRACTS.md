@@ -276,10 +276,22 @@ these two classes existed; these steps are what caught them.
   `$HOME`-only path in one and the layered path in the other is a real
   doctor↔audit asymmetry on sandboxed/project-local surfaces. Secrets live in the
   store, not the operator's interactive shell (the plugin runs in its own process
-  and cannot see a shell `export`); `connect` writes the store for the operator.
+  and cannot see a shell `export`); `connect` writes the store for the operator
+  with the shipped writer `skills/connect/scripts/addsecret.sh`, which resolves
+  the store by the **same** layered ladder as the readers and stores each value
+  single-quote-escaped as `export VAR='…'` — a re-run **replaces** that line
+  (never appends a duplicate), the value survives a `$`/quote/backtick, the store
+  stays `chmod 600`, and the value is never echoed. `doctor`'s env-missing hints
+  point the operator at that same writer and name the precise cause when a token
+  is present but not loading (missing `export ` prefix / malformed line /
+  shell-only).
 - **Guards:** `ci/scope-checkpoint-check.sh`, `ci/redaction-parity-check.sh`,
   `ci/env-load-parity-check.sh` (asserts the layered resolver in every `audit-*`
-  **and** in `doctor.sh`), `ci/leak-scan.sh`. Selftest: `layer_parity`.
+  **and** in `doctor.sh`), `ci/leak-scan.sh`,
+  `tests/test-connect-addsecret.sh` (writer round-trip incl. special chars,
+  replace-not-append, no value leak, `chmod 600`, bad-name/empty rejection),
+  `tests/test-doctor-env-hints.sh` (the three env-missing hint branches).
+  Selftest: `layer_parity`.
 
 ## C14 — Cross-tool coverage correlation (a gap in one tool covered by another)
 

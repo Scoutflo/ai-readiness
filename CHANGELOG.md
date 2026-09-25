@@ -14,9 +14,12 @@ step left `~/.scoutflo/env` empty and every token reading as missing, and the
   escapes it, replace-or-appends the `export` line, keeps the store `chmod 600`,
   writes where doctor/audits read, and prints only the name — never the value.
 - **doctor names the real reason a token didn't load** (read-only — it prints the
-  fix, never edits the store): a line missing the `export ` prefix, or a value
-  exported in the shell only (invisible to the plugin), each pointing at
-  `addsecret.sh`, instead of a generic "not set".
+  fix, never edits the store): a line missing the `export ` prefix, a malformed
+  line, or a value exported in the shell only (invisible to the plugin), each
+  pointing at `addsecret.sh`, instead of a generic "not set". The Datadog
+  api/app-key pair now uses this uniform hint too (it previously taught a fragile
+  `echo 'export …="<paste>"' >>` append that duplicates on a re-run and breaks on
+  a token containing `"`/`$`).
 - **Quick connect (the 3-move path)** up front in the connect skill: pick
   integrations → create+store one token per integration → run doctor. The
   branchy depth (tiers, per-environment files, multi-target lists, sandbox
