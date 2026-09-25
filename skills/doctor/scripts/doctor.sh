@@ -1201,7 +1201,7 @@ else
     elif [ "$CURL_RC" -ne 0 ]; then
       row victoriametrics health yes "${TOKEN_VAR:-none}" fail "000" "$(transport_hint "$CURL_RC") (${VM_URL}/health)"
     else
-      note "doctor: victoriametrics ${VM_URL}/health returned ${HTTP_CODE}; retrying cluster-mode vmselect path (/select/0/prometheus)"
+      note "doctor: victoriametrics ${VM_URL}/health returned ${HTTP_CODE}; retrying cluster-mode vmselect path (/select/0/prometheus — assumes tenant 0; a non-default tenant serves under /select/<tenant>)"
       live_check victoriametrics health "${VM_URL}/select/0/prometheus/api/v1/query?query=1" "${TOKEN_VAR:-none}" "$TOKEN" '.status=="success"'
     fi
     VMALERT_URL="$(cfg victoriametrics vmalert_url)"
