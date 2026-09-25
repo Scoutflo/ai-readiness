@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.1.207
+
+**Connect onboarding UX — the secret-writer is a real command, and a 3-move quick
+path.** From the 100ms live run, where the store-writer being a paste-a-function
+step left `~/.scoutflo/env` empty and every token reading as missing, and the
+484-line connect flow pushed a single-estate customer into over-configuring.
+
+- **Shipped secret-writer** (`skills/connect/scripts/addsecret.sh`): store a
+  credential with `sh …/addsecret.sh VARNAME` — a real command, so it can never
+  be "command not found" and silently fall back to a bare `export` the plugin
+  can't see. Reads the value silently (never in argv/history), single-quote-
+  escapes it, replace-or-appends the `export` line, keeps the store `chmod 600`,
+  writes where doctor/audits read, and prints only the name — never the value.
+- **doctor names the real reason a token didn't load** (read-only — it prints the
+  fix, never edits the store): a line missing the `export ` prefix, a malformed
+  line, or a value exported in the shell only (invisible to the plugin), each
+  pointing at `addsecret.sh`, instead of a generic "not set". The Datadog
+  api/app-key pair now uses this uniform hint too (it previously taught a fragile
+  `echo 'export …="<paste>"' >>` append that duplicates on a re-run and breaks on
+  a token containing `"`/`$`).
+- **Quick connect (the 3-move path)** up front in the connect skill: pick
+  integrations → create+store one token per integration → run doctor. The
+  branchy depth (tiers, per-environment files, multi-target lists, sandbox
+  ladders) is now clearly advanced, and **multiple-environment / multiple-target
+  setup is opt-in** — connect never proposes it unless your answers show you
+  actually run more than one. §4b/§4c point at the shipped writer.
+- Removed a latent bug found on the way: the old `scoutflo_addsecret` function's
+  single-quote escaping corrupted any token containing a `'` (needed the
+  four-backslash sed form); the function is demoted to an optional note and the
+  shipped command is the default. New pressure scenarios + `addsecret.sh` and
+  doctor-hint test suites.
+
 ## 0.1.206
 
 **Inventory-first: a complete per-environment catalog, and a typed service map.**

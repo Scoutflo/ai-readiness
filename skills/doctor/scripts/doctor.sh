@@ -217,6 +217,14 @@ if [ -n "${CLAUDE_PLUGIN_ROOT:-}" ] && [ -f "${CLAUDE_PLUGIN_ROOT%/}/report-stan
 else
   TT="$(cd "$(dirname "$0")/../../.." 2>/dev/null && pwd)/report-standard/toolkit-targets.sh"
 fi
+# Resolve the shipped secret-writer (skills/connect/scripts/addsecret.sh) the same
+# way, so the env-missing hints below can point at a real, runnable command instead
+# of a fragile hand-typed echo. Non-fatal if absent — the hint just names the path.
+if [ -n "${CLAUDE_PLUGIN_ROOT:-}" ] && [ -f "${CLAUDE_PLUGIN_ROOT%/}/skills/connect/scripts/addsecret.sh" ]; then
+  ADDSECRET="${CLAUDE_PLUGIN_ROOT%/}/skills/connect/scripts/addsecret.sh"
+else
+  ADDSECRET="$(cd "$(dirname "$0")/../../.." 2>/dev/null && pwd)/skills/connect/scripts/addsecret.sh"
+fi
 # A missing enumerator must fail loudly, never silently make every block look absent
 # (that would reintroduce the zero-rows false-green this preflight exists to kill).
 [ -f "$TT" ] || { echo "doctor: cannot locate report-standard/toolkit-targets.sh (via CLAUDE_PLUGIN_ROOT or the doctor script dir); cannot resolve integration targets; repair the install: claude plugin update scoutflo@scoutflo, or run doctor.sh from the plugin repo root so report-standard/ resolves" >&2; exit 2; }
@@ -272,15 +280,21 @@ row() {
 
 # missing_hint <VAR>: the uniform env-missing hint. The plugin runs in its own
 # process and cannot see a shell `export`; credentials must live in the secret store
-# connect writes (~/.scoutflo/env), which doctor sources above. If the store already
-# NAMES the variable but it did not load, that line is malformed — say so precisely.
+# connect writes ($SCOUTFLO_ENV), which doctor sources above. Distinguishes three
+# reasons the variable did not load, so the fix is precise, not a generic "set it":
+#   1. a correctly `export`-prefixed line exists but didn't load -> malformed line;
+#   2. the line exists WITHOUT the `export ` prefix -> the plugin can't load it;
+#   3. not in the store at all -> most often exported in the shell only (invisible).
 # Greps the NAME only; never reads or prints the value (leak-scan stays green).
+# Read-only: it names the fix (addsecret.sh), it never edits the store itself.
 missing_hint() {
   mh_var="$1"
   if [ -f "$SCOUTFLO_ENV" ] && grep -qE "^[[:space:]]*export[[:space:]]+${mh_var}=" "$SCOUTFLO_ENV" 2>/dev/null; then
-    printf '%s' "${mh_var} appears in ~/.scoutflo/env but did not load — that line is malformed (a space in the name from a wrapped paste like HDX_E U_KEY, or a doubled =); fix that one line, then rerun doctor."
+    printf '%s' "${mh_var} appears in ${SCOUTFLO_ENV} but did not load — that line failed to parse, most often because the value has an unbalanced quote or backtick. Re-add it with: sh ${ADDSECRET} ${mh_var} (which escapes the value correctly), or fix that one line, then rerun doctor."
+  elif [ -f "$SCOUTFLO_ENV" ] && grep -qE "^[[:space:]]*${mh_var}=" "$SCOUTFLO_ENV" 2>/dev/null; then
+    printf '%s' "${mh_var} is in ${SCOUTFLO_ENV} but its line is missing the 'export ' prefix, so the plugin can't load it. Re-add it with: sh ${ADDSECRET} ${mh_var} (or prepend 'export ' to that one line), then rerun doctor."
   else
-    printf '%s' "${mh_var} is not in ~/.scoutflo/env — the plugin reads that file, not your shell. Add it: echo 'export ${mh_var}=\"<paste>\"' >> ~/.scoutflo/env; chmod 600 ~/.scoutflo/env (Windows: setx ${mh_var} \"<paste>\"), then rerun doctor."
+    printf '%s' "${mh_var} is not in ${SCOUTFLO_ENV} — the plugin reads that file, not your shell, so a plain 'export ${mh_var}=...' typed in your terminal is invisible to it. Add it with: sh ${ADDSECRET} ${mh_var} (prompts silently, writes it correctly; Windows: setx ${mh_var} \"<paste>\"), then rerun doctor."
   fi
 }
 
@@ -650,10 +664,10 @@ else
         DD_API_KEY="$(printenv "$DD_API_VAR" 2>/dev/null || true)"
         DD_APP_KEY="$(printenv "$DD_APP_VAR" 2>/dev/null || true)"
         if [ -z "$DD_API_KEY" ]; then
-          row "$DD_INT" env yes "$DD_API_VAR" env-missing - "add it once to ~/.scoutflo/env: echo 'export ${DD_API_VAR}=\"<paste>\"' >> ~/.scoutflo/env (Windows PowerShell: setx ${DD_API_VAR} \"<paste>\"), then rerun doctor; created per connect references/providers.md"
+          row "$DD_INT" env yes "$DD_API_VAR" env-missing - "$(missing_hint "$DD_API_VAR")"
           DD_BLOCKED=1
         elif [ -z "$DD_APP_KEY" ]; then
-          row "$DD_INT" env yes "$DD_APP_VAR" env-missing - "add it once to ~/.scoutflo/env: echo 'export ${DD_APP_VAR}=\"<paste>\"' >> ~/.scoutflo/env (Windows PowerShell: setx ${DD_APP_VAR} \"<paste>\"), then rerun doctor; the app key is the second half of the pair"
+          row "$DD_INT" env yes "$DD_APP_VAR" env-missing - "$(missing_hint "$DD_APP_VAR") The app key is the second half of the pair (api_key_env + app_key_env)."
           DD_BLOCKED=1
         else
           row "$DD_INT" env yes "${DD_API_VAR}+${DD_APP_VAR}" pass - -

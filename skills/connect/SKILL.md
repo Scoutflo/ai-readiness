@@ -60,6 +60,22 @@ Two conventions are rules, not suggestions:
 - ❌ `grafana: { url: ..., token_env: GRAFANA_TOKEN }` backed by a token named `my-admin-token` with the Admin role, used for audits and setup alike.
 - ✅ `grafana: { url: ..., token_env: GRAFANA_TOKEN, tier: read-only }` backed by a Viewer service account named `scoutflo-audit`, with a separate `scoutflo-setup` account created only when setup work starts.
 
+## Quick connect (the 3-move path)
+
+For the common case — a single environment, one instance of each tool — connecting is three moves, and the agent drives most of it. Steps 1–8 below are the full reference the agent follows; you rarely need to read them.
+
+1. **Pick your integrations.** The agent shows a numbered list of what's supported and detects the cloud CLIs you're already logged into (`gcloud` / `az` / AWS / `doctl`); you say which to include, and it writes `~/.scoutflo/toolkit.yaml` for you.
+2. **Give each one its credential.** For each integration that needs a token, the agent hands you two copy-paste lines: one to **create** a read-only token (from [references/providers.md](references/providers.md)), and one to **store** it with the shipped writer — which prompts silently, escapes the value, writes it where the plugin reads, and never echoes it:
+
+   ```bash
+   sh "${CLAUDE_PLUGIN_ROOT}/skills/connect/scripts/addsecret.sh" GRAFANA_TOKEN
+   ```
+
+   The cloud CLIs (GCP / Azure / AWS) need no token — the agent uses your existing login.
+3. **Run `/scoutflo:doctor`.** It gives the green light and, for anything not wired yet, names the exact one-line fix. Then you audit.
+
+That's the whole happy path. **Everything below is depth for less-common cases** — more than one environment, more than one instance of a tool, elevated (setup) credentials, or a sandboxed host. On a single estate you can go straight to auditing once doctor is green; the agent only raises an advanced shape when your own answers show you need it — it never sets one up by default.
+
 ## Step 1: Pick your integrations
 
 Configure only what you run. Unconfigured integrations are skipped cleanly by every skill; they are not failures.
@@ -266,7 +282,7 @@ $Env:GRAFANA_TOKEN = "<paste-your-grafana-token-here>"
 
 **Windows — Git Bash** (the shell the plugin's skills actually run in on Windows): use the macOS/Linux `export` form above, in the Git Bash window.
 
-A bare `export`/`$Env:` sets the value **only in the shell you type it in**. The plugin's skills run in their *own* process and read every secret from the home-anchored store `~/.scoutflo/env` (Step 4a sources it, and so do `doctor` and every audit) — so a plain `export` in your terminal is **invisible to the plugin**. The forms above are for running a provider's Step 3 verify command right now, in the same shell; for anything the toolkit must see later, use the one-line store-writer `scoutflo_addsecret` in Step 4c, which both records the value in `~/.scoutflo/env` **and** exports it into your current shell. Prefer it especially for any value you paste (a long HyperDX key, a webhook URL): it takes the variable **name as a fixed argument** and reads the value with a single silent `read`, so a wrapped paste can never split the name in two (`HDX_EU_KEY` arriving as `HDX_E U_KEY`), leave the token in your shell history, or double an `=`.
+A bare `export`/`$Env:` sets the value **only in the shell you type it in**. The plugin's skills run in their *own* process and read every secret from the home-anchored store `~/.scoutflo/env` (Step 4a sources it, and so do `doctor` and every audit) — so a plain `export` in your terminal is **invisible to the plugin**. The forms above are for running a provider's Step 3 verify command right now, in the same shell; for anything the toolkit must see later, use the **shipped store-writer** in Step 4c (`sh "${CLAUDE_PLUGIN_ROOT}/skills/connect/scripts/addsecret.sh" VAR`), which records the value in `~/.scoutflo/env` where the plugin reads it. Prefer it especially for any value you paste (a long HyperDX key, a webhook URL): it takes the variable **name as a fixed argument** and reads the value with a single silent `read`, so a wrapped paste can never split the name in two (`HDX_EU_KEY` arriving as `HDX_E U_KEY`), leave the token in your shell history, or double an `=`.
 
 Swap `GRAFANA_TOKEN` for the exact `*_env` name of whatever you are setting (`DATADOG_API_KEY`, `PROM_TOKEN`, `PAGERDUTY_TOKEN`, …). Datadog needs two (`DATADOG_API_KEY` and `DATADOG_APP_KEY`); JSM needs `JSM_EMAIL` plus `JSM_API_TOKEN`.
 
@@ -284,25 +300,16 @@ mkdir -p ~/.scoutflo && touch ~/.scoutflo/env && chmod 600 ~/.scoutflo/env
 grep -q 'scoutflo/env' ~/.zshrc 2>/dev/null || echo '[ -f ~/.scoutflo/env ] && . ~/.scoutflo/env' >> ~/.zshrc
 # bash users: same line into ~/.bashrc instead of ~/.zshrc.
 
-# 3) Define the store-writer ONCE per shell (paste this block; add it to your profile to
-#    keep it). It takes the variable NAME as its argument and prompts silently for the value:
-scoutflo_addsecret() {
-  _n="$1"; [ -n "$_n" ] || { echo "usage: scoutflo_addsecret VARNAME" >&2; return 2; }
-  mkdir -p ~/.scoutflo && touch ~/.scoutflo/env && chmod 600 ~/.scoutflo/env
-  printf '%s: ' "$_n" >&2; stty -echo 2>/dev/null; IFS= read -r _v; stty echo 2>/dev/null; printf '\n' >&2
-  _e=$(printf '%s' "$_v" | sed "s/'/'\\''/g")
-  grep -v "^export ${_n}=" ~/.scoutflo/env > ~/.scoutflo/env.$$ 2>/dev/null || :
-  printf "export %s='%s'\n" "$_n" "$_e" >> ~/.scoutflo/env.$$
-  mv ~/.scoutflo/env.$$ ~/.scoutflo/env && chmod 600 ~/.scoutflo/env
-  export "$_n=$_v"; unset _v _e; echo "$_n written to ~/.scoutflo/env and exported here" >&2
-}
-
-# 4) Add each credential by NAME (one call per variable). It prompts silently — paste the
-#    value at the prompt and press Enter; nothing echoes and nothing lands in shell history:
-scoutflo_addsecret GRAFANA_TOKEN
+# 3) Store each credential by NAME with the shipped writer — the safe, no-setup path.
+#    It prompts silently (paste the value, press Enter): nothing echoes, nothing lands in
+#    shell history, the value is single-quote-escaped, and it is written where the plugin
+#    reads it. One call per variable. The agent hands you this with the path resolved:
+sh "${CLAUDE_PLUGIN_ROOT}/skills/connect/scripts/addsecret.sh" GRAFANA_TOKEN
 ```
 
-Why this is the safe path and not a hand-typed `echo … >> env`: the **name is a fixed argument**, so a wrapped paste can never turn `HDX_EU_KEY` into `HDX_E U_KEY` and there is no keyboard path to an `export VAR==` typo; the value is read once, silently, and never enters shell history; it is single-quote-escaped before storage, so a `$`, `"`, or backtick in a token is stored literally; a re-run **replaces** that variable's line rather than appending a duplicate; the file stays `chmod 600`; and it `export`s the value into your current shell too, so a provider's Step 3 verify command works in the same terminal without opening a new one. Swap `GRAFANA_TOKEN` for the exact `*_env` name you are setting.
+Why this is the safe path and not a hand-typed `echo … >> env`: the **name is a fixed argument**, so a wrapped paste can never turn `HDX_EU_KEY` into `HDX_E U_KEY` and there is no keyboard path to an `export VAR==` typo; the value is read once, silently, and never enters shell history; it is single-quote-escaped before storage, so a `$`, `"`, `'`, or backtick in a token is stored literally; a re-run **replaces** that variable's line rather than appending a duplicate; and the file stays `chmod 600`. Being a **shipped command it can never be "command not found"** — the exact failure that silently leaves the store empty with every token reading as missing. It runs in its own process, so it does not set the variable in your current shell: `doctor` and every audit read the file directly, and to load it into *this* shell too, run `. ~/.scoutflo/env`. Swap `GRAFANA_TOKEN` for the exact `*_env` name you are setting.
+
+*Prefer a shell function that also exports into the current shell?* You can still write your own `scoutflo_addsecret`, but the shipped command needs no setup and cannot be left undefined — which is why it is the default here.
 
 **Windows — PowerShell — one-time, persists for your user across all new terminals:**
 
@@ -368,7 +375,7 @@ The same ladder applies to the secret store `env` file (Step 4c): shell append �
 
 If the user asks to keep the config inside their project folder instead of `~/.scoutflo/`, explain the trade-off rather than refusing: home-anchoring is what makes credentials work from every folder and session without re-entry, and reports already live in their project folder (`./scoutflo-audits/`). If they still want it relocated (isolated estates, shared-machine policy), set it up with `export SCOUTFLO_CONFIG="<their-path>/toolkit.yaml"` persisted the same way as Step 4c — every skill honors that override.
 
-**Multiple environments (prod + nonprod), the recommended shape.** A team auditing more than one estate keeps a **named config per environment** — `~/.scoutflo/toolkit-prod.yaml`, `~/.scoutflo/toolkit-nonprod.yaml` — instead of one `toolkit.yaml`, and selects one per run with `export SCOUTFLO_CONFIG=~/.scoutflo/toolkit-<env>.yaml`. This is a first-class pattern: when a skill finds no default `toolkit.yaml` but sees `toolkit-*.yaml` variants, its doctor gate **lists them and asks which environment** rather than stalling — and it **never auto-picks** one, because auditing prod when you meant staging (or vice-versa) is worse than a one-line question. When you set up multiple environments here, write each `toolkit-<env>.yaml` (same structure, environment-specific `kubernetes.context` / account / URLs), then **write the pointer to the environment new terminals should default to** — `printf '%s\n' "$HOME/.scoutflo/toolkit-nonprod.yaml" > "$HOME/.scoutflo/active-config"` (nonprod is the safer default) — so a fresh session resolves that environment without re-exporting. A one-off `export SCOUTFLO_CONFIG=~/.scoutflo/toolkit-prod.yaml` overrides the pointer for a single prod run; this is what keeps "audit prod when you meant staging" from ever happening by accident. `/scoutflo:audit-cost` and `/scoutflo:audit-all` can also ask which environment to cover when both configs are present.
+**Multiple environments (prod + nonprod) — set this up only if you actually run more than one estate.** For a single environment this whole pattern is skipped: one `toolkit.yaml` is the answer, and connect does **not** create per-environment files unless your own answers show more than one environment (never propose it by default — over-configuring a single estate into prod/nonprod files is a real source of confusion). When you genuinely run several, keep a **named config per environment** — `~/.scoutflo/toolkit-prod.yaml`, `~/.scoutflo/toolkit-nonprod.yaml` — instead of one `toolkit.yaml`, and select one per run with `export SCOUTFLO_CONFIG=~/.scoutflo/toolkit-<env>.yaml`. This is a first-class pattern: when a skill finds no default `toolkit.yaml` but sees `toolkit-*.yaml` variants, its doctor gate **lists them and asks which environment** rather than stalling — and it **never auto-picks** one, because auditing prod when you meant staging (or vice-versa) is worse than a one-line question. When you set up multiple environments here, write each `toolkit-<env>.yaml` (same structure, environment-specific `kubernetes.context` / account / URLs), then **write the pointer to the environment new terminals should default to** — `printf '%s\n' "$HOME/.scoutflo/toolkit-nonprod.yaml" > "$HOME/.scoutflo/active-config"` (nonprod is the safer default) — so a fresh session resolves that environment without re-exporting. A one-off `export SCOUTFLO_CONFIG=~/.scoutflo/toolkit-prod.yaml` overrides the pointer for a single prod run; this is what keeps "audit prod when you meant staging" from ever happening by accident. `/scoutflo:audit-cost` and `/scoutflo:audit-all` can also ask which environment to cover when both configs are present.
 
 Then apply the approved blocks from Step 5:
 
@@ -476,8 +483,8 @@ owns that file and its rich capture flow.
 | Sentry commands hit the wrong region and every call 404s | Set `sentry.host` explicitly; run the region probe in [references/providers.md](references/providers.md) before writing the config |
 | One admin token reused for both tiers | Separate credentials named `scoutflo-audit` and `scoutflo-setup`; record each block's `tier:` and revoke the elevated one when setup work is done |
 | Slack webhook URL treated as non-secret config | The URL is the credential; it goes in the env var named by `slack.webhook_env`, never in the file |
-| Secrets exported in one terminal, doctor run in another (or invisible to the plugin) | A bare `export` lives only in that shell and the plugin reads its own process; write the value to `~/.scoutflo/env` with `scoutflo_addsecret <VAR>` (Step 4c) so every session, terminal, and the plugin pick it up |
-| A pasted key wraps and the name splits (`HDX_E U_KEY`) or an `export VAR==` typo slips in | Use `scoutflo_addsecret <VAR>` (Step 4c): the name is a fixed argument and the value is a single silent read, so a wrapped paste can't break the name and there is no `==` keyboard path |
+| Secrets exported in one terminal, doctor run in another (or invisible to the plugin) | A bare `export` lives only in that shell and the plugin reads its own process; write the value to `~/.scoutflo/env` with the shipped writer `sh "${CLAUDE_PLUGIN_ROOT}/skills/connect/scripts/addsecret.sh" <VAR>` (Step 4c) so every session, terminal, and the plugin pick it up |
+| A pasted key wraps and the name splits (`HDX_E U_KEY`) or an `export VAR==` typo slips in | Use the shipped writer `sh "${CLAUDE_PLUGIN_ROOT}/skills/connect/scripts/addsecret.sh" <VAR>` (Step 4c): the name is a fixed argument and the value is a single silent read, so a wrapped paste can't break the name and there is no `==` keyboard path |
 | A named cloud target is silently dropped from the config | Step 2a resolves and lists every visible subscription/project/account and Step 6's completeness check reconciles written targets against the names from Step 1 |
 | Audits pointed at an admin kube context | Use a read-only context bound to the `view` ClusterRole; name it in `kubernetes.context` |
 | Mimir or VictoriaMetrics queries return empty because tenancy was skipped | Set `mimir.tenant_id` (or the VM tenant path) during connect, not mid-audit |
