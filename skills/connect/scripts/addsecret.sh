@@ -4,7 +4,10 @@
 # found" the way the scoutflo_addsecret shell function can (that trap left a
 # customer's store empty and every token reading as missing).
 #
-#   Usage:  sh addsecret.sh VARNAME     # prompts SILENTLY for the value
+#   Usage:  sh addsecret.sh VARNAME              # prompts SILENTLY for a literal value
+#           sh addsecret.sh --command VARNAME    # prompts for a COMMAND; stores
+#                                                #   export VAR="$(command)" — runs on every
+#                                                #   store load (e.g. vault kv get). Trusted fetch only.
 #
 # Guarantees (same as the scoutflo_addsecret function, minus the parent-shell
 # export a subprocess cannot do):
@@ -29,10 +32,13 @@ set -eu
 umask 077
 
 _n="${1:-}"
+_mode=value
 case "$_n" in
-  -h|--help) echo "usage: sh addsecret.sh VARNAME   (prompts silently for the value)"; exit 0 ;;
-  "") echo "usage: sh addsecret.sh VARNAME   (prompts silently for the value)" >&2; exit 2 ;;
+  -h|--help) echo "usage: sh addsecret.sh VARNAME            (prompts silently for a literal value)"; echo "       sh addsecret.sh --command VARNAME  (prompts for a command; stores export VAR=\"\$(command)\" — runs on load, e.g. vault kv get)"; exit 0 ;;
+  --command|-c) _mode=command; _n="${2:-}" ;;
+  "") echo "usage: sh addsecret.sh VARNAME | --command VARNAME" >&2; exit 2 ;;
 esac
+[ -n "$_n" ] || { echo "usage: sh addsecret.sh --command VARNAME  (a variable name is required)" >&2; exit 2; }
 # The name must be a valid env identifier; reject a mistyped/split name (e.g. a
 # wrapped paste that put a space in it) instead of writing a line nothing can read.
 case "$_n" in
@@ -48,20 +54,39 @@ if [ -z "$STORE" ]; then
 fi
 mkdir -p "$(dirname "$STORE")" && touch "$STORE" && chmod 600 "$STORE"
 
-# Read the value silently: no echo, no argv, no history. stty guards a non-tty
-# (piped input, e.g. tests) rather than failing.
-printf '%s: ' "$_n" >&2
-stty -echo 2>/dev/null || :
-IFS= read -r _v || :
-stty echo 2>/dev/null || :
-printf '\n' >&2
-[ -n "${_v:-}" ] || { echo "addsecret: no value entered; nothing written for $_n" >&2; exit 2; }
+if [ "$_mode" = command ]; then
+  # Command-sourced secret. The store is a sourced shell file, so `export VAR="$(cmd)"` runs
+  # the command every time the store loads (doctor + every audit source it). The command LINE
+  # is not itself the secret, so read it visibly; the resolved VALUE is never written here (it
+  # resolves at load, not now). Use ONLY a trusted secret fetch.
+  printf 'command to fetch %s (e.g. vault kv get -field=token secret/grafana): ' "$_n" >&2
+  IFS= read -r _c || :
+  [ -n "${_c:-}" ] || { echo "addsecret: no command entered; nothing written for $_n" >&2; exit 2; }
+  # Write export VAR="$(command)" — NOT single-quote-escaped, so the command substitution
+  # survives to run on load. Replace-or-append the line atomically.
+  _tmp="${STORE}.tmp.$$"
+  { grep -v "^export ${_n}=" "$STORE" 2>/dev/null || :; } > "$_tmp"
+  printf 'export %s="$(%s)"\n' "$_n" "$_c" >> "$_tmp"
+  mv "$_tmp" "$STORE" && chmod 600 "$STORE"
+  unset _c
+  echo "$_n saved to $STORE as a command-sourced secret  (load it into this shell with: . $STORE)" >&2
+  echo "NOTE: that command RUNS every time the store is loaded (doctor + every audit). Use ONLY a trusted secret fetch (e.g. vault kv get); never an untrusted or side-effecting command. Avoid a fetch command containing a literal double-quote (it would break the stored line). The resolved value is never printed or stored." >&2
+else
+  # Read the value silently: no echo, no argv, no history. stty guards a non-tty
+  # (piped input, e.g. tests) rather than failing.
+  printf '%s: ' "$_n" >&2
+  stty -echo 2>/dev/null || :
+  IFS= read -r _v || :
+  stty echo 2>/dev/null || :
+  printf '\n' >&2
+  [ -n "${_v:-}" ] || { echo "addsecret: no value entered; nothing written for $_n" >&2; exit 2; }
 
-# Single-quote-escape the value, then replace-or-append the export line atomically.
-_e=$(printf '%s' "$_v" | sed "s/'/'\\\\''/g")
-_tmp="${STORE}.tmp.$$"
-{ grep -v "^export ${_n}=" "$STORE" 2>/dev/null || :; } > "$_tmp"
-printf "export %s='%s'\n" "$_n" "$_e" >> "$_tmp"
-mv "$_tmp" "$STORE" && chmod 600 "$STORE"
-unset _v _e
-echo "$_n saved to $STORE  (load it into this shell with: . $STORE)" >&2
+  # Single-quote-escape the value, then replace-or-append the export line atomically.
+  _e=$(printf '%s' "$_v" | sed "s/'/'\\\\''/g")
+  _tmp="${STORE}.tmp.$$"
+  { grep -v "^export ${_n}=" "$STORE" 2>/dev/null || :; } > "$_tmp"
+  printf "export %s='%s'\n" "$_n" "$_e" >> "$_tmp"
+  mv "$_tmp" "$STORE" && chmod 600 "$STORE"
+  unset _v _e
+  echo "$_n saved to $STORE  (load it into this shell with: . $STORE)" >&2
+fi
