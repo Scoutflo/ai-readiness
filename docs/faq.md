@@ -74,6 +74,9 @@ The toolkit is free. Runs consume your own Claude subscription or API usage like
 **We are in the EU. Does Sentry / our region work?**
 Yes. Hosts and regions come from your `~/.scoutflo/toolkit.yaml`; nothing assumes a US region. `/scoutflo:connect` covers region selection per provider.
 
+**Our logs/metrics/traces stores are spread across several clusters or environments. One audit, or one per cluster?**
+One audit. Make `lgtm:` in your `toolkit.yaml` a **list** of stack entries — each with its own `label`, `kubernetes_context`, and store URLs (`loki_url`, `victoriametrics_url`, `tempo_url`, …) — and `/scoutflo:audit-lgtm` audits each stack in turn, writing a separate report per environment under `scoutflo-audits/lgtm/<label>/`. `/scoutflo:doctor` validates and probes each stack. A single stack stays a plain `lgtm:` block with nothing to change. See `references/providers.md` → "Multiple clusters / environments".
+
 **Can I silence a finding we have accepted?**
 Yes: add it to `./scoutflo-audits/exemptions.yaml` with a reason and an expiry date. It moves to the report's Suppressed appendix instead of vanishing, and returns automatically when the exemption expires.
 
