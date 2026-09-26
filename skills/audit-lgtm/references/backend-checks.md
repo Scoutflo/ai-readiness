@@ -4,7 +4,7 @@ Runnable, read-only checks for every backend the [audit-lgtm](../SKILL.md) workf
 
 ## Conventions
 
-**Multi-target (IMP-003).** When `lgtm` is a **list** of stacks (multi-cluster), the source for each `# <block>.url` comment below is the **current stack entry's flat key**, not the top-level block: resolve it from the target the runner selected with `SCOUTFLO_TARGET`, e.g. `LOKI_URL="$(sh "${CLAUDE_PLUGIN_ROOT}/report-standard/toolkit-targets.sh" "$CFG" lgtm get "$LG_IDX" loki_url)"` (`# loki.url` → `loki_url`, `# tempo.url` → `tempo_url`, `# mimir.url` → `mimir_url`, `# victoriametrics.url` → `victoriametrics_url`, `# prometheus.url` → `prometheus_url`, `# prometheus.alertmanager_url` → `alertmanager_url`, `# victoriametrics.vmalert_url` → `vmalert_url`), with `$KUBE_CONTEXT` and `$MONITORING_NAMESPACES` from that same entry (Phase 0/2 set `$LG_IDX`). When `lgtm` is a single map (or absent), read the top-level blocks exactly as the `# key` comments show — byte-identical to before. `grafana.url` is always the top-level block (a Grafana is commonly shared across stacks).
+**Multi-target (IMP-003).** When `lgtm` is a **list** of stacks (multi-cluster), the source for each `# <block>.url` comment below is the **current stack entry's flat key**, not the top-level block: resolve it from the target the runner selected with `SCOUTFLO_TARGET`, e.g. `LOKI_URL="$(sh "${CLAUDE_PLUGIN_ROOT}/report-standard/toolkit-targets.sh" "$CFG" lgtm get "$LG_IDX" loki_url)"` (`# loki.url` → `loki_url`, `# tempo.url` → `tempo_url`, `# mimir.url` → `mimir_url`, `# victoriametrics.url` → `victoriametrics_url`, `# prometheus.url` → `prometheus_url`, `# prometheus.alertmanager_url` → `alertmanager_url`, `# victoriametrics.vmalert_url` → `vmalert_url`), with `$KUBE_CONTEXT` and `$MONITORING_NAMESPACES` from that same entry (Phase 0/2 set `$LG_IDX`). When `lgtm` is a single map (or absent), read the top-level blocks exactly as the `# key` comments show — byte-identical to before. `grafana.url` is always the top-level block (a Grafana is commonly shared across stacks). In multi mode the **output segment** is also per-stack — `$LG_SEG` = `lgtm/<label>` (Phase 0/2 set it), so every artifact and transient working file writes under `lgtm/<label>/<date>/`, never colliding across stacks.
 
 Every block declares its variables at the top with the `toolkit.yaml` key it resolves from. Auth uses this pattern throughout; endpoints without auth send a harmless `Accept` header instead of a broken empty bearer:
 
@@ -755,7 +755,7 @@ LGTM-031, name parity across signals:
 
 ```bash
 set -eu
-OUT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/lgtm/$(date -u +%Y-%m-%d)"; mkdir -p "$OUT"
+OUT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${LG_SEG:-lgtm}/$(date -u +%Y-%m-%d)"; mkdir -p "$OUT"   # LG_SEG=lgtm/<label> in multi-stack mode, so these working files don't collide across stacks
 SERVICE_LABEL="service"                        # tune to your canonical label
 METRICS_URL="https://prometheus.example.com"   # prometheus.url (adjust prefix per sections 3-4)
 LOKI_URL="https://loki.example.com"            # loki.url

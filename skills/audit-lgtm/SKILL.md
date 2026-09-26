@@ -75,7 +75,7 @@ command -v jq   >/dev/null || { echo "jq not installed"; exit 1; }
 # *_token_env). Resolve through the ONE shared enumerator so the shape is parsed one way.
 # Runtime mode stays an operator-owned scope decision read from config — never inferred.
 TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
-LG_KIND="$(sh "$TT" "$CFG" lgtm kind)"           # seq | map | absent
+LG_KIND="$(sh "$TT" "$CFG" lgtm kind 2>/dev/null || echo absent)"           # seq | map | absent
 LG_N="$(sh "$TT" "$CFG" lgtm count)"; [ "$LG_N" -ge 1 ] 2>/dev/null || LG_N=1
 # When `lgtm` is a list, the AGENT runs this whole audit once per target, selecting each with
 # SCOUTFLO_TARGET=<label> (enumerate labels with `sh "$TT" "$CFG" lgtm labels`). This block
@@ -85,6 +85,9 @@ if [ -n "${SCOUTFLO_TARGET:-}" ]; then
   _i=0; while [ "$_i" -lt "$LG_N" ]; do [ "$(sh "$TT" "$CFG" lgtm label "$_i")" = "$SCOUTFLO_TARGET" ] && { LG_IDX=$_i; break; }; _i=$((_i+1)); done
 fi
 LG_LABEL="$(sh "$TT" "$CFG" lgtm label "$LG_IDX")"
+if [ "$LG_KIND" = seq ] && [ -n "${SCOUTFLO_TARGET:-}" ] && [ "$LG_LABEL" != "$SCOUTFLO_TARGET" ]; then
+  echo "warning: SCOUTFLO_TARGET='${SCOUTFLO_TARGET}' matched no lgtm stack label; auditing the first stack '${LG_LABEL}' instead — check the label against 'sh \"\$TT\" \"\$CFG\" lgtm labels'" >&2
+fi
 if [ "$LG_KIND" = seq ]; then
   # Self-contained stack entry: everything (context + store URLs) comes from THIS target.
   LG_SEG="lgtm/${LG_LABEL}"                        # output nests: lgtm/<label>/<date>/
@@ -306,7 +309,7 @@ CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml
 # (the runner sets SCOUTFLO_TARGET=<label>); a single `lgtm` map/absent resolves from the
 # top-level blocks exactly as before. Self-contained so this phase can run standalone.
 TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
-LG_KIND="$(sh "$TT" "$CFG" lgtm kind)"; LG_N="$(sh "$TT" "$CFG" lgtm count)"; [ "$LG_N" -ge 1 ] 2>/dev/null || LG_N=1
+LG_KIND="$(sh "$TT" "$CFG" lgtm kind 2>/dev/null || echo absent)"; LG_N="$(sh "$TT" "$CFG" lgtm count)"; [ "$LG_N" -ge 1 ] 2>/dev/null || LG_N=1
 LG_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$LG_N" ]; do [ "$(sh "$TT" "$CFG" lgtm label "$_i")" = "$SCOUTFLO_TARGET" ] && { LG_IDX=$_i; break; }; _i=$((_i+1)); done; fi
 if [ "$LG_KIND" = seq ]; then
   RUNTIME_MODE="$(sh "$TT" "$CFG" lgtm get "$LG_IDX" runtime_mode)"
