@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.1.211
+
+**Fix the connect provider recipes to use the shipped secret-writer (IMP-012).**
+`references/providers.md`'s per-provider "Export and verify" snippets still called the
+`scoutflo_addsecret` shell **function**, which v0.1.207 removed — so anyone following
+those recipes hit "command not found" (the exact trap `addsecret.sh` was shipped to
+kill). All ~19 export lines now use `sh "${CLAUDE_PLUGIN_ROOT}/skills/connect/scripts/addsecret.sh" <VAR>`,
+each followed by `. ~/.scoutflo/env` so the verify command right below still sees the
+value (the shipped writer is a subprocess and can't export into your shell). The intro
+and human/agent-boundary notes were updated to match; defining your own
+`scoutflo_addsecret` remains a documented optional convenience. Docs-only; no behavior change.
+
 ## 0.1.210
 
 **Onboarding robustness: cluster-discovery triage + Vault/command-sourced secrets
