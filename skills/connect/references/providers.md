@@ -4,14 +4,14 @@ One section per integration: click path, minimal scopes per tier, the `toolkit.y
 
 ### Where secrets live
 
-`~/.scoutflo/env` is the home-anchored file **every skill reads** at run time — `doctor` and every audit source it before they do anything, so a value added there is picked up in the same session. You write a value into it with the one-liner `scoutflo_addsecret <VAR>` (defined in `/scoutflo:connect` Step 4c): it takes the variable **name** as a fixed argument, prompts silently for the value, records it in `~/.scoutflo/env`, and exports it into your current shell so the verify command right below works immediately. A plain shell `export` sets the value only in the one terminal you type it in and is **invisible to the plugin's own process**, which is why every "Export and verify" section below uses `scoutflo_addsecret <VAR>` rather than a bare `export`.
+`~/.scoutflo/env` is the home-anchored file **every skill reads** at run time — `doctor` and every audit source it before they do anything, so a value added there is picked up in the same session. You write a value into it with the shipped writer `sh "${CLAUDE_PLUGIN_ROOT}/skills/connect/scripts/addsecret.sh" <VAR>`: it takes the variable **name** as a fixed argument, prompts silently for the value, and records it in `~/.scoutflo/env` — a real command that can never be "command not found." Being a subprocess it cannot export into your current shell, so each "Export and verify" section below runs `. ~/.scoutflo/env` right after to load the value for the verify command. A plain shell `export` sets the value only in the one terminal you type it in and is **invisible to the plugin's own process**, which is why a credential persists via the writer plus the store file (loaded with `. ~/.scoutflo/env`), never a bare `export`. (Prefer a shell function that also exports into your current shell? You can still define your own `scoutflo_addsecret`; the shipped script is the default because it needs no setup and cannot be left undefined.)
 
 **Fetch a secret at load time instead of pasting it (Vault etc.).** Because `~/.scoutflo/env` is *sourced*, a line like `export GRAFANA_TOKEN="$(vault kv get -field=token secret/grafana)"` resolves every time the store loads — no static secret on disk. Write one with the command form of the shipped writer: `sh "${CLAUDE_PLUGIN_ROOT}/skills/connect/scripts/addsecret.sh" --command <VAR>` (prompts for the fetch command, stores that line, never records the resolved value). **Use only a trusted, side-effect-free fetch** (e.g. `vault kv get`) — the command runs on every store load; if it needs a session (`vault login`), establish that in your shell first.
 
 Two conventions apply everywhere below:
 
 - **Tier naming rule**: read-only credentials are named `scoutflo-audit`, elevated ones `scoutflo-setup`, in every provider that lets you name tokens, service accounts, or integrations. Every config block that names a `token_env` also records `tier: read-only` or `tier: elevated` for the token behind it.
-- **Human/agent boundary**: any command that prompts for or writes a secret value (the `scoutflo_addsecret <VAR>` lines under Export headings) is yours to run in your own terminal. Agents display those commands and never execute them.
+- **Human/agent boundary**: any command that prompts for or writes a secret value (the `addsecret.sh <VAR>` lines under Export headings) is yours to run in your own terminal. Agents display those commands and never execute them.
 
 ## Quick reference: read-only tier, all providers
 
@@ -67,7 +67,8 @@ OSS caveat: Grafana OSS has basic roles only. Listing datasources (`GET /api/dat
 
 ```bash
 # YOU run this in your own terminal; an agent never executes this line.
-scoutflo_addsecret GRAFANA_TOKEN   # prompts silently, writes ~/.scoutflo/env, exports here (defined in /scoutflo:connect Step 4c)
+sh "${CLAUDE_PLUGIN_ROOT}/skills/connect/scripts/addsecret.sh" GRAFANA_TOKEN   # shipped writer — prompts silently, writes ~/.scoutflo/env, never "command not found"
+. ~/.scoutflo/env   # load it into THIS shell so the verify below sees the value (addsecret.sh is a subprocess; it cannot export to your shell)
 
 GRAFANA_URL="https://grafana.example.com"   # grafana.url
 curl -fsS --max-time 10 -H "Authorization: Bearer ${GRAFANA_TOKEN}" "${GRAFANA_URL}/api/health" | jq -e '.database=="ok"' >/dev/null \
@@ -148,7 +149,8 @@ Alternatives, and why they are second choice:
 
 ```bash
 # YOU run this in your own terminal; an agent never executes this line.
-scoutflo_addsecret SENTRY_TOKEN   # prompts silently, writes ~/.scoutflo/env, exports here (defined in /scoutflo:connect Step 4c)
+sh "${CLAUDE_PLUGIN_ROOT}/skills/connect/scripts/addsecret.sh" SENTRY_TOKEN   # shipped writer — prompts silently, writes ~/.scoutflo/env, never "command not found"
+. ~/.scoutflo/env   # load it into THIS shell so the verify below sees the value (addsecret.sh is a subprocess; it cannot export to your shell)
 
 SENTRY_HOST="us.sentry.io"    # sentry.host
 SENTRY_ORG="your-org-slug"    # sentry.org
@@ -191,7 +193,8 @@ DigitalOcean supports custom-scoped API tokens. The API cannot introspect a toke
 
 ```bash
 # YOU run this in your own terminal; an agent never executes this line.
-scoutflo_addsecret DIGITALOCEAN_ACCESS_TOKEN   # prompts silently, writes ~/.scoutflo/env, exports here (defined in /scoutflo:connect Step 4c)
+sh "${CLAUDE_PLUGIN_ROOT}/skills/connect/scripts/addsecret.sh" DIGITALOCEAN_ACCESS_TOKEN   # shipped writer — prompts silently, writes ~/.scoutflo/env, never "command not found"
+. ~/.scoutflo/env   # load it into THIS shell so the verify below sees the value (addsecret.sh is a subprocess; it cannot export to your shell)
 
 doctl account get -o json | jq -e '(if type=="array" then .[0] else . end) | .status == "active"'
 # Expect: exit 0 (prints `true`). A failure here (or a 401 from doctl) means the
@@ -239,7 +242,8 @@ Two caveats to know at creation time:
 
 ```bash
 # YOU run this in your own terminal; an agent never executes this line.
-scoutflo_addsecret PAGERDUTY_TOKEN   # prompts silently, writes ~/.scoutflo/env, exports here (defined in /scoutflo:connect Step 4c)
+sh "${CLAUDE_PLUGIN_ROOT}/skills/connect/scripts/addsecret.sh" PAGERDUTY_TOKEN   # shipped writer — prompts silently, writes ~/.scoutflo/env, never "command not found"
+. ~/.scoutflo/env   # load it into THIS shell so the verify below sees the value (addsecret.sh is a subprocess; it cannot export to your shell)
 
 PD_API="https://api.pagerduty.com"   # pagerduty.region: us -> api.pagerduty.com, eu -> api.eu.pagerduty.com
 # status-probe-ok: quick user sanity-check against api.pagerduty.com (fixed vendor JSON API, no SSO login fall-through); the authoritative JSON-asserting gate is /scoutflo:doctor.
@@ -308,8 +312,9 @@ Two things to know at creation time:
 
 ```bash
 # YOU run these in your own terminal; an agent never executes these lines.
-scoutflo_addsecret DATADOG_API_KEY   # prompts silently, writes ~/.scoutflo/env, exports here (defined in /scoutflo:connect Step 4c)
-scoutflo_addsecret DATADOG_APP_KEY   # Datadog needs both keys — one call each
+sh "${CLAUDE_PLUGIN_ROOT}/skills/connect/scripts/addsecret.sh" DATADOG_API_KEY   # shipped writer — prompts silently, writes ~/.scoutflo/env, never "command not found"
+sh "${CLAUDE_PLUGIN_ROOT}/skills/connect/scripts/addsecret.sh" DATADOG_APP_KEY   # Datadog needs both keys — one call each
+. ~/.scoutflo/env   # load it into THIS shell so the verify below sees the value (addsecret.sh is a subprocess; it cannot export to your shell)
 
 DD_SITE="datadoghq.com"   # datadog.site
 # status-probe-ok: quick user sanity-check against api.<site> Datadog (fixed vendor JSON API, no SSO login fall-through); the authoritative JSON-asserting gate is /scoutflo:doctor.
@@ -406,7 +411,8 @@ If you also want the legacy-Watcher split check (ELK-032), add `"cluster": ["mon
 # The prompt shows NOTHING as you paste the encoded key — that is the silent read hiding the
 # value, not a hang. Paste and press Enter; the name is a fixed argument, so a wrapped paste
 # can never split it. (Defined in /scoutflo:connect Step 4c.)
-scoutflo_addsecret KIBANA_API_KEY   # prompts silently, writes ~/.scoutflo/env, exports here
+sh "${CLAUDE_PLUGIN_ROOT}/skills/connect/scripts/addsecret.sh" KIBANA_API_KEY   # shipped writer — prompts silently, writes ~/.scoutflo/env, never "command not found"
+. ~/.scoutflo/env   # load it into THIS shell so the verify below sees the value (addsecret.sh is a subprocess; it cannot export to your shell)
 
 KIBANA_URL="https://kibana.example.com"   # elk.kibana_url
 # Kibana takes the encoded key as "Authorization: ApiKey <encoded>".
@@ -479,8 +485,9 @@ Notification policies and heartbeats in JSM Operations are **team-scoped**, not 
 
 ```bash
 # YOU run these in your own terminal; an agent never executes these lines.
-scoutflo_addsecret JSM_EMAIL       # the Basic-auth username; prompts silently (defined in /scoutflo:connect Step 4c)
-scoutflo_addsecret JSM_API_TOKEN   # the Basic-auth password — JSM needs both, one call each
+sh "${CLAUDE_PLUGIN_ROOT}/skills/connect/scripts/addsecret.sh" JSM_EMAIL       # the Basic-auth username; prompts silently
+sh "${CLAUDE_PLUGIN_ROOT}/skills/connect/scripts/addsecret.sh" JSM_API_TOKEN   # the Basic-auth password — JSM needs both, one call each
+. ~/.scoutflo/env   # load it into THIS shell so the verify below sees the value (addsecret.sh is a subprocess; it cannot export to your shell)
 
 SITE="your-site.atlassian.net"   # jsm.site
 CLOUD_ID="$(curl -fsS --max-time 10 "https://${SITE}/_edge/tenant_info" | jq -r '.cloudId')"
@@ -530,7 +537,8 @@ Zenduty publishes strict, per-endpoint-class rate limits (for example, Incident 
 
 ```bash
 # YOU run this in your own terminal; an agent never executes this line.
-scoutflo_addsecret ZENDUTY_TOKEN   # prompts silently, writes ~/.scoutflo/env, exports here (defined in /scoutflo:connect Step 4c)
+sh "${CLAUDE_PLUGIN_ROOT}/skills/connect/scripts/addsecret.sh" ZENDUTY_TOKEN   # shipped writer — prompts silently, writes ~/.scoutflo/env, never "command not found"
+. ~/.scoutflo/env   # load it into THIS shell so the verify below sees the value (addsecret.sh is a subprocess; it cannot export to your shell)
 
 # Teams is the cheapest list read and the doctor probe. Token, not Bearer.
 curl -fsS --max-time 10 -H "Authorization: Token ${ZENDUTY_TOKEN}" "https://www.zenduty.com/api/account/teams/" \
@@ -576,7 +584,8 @@ If your groundcover account has more than one backend, the API requires an `X-Ba
 
 ```bash
 # YOU run this in your own terminal; an agent never executes this line.
-scoutflo_addsecret GROUNDCOVER_API_KEY   # prompts silently, writes ~/.scoutflo/env, exports here (defined in /scoutflo:connect Step 4c)
+sh "${CLAUDE_PLUGIN_ROOT}/skills/connect/scripts/addsecret.sh" GROUNDCOVER_API_KEY   # shipped writer — prompts silently, writes ~/.scoutflo/env, never "command not found"
+. ~/.scoutflo/env   # load it into THIS shell so the verify below sees the value (addsecret.sh is a subprocess; it cannot export to your shell)
 
 GC_API="https://api.groundcover.com"   # groundcover.api_url
 # Listing monitors is the cheapest read and the doctor probe (there is no whoami endpoint).
@@ -938,7 +947,8 @@ GRANT SELECT ON system.* TO scoutflo_ro;
 Then store that password under the variable your config names (it prompts silently — paste the same password you set above):
 
 ```bash
-scoutflo_addsecret CH_KEY   # writes ~/.scoutflo/env, exports here (defined in /scoutflo:connect Step 4c)
+sh "${CLAUDE_PLUGIN_ROOT}/skills/connect/scripts/addsecret.sh" CH_KEY   # shipped writer — prompts silently, writes ~/.scoutflo/env, never "command not found"
+. ~/.scoutflo/env   # load it into THIS shell so the verify below sees the value (addsecret.sh is a subprocess; it cannot export to your shell)
 ```
 
 ### Create a HyperDX Personal API Access Key (the read credential)
@@ -948,7 +958,8 @@ scoutflo_addsecret CH_KEY   # writes ~/.scoutflo/env, exports here (defined in /
 In HyperDX, open **Team Settings → API Keys** and copy the **"Personal API Access Key"** card (the per-user key; on v2.36+ the section is renamed "API & Agents"). Store it under the variable your config names (a long pasted key is exactly why the name is a fixed argument — it can never split):
 
 ```bash
-scoutflo_addsecret HDX_API_KEY   # prompts silently, writes ~/.scoutflo/env, exports here (defined in /scoutflo:connect Step 4c)
+sh "${CLAUDE_PLUGIN_ROOT}/skills/connect/scripts/addsecret.sh" HDX_API_KEY   # shipped writer — prompts silently, writes ~/.scoutflo/env, never "command not found"
+. ~/.scoutflo/env   # load it into THIS shell so the verify below sees the value (addsecret.sh is a subprocess; it cannot export to your shell)
 ```
 
 Point `clickstack.hyperdx_url` at a URL that reaches the API: either the API-server port directly (then the audit uses `<url>/api/v2/...`) or the app/UI URL that proxies `/api` (the app strips one leading `/api`, so the audit automatically falls back to the doubled `<url>/api/api/v2/...`). The audit probes both forms and uses whichever returns JSON.
@@ -960,8 +971,9 @@ Point `clickstack.hyperdx_url` at a URL that reaches the API: either the API-ser
 Only if you cannot mint a Personal API Access Key. This is a deliberately **heavier posture** — a real user login. Prefer a dedicated least-privilege HyperDX member account, not an owner account. What the audit does with it (confirmed live): one `POST /api/login/password` with `{email, password}` per run, which answers `303` and sets a `connect.sid` session cookie; the cookie is held in a `mktemp` jar (`chmod 600`), used only for read-only `GET`s on the internal routes, deleted on exit, and never printed, logged, or written anywhere persistent.
 
 ```bash
-scoutflo_addsecret HDX_EMAIL      # the login email; prompts silently (defined in /scoutflo:connect Step 4c)
-scoutflo_addsecret HDX_PASSWORD   # the login password — one call each
+sh "${CLAUDE_PLUGIN_ROOT}/skills/connect/scripts/addsecret.sh" HDX_EMAIL      # the login email; prompts silently
+sh "${CLAUDE_PLUGIN_ROOT}/skills/connect/scripts/addsecret.sh" HDX_PASSWORD   # the login password — one call each
+. ~/.scoutflo/env   # load it into THIS shell so the verify below sees the value (addsecret.sh is a subprocess; it cannot export to your shell)
 ```
 
 Name both variables in `clickstack.hyperdx_email_env` / `clickstack.hyperdx_password_env`. Skipping this is fine — with a working Personal API Access Key it is not needed, and with neither, the HyperDX categories simply stay `not-in-scope`.
@@ -1031,7 +1043,8 @@ signoz:
 On current SigNoz (**v0.114+, including v0.138**) the only token path is **Settings → Service Accounts** — there is **no "API Keys" menu** (only very old builds, ~v0.85–v0.113, had *Settings → API Keys*). Create a service account, then **open it and assign the `signoz-viewer` role** via the Roles dropdown (a service account starts with **zero roles**, so an unroled token gets `403 authz_forbidden` on the read endpoints — that is a missing role, not "Viewer is insufficient"). `signoz-viewer` is read-only and is the least-privilege role that works; do not use Admin. Generate the key and store it under the variable your config names (it is sent as the `SIGNOZ-API-KEY` header):
 
 ```bash
-scoutflo_addsecret SIGNOZ_API_KEY   # prompts silently, writes ~/.scoutflo/env, exports here (defined in /scoutflo:connect Step 4c)
+sh "${CLAUDE_PLUGIN_ROOT}/skills/connect/scripts/addsecret.sh" SIGNOZ_API_KEY   # shipped writer — prompts silently, writes ~/.scoutflo/env, never "command not found"
+. ~/.scoutflo/env   # load it into THIS shell so the verify below sees the value (addsecret.sh is a subprocess; it cannot export to your shell)
 ```
 
 ### Optional: read-only ClickHouse user (deep backend lane)
@@ -1047,7 +1060,8 @@ GRANT SELECT ON system.*         TO scoutflo_ro;
 ```
 
 ```bash
-scoutflo_addsecret SIGNOZ_CH_KEY   # prompts silently, writes ~/.scoutflo/env, exports here (defined in /scoutflo:connect Step 4c)
+sh "${CLAUDE_PLUGIN_ROOT}/skills/connect/scripts/addsecret.sh" SIGNOZ_CH_KEY   # shipped writer — prompts silently, writes ~/.scoutflo/env, never "command not found"
+. ~/.scoutflo/env   # load it into THIS shell so the verify below sees the value (addsecret.sh is a subprocess; it cannot export to your shell)
 ```
 
 ### Verify
@@ -1317,7 +1331,8 @@ map-repos never writes to GitHub; there is no elevated tier for this integration
 
 ```bash
 # YOU run this in your own terminal; an agent never executes this line.
-scoutflo_addsecret GITHUB_TOKEN   # prompts silently, writes ~/.scoutflo/env, exports here (defined in /scoutflo:connect Step 4c)
+sh "${CLAUDE_PLUGIN_ROOT}/skills/connect/scripts/addsecret.sh" GITHUB_TOKEN   # shipped writer — prompts silently, writes ~/.scoutflo/env, never "command not found"
+. ~/.scoutflo/env   # load it into THIS shell so the verify below sees the value (addsecret.sh is a subprocess; it cannot export to your shell)
 
 GITHUB_ORG="your-org"   # github.org
 # status-probe-ok: quick user sanity-check against api.github.com (fixed vendor JSON API, no SSO login fall-through); the authoritative gate is /scoutflo:doctor.
@@ -1351,7 +1366,8 @@ The webhook URL is itself the secret: anyone holding it can post to your channel
 
 ```bash
 # YOU run this in your own terminal; an agent never executes this line.
-scoutflo_addsecret SCOUTFLO_SLACK_WEBHOOK   # the webhook URL is the secret; prompts silently, writes ~/.scoutflo/env, exports here (defined in /scoutflo:connect Step 4c)
+sh "${CLAUDE_PLUGIN_ROOT}/skills/connect/scripts/addsecret.sh" SCOUTFLO_SLACK_WEBHOOK   # the webhook URL is the secret; prompts silently, writes ~/.scoutflo/env
+. ~/.scoutflo/env   # load it into THIS shell so the verify below sees the value (addsecret.sh is a subprocess; it cannot export to your shell)
 ```
 
 Verification posts a visible message to the channel. Run it only when that is acceptable to the channel's members:
