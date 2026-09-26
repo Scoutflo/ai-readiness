@@ -70,7 +70,7 @@ if [ "$_mode" = command ]; then
   mv "$_tmp" "$STORE" && chmod 600 "$STORE"
   unset _c
   echo "$_n saved to $STORE as a command-sourced secret  (load it into this shell with: . $STORE)" >&2
-  echo "NOTE: that command RUNS every time the store is loaded (doctor + every audit). Use ONLY a trusted secret fetch (e.g. vault kv get); never an untrusted or side-effecting command. The resolved value is never printed or stored." >&2
+  echo "NOTE: that command RUNS every time the store is loaded (doctor + every audit). Use ONLY a trusted secret fetch (e.g. vault kv get); never an untrusted or side-effecting command. Avoid a fetch command containing a literal double-quote (it would break the stored line). The resolved value is never printed or stored." >&2
 else
   # Read the value silently: no echo, no argv, no history. stty guards a non-tty
   # (piped input, e.g. tests) rather than failing.
