@@ -769,6 +769,28 @@ prometheus:
 
 Replace `choose-one` with the deployment mode proved by the target environment: `kubernetes`, `ec2-systemd`, `docker`, or `external` (provider-managed). Do not infer it from metric labels, dashboards, or an architecture diagram. For `kubernetes`, also configure `kubernetes.context` and verify that exact context live. For every other mode, the audit records the on-target service/container/provider identity that proves the selection. `/scoutflo:doctor` rejects a missing, placeholder, or unknown value before `audit-lgtm` runs.
 
+### Multiple clusters / environments in one config (multi-stack)
+
+When your logs/metrics/traces stores live on **different clusters or environments** (a prod stack and a pre-prod stack, say), make `lgtm:` a **list** of self-contained stack entries instead of a single map. `audit-lgtm` audits each stack in turn and writes each one's report under `lgtm/<label>/<date>/`; `doctor` validates each. Each entry carries its own context + **flat** store URLs:
+
+```yaml
+lgtm:
+  - label: prod                              # required, unique, slug-safe
+    runtime_mode: kubernetes
+    kubernetes_context: prod-cluster
+    monitoring_namespace: monitoring
+    loki_url: https://loki.prod.example.com
+    victoriametrics_url: https://vm.prod.example.com
+    # tempo_url / mimir_url / prometheus_url / alertmanager_url / vmalert_url as you run them
+    # loki_token_env: LOKI_PROD_TOKEN        # optional, per store
+  - label: preprod
+    runtime_mode: kubernetes
+    kubernetes_context: preprod-cluster
+    loki_url: https://loki.preprod.example.com
+```
+
+Notes: a single `lgtm:` map (with the stores in the top-level `loki:`/`tempo:`/… blocks) is still valid and unchanged — use the list only when you genuinely run more than one stack. `grafana:` stays a single top-level block (a Grafana is commonly shared across stacks). The top-level `prometheus:`/`alertmanager:` blocks remain for `/scoutflo:audit-prometheus` and `/scoutflo:audit-alertmanager`, which audit one Prometheus plane; the per-stack `prometheus_url` above is `audit-lgtm`'s alerting-plane view for that stack.
+
 ### Getting a reachable URL
 
 Use whatever already exposes the API to you: an internal ingress, a LoadBalancer on a private network, or a port-forward for in-cluster deployments:

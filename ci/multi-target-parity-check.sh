@@ -9,17 +9,21 @@
 # Exemptions (documented, not silent):
 #   - audit-all: orchestrator; it aggregates the per-target dirs (two-level glob), not a target.
 #   - audit-cost: cross-provider aggregator; no own connection block.
-#   - audit-lgtm, audit-alertmanager, audit-prometheus: these read the SHARED backend block(s)
-#     (prometheus/loki/tempo/mimir/grafana/alertmanager) as a single mapping, not a labeled own
-#     block — a labeled list under prometheus: would break doctor/audit-lgtm/audit-alertmanager,
-#     which all read `cfg prometheus url`. "Multiple targets" there is a distinct multi-stack
-#     design tracked as a follow-up. When they adopt it, remove them here.
+#   - audit-alertmanager, audit-prometheus: these read the SHARED top-level backend block(s)
+#     (prometheus/alertmanager) as a single mapping, not a labeled own block — a labeled list
+#     under prometheus: would break doctor/audit-alertmanager, which read `cfg prometheus url`.
+#     "Multiple targets" there is a distinct multi-stack design tracked as a follow-up.
+#   - audit-lgtm ADOPTED the multi-stack design (IMP-003, v0.1.209): `lgtm:` may be a LIST of
+#     self-contained stack entries (each its own context + flat store URLs); it resolves the
+#     current stack via the enumerator (SCOUTFLO_TARGET) and nests output by LG_SEG. It is no
+#     longer exempt — the two markers below apply. The top-level prometheus:/alertmanager:
+#     blocks stay single (for those two audits); the stack-list lives under lgtm:, not under them.
 #
 # Read-only. POSIX sh + grep.
 set -eu
 DIR="${1:-.}"
 FAIL=0
-EXEMPT="audit-all audit-cost audit-lgtm audit-alertmanager audit-prometheus"
+EXEMPT="audit-all audit-cost audit-alertmanager audit-prometheus"
 
 for d in "$DIR"/skills/audit-*/; do
   name="$(basename "$d")"

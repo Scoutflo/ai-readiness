@@ -11,6 +11,8 @@ Every command in this audit is read-only: GET requests, read-only query calls, `
 
 Run this standalone, from `/scoutflo:audit-all`, or on a schedule via `/scoutflo:schedule-audits`.
 
+**Scope — multiple stacks (clusters/environments) in one run.** `lgtm:` is EITHER a single map (today — `runtime_mode` only, with the stores read from the top-level `loki:`/`tempo:`/`mimir:`/`victoriametrics:`/`prometheus:` + `kubernetes:` blocks; **zero migration**) OR a **list of self-contained stack entries**, one per cluster/environment. When it is a list, the audit **iterates every stack** — enumerate them with `sh "${CLAUDE_PLUGIN_ROOT}/report-standard/toolkit-targets.sh" <cfg> lgtm labels` and run the full sequence below once per stack with `SCOUTFLO_TARGET=<label>` set. Each entry carries its own `runtime_mode`, `kubernetes_context`, `monitoring_namespace`, and flat store URLs (`loki_url`, `tempo_url`, `mimir_url`, `victoriametrics_url`, `prometheus_url`, `alertmanager_url`, `vmalert_url`) + optional `*_token_env`; Phase 0/2 resolve the current stack's values and every check uses them. Output nests under `lgtm/<label>/<date>/` for a list, or the flat `lgtm/<date>/` for a single block (byte-identical to today). This is the customer with logs/metrics/traces spread across prod + pre-prod (or several clusters): one config, one run, per-environment reports — instead of hand-split config files. `grafana:` stays a single top-level block (a Grafana is commonly shared across stacks); point per-stack store URLs at each cluster's own endpoints.
+
 Outputs, per the [report standard](../../report-standard/README.md):
 
 - `./scoutflo-audits/lgtm/<YYYY-MM-DD>/findings.json` per the [findings schema](../../report-standard/findings-schema.md)
@@ -64,21 +66,63 @@ SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.s
 [ -f "$SCOUTFLO_ENV" ] && . "$SCOUTFLO_ENV" || true
 command -v curl >/dev/null || { echo "curl not installed"; exit 1; }
 command -v jq   >/dev/null || { echo "jq not installed"; exit 1; }
-# runtime_mode is an operator-owned scope decision. Read it from config and fail
-# closed; never infer it from metrics, dashboard labels, or a diagram.
-if command -v yq >/dev/null 2>&1 && yq -r '. | keys | length' "$CFG" >/dev/null 2>&1; then
-  RUNTIME_MODE="$(yq -r '.lgtm.runtime_mode // ""' "$CFG")"
-  KUBE_CONTEXT="$(yq -r '.kubernetes.context // ""' "$CFG")"
+# --- Multi-cluster target resolution (IMP-003) -----------------------------------
+# `lgtm:` is EITHER a single map (today: `runtime_mode` only; the stores come from the
+# top-level loki:/tempo:/mimir:/victoriametrics:/prometheus: + kubernetes: blocks — ZERO
+# migration) OR a LIST of self-contained flat stack entries, one per cluster/environment
+# (each: label, runtime_mode, kubernetes_context, monitoring_namespace, loki_url, tempo_url,
+# mimir_url, victoriametrics_url, prometheus_url, alertmanager_url, vmalert_url, and optional
+# *_token_env). Resolve through the ONE shared enumerator so the shape is parsed one way.
+# Runtime mode stays an operator-owned scope decision read from config — never inferred.
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+LG_KIND="$(sh "$TT" "$CFG" lgtm kind 2>/dev/null || echo absent)"           # seq | map | absent
+LG_N="$(sh "$TT" "$CFG" lgtm count)"; [ "$LG_N" -ge 1 ] 2>/dev/null || LG_N=1
+# When `lgtm` is a list, the AGENT runs this whole audit once per target, selecting each with
+# SCOUTFLO_TARGET=<label> (enumerate labels with `sh "$TT" "$CFG" lgtm labels`). This block
+# resolves the CURRENT target into the same variables the rest of the audit already uses.
+LG_IDX=0
+if [ -n "${SCOUTFLO_TARGET:-}" ]; then
+  _i=0; while [ "$_i" -lt "$LG_N" ]; do [ "$(sh "$TT" "$CFG" lgtm label "$_i")" = "$SCOUTFLO_TARGET" ] && { LG_IDX=$_i; break; }; _i=$((_i+1)); done
+fi
+LG_LABEL="$(sh "$TT" "$CFG" lgtm label "$LG_IDX")"
+if [ "$LG_KIND" = seq ] && [ -n "${SCOUTFLO_TARGET:-}" ] && [ "$LG_LABEL" != "$SCOUTFLO_TARGET" ]; then
+  echo "warning: SCOUTFLO_TARGET='${SCOUTFLO_TARGET}' matched no lgtm stack label; auditing the first stack '${LG_LABEL}' instead — check the label against 'sh \"\$TT\" \"\$CFG\" lgtm labels'" >&2
+fi
+if [ "$LG_KIND" = seq ]; then
+  # Self-contained stack entry: everything (context + store URLs) comes from THIS target.
+  LG_SEG="lgtm/${LG_LABEL}"                        # output nests: lgtm/<label>/<date>/
+  RUNTIME_MODE="$(sh "$TT" "$CFG" lgtm get "$LG_IDX" runtime_mode)"
+  KUBE_CONTEXT="$(sh "$TT" "$CFG" lgtm get "$LG_IDX" kubernetes_context)"
+  MONITORING_NAMESPACES="$(sh "$TT" "$CFG" lgtm get "$LG_IDX" monitoring_namespace)"; [ -n "$MONITORING_NAMESPACES" ] || MONITORING_NAMESPACES="monitoring"
+  # Pre-resolve this target's store URLs; each check in references/backend-checks.md uses the
+  # pre-resolved $LOKI_URL/$TEMPO_URL/$MIMIR_URL/$VM_URL/$PROM_URL/$ALERTMANAGER_URL/$VMALERT_URL
+  # when set (multi-target), else reads the top-level block (single-block, below).
+  LOKI_URL="$(sh "$TT" "$CFG" lgtm get "$LG_IDX" loki_url)"
+  TEMPO_URL="$(sh "$TT" "$CFG" lgtm get "$LG_IDX" tempo_url)"
+  MIMIR_URL="$(sh "$TT" "$CFG" lgtm get "$LG_IDX" mimir_url)"
+  VM_URL="$(sh "$TT" "$CFG" lgtm get "$LG_IDX" victoriametrics_url)"
+  PROM_URL="$(sh "$TT" "$CFG" lgtm get "$LG_IDX" prometheus_url)"
+  ALERTMANAGER_URL="$(sh "$TT" "$CFG" lgtm get "$LG_IDX" alertmanager_url)"
+  VMALERT_URL="$(sh "$TT" "$CFG" lgtm get "$LG_IDX" vmalert_url)"
 else
-  RUNTIME_MODE="$(sed -n '/^lgtm:/,/^[A-Za-z_]/p' "$CFG" | sed -n 's/^[[:space:]]\{1,\}runtime_mode:[[:space:]]*//p' | head -1 | sed 's/[[:space:]]#.*$//; s/^"//; s/"$//; s/^'\''//; s/'\''$//; s/[[:space:]]*$//')"
-  KUBE_CONTEXT="$(sed -n '/^kubernetes:/,/^[A-Za-z_]/p' "$CFG" | sed -n 's/^[[:space:]]\{1,\}context:[[:space:]]*//p' | head -1 | sed 's/[[:space:]]#.*$//; s/^"//; s/"$//; s/^'\''//; s/'\''$//; s/[[:space:]]*$//')"
+  # Single-block (today, byte-identical): runtime_mode from the lgtm map, context from the
+  # top-level kubernetes: block; store URLs are read from the top-level blocks by each check.
+  LG_SEG="lgtm"                                    # flat output: lgtm/<date>/
+  if command -v yq >/dev/null 2>&1 && yq -r '. | keys | length' "$CFG" >/dev/null 2>&1; then
+    RUNTIME_MODE="$(yq -r '.lgtm.runtime_mode // ""' "$CFG")"
+    KUBE_CONTEXT="$(yq -r '.kubernetes.context // ""' "$CFG")"
+  else
+    RUNTIME_MODE="$(sed -n '/^lgtm:/,/^[A-Za-z_]/p' "$CFG" | sed -n 's/^[[:space:]]\{1,\}runtime_mode:[[:space:]]*//p' | head -1 | sed 's/[[:space:]]#.*$//; s/^"//; s/"$//; s/^'\''//; s/'\''$//; s/[[:space:]]*$//')"
+    KUBE_CONTEXT="$(sed -n '/^kubernetes:/,/^[A-Za-z_]/p' "$CFG" | sed -n 's/^[[:space:]]\{1,\}context:[[:space:]]*//p' | head -1 | sed 's/[[:space:]]#.*$//; s/^"//; s/"$//; s/^'\''//; s/'\''$//; s/[[:space:]]*$//')"
+  fi
 fi
 case "$RUNTIME_MODE" in
-  kubernetes) [ -n "$KUBE_CONTEXT" ] || { echo "lgtm.runtime_mode=kubernetes requires kubernetes.context; fix with /scoutflo:connect"; exit 1; } ;;
+  kubernetes) [ -n "$KUBE_CONTEXT" ] || { echo "lgtm runtime_mode=kubernetes requires a kubernetes context${LG_KIND:+ (target ${LG_LABEL})}; fix with /scoutflo:connect"; exit 1; } ;;
   ec2-systemd|docker|external) : ;;
-  "") echo "missing lgtm.runtime_mode; set kubernetes, ec2-systemd, docker, or external via /scoutflo:connect"; exit 1 ;;
-  *) echo "invalid lgtm.runtime_mode '$RUNTIME_MODE'; use kubernetes, ec2-systemd, docker, or external"; exit 1 ;;
+  "") echo "missing lgtm runtime_mode${LG_KIND:+ for target ${LG_LABEL}}; set kubernetes, ec2-systemd, docker, or external via /scoutflo:connect"; exit 1 ;;
+  *) echo "invalid lgtm runtime_mode '$RUNTIME_MODE'${LG_KIND:+ for target ${LG_LABEL}}; use kubernetes, ec2-systemd, docker, or external"; exit 1 ;;
 esac
+echo "lgtm target: ${LG_LABEL} -> ${LG_SEG}/ (kind=${LG_KIND}, ${LG_N} total)"
 # For every configured *_env key: presence only, never the value.
 # Grafana is one of several optional blocks (see the requirements table above);
 # only gate GRAFANA_TOKEN when a grafana block is actually configured in
@@ -202,7 +246,7 @@ fi
 # TOTAL computed above; a separate fence would run in a fresh shell where $TOTAL is unbound and,
 # under set -eu, abort. State the result in the executive summary; never silently omit it. This
 # never skips a live check — every later-phase check still runs fresh regardless of drift status.
-TARGET_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/lgtm"
+TARGET_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${LG_SEG:-lgtm}"
 # Only date-named dirs are runs. The large path creates a persistent `runs/` sibling here;
 # it sorts after the dates, so an unfiltered `tail -1` would pick `runs/` (no findings.json)
 # and wrongly report "first run" on every repeat run once the large path has been used.
@@ -261,7 +305,17 @@ Build the raw picture before judging anything. The Kubernetes inventory block ap
 ```bash
 set -eu
 CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
-if command -v yq >/dev/null 2>&1 && yq -r '. | keys | length' "$CFG" >/dev/null 2>&1; then
+# Target-aware (IMP-003): a `lgtm` LIST resolves per-target via the shared enumerator
+# (the runner sets SCOUTFLO_TARGET=<label>); a single `lgtm` map/absent resolves from the
+# top-level blocks exactly as before. Self-contained so this phase can run standalone.
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+LG_KIND="$(sh "$TT" "$CFG" lgtm kind 2>/dev/null || echo absent)"; LG_N="$(sh "$TT" "$CFG" lgtm count)"; [ "$LG_N" -ge 1 ] 2>/dev/null || LG_N=1
+LG_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$LG_N" ]; do [ "$(sh "$TT" "$CFG" lgtm label "$_i")" = "$SCOUTFLO_TARGET" ] && { LG_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+if [ "$LG_KIND" = seq ]; then
+  RUNTIME_MODE="$(sh "$TT" "$CFG" lgtm get "$LG_IDX" runtime_mode)"
+  KUBE_CONTEXT="$(sh "$TT" "$CFG" lgtm get "$LG_IDX" kubernetes_context)"
+  MONITORING_NAMESPACES="$(sh "$TT" "$CFG" lgtm get "$LG_IDX" monitoring_namespace)"; [ -n "$MONITORING_NAMESPACES" ] || MONITORING_NAMESPACES="monitoring"
+elif command -v yq >/dev/null 2>&1 && yq -r '. | keys | length' "$CFG" >/dev/null 2>&1; then
   RUNTIME_MODE="$(yq -r '.lgtm.runtime_mode // ""' "$CFG")"
   KUBE_CONTEXT="$(yq -r '.kubernetes.context // ""' "$CFG")"
   MONITORING_NAMESPACES="$(yq -r '.kubernetes.monitoring_namespace // "monitoring"' "$CFG")"
@@ -450,7 +504,7 @@ Emit and verify:
 ```bash
 set -eu
 RUN_DATE="$(date -u +%Y-%m-%d)"
-OUT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/lgtm/${RUN_DATE}"
+OUT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${LG_SEG:-lgtm}/${RUN_DATE}"   # LG_SEG=lgtm/<label> for a multi-target list, else flat lgtm/
 mkdir -p "$OUT"
 # ... write findings.json (scoutflo-findings/v2, with one checks[] row per
 # catalog check, lifecycle set per finding, report_lanes, and the estate
@@ -498,7 +552,7 @@ Compute the delta against the previous run date per the [report standard](../../
 
 ```bash
 set -eu
-TARGET_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/lgtm"
+TARGET_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${LG_SEG:-lgtm}"
 RUN_DATE="$(date -u +%Y-%m-%d)"
 OUT="${TARGET_DIR}/${RUN_DATE}"
 # slack.webhook_env names the webhook variable; skip when unset.

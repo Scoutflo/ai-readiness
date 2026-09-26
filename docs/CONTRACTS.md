@@ -93,10 +93,17 @@ these two classes existed; these steps are what caught them.
   the `SCOUTFLO_TARGET` env var, and nest output by a resolved `<PREFIX>_SEG`. A
   single block resolves to exactly one target whose label defaults to the
   integration name (byte-identical to the pre-multi-target read).
-- **Exemptions:** `audit-lgtm`, `audit-alertmanager`, `audit-prometheus`
-  (shared-backend blocks — they read `prometheus`/`loki`/`tempo`/`mimir`/
-  `victoriametrics` as a single mapping, never a labeled own block; a labeled
-  list there would break `doctor` and the other readers).
+- **Exemptions:** `audit-alertmanager`, `audit-prometheus` (they read the shared
+  top-level `prometheus`/`alertmanager` blocks as a single mapping; a labeled list
+  there would break `doctor` and the other readers). **`audit-lgtm` is NOT exempt
+  (IMP-003, v0.1.209):** its own `lgtm:` block may be a LIST of self-contained
+  stack entries (each with its own `runtime_mode`/`kubernetes_context` + flat store
+  URLs `loki_url`/`tempo_url`/`mimir_url`/`victoriametrics_url`/`prometheus_url`/
+  `alertmanager_url`/`vmalert_url`); it resolves the current stack via the enumerator
+  (`SCOUTFLO_TARGET`) and nests output `lgtm/<label>/<date>/` (`LG_SEG`). The
+  top-level `prometheus`/`loki`/… blocks stay single (for the two audits above); the
+  multi-stack list lives under `lgtm:`. `doctor` also resolves the `lgtm` list
+  per-stack (per-stack runtime-mode + store reachability rows).
 - **Metrics-plane ownership boundary (v0.1.156/157, fixed):** within the shared
   metrics blocks, the **Prometheus server + rule-engine plane** (`prometheus.url`
   — scrape targets, `up`, TSDB, WAL/compaction, remote-write, config reload, rule

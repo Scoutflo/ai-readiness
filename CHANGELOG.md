@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.1.209
+
+**audit-lgtm goes multi-cluster (IMP-003).** A customer whose logs / metrics /
+traces stores live on different clusters or environments used to hand-split the
+config into one file per stack and run the audit N times. Now `lgtm:` may be a
+**list of self-contained stack entries** — each with its own `runtime_mode`,
+`kubernetes_context`, `monitoring_namespace`, and flat store URLs (`loki_url`,
+`tempo_url`, `mimir_url`, `victoriametrics_url`, `prometheus_url`,
+`alertmanager_url`, `vmalert_url`) plus optional `*_token_env`. audit-lgtm
+iterates every stack (`SCOUTFLO_TARGET=<label>`, enumerated via the shared
+`toolkit-targets.sh`) and writes each stack's report under `lgtm/<label>/<date>/`;
+`doctor` validates each stack's runtime mode and probes each stack's stores per
+label. A single `lgtm:` map is unchanged and byte-identical (zero migration); the
+top-level `prometheus:`/`alertmanager:` blocks stay single (for `audit-prometheus`
+/ `audit-alertmanager`), and `grafana:` stays a shared top-level block. The
+combined "one report separating prod vs pre-prod" view lands next with IMP-010.
+
 ## 0.1.208
 
 **Three onboarding cheap wins — clearer health checks and discoverability.** A

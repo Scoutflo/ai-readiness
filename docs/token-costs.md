@@ -268,6 +268,12 @@ Every audit run loads that audit's `SKILL.md` plus its `references/*.md`. This i
 the fixed floor before any of your live data is read. Regenerate these anytime with
 `sh tests/measure-efficiency.sh` (byte counts come straight from the shipped files):
 
+> **Multi-target audits scale per target.** When an integration is configured as a
+> labeled list — a `lgtm:` list of stacks (multi-cluster), a `clickstack:` list, or N
+> Azure subscriptions — the audit runs once per target, so its cost is roughly the
+> single-target figure below × the number of targets. The figures are per single
+> target/stack.
+
 | Audit | Fixed instructions (bytes) | ~tokens (est) |
 | --- | --- | --- |
 | audit-cost | 172,136 | ~43,000 |
