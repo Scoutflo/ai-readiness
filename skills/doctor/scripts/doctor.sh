@@ -1108,14 +1108,23 @@ if [ "$LG_KIND" = seq ]; then
       http_get "${SU}/ready" "$STK_TOK"
       if [ "$CURL_RC" -eq 0 ] && { [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "204" ]; }; then
         row "lgtm:${LBL}" "${SK%_url}-reachable" yes "${TKV:-none}" pass "$HTTP_CODE" "-"
+      elif [ "$CURL_RC" -ne 0 ]; then
+        row "lgtm:${LBL}" "${SK%_url}-reachable" yes "${TKV:-none}" fail "000" "$(transport_hint "$CURL_RC") (${SU})"
       else
         http_get "${SU}/health" "$STK_TOK"
         if [ "$CURL_RC" -eq 0 ] && [ "$HTTP_CODE" = "200" ]; then
           row "lgtm:${LBL}" "${SK%_url}-reachable" yes "${TKV:-none}" pass "$HTTP_CODE" "answers /health (VictoriaLogs/VictoriaTraces/VM shape)"
-        elif [ "$CURL_RC" -ne 0 ]; then
-          row "lgtm:${LBL}" "${SK%_url}-reachable" yes "${TKV:-none}" fail "000" "$(transport_hint "$CURL_RC") (${SU})"
         else
-          row "lgtm:${LBL}" "${SK%_url}-reachable" yes "${TKV:-none}" fail "$HTTP_CODE" "$(http_hint "$HTTP_CODE"); audit-lgtm detects the exact engine/path for this store"
+          # Prometheus (and Alertmanager) answer readiness at /-/ready, not /ready or /health —
+          # a healthy Prometheus 404s the two above, so try its shape before calling it unreachable.
+          http_get "${SU}/-/ready" "$STK_TOK"
+          if [ "$CURL_RC" -eq 0 ] && [ "$HTTP_CODE" = "200" ]; then
+            row "lgtm:${LBL}" "${SK%_url}-reachable" yes "${TKV:-none}" pass "$HTTP_CODE" "answers /-/ready (Prometheus/Alertmanager shape)"
+          elif [ "$CURL_RC" -ne 0 ]; then
+            row "lgtm:${LBL}" "${SK%_url}-reachable" yes "${TKV:-none}" fail "000" "$(transport_hint "$CURL_RC") (${SU})"
+          else
+            row "lgtm:${LBL}" "${SK%_url}-reachable" yes "${TKV:-none}" fail "$HTTP_CODE" "$(http_hint "$HTTP_CODE"); tried /ready, /health, /-/ready — audit-lgtm detects the exact engine/path for this store"
+          fi
         fi
       fi
     done
