@@ -105,6 +105,10 @@ groundcover:
 
 lgtm:
   runtime_mode: choose-one                  # REQUIRED: kubernetes | ec2-systemd | docker | external; doctor rejects this placeholder
+  # Multiple clusters/environments? Make `lgtm:` a LIST of self-contained stack entries instead
+  # of this map — each with its own label, runtime_mode, kubernetes_context, and flat store URLs
+  # (loki_url, tempo_url, victoriametrics_url, prometheus_url, ...). audit-lgtm audits each and
+  # writes lgtm/<label>/<date>/. See references/providers.md "Multiple clusters / environments".
 
 prometheus:
   url: https://prometheus.example.com

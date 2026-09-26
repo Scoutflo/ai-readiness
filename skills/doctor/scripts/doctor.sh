@@ -1074,35 +1074,84 @@ fi
 # --- LGTM runtime contract ----------------------------------------------------------
 # audit-lgtm has platform-specific checks. The operator must declare the deployment
 # mode; neither doctor nor the audit may infer it from metric names or dashboards.
-LGTM_MODE="$(cfg lgtm runtime_mode)"
-LGTM_BACKEND_CONFIGURED=0
-for _lgtm_backend in prometheus loki tempo mimir victoriametrics; do
-  [ -n "$(cfg "$_lgtm_backend" url)" ] && LGTM_BACKEND_CONFIGURED=1
-done
-[ -n "$(cfg prometheus alertmanager_url)" ] && LGTM_BACKEND_CONFIGURED=1
-[ -n "$(cfg victoriametrics vmalert_url)" ] && LGTM_BACKEND_CONFIGURED=1
-if [ -z "$LGTM_MODE" ]; then
-  if grep -q '^lgtm:' "$CONFIG" || [ "$LGTM_BACKEND_CONFIGURED" -eq 1 ]; then
-    row lgtm runtime-mode yes - fail - "lgtm.runtime_mode is required; set exactly one of kubernetes, ec2-systemd, docker, external"
-  else
-    row lgtm runtime-mode no - skipped - "add lgtm.runtime_mode via /scoutflo:connect before running audit-lgtm"
-  fi
-else
-  case "$LGTM_MODE" in
-    kubernetes)
-      if [ -z "$(cfg kubernetes context)" ]; then
-        row lgtm runtime-mode yes - fail - "lgtm.runtime_mode=kubernetes requires kubernetes.context; add the exact live context via /scoutflo:connect"
+# Multi-cluster (IMP-003): `lgtm` may be a LIST of self-contained stack entries. Detect it
+# via the shared enumerator; when it is a list, validate each stack's runtime_mode + probe
+# each stack's stores per label, and set LGTM_MULTI=1 so the single-block loki/tempo/mimir/vm
+# sections below (which read the top-level blocks) are skipped — their stores live in the list.
+TT_LG="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+LG_KIND="$(sh "$TT_LG" "$CONFIG" lgtm kind 2>/dev/null || echo absent)"
+LGTM_MULTI=0
+if [ "$LG_KIND" = seq ]; then
+  LGTM_MULTI=1
+  LG_N="$(sh "$TT_LG" "$CONFIG" lgtm count)"; [ "$LG_N" -ge 1 ] 2>/dev/null || LG_N=1
+  _s=0
+  while [ "$_s" -lt "$LG_N" ]; do
+    LBL="$(sh "$TT_LG" "$CONFIG" lgtm label "$_s")"
+    RM="$(sh "$TT_LG" "$CONFIG" lgtm get "$_s" runtime_mode)"
+    KC="$(sh "$TT_LG" "$CONFIG" lgtm get "$_s" kubernetes_context)"
+    case "$RM" in
+      kubernetes) if [ -n "$KC" ]; then row "lgtm:${LBL}" runtime-mode yes - pass - "declared kubernetes (context ${KC}); audit-lgtm audits this stack via SCOUTFLO_TARGET=${LBL}"; else row "lgtm:${LBL}" runtime-mode yes - fail - "stack ${LBL}: runtime_mode=kubernetes requires kubernetes_context in the lgtm list entry"; fi ;;
+      ec2-systemd|docker|external) row "lgtm:${LBL}" runtime-mode yes - pass - "declared ${RM} for stack ${LBL}" ;;
+      "") row "lgtm:${LBL}" runtime-mode yes - fail - "stack ${LBL}: runtime_mode is required (kubernetes|ec2-systemd|docker|external)" ;;
+      *) row "lgtm:${LBL}" runtime-mode yes - fail - "stack ${LBL}: invalid runtime_mode '${RM}'; use kubernetes|ec2-systemd|docker|external" ;;
+    esac
+    # Per-stack store reachability (best-effort). audit-lgtm runs the engine-specific queryable
+    # checks; here we just confirm each configured store answers, so a broken URL is caught pre-audit.
+    for SK in loki_url tempo_url mimir_url victoriametrics_url prometheus_url; do
+      SU="$(sh "$TT_LG" "$CONFIG" lgtm get "$_s" "$SK")"; [ -n "$SU" ] || continue
+      SU="${SU%/}"; CONFIGURED_COUNT=$((CONFIGURED_COUNT + 1))
+      TKV="$(sh "$TT_LG" "$CONFIG" lgtm get "$_s" "${SK%_url}_token_env")"; STK_TOK=""; [ -n "$TKV" ] && STK_TOK="$(printenv "$TKV" 2>/dev/null || true)"
+      # status-probe-ok: a best-effort readiness ping for a stack store; the body shape is
+      # irrelevant here (audit-lgtm does the engine-specific queryable checks), so /ready|/health
+      # status is the signal. Try /ready first, then /health (VictoriaLogs/VictoriaTraces shape).
+      note "doctor: checking lgtm:${LBL} ${SK%_url} reachable: GET ${SU}/ready"
+      http_get "${SU}/ready" "$STK_TOK"
+      if [ "$CURL_RC" -eq 0 ] && { [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "204" ]; }; then
+        row "lgtm:${LBL}" "${SK%_url}-reachable" yes "${TKV:-none}" pass "$HTTP_CODE" "-"
       else
-        row lgtm runtime-mode yes - pass - "declared kubernetes; the kubernetes identity/RBAC row verifies the configured context live"
+        http_get "${SU}/health" "$STK_TOK"
+        if [ "$CURL_RC" -eq 0 ] && [ "$HTTP_CODE" = "200" ]; then
+          row "lgtm:${LBL}" "${SK%_url}-reachable" yes "${TKV:-none}" pass "$HTTP_CODE" "answers /health (VictoriaLogs/VictoriaTraces/VM shape)"
+        elif [ "$CURL_RC" -ne 0 ]; then
+          row "lgtm:${LBL}" "${SK%_url}-reachable" yes "${TKV:-none}" fail "000" "$(transport_hint "$CURL_RC") (${SU})"
+        else
+          row "lgtm:${LBL}" "${SK%_url}-reachable" yes "${TKV:-none}" fail "$HTTP_CODE" "$(http_hint "$HTTP_CODE"); audit-lgtm detects the exact engine/path for this store"
+        fi
       fi
-      ;;
-    ec2-systemd|docker|external)
-      row lgtm runtime-mode yes - pass - "declared ${LGTM_MODE}; audit-lgtm must still cite an on-target runtime identity or inventory read"
-      ;;
-    *)
-      row lgtm runtime-mode yes - fail - "invalid lgtm.runtime_mode '${LGTM_MODE}'; use exactly one of kubernetes, ec2-systemd, docker, external"
-      ;;
-  esac
+    done
+    _s=$((_s+1))
+  done
+else
+  LGTM_MODE="$(cfg lgtm runtime_mode)"
+  LGTM_BACKEND_CONFIGURED=0
+  for _lgtm_backend in prometheus loki tempo mimir victoriametrics; do
+    [ -n "$(cfg "$_lgtm_backend" url)" ] && LGTM_BACKEND_CONFIGURED=1
+  done
+  [ -n "$(cfg prometheus alertmanager_url)" ] && LGTM_BACKEND_CONFIGURED=1
+  [ -n "$(cfg victoriametrics vmalert_url)" ] && LGTM_BACKEND_CONFIGURED=1
+  if [ -z "$LGTM_MODE" ]; then
+    if grep -q '^lgtm:' "$CONFIG" || [ "$LGTM_BACKEND_CONFIGURED" -eq 1 ]; then
+      row lgtm runtime-mode yes - fail - "lgtm.runtime_mode is required; set exactly one of kubernetes, ec2-systemd, docker, external"
+    else
+      row lgtm runtime-mode no - skipped - "add lgtm.runtime_mode via /scoutflo:connect before running audit-lgtm"
+    fi
+  else
+    case "$LGTM_MODE" in
+      kubernetes)
+        if [ -z "$(cfg kubernetes context)" ]; then
+          row lgtm runtime-mode yes - fail - "lgtm.runtime_mode=kubernetes requires kubernetes.context; add the exact live context via /scoutflo:connect"
+        else
+          row lgtm runtime-mode yes - pass - "declared kubernetes; the kubernetes identity/RBAC row verifies the configured context live"
+        fi
+        ;;
+      ec2-systemd|docker|external)
+        row lgtm runtime-mode yes - pass - "declared ${LGTM_MODE}; audit-lgtm must still cite an on-target runtime identity or inventory read"
+        ;;
+      *)
+        row lgtm runtime-mode yes - fail - "invalid lgtm.runtime_mode '${LGTM_MODE}'; use exactly one of kubernetes, ec2-systemd, docker, external"
+        ;;
+    esac
+  fi
 fi
 
 # --- prometheus and alertmanager (one block, shared optional token) -----------------
@@ -1153,6 +1202,7 @@ fi
 # /health, and say which shape answered. audit-lgtm detects the engine either way.
 
 for STORE in loki tempo mimir; do
+  [ "${LGTM_MULTI:-0}" -eq 0 ] || continue   # multi-stack lgtm: these stores live in the lgtm list entries and were probed per-stack above
   STORE_URL="$(cfg "$STORE" url)"
   if [ -z "$STORE_URL" ]; then
     row "$STORE" configured no - skipped - "add a ${STORE} block via /scoutflo:connect if you run it"
@@ -1181,8 +1231,10 @@ done
 
 # --- victoriametrics and vmalert -------------------------------------------------------
 
-VM_URL="$(cfg victoriametrics url)"
-if [ -z "$VM_URL" ]; then
+if [ "${LGTM_MULTI:-0}" -eq 0 ]; then VM_URL="$(cfg victoriametrics url)"; else VM_URL=""; fi
+if [ "${LGTM_MULTI:-0}" -ne 0 ]; then
+  :   # multi-stack lgtm: victoriametrics stores live in the lgtm list entries, probed per-stack above
+elif [ -z "$VM_URL" ]; then
   row victoriametrics configured no - skipped - "add a victoriametrics block via /scoutflo:connect if you run it"
 else
   CONFIGURED_COUNT=$((CONFIGURED_COUNT + 1))
