@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.1.210
+
+**Onboarding robustness: cluster-discovery triage + Vault/command-sourced secrets
+(IMP-007 + IMP-009).** Two fixes for the first ten minutes, from the same customer call.
+
+- **`cluster-triage.sh` — reduce a big kubeconfig to live, distinct clusters.** A new
+  read-only helper enumerates your kube contexts, **dedups by API-server URL**, probes
+  each with a **bounded** timeout (so a dead context can't hang the sweep), and marks
+  every context `live` / `unreachable:network` / `unreachable:reauth` /
+  `duplicate-of:<ctx>`. connect offers only the live, distinct clusters, so a deleted
+  or duplicate context never becomes a target (`--live` prints just the live names).
+  The API-server is redacted to host; no token is printed.
+- **Command-sourced secrets (Vault etc.).** `~/.scoutflo/env` is sourced, so
+  `export TOK="$(vault kv get …)"` resolves on every load — no static secret on disk.
+  `addsecret.sh --command VARNAME` now writes exactly that line (prompts for the fetch
+  command, never records the resolved value), with a clear safety note that the command
+  runs on every store load, so use only a trusted, side-effect-free fetch. The default
+  literal-value mode is unchanged. Documented in the FAQ and `references/providers.md`.
+
 ## 0.1.209
 
 **audit-lgtm goes multi-cluster (IMP-003).** A customer whose logs / metrics /

@@ -51,4 +51,19 @@ if printf '\n' | sh "$S" EMPTYVAR >/dev/null 2>&1; then fail "accepted an empty 
 grep -q "^export EMPTYVAR=" "$STORE" && fail "wrote an empty EMPTYVAR" || :
 ok "empty value rejected"
 
+# 8. --command mode (IMP-009): writes export VAR="$(command)" (command substitution SURVIVES,
+#    not single-quote-escaped), so it resolves on load; the resolved value is never printed.
+OUT=$(printf 'printf cmdsourced99\n' | sh "$S" --command CMDVAR 2>&1)
+grep -qF 'export CMDVAR="$(printf cmdsourced99)"' "$STORE" || fail "--command did not write export VAR=\"\$(command)\": $(grep CMDVAR "$STORE")"
+printf '%s' "$OUT" | grep -q "cmdsourced99" && ok "note: command line echoed (not a secret) — resolved value check next" || :
+# sourcing the store runs the command and resolves the var
+( . "$STORE"; [ "$CMDVAR" = "cmdsourced99" ] ) || fail "--command line did not resolve on load"
+# re-run replaces (no duplicate), and a missing varname is rejected
+printf 'printf again\n' | sh "$S" --command CMDVAR >/dev/null 2>&1
+[ "$(grep -c '^export CMDVAR=' "$STORE")" = 1 ] || fail "--command re-run duplicated the line"
+if printf 'x\n' | sh "$S" --command >/dev/null 2>&1; then fail "--command with no varname accepted"; fi
+if printf '\n' | sh "$S" --command NOCMD >/dev/null 2>&1; then fail "--command with empty command accepted"; fi
+grep -q "^export NOCMD=" "$STORE" && fail "wrote an empty-command NOCMD" || :
+ok "--command mode: export VAR=\"\$(cmd)\" resolves on load, replace-not-append, rejects missing name/command"
+
 echo "PASS: connect addsecret.sh locks"

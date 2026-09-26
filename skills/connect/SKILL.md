@@ -165,7 +165,7 @@ Judgment step: collect the non-secret facts for every integration you picked bef
 | GCP | `gcp.project`, `gcp.tier`; optional `credentials_env` | resolve `project` in Step 2a / the recipe in [references/providers.md](references/providers.md#google-cloud-gcp) — never hand-type it |
 | Azure | `azure.subscription_id`, `azure.tier`; optional `tenant_id` | resolve `subscription_id` (+`tenant_id`) in Step 2a / the recipe in [references/providers.md](references/providers.md#azure) |
 | AWS | `aws.account_id` (quoted), `aws.region`, `aws.tier`; optional `profile`, `role_env` | resolve `account_id` in Step 2a / the recipe in [references/providers.md](references/providers.md#aws) |
-| Kubernetes | `kubernetes.context`; optional `monitoring_namespace` | `context: your-kube-context` |
+| Kubernetes | `kubernetes.context`; optional `monitoring_namespace` | `context: your-kube-context`. **Many contexts in your kubeconfig?** Run the read-only `sh "${CLAUDE_PLUGIN_ROOT}/skills/connect/scripts/cluster-triage.sh"` to see which are **live, distinct clusters** vs dead/unreachable/duplicate, and name a live one — so a deleted or duplicate context never becomes a target (`--live` prints just the live names). |
 | GitHub | `github.org`, `github.token_env`; optional `tier` | `org: your-org` |
 | Slack | `slack.webhook_env` | `webhook_env: SCOUTFLO_SLACK_WEBHOOK` |
 
@@ -489,5 +489,7 @@ owns that file and its rich capture flow.
 | A pasted key wraps and the name splits (`HDX_E U_KEY`) or an `export VAR==` typo slips in | Use the shipped writer `sh "${CLAUDE_PLUGIN_ROOT}/skills/connect/scripts/addsecret.sh" <VAR>` (Step 4c): the name is a fixed argument and the value is a single silent read, so a wrapped paste can't break the name and there is no `==` keyboard path |
 | A named cloud target is silently dropped from the config | Step 2a resolves and lists every visible subscription/project/account and Step 6's completeness check reconciles written targets against the names from Step 1 |
 | Audits pointed at an admin kube context | Use a read-only context bound to the `view` ClusterRole; name it in `kubernetes.context` |
+| A big kubeconfig with dead/duplicate contexts (which one is real?) | Run `sh "${CLAUDE_PLUGIN_ROOT}/skills/connect/scripts/cluster-triage.sh"` (read-only) — it dedups by API-server URL, probes reachability with a bounded timeout, and marks each context live / unreachable(network vs reauth) / duplicate-of; configure only the live, distinct clusters |
+| A secret lives in Vault, not a static value | `sh "${CLAUDE_PLUGIN_ROOT}/skills/connect/scripts/addsecret.sh" --command VARNAME` stores `export VAR="$(vault kv get …)"` — it resolves on every store load. Trusted fetch only; see [references/providers.md](references/providers.md) |
 | Mimir or VictoriaMetrics queries return empty because tenancy was skipped | Set `mimir.tenant_id` (or the VM tenant path) during connect, not mid-audit |
 | Old config clobbered on re-run | Back up first with the timestamped copy in Step 6; edit blocks in place |
