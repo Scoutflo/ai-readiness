@@ -1,5 +1,5 @@
 #!/bin/sh
-# structure-check.sh — composes 23 gates (plus an inline frontmatter check): anchor, cross-block,
+# structure-check.sh — composes 24 gates (plus an inline frontmatter check): anchor, cross-block,
 # coverage, remediation-map, skill-completeness, the four behavioral-parity
 # gates (scope-checkpoint, redaction-parity, business-context-parity,
 # env-load-parity), manifest-compat, min-version-consistency,
@@ -14,8 +14,10 @@
 # prefix is registered in findings-schema.md), optional-key-parity (per-provider
 # required keys + either-or lane contracts — e.g. ClickStack = ClickHouse OR HyperDX
 # — are reflected in the config template; the sub-key granularity config-key-agreement
-# does not see), and contract-map (docs/CONTRACTS.md stays honest: every composed gate
-# is documented there and every gate it names exists).
+# does not see), command-ref (every ${CLAUDE_PLUGIN_ROOT}/*.sh reference in a skill
+# resolves to a shipped file; the demoted scoutflo_addsecret helper is never a
+# runnable recipe line), and contract-map (docs/CONTRACTS.md stays honest: every
+# composed gate is documented there and every gate it names exists).
 # Keep this count in sync with AGENTS.md ("composes N checks").
 set -eu
 DIR="${1:-.}"
@@ -51,5 +53,6 @@ sh "$SELF_DIR/audit-all-map-check.sh" "$DIR" || FAIL=1
 sh "$SELF_DIR/config-key-agreement-check.sh" "$DIR" || FAIL=1
 sh "$SELF_DIR/optional-key-parity-check.sh" "$DIR" || FAIL=1
 sh "$SELF_DIR/prefix-registry-check.sh" "$DIR" || FAIL=1
+sh "$SELF_DIR/command-ref-check.sh" "$DIR" || FAIL=1
 sh "$SELF_DIR/contract-map-check.sh" "$DIR" || FAIL=1
 [ "$FAIL" -eq 0 ] && echo STRUCTURE-OK || exit 1

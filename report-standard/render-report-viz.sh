@@ -1323,8 +1323,88 @@ HTMLFOOT
     echo "wrote $OUT"
     ;;
 
+  env-compare)
+    # Combined prod-vs-pre-prod (or N-environment) view for audit-all's "all
+    # environments" flow. Environment is a config-file axis (SCOUTFLO_CONFIG=
+    # toolkit-<env>.yaml), not a path level, and findings.json carries no env
+    # field — so each environment is audited into its OWN audit-dir and this mode
+    # reads each dir and lays the per-integration readiness side by side. Never a
+    # blended score across environments; an integration audited in one env but not
+    # another is flagged as a coverage gap, not counted as a pass.
+    #   env-compare <run-date> <label1> <dir1> [<label2> <dir2> ...]
+    RD="${1:?run-date}"; shift 2>/dev/null || { echo "env-compare: run-date required" >&2; exit 2; }
+    [ "$#" -ge 2 ] || { echo "env-compare: need at least one <label> <dir> pair" >&2; exit 2; }
+    AGG="$(mktemp)"; FND="$(mktemp)"; ENVS=""
+    trap 'rm -f "$AGG" "$FND"' EXIT
+    TB="$(printf '\t')"
+    while [ "$#" -ge 2 ]; do
+      _lbl="$1"; _dir="$2"; shift 2
+      ENVS="${ENVS} ${_lbl}"
+      # dual-glob one-level <target>/<date>/ and two-level <integration>/<label>/<date>/
+      for f in "$_dir"/*/"$RD"/findings.json "$_dir"/*/*/"$RD"/findings.json; do
+        [ -f "$f" ] || continue
+        tgt="$(jq -r '.target // "?"' "$f" 2>/dev/null || echo "?")"
+        case "$tgt" in all|doctor|alert-fatigue|"?") continue ;; esac
+        sc="$(jq -r 'if .score.overall == null then "na" else (.score.overall|tostring) end' "$f" 2>/dev/null || echo na)"
+        read -r c h <<EOF
+$(jq -r '[.findings[]?|select((.lifecycle//"new")!="suppressed")] | "\([.[]|select(.severity=="critical")]|length) \([.[]|select(.severity=="high")]|length)"' "$f" 2>/dev/null || echo "0 0")
+EOF
+        printf '%s\t%s\t%s\t%s\t%s\n' "$_lbl" "$tgt" "$sc" "${c:-0}" "${h:-0}" >> "$AGG"
+        printf '%s\t%s\n' "$_lbl" "$f" >> "$FND"
+      done
+    done
+    echo "## Prod vs pre-prod — combined readiness (${RD})"
+    echo
+    if [ ! -s "$AGG" ]; then echo "_No completed audits for ${RD} in any environment — run \`/scoutflo:audit-all\` per environment first._"; exit 0; fi
+    INTS="$(cut -f2 "$AGG" | sort -u)"
+    hdr="| Integration"; sep="| ---"
+    for e in $ENVS; do hdr="${hdr} | ${e} score | ${e} crit/high"; sep="${sep} | ---: | ---:"; done
+    echo "${hdr} |"; echo "${sep} |"
+    for i in $INTS; do
+      rowline="| \`${i}\`"
+      for e in $ENVS; do
+        line="$(awk -F"$TB" -v e="$e" -v i="$i" '$1==e && $2==i{print;exit}' "$AGG")"
+        if [ -n "$line" ]; then
+          s="$(printf '%s' "$line" | cut -f3)"; c="$(printf '%s' "$line" | cut -f4)"; h="$(printf '%s' "$line" | cut -f5)"
+          [ "$s" = "na" ] && sdisp="unassessed" || sdisp="${s}/100"
+          rowline="${rowline} | ${sdisp} | ${c}c / ${h}h"
+        else
+          rowline="${rowline} | — | —"
+        fi
+      done
+      echo "${rowline} |"
+    done
+    echo
+    NENV="$(printf '%s' "$ENVS" | wc -w | tr -d ' ')"
+    gaps=""
+    for i in $INTS; do
+      seen="$(awk -F"$TB" -v i="$i" '$2==i{print $1}' "$AGG" | sort -u | wc -l | tr -d ' ')"
+      [ "$seen" -lt "$NENV" ] && gaps="${gaps} \`${i}\`"
+    done
+    if [ -n "$gaps" ]; then
+      echo "**Coverage gaps (audited in some environments but not all):**${gaps}. An integration missing from an environment is an untested surface, not a pass — confirm it is intentionally absent before treating that environment as clean."
+      echo
+    fi
+    for e in $ENVS; do
+      set --
+      while IFS="$TB" read -r lbl f; do [ "$lbl" = "$e" ] && [ -f "$f" ] && set -- "$@" "$f"; done < "$FND"
+      [ "$#" -ge 1 ] || continue
+      _top="$(jq -s -r '[.[]|(.target//"?") as $t|(.findings//[])[]|select((.lifecycle//"new")!="suppressed")|.+{target:$t}]
+        | map(select(.severity=="critical" or .severity=="high"))
+        | sort_by({"critical":0,"high":1}[.severity]) | .[0:8][]
+        | "- **" + (.severity|ascii_upcase) + "** `" + (.target) + "` — " + (.title) + (if (.affected//[]|length)>0 then " (" + ((.affected)|join(", ")) + ")" else "" end)' "$@" 2>/dev/null || true)"
+      if [ -n "$_top" ]; then
+        echo "### ${e} — top critical/high findings"
+        echo
+        printf '%s\n' "$_top"
+        echo
+      fi
+    done
+    echo "_Side-by-side per environment, never a blended cross-environment score. Each environment's full detail lives in its own audit directory._"
+    ;;
+
   *)
-    echo "usage: render-report-viz.sh {at-a-glance|scorecard|lanes|mermaid-topo|html|overlaps|rollup|inventory|inventory-rollup|alert-fatigue|alert-fatigue-html|exec-summary|migration-plan|migration-plan-html} ..." >&2
+    echo "usage: render-report-viz.sh {at-a-glance|scorecard|lanes|mermaid-topo|html|overlaps|rollup|inventory|inventory-rollup|alert-fatigue|alert-fatigue-html|exec-summary|env-compare|migration-plan|migration-plan-html} ..." >&2
     exit 2
     ;;
 esac

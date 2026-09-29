@@ -80,6 +80,12 @@ Yes. Hosts and regions come from your `~/.scoutflo/toolkit.yaml`; nothing assume
 **Our logs/metrics/traces stores are spread across several clusters or environments. One audit, or one per cluster?**
 One audit. Make `lgtm:` in your `toolkit.yaml` a **list** of stack entries — each with its own `label`, `kubernetes_context`, and store URLs (`loki_url`, `victoriametrics_url`, `tempo_url`, …) — and `/scoutflo:audit-lgtm` audits each stack in turn, writing a separate report per environment under `scoutflo-audits/lgtm/<label>/`. `/scoutflo:doctor` validates and probes each stack. A single stack stays a plain `lgtm:` block with nothing to change. See `references/providers.md` → "Multiple clusters / environments".
 
+**We run prod and pre-prod. Can I get one report that separates them?**
+Yes. Environment is chosen by *which config* you audit — keep a `toolkit-prod.yaml` and a `toolkit-nonprod.yaml` (what `/scoutflo:connect` writes for a prod + non-prod estate). Audit each environment into its own output dir (`SCOUTFLO_CONFIG=~/.scoutflo/toolkit-prod.yaml SCOUTFLO_AUDIT_DIR=./scoutflo-audits/prod /scoutflo:audit-all`, then the non-prod pair). `/scoutflo:audit-all`'s Phase 0 offers to cover all environments and render one combined report that lays each environment's per-integration readiness **side by side** — never a blended or averaged score — and flags anything audited in one environment but not the other as a coverage gap.
+
+**A store (Grafana, VictoriaMetrics, Prometheus…) is only reachable on our VPN or inside the cluster. How do I audit it?**
+Bridge it read-only and point the audit at the local port. If it runs in your cluster, `kubectl port-forward` it — this rides the same kubeconfig the cluster audit uses, including a private or JIT-tunnelled cluster. If it's a VPN-only host your tunnel doesn't cover (overlapping CIDRs, partial tunnel), `ssh -L` it through a bastion that can reach it. Then set that store's `*_url` to `http://127.0.0.1:<local-port>` and run the audit. `/scoutflo:doctor` prints this unlock for any store it cannot reach. Full recipe: `report-standard/private-store-access.md`. Everything is read-only — the plugin opens no network path of its own and holds no credential.
+
 **Can I silence a finding we have accepted?**
 Yes: add it to `./scoutflo-audits/exemptions.yaml` with a reason and an expiry date. It moves to the report's Suppressed appendix instead of vanishing, and returns automatically when the exemption expires.
 

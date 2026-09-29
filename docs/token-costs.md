@@ -273,6 +273,13 @@ the fixed floor before any of your live data is read. Regenerate these anytime w
 > Azure subscriptions — the audit runs once per target, so its cost is roughly the
 > single-target figure below × the number of targets. The figures are per single
 > target/stack.
+>
+> **The combined prod-vs-pre-prod report scales per environment.** Environment is a
+> separate config (`toolkit-prod.yaml` / `toolkit-nonprod.yaml`), so covering "all
+> environments" runs one full `audit-all` pass per environment — roughly the
+> single-environment suite cost × the number of environments. The `env-compare`
+> render that stitches them into one side-by-side report is pure shell over the
+> already-written `findings.json` files (no extra model tokens).
 
 | Audit | Fixed instructions (bytes) | ~tokens (est) |
 | --- | --- | --- |

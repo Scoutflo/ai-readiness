@@ -34,7 +34,21 @@ set -eu
 # SCOUTFLO_TARGET-selected item of a labeled list (the shared enumerator handles both; no yq
 # required). Every call below uses THIS target's own url + token; no ambient default is read.
 CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
-[ -f "$CFG" ] || { echo "missing $CFG; run /scoutflo:connect"; exit 1; }
+if [ ! -f "$CFG" ]; then
+  # Multi-environment setup: a customer running prod+nonprod often has no default
+  # toolkit.yaml but named variants (toolkit-prod.yaml, toolkit-nonprod.yaml). List
+  # them so the choice is directed, not a dead stall — but NEVER auto-pick an
+  # environment (auditing the wrong one is worse than asking).
+  ENVCFGS=$(for d in "./.scoutflo" "$HOME/.scoutflo"; do ls "$d"/toolkit-*.yaml 2>/dev/null; done || true)
+  if [ -n "$ENVCFGS" ]; then
+    echo "no default config at $CFG, but found environment-specific configs:"
+    printf '%s\n' "$ENVCFGS" | sed 's/^/  - /'
+    echo "re-run with SCOUTFLO_CONFIG=<one of the above> for the environment you want (never auto-picked), or run /scoutflo:connect to create a default"
+  else
+    echo "missing $CFG; run /scoutflo:connect"
+  fi
+  exit 1
+fi
 TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 GRAF_KIND=$(sh "$TT" "$CFG" grafana kind); GRAF_N=$(sh "$TT" "$CFG" grafana count)
 [ "${GRAF_N:-0}" -ge 1 ] || { echo "no grafana target configured in $CFG; run /scoutflo:connect"; exit 1; }
@@ -58,7 +72,7 @@ command -v jq   >/dev/null || { echo "jq is required"; exit 1; }
 echo "grafana target: ${GRAF_LABEL} (${GRAFANA_URL}) -> ${GRAF_SEG}/"
 
 curl -fsS --max-time 10 "${GRAFANA_URL}/api/health" | jq -e '.database == "ok"' >/dev/null \
-  || { echo "Grafana health check failed at ${GRAFANA_URL}/api/health"; exit 1; }
+  || { echo "Grafana health check failed at ${GRAFANA_URL}/api/health — if Grafana is only reachable on the VPN or inside the cluster, bridge it read-only (kubectl port-forward, or ssh -L to a bastion) and set grafana.url to http://127.0.0.1:<local-port> per report-standard/private-store-access.md; otherwise the URL is wrong. Run /scoutflo:connect."; exit 1; }
 # Assert real identity fields, not just a 200: an auth-proxy/SPA JSON stub returning
 # {"name":null,"id":null} would otherwise pass. jq -e fails closed on nulls (and on a
 # non-JSON body, which fails to parse) instead of printing a hollow object.
@@ -67,7 +81,7 @@ curl -fsS --max-time 10 -H "Authorization: Bearer ${GRAFANA_TOKEN}" \
   || { echo "Grafana identity check failed at ${GRAFANA_URL}/api/org: the org name/id are missing — a 200 with null identity fields is an auth-proxy/SPA stub, not the real Grafana API; verify grafana.url and the token"; exit 1; }
 ```
 
-Expected: health passes silently, then the identity check confirms a real org name and id (it prints nothing on success; a 200 stub with null identity fields fails). A 401 means the token is wrong for this instance; a 403 here (health passing) means the token exists but lacks even the Viewer basic role; a connection failure means the URL is wrong or unreachable. Either way, stop and run `/scoutflo:connect`. Never proceed past a failed doctor check, and never downgrade one into a finding.
+Expected: health passes silently, then the identity check confirms a real org name and id (it prints nothing on success; a 200 stub with null identity fields fails). A 401 means the token is wrong for this instance; a 403 here (health passing) means the token exists but lacks even the Viewer basic role; a connection failure means the URL is wrong or unreachable — if the instance is only reachable over the VPN or inside the cluster, bridge it read-only per [report-standard/private-store-access.md](../../report-standard/private-store-access.md) (port-forward or `ssh -L`) and point `grafana.url` at `http://127.0.0.1:<local-port>`. Either way, stop and run `/scoutflo:connect`. Never proceed past a failed doctor check, and never downgrade one into a finding.
 
 `GET /api/user` is not used here or anywhere in this skill: on modern Grafana (confirmed live on 10.4.1), a real, correctly-scoped service-account token gets a hard `403 "Endpoint only available for users"` from `/api/user` regardless of its assigned role, because that endpoint identifies an interactively logged-in user, not a service account. Under `curl -fsS` and `set -eu`, that 403 crashes the whole doctor gate before the audit ever starts, even though the token is perfectly healthy. `/api/org` identifies the token's org correctly for both service-account tokens and legacy API keys, so it is the only identity check used throughout this skill.
 
@@ -80,7 +94,21 @@ Before any real check, confirm what you are pointed at:
 ```bash
 set -eu
 CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
-[ -f "$CFG" ] || { echo "missing $CFG; run /scoutflo:connect"; exit 1; }
+if [ ! -f "$CFG" ]; then
+  # Multi-environment setup: a customer running prod+nonprod often has no default
+  # toolkit.yaml but named variants (toolkit-prod.yaml, toolkit-nonprod.yaml). List
+  # them so the choice is directed, not a dead stall — but NEVER auto-pick an
+  # environment (auditing the wrong one is worse than asking).
+  ENVCFGS=$(for d in "./.scoutflo" "$HOME/.scoutflo"; do ls "$d"/toolkit-*.yaml 2>/dev/null; done || true)
+  if [ -n "$ENVCFGS" ]; then
+    echo "no default config at $CFG, but found environment-specific configs:"
+    printf '%s\n' "$ENVCFGS" | sed 's/^/  - /'
+    echo "re-run with SCOUTFLO_CONFIG=<one of the above> for the environment you want (never auto-picked), or run /scoutflo:connect to create a default"
+  else
+    echo "missing $CFG; run /scoutflo:connect"
+  fi
+  exit 1
+fi
 # Resolve the CURRENT grafana target (single block or SCOUTFLO_TARGET-selected list item); never hand-typed.
 TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 GRAF_N=$(sh "$TT" "$CFG" grafana count)

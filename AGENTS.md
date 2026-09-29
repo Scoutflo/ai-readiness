@@ -13,7 +13,7 @@ sh ci/run-tests.sh .
 claude plugin validate . --strict
 ```
 
-`ci/structure-check.sh` composes 23 checks: anchor, cross-block, coverage,
+`ci/structure-check.sh` composes 24 checks: anchor, cross-block, coverage,
 remediation-map, **skill-completeness**, the four behavioral-parity gates
 (scope-checkpoint, redaction-parity, business-context-parity, **env-load-parity**),
 and manifest-compat, min-version-consistency, catalog-consistency,
@@ -46,8 +46,12 @@ probed-but-unconfigurable or configurable-but-unprobed), **prefix-registry**
 prefixes stay one-per-audit and never collide), **optional-key-parity** (per-provider
 required keys and either-or lane contracts — e.g. ClickStack = ClickHouse OR HyperDX —
 are reflected in the config template, the sub-key granularity `config-key-agreement`
-does not cover), and **contract-map** (keeps [docs/CONTRACTS.md](docs/CONTRACTS.md)
-honest — every composed gate is documented there and every gate it names exists).
+does not cover), **command-ref** (every `${CLAUDE_PLUGIN_ROOT}`-relative `*.sh`
+reference a SKILL/reference doc executes resolves to a shipped file, and the
+demoted `scoutflo_addsecret` helper never appears as a runnable recipe line — the
+mechanical catch for the IMP-012 doc↔code drift class), and **contract-map**
+(keeps [docs/CONTRACTS.md](docs/CONTRACTS.md) honest — every composed gate is
+documented there and every gate it names exists).
 
 **Before adding or changing any skill, read [docs/CONTRACTS.md](docs/CONTRACTS.md)** —
 the map of every cross-skill contract (producer → consumer → invariant → guard).

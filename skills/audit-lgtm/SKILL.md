@@ -23,7 +23,7 @@ Outputs, per the [report standard](../../report-standard/README.md):
 
 ## Doctor gate
 
-Requirements. Configure only the blocks that exist in your environment; delete the rest from `~/.scoutflo/toolkit.yaml`. At least one metrics backend plus Grafana or Alertmanager must be configured for this audit to be worth running.
+Requirements. Configure only the blocks that exist in your environment; delete the rest from `~/.scoutflo/toolkit.yaml`. At least one metrics backend plus Grafana or Alertmanager must be configured for this audit to be worth running. Any store here that is only reachable on the VPN or inside the cluster (Loki, Tempo, Mimir, VictoriaMetrics, Prometheus, Alertmanager) can be bridged read-only per [report-standard/private-store-access.md](../../report-standard/private-store-access.md) — `kubectl port-forward`, or `ssh -L` to a bastion — by pointing that store's `*_url` at `http://127.0.0.1:<local-port>`.
 
 | Integration | toolkit.yaml keys | Secret | Minimum scope | Tier |
 | --- | --- | --- | --- | --- |

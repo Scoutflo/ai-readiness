@@ -486,6 +486,7 @@ Structural / linkage:
 `ci/optional-key-parity-check.sh` (**C15** — per-provider required keys + either-or lane contracts reflected in the template) ·
 `ci/prefix-registry-check.sh` (**C1/C9** — every emitted finding-ID prefix is registered) ·
 `ci/audit-all-map-check.sh` (**C8/C10** — every own-block audit mapped in audit-all; no `sync-ready` jargon) ·
+`ci/command-ref-check.sh` (every `${CLAUDE_PLUGIN_ROOT}`-relative `*.sh` reference in a SKILL/reference doc resolves to a shipped file; the demoted `scoutflo_addsecret` helper never appears as a runnable recipe line) ·
 `ci/contract-map-check.sh` (**this file** — the map stays honest).
 
 Behavioral parity:
