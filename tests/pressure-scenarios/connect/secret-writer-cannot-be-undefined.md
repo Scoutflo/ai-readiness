@@ -1,6 +1,6 @@
 # connect: the secret-writer is a shipped command, never a "command not found" trap
 
-**Failure mode (live-caught, 100ms):** the operator is told to store a token, but
+**Failure mode (live-caught on a customer onboarding call):** the operator is told to store a token, but
 the store-writer was a shell **function they had to define first**. They didn't
 (or pasted it into a different terminal), so `scoutflo_addsecret` was "command not
 found"; they fell back to a bare `export`, which the plugin's own process can't

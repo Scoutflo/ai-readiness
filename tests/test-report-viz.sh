@@ -425,5 +425,28 @@ printf '%s' "$MB" | grep -q '```mermaid' && fail "mermaid-mesh: invalid JSON lef
 printf '%s' "$(sh "$VIZ" topology-inventory "$WORK/bad-export.json")" | grep -qi 'not valid JSON' || fail "topology-inventory: invalid JSON did not degrade cleanly"
 echo "PASS"
 
+echo "Test env-compare: side-by-side per env, coverage gap flagged, per-env top findings, no blend"
+ECRD="2026-09-29"
+mkdir -p "$WORK/ec/prod/prometheus/$ECRD" "$WORK/ec/prod/grafana/$ECRD" "$WORK/ec/nonprod/prometheus/$ECRD"
+cat > "$WORK/ec/prod/prometheus/$ECRD/findings.json" <<'EOF'
+{"target":"prometheus","score":{"overall":72},"findings":[{"severity":"critical","title":"No alerting rules","affected":["prod"]},{"severity":"high","title":"Scrape gaps","affected":["api"]}]}
+EOF
+cat > "$WORK/ec/prod/grafana/$ECRD/findings.json" <<'EOF'
+{"target":"grafana","score":{"overall":90},"findings":[{"severity":"high","title":"Anon access","affected":["grafana"]}]}
+EOF
+cat > "$WORK/ec/nonprod/prometheus/$ECRD/findings.json" <<'EOF'
+{"target":"prometheus","score":{"overall":88},"findings":[{"severity":"high","title":"Scrape gaps","affected":["api"]}]}
+EOF
+EC="$(sh "$VIZ" env-compare "$ECRD" prod "$WORK/ec/prod" nonprod "$WORK/ec/nonprod")"
+printf '%s' "$EC" | grep -q 'prod score' || fail "env-compare: no prod column header"
+printf '%s' "$EC" | grep -q 'nonprod score' || fail "env-compare: no nonprod column header"
+printf '%s' "$EC" | grep -q '72/100' || fail "env-compare: prod prometheus score missing"
+printf '%s' "$EC" | grep -q '88/100' || fail "env-compare: nonprod prometheus score missing"
+printf '%s' "$EC" | grep -q 'Coverage gaps' || fail "env-compare: coverage-gap section missing (grafana is prod-only)"
+printf '%s' "$EC" | grep -q 'No alerting rules' || fail "env-compare: prod critical finding not surfaced in top findings"
+printf '%s' "$EC" | grep -q 'never a blended' || fail "env-compare: missing the no-blend footer"
+printf '%s' "$(sh "$VIZ" env-compare "$ECRD" prod "$WORK/nope-prod" nonprod "$WORK/nope-nonprod")" | grep -qi 'No completed audits' || fail "env-compare: empty dirs did not degrade cleanly"
+echo "PASS"
+
 echo
 echo "=== report-viz self-test passed ==="

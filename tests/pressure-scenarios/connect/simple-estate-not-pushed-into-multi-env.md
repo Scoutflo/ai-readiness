@@ -1,6 +1,6 @@
 # connect: a single-estate customer is not over-configured into multi-env / multi-target
 
-**Failure mode (live-caught, 100ms):** the guidance surfaces every advanced shape
+**Failure mode (live-caught on a customer onboarding call):** the guidance surfaces every advanced shape
 up front — two credential tiers, per-environment `toolkit-<env>.yaml` files,
 labeled multi-target lists, sandbox write-ladders — so an operator with one
 ordinary estate over-does the setup: builds prod/nonprod files they don't need,

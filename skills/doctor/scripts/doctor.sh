@@ -349,13 +349,16 @@ http_get() {
 }
 
 transport_hint() {
+  # The one unlock for a store that is in-cluster or VPN-only: bridge it read-only
+  # and point its *_url at the local port. Full recipe: report-standard/private-store-access.md.
+  th_unlock="if this store is in your cluster or behind a VPN, reach it read-only with a port-forward (kubectl port-forward svc/<store> :<port>) or an ssh -L bastion tunnel, then set its *_url to http://127.0.0.1:<local-port> — see report-standard/private-store-access.md"
   case "$1" in
-    6)     echo "curl exit 6: DNS lookup failed; typo in the URL, or the host resolves only on VPN or internal DNS" ;;
-    7)     echo "curl exit 7: connection refused; wrong port, service not exposed, or the port-forward is not running" ;;
-    28)    echo "curl exit 28: timeout after ${MAX_TIME}s; check the network path before raising CURL_MAX_TIME" ;;
+    6)     echo "curl exit 6: DNS lookup failed; typo in the URL, or the host resolves only on VPN or internal DNS — ${th_unlock}" ;;
+    7)     echo "curl exit 7: connection refused; wrong port, service not exposed, or the port-forward is not running — ${th_unlock}" ;;
+    28)    echo "curl exit 28: timeout after ${MAX_TIME}s; check the network path before raising CURL_MAX_TIME — ${th_unlock}" ;;
     35|60) echo "curl exit $1: TLS failure; trust the internal CA properly, never disable verification" ;;
     52|55|56) echo "curl exit $1: the connection was dropped mid-transfer with no HTTP response, usually a proxy or corporate firewall between you and the host, not the token; retry once with proxy vars cleared (env -u HTTPS_PROXY -u https_proxy ...) and confirm the host is reachable from this network (curl -I the base URL)" ;;
-    *)     echo "curl exit $1: transport failure before any HTTP response (not an auth error); the host was unreachable from this network, check proxy/VPN/firewall" ;;
+    *)     echo "curl exit $1: transport failure before any HTTP response (not an auth error); the host was unreachable from this network — ${th_unlock}" ;;
   esac
 }
 

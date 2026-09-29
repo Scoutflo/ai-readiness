@@ -21,6 +21,71 @@ A full deep run over a large estate takes tens of minutes — right for a schedu
 
 If the config file is missing or empty, stop and point at `/scoutflo:connect`.
 
+## Phase 0: choose the environment(s)
+
+Environment (prod vs pre-prod) is chosen by *which config file* you audit — a
+named `toolkit-<env>.yaml` written by `/scoutflo:connect`. That is a separate
+axis from multiple targets *within* one environment (which is `SCOUTFLO_TARGET`).
+
+```bash
+set -eu
+CONFIG="${SCOUTFLO_CONFIG:-}"
+[ -n "$CONFIG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CONFIG="$_c"; break; }; done
+if [ -n "${SCOUTFLO_CONFIG:-}" ] || [ -n "$CONFIG" ]; then
+  echo "auditing one environment: ${SCOUTFLO_CONFIG:-$CONFIG}"
+else
+  ENVCFGS=$(for d in "./.scoutflo" "$HOME/.scoutflo"; do ls "$d"/toolkit-*.yaml 2>/dev/null; done || true)
+  if [ -n "$ENVCFGS" ]; then
+    echo "no default config, but found environment-specific configs:"
+    printf '%s\n' "$ENVCFGS" | sed 's/^/  - /'
+    echo "audit ONE (re-run with SCOUTFLO_CONFIG=<one of the above>), or ALL for a combined prod-vs-pre-prod report (see 'All environments' below). Never auto-picked."
+  else
+    echo "missing config; run /scoutflo:connect"
+  fi
+fi
+```
+
+- **One environment** (the default): with `SCOUTFLO_CONFIG` set, or a single
+  default `toolkit.yaml` resolving, continue to Phase 1 — this run covers exactly
+  that environment, and the combined summary is already prod-vs-pre-prod-separated
+  because it names the config it ran against.
+- **All environments → one combined report:** when named `toolkit-<env>.yaml`
+  variants exist and the operator asks to cover them all, run the whole audit
+  (Phases 1–5) once per environment into its **own** output root, then render one
+  combined prod-vs-pre-prod report. Never auto-pick; confirm the set first.
+
+### All environments → combined prod-vs-pre-prod report
+
+Environment is not a level in the output path and `findings.json` carries no env
+field, so each environment must be audited into its own `SCOUTFLO_AUDIT_DIR` —
+otherwise two environments collide in one directory. Run Phases 1–5 once per
+environment, each with its own config and output root:
+
+```bash
+BASE="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}"
+# Example for prod + nonprod — one full audit-all pass each, into its own root:
+#   SCOUTFLO_CONFIG=~/.scoutflo/toolkit-prod.yaml    SCOUTFLO_AUDIT_DIR="$BASE/prod"    <run Phases 1-5>
+#   SCOUTFLO_CONFIG=~/.scoutflo/toolkit-nonprod.yaml SCOUTFLO_AUDIT_DIR="$BASE/nonprod" <run Phases 1-5>
+echo "run one full pass per environment into $BASE/<env>/ before rendering the combined report"
+```
+
+When every environment's pass has completed, render the side-by-side report:
+
+```bash
+BASE="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}"
+RUN_DATE="$(date -u +%F)"
+COMBINED="$BASE/prod-vs-preprod-${RUN_DATE}.md"
+sh "${CLAUDE_PLUGIN_ROOT:-.}/report-standard/render-report-viz.sh" env-compare "$RUN_DATE" \
+  prod "$BASE/prod" nonprod "$BASE/nonprod" > "$COMBINED"
+echo "wrote $COMBINED"
+```
+
+Pass one `<label> <dir>` pair per environment (any labels: `prod`, `staging`,
+`eu-prod`, …). The report lays each environment's per-integration readiness side
+by side, flags an integration audited in one environment but not another (a
+coverage gap, not a pass), and never blends scores across environments — each
+environment's full detail stays in its own directory.
+
 ## Phase 1: Build the run plan
 
 List the top-level integration keys in the config:
@@ -30,7 +95,19 @@ set -eu
 CONFIG="${SCOUTFLO_CONFIG:-}"
 [ -n "$CONFIG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CONFIG="$_c"; break; }; done
 [ -n "$CONFIG" ] || CONFIG="$HOME/.scoutflo/toolkit.yaml"   # toolkit config location
-[ -f "$CONFIG" ] || { echo "missing $CONFIG; run /scoutflo:connect"; exit 1; }
+if [ ! -f "$CONFIG" ]; then
+  # No default config. If named per-environment variants exist, list them (a
+  # directed choice, never an auto-pick) — see Phase 0 to cover one or all.
+  ENVCFGS=$(for d in "./.scoutflo" "$HOME/.scoutflo"; do ls "$d"/toolkit-*.yaml 2>/dev/null; done || true)
+  if [ -n "$ENVCFGS" ]; then
+    echo "no default config at $CONFIG, but found environment-specific configs:"
+    printf '%s\n' "$ENVCFGS" | sed 's/^/  - /'
+    echo "re-run with SCOUTFLO_CONFIG=<one of the above>, audit ALL of them for a combined report (Phase 0), or run /scoutflo:connect to create a default"
+  else
+    echo "missing $CONFIG; run /scoutflo:connect"
+  fi
+  exit 1
+fi
 awk -F: '/^[a-z_]+:/{print $1}' "$CONFIG"
 ```
 

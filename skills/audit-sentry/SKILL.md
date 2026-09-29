@@ -37,7 +37,21 @@ set -eu
 CFG="${SCOUTFLO_CONFIG:-}"
 [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done
 [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
-[ -f "$CFG" ] || { echo "missing $CFG; run /scoutflo:connect"; exit 1; }
+if [ ! -f "$CFG" ]; then
+  # Multi-environment setup: a customer running prod+nonprod often has no default
+  # toolkit.yaml but named variants (toolkit-prod.yaml, toolkit-nonprod.yaml). List
+  # them so the choice is directed, not a dead stall — but NEVER auto-pick an
+  # environment (auditing the wrong one is worse than asking).
+  ENVCFGS=$(for d in "./.scoutflo" "$HOME/.scoutflo"; do ls "$d"/toolkit-*.yaml 2>/dev/null; done || true)
+  if [ -n "$ENVCFGS" ]; then
+    echo "no default config at $CFG, but found environment-specific configs:"
+    printf '%s\n' "$ENVCFGS" | sed 's/^/  - /'
+    echo "re-run with SCOUTFLO_CONFIG=<one of the above> for the environment you want (never auto-picked), or run /scoutflo:connect to create a default"
+  else
+    echo "missing $CFG; run /scoutflo:connect"
+  fi
+  exit 1
+fi
 TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 SNTRY_KIND=$(sh "$TT" "$CFG" sentry kind); SNTRY_N=$(sh "$TT" "$CFG" sentry count)
 [ "${SNTRY_N:-0}" -ge 1 ] || { echo "no sentry target configured in $CFG; run /scoutflo:connect"; exit 1; }

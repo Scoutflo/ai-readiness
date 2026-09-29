@@ -129,7 +129,7 @@ This audit talks to the cluster only through `kubectl`, which reads whatever kub
 3. Set `kubernetes.context` in `~/.scoutflo/toolkit.yaml` to the context inside that kubeconfig (`KUBECONFIG=<path> kubectl config get-contexts -o name`). The context name is stable across sessions; the temporary file path and the tunnel port are **not**, so never hard-code the path in the config — always resolve it from `$KUBECONFIG`.
 4. Run the audit. Every `kubectl --context …` call rides the live tunnel. When the session expires the audit simply loses access and says so — Scoutflo retains no token, kubeconfig, or cluster credential.
 
-An in-cluster backend with no external ingress (ClickHouse/HyperDX for `audit-clickstack`, or a store for `audit-lgtm` / `audit-prometheus` / `audit-signoz`) is reached the same way: `kubectl port-forward` it through this kubeconfig and point that audit's URL at `http://127.0.0.1:<local-port>`.
+An in-cluster backend with no external ingress (ClickHouse/HyperDX for `audit-clickstack`, or a store for `audit-lgtm` / `audit-prometheus` / `audit-signoz`) is reached the same way: `kubectl port-forward` it through this kubeconfig and point that audit's URL at `http://127.0.0.1:<local-port>`. See [report-standard/private-store-access.md](../../report-standard/private-store-access.md) for the full store-bridging recipe, including the `ssh -L` bastion path for a store that sits behind a VPN but not in the cluster.
 
 ## Live-safety gate
 

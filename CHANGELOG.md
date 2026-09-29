@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.1.212
+
+**Reach stores behind a VPN, one combined prod-vs-pre-prod report, and a gate that
+keeps script references honest (IMP-008 + IMP-010 + IMP-013).** Closes the last of
+the improvement items from the customer onboarding calls.
+
+- **Reach an internal store behind a VPN / overlapping IPs (IMP-008).** When a
+  store (Grafana, VictoriaMetrics, Loki/Tempo/Mimir, Prometheus, Alertmanager,
+  ClickHouse) is unreachable — in-cluster with no ingress, or behind a VPN whose
+  tunnel covers only part of the network — the audits and `/scoutflo:doctor` now
+  point at one read-only bridge instead of a dead "unreachable". New
+  `report-standard/private-store-access.md` is the authoritative recipe:
+  `kubectl port-forward` for an in-cluster store, or `ssh -L` to a bastion for a
+  VPN-only host, then point that store's `*_url` at `http://127.0.0.1:<port>`.
+  doctor's transport-failure hint carries the unlock for every store; audit-grafana
+  no longer prints a bare "health check failed"; audit-lgtm / audit-prometheus /
+  audit-kubernetes cross-link the recipe. All read-only — the plugin holds no
+  standing credential and invents no network path.
+- **One combined prod-vs-pre-prod report (IMP-010).** `render-report-viz.sh` gains
+  an `env-compare` mode that reads each environment's audit directory and lays the
+  per-integration readiness side by side — score + critical/high per environment,
+  never a blended or averaged cross-environment score, and it flags an integration
+  audited in one environment but not another as a coverage gap. `audit-all` gains a
+  Phase 0 that offers "one environment, or all of them → combined report" (never
+  auto-picking), and the config-absent environment picker is now in **every** audit
+  (audit-all, audit-grafana, audit-sentry were the three that still dead-ended).
+- **Command/script-reference gate (IMP-013).** New `ci/command-ref-check.sh` (the
+  24th composed structure check): every `${CLAUDE_PLUGIN_ROOT}`-relative `*.sh`
+  reference in a SKILL/reference doc must resolve to a shipped file, and the demoted
+  `scoutflo_addsecret` helper may never appear as a runnable recipe line. This is
+  the mechanical catch for the doc↔code drift class that IMP-012 hit (a recipe
+  calling a removed helper), which until now only a human review caught.
+
 ## 0.1.211
 
 **Fix the connect provider recipes to use the shipped secret-writer (IMP-012).**
@@ -79,7 +112,7 @@ batch of small, high-signal fixes from the improvement tracker.
 ## 0.1.207
 
 **Connect onboarding UX — the secret-writer is a real command, and a 3-move quick
-path.** From the 100ms live run, where the store-writer being a paste-a-function
+path.** From a live customer onboarding run, where the store-writer being a paste-a-function
 step left `~/.scoutflo/env` empty and every token reading as missing, and the
 484-line connect flow pushed a single-estate customer into over-configuring.
 
@@ -717,7 +750,7 @@ from a full CONTRACTS.md compliance pass + the maintainer rubric review):
 
 ## 0.1.180
 
-**`alert-fatigue` strengthened into a two-mode alert noise & fatigue assessment — now standalone on a single integration, not just a cross-audit roll-up.** Grounded in a deep research pass on the domain (SRE canon + PagerDuty/Datadog/Alertmanager/incident.io/Rootly/FireHydrant/Opsgenie/Grafana/BigPanda/Moogsoft + verified benchmarks). Requested ahead of a customer (codeyoung) evaluation.
+**`alert-fatigue` strengthened into a two-mode alert noise & fatigue assessment — now standalone on a single integration, not just a cross-audit roll-up.** Grounded in a deep research pass on the domain (SRE canon + PagerDuty/Datadog/Alertmanager/incident.io/Rootly/FireHydrant/Opsgenie/Grafana/BigPanda/Moogsoft + verified benchmarks). Requested ahead of a customer evaluation.
 
 - **Standalone mode (NEW):** point it at one (or a few) configured alerting providers — even with **no full audit run** — and it drives that provider's own **alerting-lane checks** (referenced from `audit-<provider>`, never re-implemented — DRY) to produce the noise/fatigue picture directly, then rolls up. The roll-up library itself still makes **zero provider calls**; the reads happen in the audit-lane checks it invokes. Roll-up mode (inside `/scoutflo:audit-all` Phase 3.6) is unchanged. "Handle both": standalone drives the checks; roll-up consumes them; same `alert-fatigue.json` out.
 - **The honest three feed tiers, stated every run:** **config** (symptom-vs-cause, tiering, burn-rate-vs-static, dedup/grouping/inhibition/maintenance/recovery-threshold presence — from config alone), **fire-history** (volume, pages-per-shift, flapping/self-resolve, top-noisy, off-hours, co-firing alert-to-incident *proxy* — real measured numbers, no incident feed), **incident-feed** (true precision/recall, MTTA/MTTR, %-actionable, true alert-to-incident ratio — labeled `verify-pending` or a proxy, **never fabricated**).

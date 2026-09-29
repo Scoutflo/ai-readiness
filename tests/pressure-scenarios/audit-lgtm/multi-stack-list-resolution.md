@@ -4,7 +4,7 @@
 clusters or environments (a prod stack and a pre-prod stack). Before IMP-003 the
 only shape was a single `lgtm:` map + one set of top-level store blocks, so they
 had to hand-split into one `toolkit-<env>.yaml` per stack and run the audit N times
-(the live 100ms friction). If the audit silently audited only the first stack, or
+(the live customer-call friction). If the audit silently audited only the first stack, or
 overwrote one stack's report with the next, or `doctor` spuriously failed the
 multi-stack config, the estate would look half-covered or broken.
 

@@ -1,6 +1,6 @@
 # connect: a big kubeconfig with dead/duplicate contexts must be triaged to live, distinct clusters — read-only
 
-**Failure mode:** the operator's kubeconfig has many contexts (live at 100ms: ~26),
+**Failure mode:** the operator's kubeconfig has many contexts (live-caught on a customer call: dozens),
 several unreachable/deleted, and some pointing at the **same** cluster. If connect
 just lists raw context names, a dead or duplicate context gets configured as an
 audit target — the audit then fails or double-counts, and the operator can't tell
