@@ -221,9 +221,9 @@ fi
 # way, so the env-missing hints below can point at a real, runnable command instead
 # of a fragile hand-typed echo. Non-fatal if absent — the hint just names the path.
 if [ -n "${CLAUDE_PLUGIN_ROOT:-}" ] && [ -f "${CLAUDE_PLUGIN_ROOT%/}/skills/connect/scripts/addsecret.sh" ]; then
-  ADDSECRET="${CLAUDE_PLUGIN_ROOT%/}/skills/connect/scripts/addsecret.sh"
+  ADDSECRET_SCRIPT="${CLAUDE_PLUGIN_ROOT%/}/skills/connect/scripts/addsecret.sh"
 else
-  ADDSECRET="$(cd "$(dirname "$0")/../../.." 2>/dev/null && pwd)/skills/connect/scripts/addsecret.sh"
+  ADDSECRET_SCRIPT="$(cd "$(dirname "$0")/../../.." 2>/dev/null && pwd)/skills/connect/scripts/addsecret.sh"
 fi
 # A missing enumerator must fail loudly, never silently make every block look absent
 # (that would reintroduce the zero-rows false-green this preflight exists to kill).
@@ -290,11 +290,11 @@ row() {
 missing_hint() {
   mh_var="$1"
   if [ -f "$SCOUTFLO_ENV" ] && grep -qE "^[[:space:]]*export[[:space:]]+${mh_var}=" "$SCOUTFLO_ENV" 2>/dev/null; then
-    printf '%s' "${mh_var} appears in ${SCOUTFLO_ENV} but did not load — that line failed to parse, most often because the value has an unbalanced quote or backtick. Re-add it with: sh ${ADDSECRET} ${mh_var} (which escapes the value correctly), or fix that one line, then rerun doctor."
+    printf '%s' "${mh_var} appears in ${SCOUTFLO_ENV} but did not load — that line failed to parse, most often because the value has an unbalanced quote or backtick. Re-add it with: sh ${ADDSECRET_SCRIPT} ${mh_var} (which escapes the value correctly), or fix that one line, then rerun doctor."
   elif [ -f "$SCOUTFLO_ENV" ] && grep -qE "^[[:space:]]*${mh_var}=" "$SCOUTFLO_ENV" 2>/dev/null; then
-    printf '%s' "${mh_var} is in ${SCOUTFLO_ENV} but its line is missing the 'export ' prefix, so the plugin can't load it. Re-add it with: sh ${ADDSECRET} ${mh_var} (or prepend 'export ' to that one line), then rerun doctor."
+    printf '%s' "${mh_var} is in ${SCOUTFLO_ENV} but its line is missing the 'export ' prefix, so the plugin can't load it. Re-add it with: sh ${ADDSECRET_SCRIPT} ${mh_var} (or prepend 'export ' to that one line), then rerun doctor."
   else
-    printf '%s' "${mh_var} is not in ${SCOUTFLO_ENV} — the plugin reads that file, not your shell, so a plain 'export ${mh_var}=...' typed in your terminal is invisible to it. Add it with: sh ${ADDSECRET} ${mh_var} (prompts silently, writes it correctly; Windows: setx ${mh_var} \"<paste>\"), then rerun doctor."
+    printf '%s' "${mh_var} is not in ${SCOUTFLO_ENV} — the plugin reads that file, not your shell, so a plain 'export ${mh_var}=...' typed in your terminal is invisible to it. Add it with: sh ${ADDSECRET_SCRIPT} ${mh_var} (prompts silently, writes it correctly; Windows: setx ${mh_var} \"<paste>\"), then rerun doctor."
   fi
 }
 

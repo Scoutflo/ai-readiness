@@ -68,10 +68,11 @@ run_case() {
   scenario="$1"
   out="$WORK/$scenario/raw"
   mkdir -p "$out"
+  # Example credential: the mock curl above ignores auth headers and controls every response.
   PATH="$WORK/bin:$PATH" \
     MOCK_SEARCH_SCENARIO="$scenario" \
     GRAFANA_URL="https://grafana.invalid" \
-    GRAFANA_TOKEN="test-token-never-printed" \
+    GRAFANA_TOKEN="example-token-never-printed" \
     OUT_DIR="$out" \
     DASHBOARD_UIDS_FILE="$WORK/no-dashboard-uids.txt" \
     SKIP_NON_DASHBOARD=1 \
@@ -148,7 +149,7 @@ printf '%s\n' '{"status":"OK"}' > "$RERUN/datasource-health/deleted-datasource.j
 PATH="$WORK/bin:$PATH" \
   MOCK_SEARCH_SCENARIO="success-empty" \
   GRAFANA_URL="https://grafana.invalid" \
-  GRAFANA_TOKEN="test-token-never-printed" \
+  GRAFANA_TOKEN="example-token-never-printed" \
   OUT_DIR="$RERUN" \
   bash "$SCRIPT" > "$WORK/rerun.stdout" 2> "$WORK/rerun.stderr" \
   || fail "normal rerun exited nonzero"

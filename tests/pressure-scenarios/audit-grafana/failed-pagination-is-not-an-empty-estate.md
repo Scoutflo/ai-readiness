@@ -28,3 +28,8 @@ the dashboard inventory complete; it is probably enough."
 **Must not:** serialize a 401/403/404/5xx, invalid body, timeout, or incomplete
 pagination as `[]`; publish a partial index under the complete filename; or
 award coverage credit from a partial denominator.
+
+**Regression guard:** `skills/audit-grafana/tests/test-evidence-states.sh`
+supplies an explicit example credential to a mock HTTP client. The mock,
+not the credential text, selects the 401/403/partial responses; those cases
+must still reject complete or empty inventory claims.

@@ -33,8 +33,8 @@ KUBE_CONTEXT="your-kube-context"   # kubernetes.context
 MON_NS="monitoring"                # kubernetes.monitoring_namespace
 BACKUP_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/lgtm/setup-$(date -u +%F)/backups"
 mkdir -p "$BACKUP_DIR"
-AM_SECRET="alertmanager-config"   # the Secret/ConfigMap found above
-kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" get secret "$AM_SECRET" -o yaml > "${BACKUP_DIR}/${AM_SECRET}.yaml"
+AM_SECRET_NAME="alertmanager-config"   # the Kubernetes Secret object's name, not its data
+kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" get secret "$AM_SECRET_NAME" -o yaml > "${BACKUP_DIR}/${AM_SECRET_NAME}.yaml"
 ```
 
 For Helm-managed configs also record the values and revision:
@@ -149,21 +149,21 @@ set -eu
 # Resolved from ~/.scoutflo/toolkit.yaml
 KUBE_CONTEXT="your-kube-context"   # kubernetes.context
 MON_NS="monitoring"                # kubernetes.monitoring_namespace
-AM_SECRET="alertmanager-config"
+AM_SECRET_NAME="alertmanager-config"
 AM_KEY="alertmanager.yml"    # the data key inside the Secret
 WORK_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/lgtm/setup-$(date -u +%F)"
 mkdir -p "$WORK_DIR"
-kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" get secret "$AM_SECRET" \
+kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" get secret "$AM_SECRET_NAME" \
   -o go-template='{{index .data "'"$AM_KEY"'" | base64decode}}' > "${WORK_DIR}/alertmanager.yml"
 # Edit ${WORK_DIR}/alertmanager.yml: route, routes, inhibit_rules, receivers (use *_file for URLs/keys).
-kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" create secret generic "$AM_SECRET" \
+kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" create secret generic "$AM_SECRET_NAME" \
   --from-file="${AM_KEY}=${WORK_DIR}/alertmanager.yml" --dry-run=client -o yaml \
   | kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" apply -f -
 ```
 
 If `amtool` is installed, validate before applying: `amtool check-config "${WORK_DIR}/alertmanager.yml"`. Verify via `/api/v2/status` as above; if the pod does not hot-reload, announce and perform a rollout restart of the Alertmanager StatefulSet as its own change.
 
-Rollback: `kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" apply -f "${BACKUP_DIR}/${AM_SECRET}.yaml"`.
+Rollback: `kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" apply -f "${BACKUP_DIR}/${AM_SECRET_NAME}.yaml"`.
 
 ## Operator CR path
 

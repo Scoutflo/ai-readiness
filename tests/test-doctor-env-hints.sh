@@ -12,7 +12,7 @@ ok() { echo "ok: $1"; }
 
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
 SCOUTFLO_ENV="$WORK/env"
-ADDSECRET="/PLUGIN/skills/connect/scripts/addsecret.sh"
+ADDSECRET_SCRIPT="/PLUGIN/skills/connect/scripts/addsecret.sh"
 
 awk '/^missing_hint\(\) \{/,/^\}/' "$D" > "$WORK/fn.sh"
 grep -q 'missing_hint()' "$WORK/fn.sh" || fail "could not extract missing_hint from doctor.sh"
@@ -30,7 +30,7 @@ ok "branch A: unparseable line (points at addsecret)"
 printf "GRAFANA_TOKEN=sekret\n" > "$SCOUTFLO_ENV"
 MB=$(missing_hint GRAFANA_TOKEN)
 printf '%s' "$MB" | grep -q "missing the 'export ' prefix" || fail "no-export should flag the missing prefix: $MB"
-printf '%s' "$MB" | grep -q "$ADDSECRET" || fail "no-export hint should point at addsecret.sh"
+printf '%s' "$MB" | grep -q "$ADDSECRET_SCRIPT" || fail "no-export hint should point at addsecret.sh"
 printf '%s' "$MB" | grep -q "sekret" && fail "hint B leaked the value" || :
 ok "branch B: missing export prefix -> addsecret"
 
@@ -38,7 +38,7 @@ ok "branch B: missing export prefix -> addsecret"
 : > "$SCOUTFLO_ENV"
 MC=$(missing_hint GRAFANA_TOKEN)
 printf '%s' "$MC" | grep -qi "invisible" || fail "absent should name the shell-only cause: $MC"
-printf '%s' "$MC" | grep -q "$ADDSECRET" || fail "absent hint should point at addsecret.sh"
+printf '%s' "$MC" | grep -q "$ADDSECRET_SCRIPT" || fail "absent hint should point at addsecret.sh"
 ok "branch C: absent -> shell-only cause + addsecret"
 
 echo "PASS: doctor env-missing hints"

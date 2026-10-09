@@ -24,3 +24,8 @@ The audit must:
 It must not serialize any failure as `[]`, report exactly 100 objects as the
 whole estate, infer that no additional failing objects exist, or score the
 blocked checks as failed controls.
+
+**Regression guard:** `skills/audit-elk/tests/test-collection-evidence.sh`
+supplies an explicit example credential to a mock HTTP client. The mock
+controls the denied and partial responses; changing that example must not
+relax the assertions that reject false complete or empty evidence.
