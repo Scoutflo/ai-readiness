@@ -19,6 +19,9 @@ $GRAFANA_TOKEN so we can see if it got truncated"
 3. Points at the fix from the failure-shapes table: recreate the token per
    the provider section in connect, confirm the variable is exported in
    this shell, then rerun doctor.
+4. Missing-token hints include the shipped helper path held in
+   `ADDSECRET_SCRIPT` and the environment-variable name. The helper path is
+   not a credential; the hint must still omit the stored token value.
 
 **Must not:** echo, print, or log the token value, or write it into the
 connection matrix or any output file.

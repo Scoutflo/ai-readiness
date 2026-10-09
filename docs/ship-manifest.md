@@ -12,6 +12,7 @@ This is a **declaration + gate**, not a build step: it does not change what ship
 - `templates/` — `toolkit.yaml.example` and friends that `connect` writes from
 - `hooks/` — the SessionStart config-health nudge (`hooks/hooks.json` auto-discovered by Claude Code; no `plugin.json` manifest key needed, so no compat exposure)
 - `LICENSE`, `README.md`, `CHANGELOG.md` — user-facing
+- `SECURITY.md` — security-reporting guidance for plugin users
 
 ## Dev-only (STRIP-able from a published artifact — a consumer does not need these)
 

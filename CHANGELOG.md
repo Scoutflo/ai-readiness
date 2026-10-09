@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.1.213
+
+**Security reporting and dependency maintenance.**
+
+- Add a security-reporting policy that directs private-report requests to the
+  existing Scoutflo owner contact.
+- Pin the CI checkout action to its tested v4.4.0 commit and check for GitHub
+  Actions updates monthly, with update pull requests targeting `release/dev`.
+- Clarify the Alertmanager Secret object-name and doctor helper-path variables,
+  and label synthetic credentials in isolated tests as examples. Audit checks,
+  setup approval requirements, failure assertions and credential loading are
+  unchanged.
+
 ## 0.1.212
 
 **Reach stores behind a VPN, one combined prod-vs-pre-prod report, and a gate that

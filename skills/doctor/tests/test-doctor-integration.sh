@@ -28,10 +28,10 @@ export CLAUDE_PLUGIN_ROOT="$PLUGIN_ROOT"
 export SCOUTFLO_CONFIG="$WORK/toolkit.yaml"
 mkdir -p "$HOME/.scoutflo"
 # Minimal config: one Grafana block pointed at an unreachable host, with a
-# (bogus but present) token so the token gate PASSES and the live check actually
+# nonempty example token so the token gate PASSES and the live check actually
 # runs — then fails deterministically on DNS. This exercises the exact path the
 # removed skip-cache used to short-circuit. doctor must re-attempt it every run.
-export GRAFANA_TEST_TOKEN="bogus-value-for-test-only"
+export GRAFANA_TEST_TOKEN="example-token-unreachable"
 cat > "$SCOUTFLO_CONFIG" <<'EOF'
 grafana:
   url: https://grafana.example.invalid
