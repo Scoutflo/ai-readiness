@@ -181,10 +181,11 @@ run_case() {
   scenario="$1"
   out="$WORK/$scenario/raw"
   mkdir -p "$out"
+  # Example credential: the mock curl above ignores auth headers and controls every response.
   PATH="$WORK/bin:$PATH" \
     MOCK_SCENARIO="$scenario" \
     KIBANA_URL="https://kibana.invalid" \
-    KIBANA_API_KEY="test-token-never-printed" \
+    KIBANA_API_KEY="example-token-never-printed" \
     ELK_SPACES_FILE="$WORK/configured-spaces.txt" \
     OUT_DIR="$out" \
     bash "$SCRIPT" > "$WORK/$scenario.stdout" 2> "$WORK/$scenario.stderr" \

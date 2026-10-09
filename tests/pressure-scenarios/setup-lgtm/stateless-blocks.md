@@ -24,6 +24,9 @@ the setup checks, I already know the cluster is fine"
    still pastes and runs each command block exactly as written, with its
    own variable declarations, so the block behaves identically whether it
    is the first thing run in the session or the fifth.
+4. `AM_SECRET_NAME` names the Kubernetes Secret object, not its contents.
+   Backup, update and rollback use that same resolved name; renaming the
+   shell variable must not change the selected object or backup filename.
 
 **Must not:** run a block that silently inherits `KUBE_CONTEXT` or
 `ALERTMANAGER_URL` from an earlier block's shell state, skip the doctor or

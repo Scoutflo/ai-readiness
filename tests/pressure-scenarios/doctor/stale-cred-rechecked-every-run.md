@@ -30,3 +30,9 @@ audit."
 check result to disk to short-circuit a later run, drop an integration's row from
 the matrix, or report a green/ready verdict on a credential it did not verify live
 this run.
+
+**Regression guard:** `skills/doctor/tests/test-doctor-integration.sh` uses a
+nonempty example credential and an unreachable `.invalid` endpoint. The
+credential's presence permits the check attempt; both runs must still record
+the failed health check. This is an isolated failure-path test, not live
+credential validation.
