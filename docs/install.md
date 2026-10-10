@@ -2,7 +2,7 @@
 
 Three paths: install it yourself, roll it out to a team through a shared repository, or force-enable it across an organization with managed settings. All three end at the same place: run `/scoutflo:start` and follow it.
 
-**Every path below that uses a `/plugin ...` command means the standalone `claude` terminal CLI, not Claude.app's chat window.** `/plugin marketplace add`, `/plugin install`, `/plugin` (list/update), `/plugin uninstall`, and `/plugin marketplace remove` are all terminal-CLI-only commands — typing them into Claude.app's chat box fails with "isn't available in this environment." This is a one-time distinction: once a plugin is installed, it's available inside Claude.app automatically (the terminal and the app read the same shared `~/.claude/` config), and every `/scoutflo:...` skill command works directly in Claude.app's chat with no terminal involved. The "Team" and "Enterprise" paths below skip the terminal step entirely — they install via a settings file instead.
+**Every path below that uses a `/plugin ...` command means the standalone `claude` terminal CLI, not Claude.app's chat window.** `/plugin marketplace add`, `/plugin install`, `/plugin` (list/update), `/plugin uninstall`, and `/plugin marketplace remove` are all terminal-CLI-only commands — typing them into Claude.app's chat box fails with "isn't available in this environment." After installation, run `/scoutflo:...` commands in a **Local Claude Code session**: the terminal CLI, the desktop app's **Code tab with Local selected**, or the VS Code / JetBrains Claude Code extensions. The desktop app's Chat tab and claude.ai cannot access the local files and shell commands these skills need. The "Team" and "Enterprise" paths below skip the terminal step entirely — they install via a settings file instead.
 
 **Two ways to avoid the terminal for the install itself.** (1) The **Team / Enterprise** paths below add the marketplace and enable the plugin through a `settings.json` file — no `/plugin` command anywhere. (2) The **Claude desktop app** has a built-in plugin browser (in the app's UI, not the chat box: the **+** next to the prompt → **Plugins**) that can install and manage plugins — but only from a marketplace that has *already been added*. The desktop app cannot add a brand-new marketplace on its own, so the very first step (`/plugin marketplace add Scoutflo/ai-readiness`, or the `settings.json` entry) still comes from the terminal or a settings file. After that, browsing and installing from the app's UI works.
 
@@ -25,7 +25,7 @@ claude plugin install scoutflo@scoutflo
 
 **Step 2 — restart Claude Code / Claude.app** (fully quit and reopen, not just a new tab) so it loads the plugin you just installed.
 
-**Step 3 — everyday use, back in Claude.app's chat (or any Claude Code surface) — no more terminal needed.** First run, in order:
+**Step 3 — everyday use, in a Local Claude Code session.** Use the terminal CLI, the desktop app's **Code tab → Local**, or a Claude Code editor extension. First run, in order:
 
 1. `/scoutflo:start` orients you: what is installed, what to do first.
 2. `/scoutflo:connect` sets up credentials for your integrations, with exact scopes and read-only token recipes.

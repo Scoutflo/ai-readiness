@@ -1,11 +1,15 @@
 # Scoutflo AI Readiness
 
+[![HOL Guard](https://img.shields.io/endpoint?url=https%3A%2F%2Fhol.org%2Fapi%2Fregistry%2Fbadges%2Fplugin%3Fslug%3Dscoutflo%252Fscoutflo%26metric%3Dtrust)](https://hol.org/registry/plugins/scoutflo%2Fscoutflo)
+
 Audit, harden, and monitor your infrastructure and observability stacks from inside Claude Code — scored reports, guided fixes, Slack briefs, scheduled runs. Built from Scoutflo's own SRE consulting practice, packaged so you can run the same checks yourself, on your own systems, with your own credentials.
 
-**The two guarantees this whole plugin is built around:**
+**How the plugin handles access and data:**
 
-1. **Everything runs on your side.** Every API call originates from your machine or your CI. Nothing is sent to Scoutflo — no telemetry, no report upload, no callbacks. The AI driving these skills never sees a secret value: it shows you the exact command to create and export a credential, and you run it yourself, in your own terminal. Reports stay on your filesystem.
+1. **Checks run from your environment.** Your machine or CI runner queries your configured integrations and writes reports. The plugin has no automatic Scoutflo telemetry, report-upload service or callback. Claude Code still uses your selected model provider; optional Slack delivery and CI report storage have their own data flows. Enter credential values in your own terminal and review reports before sharing. See [data handling](docs/data-handling.md) for destinations, storage and retention.
 2. **Nothing changes without your explicit yes.** Audit skills are strictly read-only — they list, get, and query, never create or modify anything. Setup skills (the ones that fix what an audit found) always show you the exact change first and wait for you to confirm before touching anything live.
+
+The toolkit is free under Apache-2.0. Your Claude usage and other services can have separate charges; see [license and use](docs/license-and-use.md).
 
 ---
 
