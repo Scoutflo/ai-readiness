@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.1.214
+
+**Installation and data-handling documentation.**
+
+- Align the installation guide with the README: run the plugin in a local
+  Claude Code session, including the desktop Code tab with Local selected.
+  The desktop Chat tab and claude.ai do not provide the required local shell
+  and filesystem access.
+- Document model-provider processing, local credential storage, optional Slack
+  delivery and both cache and artifact storage in scheduled CI. Link the guide
+  from the README and FAQ to clarify the existing data flows.
+- Explain the existing Apache-2.0 license and separate service costs, and link
+  the public HOL listing with its live trust-score badge.
+- Shorten the plugin description around the audits, evidence reports and
+  approval boundary; the skill catalog retains the complete provider list.
+
+Audit behavior, setup approvals and credentials are unchanged.
+
 ## 0.1.213
 
 **Security reporting and dependency maintenance.**
