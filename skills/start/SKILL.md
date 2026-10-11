@@ -1,6 +1,6 @@
 ---
 name: start
-description: 'Orientation for the Scoutflo AI Readiness: the local-only guarantee, first steps, the full skill catalog, credential tiers, and where audit reports land. Use when the user asks where to start, what the toolkit can do, which skills exist, how reports and scoring work, or whether any data leaves their machine. Do not use to create credentials (use connect), to check config health (use doctor), or to run an audit (use audit-all or a specific audit skill).'
+description: 'Orientation for the Scoutflo AI Readiness: execution and data handling, first steps, the full skill catalog, credential tiers, and where audit reports land. Use when the user asks where to start, what the toolkit can do, which skills exist, how reports and scoring work, or whether any data leaves their machine. Do not use to create credentials (use connect), to check config health (use doctor), or to run an audit (use audit-all or a specific audit skill).'
 ---
 
 # Scoutflo AI Readiness: Start Here
@@ -9,9 +9,11 @@ This toolkit audits, hardens, and monitors your infrastructure and observability
 
 **Open this orientation with the loaded toolkit version as the first line — this is mandatory, not optional** (read `version` from `${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json`). Plugins do not auto-update: if a teammate's skill list or picker looks different, compare versions first and update with `claude plugin update scoutflo@scoutflo`. And updating on disk is not enough while a session is live: a running Claude Code session keeps whatever plugin version it loaded at startup; after `claude plugin update scoutflo@scoutflo` run `/reload-plugins` (or restart Claude Code), then re-run — otherwise you are still on the old version.
 
-## Everything runs on your side
+## Execution and data handling
 
-- Every API call originates from your machine or your CI. Nothing is sent to Scoutflo: no telemetry, no report upload, no callbacks.
+- Your machine or selected runner executes integration commands and stores working data and reports.
+- Claude Code can include prompts, selected context and tool results in the model session. Your client, account and configured model provider govern that processing; running commands locally does not make the model session offline.
+- The shipped plugin has no automatic Scoutflo telemetry, report-upload service or callback. Optional Slack delivery and scheduled CI caches/artifacts can send data to services you configure. Read the [data-handling guide](../../docs/data-handling.md) before sharing reports or enabling a schedule.
 - Configuration lives in `~/.scoutflo/toolkit.yaml`: hosts, orgs, and names in plain text. Secrets never go in that file; every `*_env` key names an environment variable that holds the secret, and skills check presence only, never the value.
 - Audit skills are strictly read-only: GET, list, describe, query. No test notifications, no silences, no state creation of any kind.
 - Setup skills show you the exact change, wait for your explicit confirmation, apply it, then re-read the object to prove the change landed.

@@ -1,6 +1,6 @@
 {
   "name": "scoutflo",
-  "version": "0.1.214",
+  "version": "0.1.215",
   "description": "Audit cloud, Kubernetes and observability setups from Claude Code. Find monitoring and alert-routing gaps, review local evidence reports, and prioritize fixes. Use read-only audits with your credentials; approve supported setup changes before execution.",
   "author": {
     "name": "Scoutflo",
@@ -8,6 +8,11 @@
   },
   "homepage": "https://scoutflo.com",
   "repository": "https://github.com/Scoutflo/ai-readiness",
+  "icon": "./.claude-plugin/scoutflo-icon.png",
+  "documentationUrl": "https://github.com/Scoutflo/ai-readiness/blob/main/docs/install.md",
+  "supportUrl": "https://github.com/Scoutflo/ai-readiness/issues",
+  "privacyPolicyUrl": "https://github.com/Scoutflo/ai-readiness/blob/main/docs/data-handling.md",
+  "termsOfServiceUrl": "https://github.com/Scoutflo/ai-readiness/blob/main/docs/license-and-use.md",
   "license": "Apache-2.0",
   "keywords": [
     "sre",

@@ -261,6 +261,17 @@ these two classes existed; these steps are what caught them.
   the stated min CLI version is consistent across docs + `doctor.sh`.
 - **Guards:** `ci/coverage-check.sh`, `ci/catalog-consistency-check.sh`,
   `ci/manifest-compat-check.sh`, `ci/min-version-consistency` (in structure-check).
+- **Directory metadata:** `icon`, `documentationUrl`, `supportUrl`,
+  `privacyPolicyUrl`, and `termsOfServiceUrl` belong only in `plugin.json`.
+  They are ignored by the supported v2.1.140 runtime; installation and the full
+  component inventory were verified at that floor. Their validator support
+  starts at v2.1.281, which is a contributor-tool version, not a new runtime
+  minimum. The manifest gate checks the exact field allowlist, HTTPS references,
+  and a packaged icon that cannot escape the plugin directory. Regression cases
+  in `tests/test-manifest-compat-gate.sh` retain unknown-field, `displayName`, and
+  marketplace-entry rejection. CI validates the actual metadata in an isolated
+  `.claude-plugin/` fixture as well as the root marketplace; the metadata fixture
+  does not validate skill content.
 
 ## C12 — Authenticated probes assert JSON (no HTML false-green)
 
