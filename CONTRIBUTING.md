@@ -15,7 +15,7 @@ Start with [AGENTS.md](AGENTS.md) and [docs/skill-authoring-conventions.md](docs
 
 1. `sh ci/leak-scan.sh .` prints CLEAN and `sh ci/structure-check.sh .` prints STRUCTURE-OK.
 2. `sh ci/run-tests.sh .` prints TESTS-OK (every `tests/*.sh` and `skills/*/tests/*.sh` pass under `/bin/sh`).
-3. `claude plugin validate . --strict` passes on Claude Code v2.1.145, the earliest validator version that supports `--strict`.
+3. Both strict validation steps in `.github/workflows/ci.yml` pass on the CI-pinned Claude Code v2.1.281: `claude plugin validate . --strict` selects the marketplace; the isolated `.claude-plugin/` fixture checks the actual plugin manifest and packaged icon. The fixture does not validate skill content. This contributor validator recognizes directory listing metadata; the supported runtime minimum remains v2.1.140, guarded separately by `ci/manifest-compat-check.sh`.
 4. Skill changes update or add pressure scenarios under `tests/pressure-scenarios/`.
 5. Tested live with `claude --plugin-dir .` for the skills you touched.
 6. No renames of shipped skill or command names; they are frozen public API.

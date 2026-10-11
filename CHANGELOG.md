@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.1.215
+
+**Directory metadata and consistent data-handling disclosures.**
+
+- Explain local command execution and configured model-provider processing
+  in the start guide, marketplace description and installation guide.
+- Link the existing data-handling guide for optional Slack delivery and
+  scheduled CI cache/artifact storage. Remove the broad local-only promise.
+- Expand the start pressure scenario to reject assumptions that the model
+  session is offline or that credentials belong in chat.
+- Package the Scoutflo icon and link installation, support, data-handling
+  and license/use references through native directory metadata.
+- Validate that metadata with Claude Code v2.1.281 and keep the runtime
+  minimum at v2.1.140. Check directory field types, HTTPS links and packaged
+  icon paths while continuing to reject unknown manifest keys.
+
+Audit commands, setup approvals and credential handling are unchanged.
+
 ## 0.1.214
 
 **Installation and data-handling documentation.**

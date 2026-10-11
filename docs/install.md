@@ -139,7 +139,9 @@ scoutflo-audits/
 
 ## Trust
 
-The toolkit runs entirely inside your own Claude Code session, on your machine or your CI. Your credentials stay in your environment and every API call originates from it. Nothing is sent to Scoutflo: no telemetry, no report upload, no callbacks.
+Your machine or selected runner executes the integration commands and stores reports. Claude Code can include prompts and tool results in the model session; your client, account and configured provider govern that processing.
+
+The shipped plugin has no automatic Scoutflo telemetry, report-upload service or callback. Optional Slack delivery and scheduled CI caches/artifacts have their own destinations and retention. Review the [data-handling guide](data-handling.md) before running with sensitive context or enabling sharing. Use scoped credentials for audits and approve each supported setup change before execution.
 
 ## How the marketplace fetches the plugin
 
