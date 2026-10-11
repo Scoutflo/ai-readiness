@@ -35,7 +35,17 @@ jobs:
         # eight releases). This is the step that actually exercises the code.
         run: sh ci/run-tests.sh .
       - name: install Claude Code
-        # Earliest version whose plugin validator supports --strict.
-        run: npm install --global @anthropic-ai/claude-code@2.1.145
-      - name: strict plugin validation
+        # Directory-only metadata is recognized by this validator. The runtime
+        # minimum remains 2.1.140; manifest-compat guards that separate contract.
+        run: npm install --global @anthropic-ai/claude-code@2.1.281
+      - name: strict marketplace validation
         run: claude plugin validate . --strict
+      - name: strict plugin metadata validation
+        # Root validation selects marketplace.json. Separately validate the real
+        # plugin manifest and its icon without unrelated root context documents.
+        # This metadata fixture does not claim to validate skill content.
+        run: |
+          fixture="$(mktemp -d)"
+          trap 'rm -rf "$fixture"' EXIT
+          cp -R .claude-plugin "$fixture/"
+          claude plugin validate "$fixture/.claude-plugin/plugin.json" --strict
