@@ -41,7 +41,7 @@ Every change follows one loop, no exceptions:
 4. **Verify.** Re-fetch the modified object and assert the outcome with `kubectl get -o json | jq -e`. A write is unverified until a read proves it — and for PSA, until a test pod or the `warn`-mode output shows the standard is actually admitting/rejecting as intended.
 5. **Record.** Append the change, its verification evidence, and pending items with named owners to the change record.
 
-Backups are GET-before-write: `kubectl get <kind> <name> -n <ns> -o yaml > backup.yaml` before any change to an existing object. New objects record the delete command as their rollback. `./scoutflo-audits/` stays out of version control.
+Backups are GET-before-write: before changing an existing object, the section's block saves it to `${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/kubernetes/setup-<date>/backups/`, stops if the backup is empty, and prints the path for the change record; the rollback block reads that exact file. Create new objects with `kubectl create`, not `apply`: create refuses a name that already exists, so a rollback's delete can only remove what this setup made. Each `kubectl` rollback is its own block that names the context, namespace, and object, and refuses to run while a `<...>` value is unfilled. `./scoutflo-audits/` stays out of version control.
 
 ## The change-risk classes
 
@@ -61,7 +61,7 @@ Elevated tier: this skill mutates namespace labels, RBAC, NetworkPolicies, and w
 
 | Integration | Config keys | Minimum scope | Tier |
 | --- | --- | --- | --- |
-| Kubernetes | `kubernetes.context` | write RBAC covering `patch`/`create` on namespaces (label), `roles`/`rolebindings`, `networkpolicies`, `poddisruptionbudgets`, and `patch` on `deployments`/`statefulsets`/`daemonsets` for resource limits — plus the read-only `view` set `audit-kubernetes` documents | elevated |
+| Kubernetes | `kubernetes.context` | write RBAC covering `patch` on `namespaces` (PSA labels and their rollback); `create` and `delete` on `roles`, `rolebindings`, `networkpolicies`, `poddisruptionbudgets`, `limitranges`, and `resourcequotas` (each fix and its rollback); `get`, `create`, and `delete` on `clusterrolebindings` (backup, removal, restore); `patch` on `deployments`/`statefulsets`/`daemonsets` (resource limits and their rollback); and `impersonate` on `serviceaccounts` for `auth can-i --as`; plus the read-only `view` set `audit-kubernetes` documents | elevated |
 
 ```bash
 set -eu
@@ -114,9 +114,11 @@ Every `kubectl` write passes `--context "$KUBE_CONTEXT"` explicitly; the active 
 
 ```bash
 set -eu
-KUBE_CONTEXT="my-cluster"
-LATEST="$(ls -d ${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/kubernetes/*/*/ 2>/dev/null | sort | tail -1)"
-[ -n "$LATEST" ] || { echo "no audit run found; run /scoutflo:audit-kubernetes first"; exit 1; }
+KUBE_CONTEXT="my-cluster"   # kubernetes.context
+AUDIT_SEG="$KUBE_CONTEXT"   # the audit's folder for this cluster: its label instead when kubernetes: is a labeled list
+# This cluster's date folders only: never another cluster's run, never kubernetes/setup-<date>/backups/.
+LATEST="$(ls -d "${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/kubernetes/${AUDIT_SEG}"/[0-9]*-[0-9]*-[0-9]*/ 2>/dev/null | sort | tail -1)"
+[ -n "$LATEST" ] || { echo "no audit run found for ${AUDIT_SEG}; run /scoutflo:audit-kubernetes first"; exit 1; }
 jq -r '.findings[] | [.id, .severity, .title] | @tsv' "${LATEST}findings.json"
 ```
 
@@ -124,17 +126,54 @@ Take the finding IDs you were asked to fix; announce the full plan as one table 
 
 ## Enforce pod security
 
-K8S-001. Guarded write. Label each application namespace for Pod Security Admission, starting at `baseline` and `warn=restricted` (warn is non-enforcing — it surfaces future violations without blocking anything):
+K8S-001. Guarded write. Label each application namespace for Pod Security Admission, starting at `baseline` and `warn=restricted` (warn is non-enforcing — it surfaces future violations without blocking anything). The block backs the namespace up first, so the rollback can put back any PSA labels it already had:
 
 ```bash
-# ANNOUNCE this exact command per namespace; rollback = kubectl label ns <ns> pod-security.kubernetes.io/enforce-
-kubectl --context "$KUBE_CONTEXT" label namespace <ns> \
+set -eu
+KUBE_CONTEXT="my-cluster"   # kubernetes.context
+NS="your-namespace"         # the application namespace; ANNOUNCE this exact block per namespace
+BACKUP_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/kubernetes/setup-$(date -u +%F)/backups"
+mkdir -p "$BACKUP_DIR"
+BACKUP_FILE="${BACKUP_DIR}/namespace-${NS}-$(date -u +%H%M%S).json"
+kubectl --context "$KUBE_CONTEXT" get namespace "$NS" -o json > "$BACKUP_FILE"
+[ -s "$BACKUP_FILE" ] || { echo "No backup written to ${BACKUP_FILE}; not labeling" >&2; exit 1; }
+echo "BACKED UP: ${BACKUP_FILE}"
+kubectl --context "$KUBE_CONTEXT" label namespace "$NS" \
   pod-security.kubernetes.io/enforce=baseline \
   pod-security.kubernetes.io/warn=restricted --overwrite
 # VERIFY:
-kubectl --context "$KUBE_CONTEXT" get ns <ns> -o json \
+kubectl --context "$KUBE_CONTEXT" get namespace "$NS" -o json \
   | jq -e '.metadata.labels["pod-security.kubernetes.io/enforce"]=="baseline"'
 ```
+
+Expected: `BACKED UP` with the path (record it), then `true`. **Rollback** puts both PSA labels back to their values in that backup, or removes them where the namespace had none, in its own fresh shell:
+
+```bash
+set -eu
+KUBE_CONTEXT="<kube-context>"   # kubernetes.context: the context the live-safety gate printed
+NS="<namespace>"                # the namespace this setup labeled
+BACKUP_FILE="<backup-file>"     # the exact BACKED UP path the block above printed
+for v in "$KUBE_CONTEXT" "$NS" "$BACKUP_FILE"; do case "$v" in ''|'<'*) echo "Fill in every <...> value from the change record first" >&2; exit 1 ;; esac; done
+[ -s "$BACKUP_FILE" ] || { echo "No backup at ${BACKUP_FILE}: use the exact path the block above printed" >&2; exit 1; }
+# The backup must be this namespace on this cluster, not a same-named one on another context.
+LIVE_UID="$(kubectl --context "$KUBE_CONTEXT" get namespace "$NS" -o jsonpath='{.metadata.uid}')"
+jq -e --arg n "$NS" --arg u "$LIVE_UID" '.metadata.name == $n and .metadata.uid == $u' "$BACKUP_FILE" > /dev/null \
+  || { echo "${BACKUP_FILE} is not a backup of namespace ${NS} on ${KUBE_CONTEXT}; stopping" >&2; exit 1; }
+for KEY in pod-security.kubernetes.io/enforce pod-security.kubernetes.io/warn; do
+  OLD="$(jq -r --arg k "$KEY" '.metadata.labels[$k] // empty' "$BACKUP_FILE")"
+  if [ -n "$OLD" ]; then
+    kubectl --context "$KUBE_CONTEXT" label namespace "$NS" "${KEY}=${OLD}" --overwrite
+  else
+    kubectl --context "$KUBE_CONTEXT" label namespace "$NS" "${KEY}-"
+  fi
+done
+kubectl --context "$KUBE_CONTEXT" get namespace "$NS" -o json \
+  | jq -e --slurpfile b "$BACKUP_FILE" '[., $b[0]]
+      | map(.metadata.labels // {} | {enforce: .["pod-security.kubernetes.io/enforce"], warn: .["pod-security.kubernetes.io/warn"]})
+      | .[0] == .[1]'
+```
+
+Expected: `true` (both labels match the backup again).
 
 `enforce=restricted` is **disruptive** (can reject running workloads' pods on their next admission) — never applied in the same step; it is a separate, per-namespace plan after `warn=restricted` shows zero violations.
 
@@ -143,7 +182,7 @@ kubectl --context "$KUBE_CONTEXT" get ns <ns> -o json \
 K8S-007, K8S-008. Guarded → disruptive. Remove the node-escape surface and bring containers to the restricted baseline. These are workload-owner changes (they edit the pod template), so they go through the deploying repo/Helm values, announced, not `kubectl edit`:
 
 ```yaml
-# ANNOUNCE this securityContext block for the flagged container; rollback = revert the manifest.
+# ANNOUNCE this securityContext block for the flagged container.
 securityContext:
   runAsNonRoot: true
   readOnlyRootFilesystem: true
@@ -152,23 +191,108 @@ securityContext:
 # and at pod level: remove privileged, hostNetwork/hostPID/hostIPC, and hostPath volumes.
 ```
 
-Order matters: `readOnlyRootFilesystem: true` and dropping `ALL` caps can break an app that writes to `/` or needs a specific capability — announce a `warn=restricted` PSA dry-run (Enforce pod security, above) or a staging rollout first, verify the pod still starts and passes its probes, **then** apply. Removing `privileged`/`hostPath` from a legitimate host agent will break it — confirm the workload is an application workload, not a CNI/CSI/node-exporter DaemonSet, before flagging. Verify: the flagged container's `securityContext` shows the hardened values and the pod is `Running` and `Ready`.
+Order matters: `readOnlyRootFilesystem: true` and dropping `ALL` caps can break an app that writes to `/` or needs a specific capability — announce a `warn=restricted` PSA dry-run (Enforce pod security, above) or a staging rollout first, verify the pod still starts and passes its probes, **then** apply. Removing `privileged`/`hostPath` from a legitimate host agent will break it — confirm the workload is an application workload, not a CNI/CSI/node-exporter DaemonSet, before flagging. Verify: the flagged container's `securityContext` shows the hardened values and the pod is `Running` and `Ready`. Rollback goes through the same owner: revert the commit or Helm values change that added this `securityContext` and removed the pod-level settings, let your pipeline roll it out, and verify the container's `securityContext` reads as it did before the change.
 
 ## Tighten RBAC
 
 K8S-002, K8S-006, K8S-009. Guarded → disruptive. Replace a workload ServiceAccount's wildcard/cluster-admin binding with a least-privilege namespaced Role. Announce the new Role, confirm, apply, verify the workload's SA can still do what it legitimately needs, **then** remove the over-broad binding (removing it first is disruptive — it can break the running workload):
 
 ```bash
-# 1. Announce + apply a scoped Role/RoleBinding (guarded). 2. Verify the SA retains needed access:
+set -eu
+KUBE_CONTEXT="my-cluster"   # kubernetes.context
+# 1. Announce + create a scoped Role/RoleBinding (guarded) with kubectl create. 2. Verify the SA retains needed access:
 VERB="get"; RESOURCE="pods"; NS="your-namespace"; SA="your-serviceaccount"   # what the workload legitimately needs
 kubectl --context "$KUBE_CONTEXT" auth can-i "$VERB" "$RESOURCE" \
   --as="system:serviceaccount:${NS}:${SA}" -n "$NS"
-# 3. Only then announce removal of the wildcard ClusterRoleBinding (DISRUPTIVE, second confirmation):
-#    rollback = re-apply the backed-up ClusterRoleBinding yaml.
-# 4. Verify the reduction took (this must now return "no"):
-kubectl --context "$KUBE_CONTEXT" auth can-i list secrets --all-namespaces \
-  --as="system:serviceaccount:${NS}:${SA}"
 ```
+
+Expected: `yes` for each verb and resource the workload uses. **Rollback** of the scoped Role and RoleBinding, in its own fresh shell. If you also removed the wildcard binding, restore it first (below), or the workload is left with neither:
+
+```bash
+set -eu
+KUBE_CONTEXT="<kube-context>"     # kubernetes.context: the context the live-safety gate printed
+NS="<namespace>"                  # the namespace of the scoped Role and RoleBinding
+ROLE="<role-name>"                # the Role this setup created
+ROLEBINDING="<rolebinding-name>"  # the RoleBinding this setup created
+for v in "$KUBE_CONTEXT" "$NS" "$ROLE" "$ROLEBINDING"; do case "$v" in ''|'<'*) echo "Fill in every <...> value from the change record first" >&2; exit 1 ;; esac; done
+kubectl --context "$KUBE_CONTEXT" -n "$NS" get rolebinding/"$ROLEBINDING" role/"$ROLE" -o name   # what will be deleted; stops if either is absent
+kubectl --context "$KUBE_CONTEXT" -n "$NS" delete rolebinding "$ROLEBINDING"
+kubectl --context "$KUBE_CONTEXT" -n "$NS" delete role "$ROLE"
+kubectl --context "$KUBE_CONTEXT" -n "$NS" get rolebinding/"$ROLEBINDING" role/"$ROLE" 2>&1 | grep -c NotFound
+```
+
+Expected: both names, the two deletes, then `2`.
+
+3. Only then announce removal of the wildcard ClusterRoleBinding (DISRUPTIVE, second confirmation). `CRB` is the binding's own `metadata.name`, not the ClusterRole it references: the audit evidence prints the role (`cluster-admin -> sa:<ns>/<sa>`), and `cluster-admin` is also the name of the built-in binding for `system:masters`. The block refuses a built-in binding and any binding whose subjects are not exactly that ServiceAccount, backs it up, deletes it, re-checks the access step 2 confirmed, then verifies the reduction took:
+
+```bash
+set -eu
+KUBE_CONTEXT="my-cluster"            # kubernetes.context
+CRB="your-wildcard-binding"          # the binding's own metadata.name, not the ClusterRole it references
+NS="your-namespace"; SA="your-serviceaccount"   # the workload ServiceAccount it grants
+NEEDED="get:pods"                    # every verb:resource pair step 2 answered yes for, space-separated
+[ -n "$NEEDED" ] || { echo "Set NEEDED to the verb:resource pairs step 2 confirmed" >&2; exit 1; }
+for PAIR in $NEEDED; do case "$PAIR" in ?*:?*) ;; *) echo "NEEDED entries are verb:resource, not ${PAIR}" >&2; exit 1 ;; esac; done
+BACKUP_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/kubernetes/setup-$(date -u +%F)/backups"
+mkdir -p "$BACKUP_DIR"
+BACKUP_FILE="${BACKUP_DIR}/clusterrolebinding-${CRB}-$(date -u +%H%M%S).yaml"
+LIVE_JSON="$(kubectl --context "$KUBE_CONTEXT" get clusterrolebinding "$CRB" -o json)"
+printf '%s' "$LIVE_JSON" | jq -e '.metadata.labels["kubernetes.io/bootstrapping"] != "rbac-defaults"' > /dev/null \
+  || { echo "${CRB} is a built-in Kubernetes binding: never remove it" >&2; exit 1; }
+printf '%s' "$LIVE_JSON" | jq -e --arg ns "$NS" --arg sa "$SA" \
+    '[.subjects[]? | {kind, namespace, name}] == [{kind: "ServiceAccount", namespace: $ns, name: $sa}]' > /dev/null \
+  || { echo "${CRB} does not bind exactly ServiceAccount ${NS}/${SA}: removing it changes other subjects' access; stop and re-announce" >&2; exit 1; }
+kubectl --context "$KUBE_CONTEXT" get clusterrolebinding "$CRB" -o yaml > "$BACKUP_FILE"
+[ -s "$BACKUP_FILE" ] || { echo "No backup written to ${BACKUP_FILE}; not removing ${CRB}" >&2; exit 1; }
+echo "BACKED UP: ${BACKUP_FILE}"
+kubectl --context "$KUBE_CONTEXT" delete clusterrolebinding "$CRB"
+# 4. The access step 2 confirmed must survive without the binding.
+for PAIR in $NEEDED; do
+  case "$(kubectl --context "$KUBE_CONTEXT" auth can-i "${PAIR%%:*}" "${PAIR#*:}" --as="system:serviceaccount:${NS}:${SA}" -n "$NS" || true)" in
+    yes*) echo "still allowed: ${PAIR}" ;;
+    *) echo "${SA} lost ${PAIR}: restore ${CRB} now with the rollback block below and ${BACKUP_FILE}" >&2; exit 1 ;;
+  esac
+done
+# 5. Verify the reduction took: the SA must no longer list secrets cluster-wide.
+case "$(kubectl --context "$KUBE_CONTEXT" auth can-i list secrets --all-namespaces --as="system:serviceaccount:${NS}:${SA}" || true)" in
+  no*) echo "REDUCED: ${SA} can no longer list secrets cluster-wide" ;;
+  *) echo "${SA} can still list secrets cluster-wide: another binding grants it" >&2; exit 1 ;;
+esac
+```
+
+Expected: `BACKED UP` with the path (record it), the delete, `still allowed:` for each needed pair, then `REDUCED`. A `lost` line means the workload is now missing access it uses: run the rollback below at once. **Rollback** recreates the binding from that backup, in its own fresh shell. It never overwrites a binding that exists now:
+
+```bash
+set -eu
+KUBE_CONTEXT="<kube-context>"    # kubernetes.context: the context the live-safety gate printed
+CRB="<clusterrolebinding-name>"  # the binding the block above removed
+BACKUP_FILE="<backup-file>"      # the exact BACKED UP path the block above printed
+for v in "$KUBE_CONTEXT" "$CRB" "$BACKUP_FILE"; do case "$v" in ''|'<'*) echo "Fill in every <...> value from the change record first" >&2; exit 1 ;; esac; done
+[ -s "$BACKUP_FILE" ] || { echo "No backup at ${BACKUP_FILE}: use the exact path the block above printed" >&2; exit 1; }
+RESTORE_FILE="${BACKUP_FILE%.yaml}.restore.yaml"
+# Drop server-set fields and the last-applied annotation: create rejects a set resourceVersion,
+# and a stale one recorded in the annotation can break later `kubectl apply` runs.
+sed -e '/^  resourceVersion: /d' -e '/^  uid: /d' -e '/^  creationTimestamp: /d' -e '/^  generation: /d' "$BACKUP_FILE" \
+  | awk '/^    kubectl\.kubernetes\.io\/last-applied-configuration:/ {skip=1; next} skip && /^      / {next} {skip=0; print}' > "$RESTORE_FILE"
+WANT_JSON="$(kubectl --context "$KUBE_CONTEXT" create --dry-run=client -f "$RESTORE_FILE" -o json)"
+printf '%s' "$WANT_JSON" | jq -e --arg n "$CRB" '.kind == "ClusterRoleBinding" and .metadata.name == $n' > /dev/null \
+  || { echo "${BACKUP_FILE} is not a backup of ClusterRoleBinding ${CRB}; stopping" >&2; exit 1; }
+WANT="$(printf '%s' "$WANT_JSON" | jq -S '{roleRef, subjects}')"
+# Empty only when the binding is absent; a Forbidden, wrong-context or timeout error stops the block.
+LIVE_JSON="$(kubectl --context "$KUBE_CONTEXT" get clusterrolebinding "$CRB" --ignore-not-found -o json)"
+if [ -n "$LIVE_JSON" ]; then
+  # A binding with this name exists now: never overwrite it.
+  [ "$(printf '%s' "$LIVE_JSON" | jq -S '{roleRef, subjects}')" = "$WANT" ] \
+    || { echo "A ClusterRoleBinding named ${CRB} exists and differs from the backup: leave it and re-announce" >&2; exit 1; }
+  echo "RESTORED: live ClusterRoleBinding already matches the backup"
+  exit 0
+fi
+kubectl --context "$KUBE_CONTEXT" create -f "$RESTORE_FILE"
+LIVE="$(kubectl --context "$KUBE_CONTEXT" get clusterrolebinding "$CRB" -o json | jq -S '{roleRef, subjects}')"
+[ "$WANT" = "$LIVE" ] && echo "RESTORED: live ClusterRoleBinding matches the backup"
+```
+
+Expected: `RESTORED`, and the SA's `auth can-i` checks answer as they did before the removal. A same-named binding that differs from the backup stops the block instead; re-announce before touching it.
 
 **K8S-009 (token exposure).** For a workload that never calls the Kubernetes API, set `automountServiceAccountToken: false` on the ServiceAccount (or the pod template) — announced as a manifest change, verified by the pod restarting healthy without the token mount. Do this *and* narrow the SA's RBAC: an unused token on a powerless SA is harmless, but the fix for a mounting pod whose SA can read secrets is both — remove the automount and cut the RBAC.
 
@@ -177,7 +301,7 @@ kubectl --context "$KUBE_CONTEXT" auth can-i list secrets --all-namespaces \
 K8S-003, K8S-011, K8S-010. Guarded → disruptive. Apply a default-deny-ingress policy **with the allow-list in the same apply**, never default-deny alone (that severs all traffic until allows exist — disruptive):
 
 ```yaml
-# ANNOUNCE this manifest; rollback = kubectl delete networkpolicy <name> -n <ns>
+# ANNOUNCE this manifest, then create it (kubectl create, not apply)
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata: { name: default-deny-ingress, namespace: <ns> }
@@ -186,26 +310,41 @@ spec:
   policyTypes: [Ingress]
   # plus the specific allow-from rules the app needs, shown and confirmed together
 ```
-Verify: `kubectl get networkpolicy -n <ns>` shows the policy and the app's known flows still connect. The empty `podSelector: {}` above is exactly the **default-deny baseline (K8S-011)** — a namespace with only per-app allow policies and no default-deny still leaks; this manifest closes it. For **external exposure (K8S-010)**, the fix is usually *not* a new policy but a review: confirm each LoadBalancer/NodePort Service is meant to be public, front it with the ingress controller + WAF rather than a raw LoadBalancer where possible, and ensure the exposed workload is hardened (Harden container security contexts) and least-privileged (Tighten RBAC) — an internet-facing pod is the one place K8S-007/008/009 are never optional.
+Verify: `kubectl get networkpolicy -n <ns>` shows the policy and the app's known flows still connect. **Rollback** deletes one policy this setup created, in its own fresh shell; run it once per policy, the default-deny policy first:
+
+```bash
+set -eu
+KUBE_CONTEXT="<kube-context>"   # kubernetes.context: the context the live-safety gate printed
+NS="<namespace>"                # the namespace the policy was created in
+NP_NAME="<networkpolicy-name>"  # a policy this setup created: the name in its kubectl create output
+for v in "$KUBE_CONTEXT" "$NS" "$NP_NAME"; do case "$v" in ''|'<'*) echo "Fill in every <...> value from the change record first" >&2; exit 1 ;; esac; done
+kubectl --context "$KUBE_CONTEXT" -n "$NS" get networkpolicy "$NP_NAME" -o name   # what will be deleted; stops if absent
+kubectl --context "$KUBE_CONTEXT" -n "$NS" delete networkpolicy "$NP_NAME"
+kubectl --context "$KUBE_CONTEXT" -n "$NS" get networkpolicy "$NP_NAME" 2>&1 | grep -c NotFound
+```
+
+Expected: the policy name, the delete, then `1`.
+
+The empty `podSelector: {}` in the manifest above is exactly the **default-deny baseline (K8S-011)** — a namespace with only per-app allow policies and no default-deny still leaks; this manifest closes it. For **external exposure (K8S-010)**, the fix is usually *not* a new policy but a review: confirm each LoadBalancer/NodePort Service is meant to be public, front it with the ingress controller + WAF rather than a raw LoadBalancer where possible, and ensure the exposed workload is hardened (Harden container security contexts) and least-privileged (Tighten RBAC) — an internet-facing pod is the one place K8S-007/008/009 are never optional.
 
 ## Add health probes
 
 K8S-012. Guarded write (workload-owner change through the manifest). Add readiness and liveness probes to the flagged container:
 
 ```yaml
-# ANNOUNCE for the flagged container; rollback = revert the manifest.
+# ANNOUNCE for the flagged container.
 readinessProbe: { httpGet: { path: /healthz, port: 8080 }, initialDelaySeconds: 5, periodSeconds: 10 }
 livenessProbe:  { httpGet: { path: /livez,  port: 8080 }, initialDelaySeconds: 15, periodSeconds: 20 }
 ```
 
-Use the app's real health endpoints and tune the thresholds to its startup time — a too-aggressive liveness probe restart-loops a slow-starting app (use `startupProbe` for those). Verify: the workload rolls out `Ready`, and a rollout no longer sends traffic to not-ready pods.
+Use the app's real health endpoints and tune the thresholds to its startup time — a too-aggressive liveness probe restart-loops a slow-starting app (use `startupProbe` for those). Verify: the workload rolls out `Ready`, and a rollout no longer sends traffic to not-ready pods. Rollback: revert the commit or Helm values change that added these `readinessProbe` and `livenessProbe` entries, and verify the workload rolls out `Ready` without them.
 
 ## Spread replicas across failure domains
 
 K8S-013. Guarded write (workload-owner change). Add `topologySpreadConstraints` (or pod anti-affinity) so replicas land on distinct nodes:
 
 ```yaml
-# ANNOUNCE for the workload's pod template; rollback = revert the manifest.
+# ANNOUNCE for the workload's pod template.
 topologySpreadConstraints:
   - maxSkew: 1
     topologyKey: kubernetes.io/hostname
@@ -213,14 +352,14 @@ topologySpreadConstraints:
     labelSelector: { matchLabels: { app: <app> } }
 ```
 
-`whenUnsatisfiable: DoNotSchedule` on a cluster without spare node capacity leaves pods `Pending` — start with `ScheduleAnyway` and verify placement. Verify: `kubectl get pods -l app=<app> -o wide` shows the replicas on different nodes.
+`whenUnsatisfiable: DoNotSchedule` on a cluster without spare node capacity leaves pods `Pending` — start with `ScheduleAnyway` and verify placement. Verify: `kubectl get pods -l app=<app> -o wide` shows the replicas on different nodes. Rollback: revert the commit or Helm values change that added `topologySpreadConstraints` to the pod template; running pods keep their placement until they are rescheduled.
 
 ## Set namespace quotas and LimitRanges
 
 K8S-014. Guarded write. Give each application namespace a LimitRange (per-container defaults) and a ResourceQuota (a namespace ceiling). The LimitRange is the cheap retro-fit for K8S-004 offenders — it applies defaults without editing every workload:
 
 ```yaml
-# ANNOUNCE both; rollback = kubectl delete limitrange <name> -n <ns> / delete resourcequota <name> -n <ns>
+# ANNOUNCE both, then create them (kubectl create, not apply)
 apiVersion: v1
 kind: LimitRange
 metadata: { name: default-limits, namespace: <ns> }
@@ -231,17 +370,72 @@ spec:
       defaultRequest: { cpu: "100m", memory: "128Mi" }
 ```
 
-A `ResourceQuota` that is set below current usage rejects new pods until usage drops — size it from observed usage first (`kubectl top pods -n <ns>`), announce the number, then apply. Verify: `kubectl get limitrange,resourcequota -n <ns>` shows both and new pods inherit the defaults.
+A `ResourceQuota` that is set below current usage rejects new pods until usage drops — size it from observed usage first (`kubectl top pods -n <ns>`), announce the number, then apply. Verify: `kubectl get limitrange,resourcequota -n <ns>` shows both and new pods inherit the defaults. **Rollback** deletes one object this setup created, in its own fresh shell; run it once for the LimitRange and once for the ResourceQuota:
+
+```bash
+set -eu
+KUBE_CONTEXT="<kube-context>"          # kubernetes.context: the context the live-safety gate printed
+NS="<namespace>"                       # the namespace the object was created in
+KIND="<limitrange-or-resourcequota>"   # limitrange or resourcequota
+NAME="<object-name>"                   # the object this setup created: the name in its kubectl create output
+for v in "$KUBE_CONTEXT" "$NS" "$KIND" "$NAME"; do case "$v" in ''|'<'*) echo "Fill in every <...> value from the change record first" >&2; exit 1 ;; esac; done
+case "$KIND" in limitrange|resourcequota) ;; *) echo "KIND must be limitrange or resourcequota" >&2; exit 1 ;; esac
+kubectl --context "$KUBE_CONTEXT" -n "$NS" get "$KIND" "$NAME" -o name   # what will be deleted; stops if absent
+kubectl --context "$KUBE_CONTEXT" -n "$NS" delete "$KIND" "$NAME"
+kubectl --context "$KUBE_CONTEXT" -n "$NS" get "$KIND" "$NAME" 2>&1 | grep -c NotFound
+```
+
+Expected: the object name, the delete, then `1`. Running pods keep the requests and limits they were admitted with.
 
 ## Set resource limits
 
-K8S-004. Guarded write. Patch the flagged workload's containers with requests and limits (or apply a namespace LimitRange). Announce the exact patch and the values; verify with `kubectl get <kind> <name> -n <ns> -o json | jq -e '.spec.template.spec.containers[].resources.limits'`.
+K8S-004. Guarded write. Patch the flagged workload's containers with requests and limits (or apply a namespace LimitRange). Announce the exact patch and the values; verify with `kubectl get <kind> <name> -n <ns> -o json | jq -e '.spec.template.spec.containers[].resources.limits'`. Before the patch, back the workload up:
+
+```bash
+set -eu
+KUBE_CONTEXT="my-cluster"   # kubernetes.context
+NS="your-namespace"         # the workload's namespace from the K8S-004 finding
+KIND="deployment"           # deployment, statefulset or daemonset
+NAME="your-workload"        # the workload from the finding
+BACKUP_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/kubernetes/setup-$(date -u +%F)/backups"
+mkdir -p "$BACKUP_DIR"
+BACKUP_FILE="${BACKUP_DIR}/${KIND}-${NS}-${NAME}-$(date -u +%H%M%S).json"
+kubectl --context "$KUBE_CONTEXT" -n "$NS" get "$KIND" "$NAME" -o json > "$BACKUP_FILE"
+[ -s "$BACKUP_FILE" ] || { echo "No backup written to ${BACKUP_FILE}; do not patch" >&2; exit 1; }
+echo "BACKED UP: ${BACKUP_FILE}"
+```
+
+Expected: `BACKED UP` with the path; record it. **Rollback** puts back only each container's resources from that backup, so anything rolled out since, such as a new image, stays; run it in its own fresh shell:
+
+```bash
+set -eu
+KUBE_CONTEXT="<kube-context>"   # kubernetes.context: the context the live-safety gate printed
+NS="<namespace>"                # the workload's namespace
+KIND="<kind>"                   # deployment, statefulset or daemonset
+NAME="<workload-name>"          # the workload this setup patched
+BACKUP_FILE="<backup-file>"     # the exact BACKED UP path the block above printed
+for v in "$KUBE_CONTEXT" "$NS" "$KIND" "$NAME" "$BACKUP_FILE"; do case "$v" in ''|'<'*) echo "Fill in every <...> value from the change record first" >&2; exit 1 ;; esac; done
+[ -s "$BACKUP_FILE" ] || { echo "No backup at ${BACKUP_FILE}: use the exact path the block above printed" >&2; exit 1; }
+LIVE="$(kubectl --context "$KUBE_CONTEXT" -n "$NS" get "$KIND" "$NAME" -o json)"
+# The backup must be this workload (same uid) with the same containers in the same order.
+printf '%s' "$LIVE" | jq -e --slurpfile b "$BACKUP_FILE" '.metadata.uid == $b[0].metadata.uid
+    and [.spec.template.spec.containers[].name] == [$b[0].spec.template.spec.containers[].name]' > /dev/null \
+  || { echo "${BACKUP_FILE} does not match the live ${KIND}/${NAME}; stop and re-announce" >&2; exit 1; }
+PATCH="$(jq -c '[.spec.template.spec.containers | to_entries[]
+    | {op: "add", path: "/spec/template/spec/containers/\(.key)/resources", value: (.value.resources // {})}]' "$BACKUP_FILE")"
+kubectl --context "$KUBE_CONTEXT" -n "$NS" patch "$KIND" "$NAME" --type=json -p "$PATCH"
+kubectl --context "$KUBE_CONTEXT" -n "$NS" get "$KIND" "$NAME" -o json \
+  | jq -e --slurpfile b "$BACKUP_FILE" '[.spec.template.spec.containers[].resources] == [$b[0].spec.template.spec.containers[].resources]'
+```
+
+Expected: `true`; the workload then rolls out with its previous requests and limits. A LimitRange used instead rolls back with the delete block in [Set namespace quotas and LimitRanges](#set-namespace-quotas-and-limitranges).
 
 ## Add disruption budgets
 
 K8S-005. Guarded write. Add a PodDisruptionBudget with `minAvailable` for the critical workload (and raise replicas via the workload's own owner if it is single-replica — replica increase is announced, not silent):
 
 ```yaml
+# ANNOUNCE this manifest, then create it (kubectl create, not apply)
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata: { name: <app>-pdb, namespace: <ns> }
@@ -249,7 +443,20 @@ spec:
   minAvailable: 1
   selector: { matchLabels: { app: <app> } }
 ```
-Rollback = `kubectl delete pdb <app>-pdb -n <ns>`. Verify the PDB selects the right pods (`kubectl get pdb <app>-pdb -n <ns> -o json | jq '.status.expectedPods'`).
+Verify the PDB selects the right pods (`kubectl get pdb <app>-pdb -n <ns> -o json | jq '.status.expectedPods'`). **Rollback** deletes the PDB this setup created, in its own fresh shell:
+
+```bash
+set -eu
+KUBE_CONTEXT="<kube-context>"   # kubernetes.context: the context the live-safety gate printed
+NS="<namespace>"                # the namespace the PDB was created in
+PDB_NAME="<pdb-name>"           # the PDB this setup created, <app>-pdb
+for v in "$KUBE_CONTEXT" "$NS" "$PDB_NAME"; do case "$v" in ''|'<'*) echo "Fill in every <...> value from the change record first" >&2; exit 1 ;; esac; done
+kubectl --context "$KUBE_CONTEXT" -n "$NS" get pdb "$PDB_NAME" -o name   # what will be deleted; stops if absent
+kubectl --context "$KUBE_CONTEXT" -n "$NS" delete pdb "$PDB_NAME"
+kubectl --context "$KUBE_CONTEXT" -n "$NS" get pdb "$PDB_NAME" 2>&1 | grep -c NotFound
+```
+
+Expected: the PDB name, the delete, then `1`.
 
 ## Record and wrap up
 

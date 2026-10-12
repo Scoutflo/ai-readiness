@@ -97,6 +97,8 @@ Green = read-only (safe, changes nothing) · amber = write, gated behind your co
 
 ## What's new (latest release)
 
+- **Safe undo steps in every setup skill.** The Kubernetes, Grafana, New Relic and ClickStack setup skills now have the same undo steps as the others: each names its target, refuses to run on a placeholder, and never removes something that existed before. Setup skills also stop mistaking their own work folder for the latest audit, and the LGTM, AWS, Azure, GCP, DigitalOcean and Sentry setup skills picked up their full-review fixes.
+
 - **Rollbacks are safe to run later, in a new session.** In the LGTM, AWS, Azure, GCP, DigitalOcean and Sentry setup skills, every undo step is now a self-contained block that names its own cluster, account, project, subscription or team, refuses to run on a placeholder, and checks it is signed in to the right place before deleting anything. Kubernetes restores also work after the object was changed, where re-applying the old backup used to fail, and no rollback removes something that existed before the setup.
 
 - **Onboarding got sturdier for big, messy estates.** If your kubeconfig has dozens of contexts — some deleted, some duplicates of the same cluster — connect can now triage them read-only: it dedups by API server, checks which are actually reachable (with a bounded timeout so a dead one can't hang it), and offers only the **live, distinct** clusters, so you never point an audit at a stale or duplicate context. And if your secrets live in **Vault** (or another fetcher) rather than as pasted values, `connect` can store `export TOKEN="$(vault kv get …)"` so the token resolves fresh on every run instead of a static copy sitting on disk — with a clear "trusted fetch only" safety note.

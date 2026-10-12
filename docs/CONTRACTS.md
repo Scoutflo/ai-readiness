@@ -79,6 +79,14 @@ these two classes existed; these steps are what caught them.
   `all/`, `cost-analysis/`, `cost/`, `doctor/`.
 - **Invariant:** a one-level glob silently drops signoz/kubernetes/multi-target
   stacks — never regress a consumer to a single `*/` glob.
+- **Run-folder readers:** every setup skill's findings loader and every
+  audit's previous-run lookup pick only date-named folders
+  (`-name '[0-9]*-[0-9]*-[0-9]*'`) under the resolved `<integration>[/<label>]`
+  segment. Setup skills write their own `<integration>/setup-<date>/` work
+  folder and large-path audits write `runs/`; neither is a run, and picking
+  "the newest folder" without the filter breaks every run after the first
+  setup (fixed in v0.1.217). No mechanical guard yet: the setup skills'
+  pressure scenarios cover it.
 - **Guards:** `ci/multi-target-parity-check.sh` (producers nest by `_SEG`),
   `ci/multi-target-consumer-check.sh` (the three aggregators dual-glob).
   Tests: `skills/correlation-engine/tests/`, `skills/cost-analysis/tests/`,
@@ -116,6 +124,11 @@ these two classes existed; these steps are what caught them.
   audits never double-score the same series. Guard: the maintainer review + the
   `layer_depth` selftest lock asserting `audit-lgtm` keeps `LGTM-006` and the
   "Metrics stores" category.
+- **Setup skills (v0.1.217):** `setup-lgtm`, `-aws`, `-azure`, `-gcp`,
+  `-digitalocean` and `-sentry` resolve their live-safety-gate target (and, except
+  setup-azure, their doctor target) through the same enumerator and `SCOUTFLO_TARGET`. On a labeled list they stop
+  when `SCOUTFLO_TARGET` is unset or matches no label: a writing skill never
+  falls back to the first entry.
 - **Reference implementation:** `audit-azure` (`AZ_KIND`/`AZ_N`/`AZ_IDX`/
   `AZ_LABEL`/`AZ_SEG`).
 - **Guards:** `ci/multi-target-parity-check.sh`. Selftest: `layer_targets`
@@ -362,6 +375,10 @@ these two classes existed; these steps are what caught them.
   declaration (required keys uncommented; each `oneof` lane has a member). Its scope
   is the operator-facing declaration + template; the audit-side enforcement of the
   same optionality is the skill's own doctor-gate behavior + the maintainer review.
+- **Setup-only requirements (v0.1.217):** `setup-digitalocean` needs
+  `digitalocean.team` (a team UUID, or `personal`), and `setup-sentry` needs its own
+  config block with a write-capable token and `tier: elevated`. Both stay commented
+  or absent in the audit-facing template; the connect guide documents them.
 
 ## C16 — Evidence-aware check ledger, readiness, and assessment coverage
 
@@ -485,7 +502,7 @@ a gate that does not exist — so the map cannot silently drift from reality.
 
 Structural / linkage:
 `ci/anchor-check.sh` (every `skill#anchor` resolves) ·
-`ci/crossblock-check.sh` (no fenced block reads an undeclared cross-block var, and no inline write command reads another block's variables) ·
+`ci/crossblock-check.sh` (no fenced block reads an undeclared cross-block var, no inline write command reads another block's variables, and no setup-skill undo step is a one-line note) ·
 `ci/coverage-check.sh` (every audit in connect + start; every template block has a providers.md source) ·
 `ci/remediation-map-check.sh` (every remediation pointer resolves to a real skill#anchor + catalog ID) ·
 `ci/skill-completeness-check.sh` (per-lane structural markers) ·

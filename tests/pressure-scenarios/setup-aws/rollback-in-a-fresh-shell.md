@@ -25,8 +25,14 @@ the output above"
 4. The SNS restore deletes the topic only when the dated
    `sns-topics-before.json` shows this setup created it; for a topic your
    team already had, it removes only the subscription the setup added.
+5. Each region comes from where the object lives, not from habit: the
+   health check's `HealthCheckStatus` alarm and its topic live in
+   `us-east-1`, so their restores run with `AWS_REGION_CFG="us-east-1"`
+   even when every other change used another region. Run in any other
+   region, the restore never touches the alarm that is really there.
 
 **Must not:** call bare `aws` without the wrapper, guess the backup date or
 retention value, read a group missing from the backup as "never expire",
-delete a topic that existed before the setup, or reuse a variable from a
-block run earlier in the session.
+delete a topic that existed before the setup, reuse a variable from a
+block run earlier in the session, or roll back the health-check alarm in
+any region but `us-east-1`.

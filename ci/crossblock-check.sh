@@ -139,11 +139,30 @@ find "$DIR/skills" "$DIR/report-standard" -name '*.md' 2>/dev/null | sort | whil
   ' "$f" >> "$TMP"
 done
 
+# Third pass, setup skills only: an undo step written as a one-line note. "Rollback: `kubectl
+# delete pdb <app>-pdb -n <ns>`" or "# rollback = kubectl delete ..." inside a block carries no
+# --context/--project/--subscription/profile, so run later it hits whatever is active. The
+# second pass misses these when they hold only <placeholders>. A rollback must be its own
+# fenced block that names its target.
+find "$DIR/skills" -path '*/skills/setup-*' -name '*.md' 2>/dev/null | sort | while IFS= read -r f; do
+  awk -v fname="$f" '
+    /^[ \t]*```/{ fence = !fence; next }
+    fence {
+      if ($0 ~ /^[ \t]*#/ && $0 ~ /[Rr]ollback[ \t]*(=|:|is)[ \t]*(kubectl|doctl|gcloud|aws|az|curl|helm)[ \t]/)
+        printf "%s:%d: undo step hidden in a comment inside a command block -> make it its own self-contained fenced rollback block\n", fname, NR
+      next
+    }
+    $0 ~ /[Rr]ollback[^`]*(=|:| is)[ \t]*`(kubectl|doctl|gcloud|aws|az|curl|helm)[ \t]/ {
+      printf "%s:%d: undo step written as a one-line note -> make it a self-contained fenced rollback block that names its target\n", fname, NR
+    }
+  ' "$f" >> "$TMP"
+done
+
 if [ -s "$TMP" ]; then
   echo "CROSS-BLOCK CHECK FAILED"
   cat "$TMP"
   FAIL=1
 else
-  echo "CROSSBLOCK-OK (no set-u block references an undeclared cross-block variable; no inline write command depends on another block's variables)"
+  echo "CROSSBLOCK-OK (no set-u block references an undeclared cross-block variable; no inline write command depends on another block's variables; no setup undo step is a one-line note)"
 fi
 exit $FAIL

@@ -66,4 +66,24 @@ Remove a test check with `curl -X DELETE -H "Authorization: Bearer ${SENTRY_TOKE
 EOF
 sh "$GATE" "$WORK/benign" >/dev/null 2>&1 || fail "gate rejected a read-only, placeholder-only or exported-secret-only inline command"
 
-echo "CROSSBLOCK-GATE-OK (fenced and inline cross-block classes rejected; self-contained and benign forms pass)"
+# 6) setup skills: an undo step written as a one-line note is rejected even with only placeholders,
+#    in prose and as a comment inside a command block
+rm -rf "$WORK/note"; mkdir -p "$WORK/note/skills/setup-x"
+printf '# x\nRollback = `kubectl delete pdb <app>-pdb -n <ns>`.\n' > "$WORK/note/skills/setup-x/SKILL.md"
+out="$(sh "$GATE" "$WORK/note" 2>&1)" && fail "gate accepted a one-line undo note in a setup skill"
+printf '%s' "$out" | grep -q 'undo step written as a one-line note' || fail "rejection did not name the one-line undo class"
+rm -rf "$WORK/comment"; mkdir -p "$WORK/comment/skills/setup-x"
+printf '# x\n```bash\nset -eu\n# ANNOUNCE this manifest; rollback = kubectl delete networkpolicy <name> -n <ns>\necho ok\n```\n' > "$WORK/comment/skills/setup-x/SKILL.md"
+out="$(sh "$GATE" "$WORK/comment" 2>&1)" && fail "gate accepted an undo step hidden in a comment"
+printf '%s' "$out" | grep -q 'undo step hidden in a comment' || fail "rejection did not name the comment undo class"
+
+# 7) a setup skill that points at its rollback block, or warns against a command, passes
+mkdir -p "$WORK/pointer/skills/setup-x"
+cat > "$WORK/pointer/skills/setup-x/SKILL.md" <<'EOF'
+# x
+Rollback: run the rollback block below. Never `kubectl apply` the raw backup.
+Rollback is the policy rollback block in the section above, `NEW_POLICY` set to the printed name.
+EOF
+sh "$GATE" "$WORK/pointer" >/dev/null 2>&1 || fail "gate rejected a pointer to a rollback block or a warning"
+
+echo "CROSSBLOCK-GATE-OK (fenced and inline cross-block classes and one-line setup undo notes rejected; self-contained, pointer and benign forms pass)"

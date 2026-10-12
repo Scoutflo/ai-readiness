@@ -127,7 +127,7 @@ done
 | Tier | Token scopes | Internal integration permission settings |
 | --- | --- | --- |
 | Read-only (audit-sentry) | `org:read`, `project:read`, `event:read`, `alerts:read`; add `team:read` and `member:read` for ownership checks | Organization: Read; Project: Read; Issue & Event: Read; Alerts: Read; Team: Read; Member: Read |
-| Elevated (setup-sentry) | the read set plus `project:write`, `alerts:write`, `org:write`; `project:admin` only when you want the setup skill to delete Sentry's default alert rule | Project: Write (Admin only for rule deletion); Issue & Event: Read; Organization: Read & Write; Alerts: Read & Write |
+| Elevated (setup-sentry) | the read set plus `project:write`, `alerts:write`, `org:write`; `project:admin` only to delete a project the setup skill created (alert deletes need only `alerts:write`) | Project: Write (Admin only for the project rollback); Issue & Event: Read; Organization: Read & Write; Alerts: Read & Write |
 
 ### Where to click
 
@@ -138,7 +138,7 @@ Recommended: an internal integration, because it gives exact scope control and i
 3. Create New Integration > Internal Integration. Name it `scoutflo-audit` per the tier naming rule.
 4. Set the permissions from the table above. Leave webhooks and UI components empty.
 5. Save, open the integration, and create a token under its Tokens section. Copy it once.
-6. For setup work, create a second internal integration named `scoutflo-setup` at the elevated permissions, and record `tier: elevated` in the block that names its env var.
+6. For setup work, create a second internal integration named `scoutflo-setup` at the elevated permissions, and record `tier: elevated` in the block that names its env var. Keep that block in a separate config file and point `SCOUTFLO_CONFIG` at it for setup runs: setup-sentry refuses a `tier: read-only` block, and the audit keeps using the read-only one.
 
 Alternatives, and why they are second choice:
 
@@ -167,7 +167,7 @@ curl -fsS --max-time 10 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
 ```yaml
 digitalocean:
   token_env: DIGITALOCEAN_ACCESS_TOKEN   # doctl reads this variable natively
-  # team: your-team-uuid                 # only for multi-team accounts
+  # team: your-team-uuid                 # audits: only for multi-team accounts; setup-digitalocean requires it (team UUID, or personal)
 ```
 
 `doctl` is a prerequisite for the DigitalOcean skills (install it from your package manager; `doctl version` is the doctor check). With `DIGITALOCEAN_ACCESS_TOKEN` exported, doctl needs no `doctl auth init` and no token file on disk.
@@ -202,7 +202,7 @@ doctl account get -o json | jq -e '(if type=="array" then .[0] else . end) | .st
 
 doctl account get -o json | jq -r '(if type=="array" then .[0] else . end) | "team=\(.team.uuid // "personal")"'
 # Confirm the team UUID matches the account you intend to audit; write it into
-# digitalocean.team for multi-team accounts.
+# digitalocean.team for multi-team accounts, and always before running setup-digitalocean.
 ```
 
 ## PagerDuty

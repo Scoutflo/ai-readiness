@@ -2,6 +2,58 @@
   "_comment": "Generated from the setup skills' own fix sections: each finding ID maps to the first fix section in its setup skill that names it. Validated by ci/remediation-map-check.sh (ID prefix must match a real audit catalog; skill dir must exist; anchor must resolve to a real heading). Regenerate when setup skills change; never hand-invent entries.",
   "version": 1,
   "mappings": {
+    "ALR-002": {
+      "setup_skill": "setup-lgtm",
+      "anchor": "fix-default-receiver"
+    },
+    "ALR-003": {
+      "setup_skill": "setup-lgtm",
+      "anchor": "fix-default-receiver"
+    },
+    "ALR-004": {
+      "setup_skill": "setup-lgtm",
+      "anchor": "add-severity-routes-and-inhibition"
+    },
+    "ALR-005": {
+      "setup_skill": "setup-lgtm",
+      "anchor": "fix-default-receiver"
+    },
+    "ALR-006": {
+      "setup_skill": "setup-lgtm",
+      "anchor": "fix-default-receiver"
+    },
+    "ALR-011": {
+      "setup_skill": "setup-lgtm",
+      "anchor": "quiet-noisy-rules"
+    },
+    "ALR-013": {
+      "setup_skill": "setup-lgtm",
+      "anchor": "quiet-noisy-rules"
+    },
+    "ALR-015": {
+      "setup_skill": "setup-lgtm",
+      "anchor": "quiet-noisy-rules"
+    },
+    "ALR-016": {
+      "setup_skill": "setup-lgtm",
+      "anchor": "add-severity-routes-and-inhibition"
+    },
+    "ALR-017": {
+      "setup_skill": "setup-lgtm",
+      "anchor": "add-severity-routes-and-inhibition"
+    },
+    "ALR-018": {
+      "setup_skill": "setup-lgtm",
+      "anchor": "fix-default-receiver"
+    },
+    "ALR-022": {
+      "setup_skill": "setup-lgtm",
+      "anchor": "add-severity-routes-and-inhibition"
+    },
+    "ALR-023": {
+      "setup_skill": "setup-lgtm",
+      "anchor": "add-severity-routes-and-inhibition"
+    },
     "AWS-001": {
       "setup_skill": "setup-aws",
       "anchor": "add-cloudwatch-alarms"
@@ -11,6 +63,10 @@
       "anchor": "add-cloudwatch-alarms"
     },
     "AWS-006": {
+      "setup_skill": "setup-aws",
+      "anchor": "add-cloudwatch-alarms"
+    },
+    "AWS-007": {
       "setup_skill": "setup-aws",
       "anchor": "add-cloudwatch-alarms"
     },
@@ -42,6 +98,10 @@
       "setup_skill": "setup-aws",
       "anchor": "add-compute-health-alarms"
     },
+    "AWS-022": {
+      "setup_skill": "setup-aws",
+      "anchor": "add-compute-health-alarms"
+    },
     "AWS-023": {
       "setup_skill": "setup-aws",
       "anchor": "add-compute-health-alarms"
@@ -50,11 +110,27 @@
       "setup_skill": "setup-aws",
       "anchor": "add-compute-health-alarms"
     },
+    "AWS-027": {
+      "setup_skill": "setup-aws",
+      "anchor": "add-compute-health-alarms"
+    },
+    "AWS-028": {
+      "setup_skill": "setup-aws",
+      "anchor": "add-compute-health-alarms"
+    },
     "AWS-030": {
       "setup_skill": "setup-aws",
       "anchor": "harden-managed-databases"
     },
+    "AWS-031": {
+      "setup_skill": "setup-aws",
+      "anchor": "harden-managed-databases"
+    },
     "AWS-034": {
+      "setup_skill": "setup-aws",
+      "anchor": "harden-managed-databases"
+    },
+    "AWS-035": {
       "setup_skill": "setup-aws",
       "anchor": "harden-managed-databases"
     },
@@ -63,6 +139,10 @@
       "anchor": "fix-uptime-coverage"
     },
     "AWS-041": {
+      "setup_skill": "setup-aws",
+      "anchor": "fix-uptime-coverage"
+    },
+    "AWS-042": {
       "setup_skill": "setup-aws",
       "anchor": "fix-uptime-coverage"
     },
@@ -94,6 +174,42 @@
       "setup_skill": "setup-aws",
       "anchor": "enable-account-observability"
     },
+    "AWS-056": {
+      "setup_skill": "setup-aws",
+      "anchor": "enable-account-observability"
+    },
+    "AWS-060": {
+      "setup_skill": "setup-aws",
+      "anchor": "add-cloudwatch-alarms"
+    },
+    "AWS-061": {
+      "setup_skill": "setup-aws",
+      "anchor": "add-cloudwatch-alarms"
+    },
+    "AWS-062": {
+      "setup_skill": "setup-aws",
+      "anchor": "add-cloudwatch-alarms"
+    },
+    "AWS-063": {
+      "setup_skill": "setup-aws",
+      "anchor": "add-cloudwatch-alarms"
+    },
+    "AWS-064": {
+      "setup_skill": "setup-aws",
+      "anchor": "add-cloudwatch-alarms"
+    },
+    "AWS-065": {
+      "setup_skill": "setup-aws",
+      "anchor": "fix-alert-routing"
+    },
+    "CS-060": {
+      "setup_skill": "setup-clickstack",
+      "anchor": "manage-storage-capacity"
+    },
+    "CS-061": {
+      "setup_skill": "setup-clickstack",
+      "anchor": "manage-merge-pressure"
+    },
     "DO-001": {
       "setup_skill": "setup-digitalocean",
       "anchor": "fix-alert-routing"
@@ -122,11 +238,23 @@
       "setup_skill": "setup-digitalocean",
       "anchor": "fix-uptime-coverage"
     },
+    "DO-016": {
+      "setup_skill": "setup-digitalocean",
+      "anchor": "fix-uptime-coverage"
+    },
+    "DO-017": {
+      "setup_skill": "setup-digitalocean",
+      "anchor": "fix-uptime-coverage"
+    },
     "DO-020": {
       "setup_skill": "setup-digitalocean",
       "anchor": "add-app-platform-alerts"
     },
     "DO-025": {
+      "setup_skill": "setup-digitalocean",
+      "anchor": "add-app-platform-alerts"
+    },
+    "DO-026": {
       "setup_skill": "setup-digitalocean",
       "anchor": "add-app-platform-alerts"
     },
@@ -184,7 +312,7 @@
     },
     "DO-060": {
       "setup_skill": "setup-digitalocean",
-      "anchor": "fix-uptime-coverage"
+      "anchor": "retire-stale-monitoring"
     },
     "DO-061": {
       "setup_skill": "setup-digitalocean",
@@ -193,6 +321,22 @@
     "DO-062": {
       "setup_skill": "setup-digitalocean",
       "anchor": "move-secret-env-vars"
+    },
+    "DO-070": {
+      "setup_skill": "setup-digitalocean",
+      "anchor": "fix-alert-routing"
+    },
+    "DO-071": {
+      "setup_skill": "setup-digitalocean",
+      "anchor": "fix-alert-routing"
+    },
+    "DO-072": {
+      "setup_skill": "setup-digitalocean",
+      "anchor": "set-database-alert-policies"
+    },
+    "DO-073": {
+      "setup_skill": "setup-digitalocean",
+      "anchor": "fix-alert-routing"
     },
     "GCP-001": {
       "setup_skill": "setup-gcp",
@@ -218,6 +362,14 @@
       "setup_skill": "setup-gcp",
       "anchor": "review-snoozes"
     },
+    "GCP-007": {
+      "setup_skill": "setup-gcp",
+      "anchor": "plan-out-of-scope-changes"
+    },
+    "GCP-008": {
+      "setup_skill": "setup-gcp",
+      "anchor": "plan-out-of-scope-changes"
+    },
     "GCP-010": {
       "setup_skill": "setup-gcp",
       "anchor": "fix-uptime-coverage"
@@ -230,9 +382,25 @@
       "setup_skill": "setup-gcp",
       "anchor": "fix-uptime-coverage"
     },
+    "GCP-013": {
+      "setup_skill": "setup-gcp",
+      "anchor": "fix-uptime-coverage"
+    },
+    "GCP-014": {
+      "setup_skill": "setup-gcp",
+      "anchor": "fix-uptime-coverage"
+    },
     "GCP-015": {
       "setup_skill": "setup-gcp",
       "anchor": "fix-uptime-coverage"
+    },
+    "GCP-016": {
+      "setup_skill": "setup-gcp",
+      "anchor": "fix-uptime-coverage"
+    },
+    "GCP-017": {
+      "setup_skill": "setup-gcp",
+      "anchor": "add-lb-alert-policies"
     },
     "GCP-020": {
       "setup_skill": "setup-gcp",
@@ -256,7 +424,7 @@
     },
     "GCP-030": {
       "setup_skill": "setup-gcp",
-      "anchor": "add-gke-health-policies"
+      "anchor": "plan-out-of-scope-changes"
     },
     "GCP-031": {
       "setup_skill": "setup-gcp",
@@ -272,7 +440,7 @@
     },
     "GCP-040": {
       "setup_skill": "setup-gcp",
-      "anchor": "add-lb-alert-policies"
+      "anchor": "plan-out-of-scope-changes"
     },
     "GCP-041": {
       "setup_skill": "setup-gcp",
@@ -284,7 +452,7 @@
     },
     "GCP-043": {
       "setup_skill": "setup-gcp",
-      "anchor": "add-lb-alert-policies"
+      "anchor": "plan-out-of-scope-changes"
     },
     "GCP-050": {
       "setup_skill": "setup-gcp",
@@ -300,7 +468,11 @@
     },
     "GCP-053": {
       "setup_skill": "setup-gcp",
-      "anchor": "create-logs-based-metrics"
+      "anchor": "plan-out-of-scope-changes"
+    },
+    "GCP-054": {
+      "setup_skill": "setup-gcp",
+      "anchor": "plan-out-of-scope-changes"
     },
     "GCP-060": {
       "setup_skill": "setup-gcp",
@@ -313,6 +485,26 @@
     "GCP-062": {
       "setup_skill": "setup-gcp",
       "anchor": "improve-alert-documentation"
+    },
+    "GCP-063": {
+      "setup_skill": "setup-gcp",
+      "anchor": "improve-alert-documentation"
+    },
+    "GCP-064": {
+      "setup_skill": "setup-gcp",
+      "anchor": "improve-alert-documentation"
+    },
+    "GCP-065": {
+      "setup_skill": "setup-gcp",
+      "anchor": "improve-alert-documentation"
+    },
+    "GCP-066": {
+      "setup_skill": "setup-gcp",
+      "anchor": "improve-alert-documentation"
+    },
+    "GCP-067": {
+      "setup_skill": "setup-gcp",
+      "anchor": "plan-out-of-scope-changes"
     },
     "GCP-070": {
       "setup_skill": "setup-gcp",
@@ -474,69 +666,81 @@
       "setup_skill": "setup-kubernetes",
       "anchor": "set-namespace-quotas-and-limitranges"
     },
-    "SNTRY-001": {
-      "setup_skill": "setup-sentry",
-      "anchor": "alert-rule-taxonomy"
+    "LGTM-001": {
+      "setup_skill": "setup-lgtm",
+      "anchor": "enable-ha"
     },
-    "SNTRY-002": {
-      "setup_skill": "setup-sentry",
-      "anchor": "privacy-gates"
+    "LGTM-004": {
+      "setup_skill": "setup-lgtm",
+      "anchor": "quiet-noisy-rules"
     },
-    "SNTRY-003": {
-      "setup_skill": "setup-sentry",
-      "anchor": "privacy-gates"
+    "LGTM-011": {
+      "setup_skill": "setup-lgtm",
+      "anchor": "fix-default-receiver"
     },
-    "SNTRY-004": {
-      "setup_skill": "setup-sentry",
-      "anchor": "environment-seeding"
+    "LGTM-012": {
+      "setup_skill": "setup-lgtm",
+      "anchor": "fix-default-receiver"
     },
-    "SNTRY-005": {
-      "setup_skill": "setup-sentry",
-      "anchor": "receiver-wiring"
+    "LGTM-013": {
+      "setup_skill": "setup-lgtm",
+      "anchor": "test-fire-receivers"
     },
-    "SNTRY-006": {
-      "setup_skill": "setup-sentry",
-      "anchor": "releases-and-source-maps"
+    "LGTM-014": {
+      "setup_skill": "setup-lgtm",
+      "anchor": "fix-default-receiver"
     },
-    "SNTRY-007": {
-      "setup_skill": "setup-sentry",
-      "anchor": "cron-and-uptime-monitors"
+    "LGTM-015": {
+      "setup_skill": "setup-lgtm",
+      "anchor": "add-severity-routes-and-inhibition"
     },
-    "SNTRY-008": {
-      "setup_skill": "setup-sentry",
-      "anchor": "privacy-gates"
+    "LGTM-016": {
+      "setup_skill": "setup-lgtm",
+      "anchor": "add-severity-routes-and-inhibition"
     },
-    "SNTRY-009": {
-      "setup_skill": "setup-sentry",
-      "anchor": "github-integration-and-code-mappings"
+    "LGTM-017": {
+      "setup_skill": "setup-lgtm",
+      "anchor": "quiet-noisy-rules"
     },
-    "SNTRY-010": {
-      "setup_skill": "setup-sentry",
-      "anchor": "quota-spike-protection-and-privacy-sensitive-ingestion"
+    "LGTM-023": {
+      "setup_skill": "setup-lgtm",
+      "anchor": "standardize-service-labels"
     },
-    "SNTRY-011": {
-      "setup_skill": "setup-sentry",
-      "anchor": "receiver-wiring"
+    "LGTM-031": {
+      "setup_skill": "setup-lgtm",
+      "anchor": "standardize-service-labels"
     },
-    "SNTRY-012": {
-      "setup_skill": "setup-sentry",
-      "anchor": "projects"
+    "LGTM-043": {
+      "setup_skill": "setup-lgtm",
+      "anchor": "standardize-service-labels"
     },
-    "SNTRY-013": {
-      "setup_skill": "setup-sentry",
-      "anchor": "alert-rule-taxonomy"
+    "LGTM-060": {
+      "setup_skill": "setup-lgtm",
+      "anchor": "enable-ha"
     },
-    "SNTRY-014": {
-      "setup_skill": "setup-sentry",
-      "anchor": "alert-rule-taxonomy"
+    "LGTM-061": {
+      "setup_skill": "setup-lgtm",
+      "anchor": "set-retention"
     },
-    "CS-060": {
-      "setup_skill": "setup-clickstack",
-      "anchor": "manage-storage-capacity"
+    "LGTM-063": {
+      "setup_skill": "setup-lgtm",
+      "anchor": "lock-down-exposure"
     },
-    "CS-061": {
-      "setup_skill": "setup-clickstack",
-      "anchor": "manage-merge-pressure"
+    "LGTM-064": {
+      "setup_skill": "setup-lgtm",
+      "anchor": "add-network-policies"
+    },
+    "LGTM-080": {
+      "setup_skill": "setup-lgtm",
+      "anchor": "quiet-noisy-rules"
+    },
+    "LGTM-081": {
+      "setup_skill": "setup-lgtm",
+      "anchor": "quiet-noisy-rules"
+    },
+    "LGTM-082": {
+      "setup_skill": "setup-lgtm",
+      "anchor": "quiet-noisy-rules"
     },
     "NR-004": {
       "setup_skill": "setup-newrelic",
@@ -617,6 +821,146 @@
     "NR-042": {
       "setup_skill": "setup-newrelic",
       "anchor": "wire-change-tracking"
+    },
+    "SNTRY-001": {
+      "setup_skill": "setup-sentry",
+      "anchor": "alert-rule-taxonomy"
+    },
+    "SNTRY-002": {
+      "setup_skill": "setup-sentry",
+      "anchor": "privacy-gates"
+    },
+    "SNTRY-003": {
+      "setup_skill": "setup-sentry",
+      "anchor": "privacy-gates"
+    },
+    "SNTRY-004": {
+      "setup_skill": "setup-sentry",
+      "anchor": "environment-seeding"
+    },
+    "SNTRY-005": {
+      "setup_skill": "setup-sentry",
+      "anchor": "receiver-wiring"
+    },
+    "SNTRY-006": {
+      "setup_skill": "setup-sentry",
+      "anchor": "releases-and-source-maps"
+    },
+    "SNTRY-007": {
+      "setup_skill": "setup-sentry",
+      "anchor": "cron-and-uptime-monitors"
+    },
+    "SNTRY-008": {
+      "setup_skill": "setup-sentry",
+      "anchor": "privacy-gates"
+    },
+    "SNTRY-009": {
+      "setup_skill": "setup-sentry",
+      "anchor": "github-integration-and-code-mappings"
+    },
+    "SNTRY-010": {
+      "setup_skill": "setup-sentry",
+      "anchor": "quota-spike-protection-and-privacy-sensitive-ingestion"
+    },
+    "SNTRY-011": {
+      "setup_skill": "setup-sentry",
+      "anchor": "receiver-wiring"
+    },
+    "SNTRY-012": {
+      "setup_skill": "setup-sentry",
+      "anchor": "projects"
+    },
+    "SNTRY-013": {
+      "setup_skill": "setup-sentry",
+      "anchor": "alert-rule-taxonomy"
+    },
+    "SNTRY-014": {
+      "setup_skill": "setup-sentry",
+      "anchor": "alert-rule-taxonomy"
+    },
+    "SNTRY-015": {
+      "setup_skill": "setup-sentry",
+      "anchor": "alerting-model-decision"
+    },
+    "SNTRY-016": {
+      "setup_skill": "setup-sentry",
+      "anchor": "alert-rule-taxonomy"
+    },
+    "SNTRY-017": {
+      "setup_skill": "setup-sentry",
+      "anchor": "receiver-wiring"
+    },
+    "SNTRY-018": {
+      "setup_skill": "setup-sentry",
+      "anchor": "quota-spike-protection-and-privacy-sensitive-ingestion"
+    },
+    "SNTRY-019": {
+      "setup_skill": "setup-sentry",
+      "anchor": "quota-spike-protection-and-privacy-sensitive-ingestion"
+    },
+    "SNTRY-020": {
+      "setup_skill": "setup-sentry",
+      "anchor": "releases-and-source-maps"
+    },
+    "SNTRY-021": {
+      "setup_skill": "setup-sentry",
+      "anchor": "github-integration-and-code-mappings"
+    },
+    "SNTRY-022": {
+      "setup_skill": "setup-sentry",
+      "anchor": "github-integration-and-code-mappings"
+    },
+    "SNTRY-023": {
+      "setup_skill": "setup-sentry",
+      "anchor": "cron-and-uptime-monitors"
+    },
+    "SNTRY-024": {
+      "setup_skill": "setup-sentry",
+      "anchor": "projects"
+    },
+    "SNTRY-025": {
+      "setup_skill": "setup-sentry",
+      "anchor": "environment-seeding"
+    },
+    "SNTRY-101": {
+      "setup_skill": "setup-sentry",
+      "anchor": "alert-rule-taxonomy"
+    },
+    "SNTRY-102": {
+      "setup_skill": "setup-sentry",
+      "anchor": "alert-rule-taxonomy"
+    },
+    "SNTRY-103": {
+      "setup_skill": "setup-sentry",
+      "anchor": "alert-rule-taxonomy"
+    },
+    "SNTRY-104": {
+      "setup_skill": "setup-sentry",
+      "anchor": "quota-spike-protection-and-privacy-sensitive-ingestion"
+    },
+    "SNTRY-105": {
+      "setup_skill": "setup-sentry",
+      "anchor": "quota-spike-protection-and-privacy-sensitive-ingestion"
+    },
+    "SNTRY-106": {
+      "setup_skill": "setup-sentry",
+      "anchor": "alert-rule-remediation-playbook"
+    },
+    "SNTRY-107": {
+      "setup_skill": "setup-sentry",
+      "anchor": "alert-rule-remediation-playbook"
+    },
+    "SNTRY-108": {
+      "setup_skill": "setup-sentry",
+      "anchor": "alert-rule-remediation-playbook"
+    },
+    "SNTRY-109": {
+      "setup_skill": "setup-sentry",
+      "anchor": "alert-rule-remediation-playbook"
+    },
+    "SNTRY-110": {
+      "setup_skill": "setup-sentry",
+      "anchor": "alert-rule-remediation-playbook"
     }
   }
 }
