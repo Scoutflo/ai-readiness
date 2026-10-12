@@ -163,7 +163,25 @@ kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" create secret generic "$AM_SECRET
 
 If `amtool` is installed, validate before applying: `amtool check-config "${WORK_DIR}/alertmanager.yml"`. Verify via `/api/v2/status` as above; if the pod does not hot-reload, announce and perform a rollout restart of the Alertmanager StatefulSet as its own change.
 
-Rollback: `kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" apply -f "${BACKUP_DIR}/${AM_SECRET_NAME}.yaml"`.
+Rollback runs in a fresh shell, so it re-declares its target and points at the dated backup folder explicitly:
+
+```bash
+set -eu
+# Resolved from ~/.scoutflo/toolkit.yaml
+KUBE_CONTEXT="your-kube-context"   # kubernetes.context
+MON_NS="monitoring"                # kubernetes.monitoring_namespace
+AM_SECRET_NAME="alertmanager-config"
+BACKUP_DATE="YYYY-MM-DD"           # UTC date of the backup step (its setup-<date>/backups folder)
+BACKUP_FILE="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/lgtm/setup-${BACKUP_DATE}/backups/${AM_SECRET_NAME}.yaml"
+[ -s "$BACKUP_FILE" ] || { echo "No backup at ${BACKUP_FILE}: set BACKUP_DATE to the day the backup ran" >&2; exit 1; }
+# Drop server-set identity fields: a changed or recreated object refuses a stale resourceVersion/uid.
+RESTORE_FILE="${BACKUP_FILE%.yaml}.restore.yaml"
+sed -e '/^  resourceVersion: /d' -e '/^  uid: /d' -e '/^  creationTimestamp: /d' -e '/^  generation: /d' "$BACKUP_FILE" > "$RESTORE_FILE"
+kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" apply -f "$RESTORE_FILE"
+kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" diff -f "$RESTORE_FILE" >/dev/null && echo "RESTORED: live Secret matches the backup"
+```
+
+Expected: `RESTORED`. Then verify via `/api/v2/status` as above.
 
 ## Operator CR path
 
@@ -224,7 +242,25 @@ Common edits for the noise classes audit-lgtm flags:
 
 Verify every rule edit against the live rules API (`.duration`, `.state`, and the new `expr`), then watch `/api/v2/alerts` long enough to confirm the noise stopped and real alerts still fire.
 
-Rollback: `kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" apply -f "${BACKUP_DIR}/${RULE_CR}.yaml"`.
+Rollback, in its own fresh shell:
+
+```bash
+set -eu
+# Resolved from ~/.scoutflo/toolkit.yaml
+KUBE_CONTEXT="your-kube-context"   # kubernetes.context
+MON_NS="monitoring"                # kubernetes.monitoring_namespace
+RULE_CR="my-app-rules"             # the PrometheusRule you backed up above
+BACKUP_DATE="YYYY-MM-DD"           # UTC date of the backup step (its setup-<date>/backups folder)
+BACKUP_FILE="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/lgtm/setup-${BACKUP_DATE}/backups/${RULE_CR}.yaml"
+[ -s "$BACKUP_FILE" ] || { echo "No backup at ${BACKUP_FILE}: set BACKUP_DATE to the day the backup ran" >&2; exit 1; }
+# Drop server-set identity fields: a changed or recreated object refuses a stale resourceVersion/uid.
+RESTORE_FILE="${BACKUP_FILE%.yaml}.restore.yaml"
+sed -e '/^  resourceVersion: /d' -e '/^  uid: /d' -e '/^  creationTimestamp: /d' -e '/^  generation: /d' "$BACKUP_FILE" > "$RESTORE_FILE"
+kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" apply -f "$RESTORE_FILE"
+kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" diff -f "$RESTORE_FILE" >/dev/null && echo "RESTORED: live PrometheusRule matches the backup"
+```
+
+Expected: `RESTORED`. Re-check the rules API as above.
 
 ## vmalert notifier check
 

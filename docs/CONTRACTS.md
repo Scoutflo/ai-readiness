@@ -485,7 +485,7 @@ a gate that does not exist — so the map cannot silently drift from reality.
 
 Structural / linkage:
 `ci/anchor-check.sh` (every `skill#anchor` resolves) ·
-`ci/crossblock-check.sh` (no fenced block reads an undeclared cross-block var) ·
+`ci/crossblock-check.sh` (no fenced block reads an undeclared cross-block var, and no inline write command reads another block's variables) ·
 `ci/coverage-check.sh` (every audit in connect + start; every template block has a providers.md source) ·
 `ci/remediation-map-check.sh` (every remediation pointer resolves to a real skill#anchor + catalog ID) ·
 `ci/skill-completeness-check.sh` (per-lane structural markers) ·

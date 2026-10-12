@@ -567,7 +567,24 @@ curl -fsS --max-time 10 "${API}/projects/${SENTRY_ORG}/${PROJECT}/uptime/${CHECK
   -H "Authorization: Bearer ${SENTRY_TOKEN}" | jq -e --arg u "$CHECK_URL" '.url == $u'
 ```
 
-Expect: exit 0. `intervalSeconds` accepts only `300`, `600`, `1800`, or `3600`; any other value is rejected. Add a matching issue alert rule for the uptime issue type if you want notifications routed the same way as other alerts. Rollback: `curl -X DELETE "${API}/projects/${SENTRY_ORG}/${PROJECT}/uptime/${CHECK_ID}/"`, then confirm a re-fetch returns `404`.
+Expect: exit 0. `intervalSeconds` accepts only `300`, `600`, `1800`, or `3600`; any other value is rejected. Add a matching issue alert rule for the uptime issue type if you want notifications routed the same way as other alerts.
+
+Rollback, in its own fresh shell:
+
+```bash
+set -eu
+SENTRY_HOST="us.sentry.io"; SENTRY_ORG="your-org-slug"; API="https://${SENTRY_HOST}/api/0"
+[ -n "${SENTRY_TOKEN:-}" ] || { echo "SENTRY_TOKEN is not set; run /scoutflo:connect"; exit 1; }
+PROJECT="checkout"
+CHECK_ID="<uptime-check-id>"   # the CHECK_ID the create block captured
+case "$CHECK_ID" in ''|'<'*) echo "Set CHECK_ID to the uptime monitor this setup created" >&2; exit 1 ;; esac
+curl -fsS --max-time 10 -X DELETE "${API}/projects/${SENTRY_ORG}/${PROJECT}/uptime/${CHECK_ID}/" \
+  -H "Authorization: Bearer ${SENTRY_TOKEN}" > /dev/null
+curl -sS --max-time 10 -o /dev/null -w '%{http_code}\n' "${API}/projects/${SENTRY_ORG}/${PROJECT}/uptime/${CHECK_ID}/" \
+  -H "Authorization: Bearer ${SENTRY_TOKEN}"
+```
+
+Expect: `404`.
 
 ## Pagination and rate limits
 

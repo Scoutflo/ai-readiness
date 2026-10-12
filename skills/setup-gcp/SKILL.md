@@ -168,7 +168,22 @@ curl -fsS --max-time 30 -H "Authorization: Bearer ${TOKEN}" "${MON_API}/${NEW_CH
   | jq -e '.enabled == true and .type == "email"'
 ```
 
-Expected: the new channel's resource name and a final `jq -e` exit 0. For webhook, Slack, or PagerDuty channel types the sensitive value (URL, token, service key) goes into the payload file from an unechoed variable, is never printed, and the announcement shows the display name and type only. Rollback: `curl -fsS -X DELETE -H "Authorization: Bearer ${TOKEN}" "${MON_API}/${NEW_CHANNEL}"`, then a GET asserting `404`. For `GCP-005`, replacing a dead channel means creating the good one, re-pointing every referencing policy ([next section](#attach-channels-to-policies)), verifying, and only then deleting the dead channel, confirmed individually.
+Expected: the new channel's resource name and a final `jq -e` exit 0. For webhook, Slack, or PagerDuty channel types the sensitive value (URL, token, service key) goes into the payload file from an unechoed variable, is never printed, and the announcement shows the display name and type only.
+
+Rollback, in its own fresh shell:
+
+```bash
+set -eu
+GCP_PROJECT="your-project-id"   # gcp.project
+MON_API="https://monitoring.googleapis.com/v3"
+if [ -n "${GOOGLE_APPLICATION_CREDENTIALS:-}" ]; then TOKEN="$(gcloud auth application-default print-access-token)"; export CLOUDSDK_AUTH_ACCESS_TOKEN="$TOKEN"; else TOKEN="$(gcloud auth print-access-token)"; fi
+NEW_CHANNEL="<channel-resource-name>"   # the "created:" value, projects/<project>/notificationChannels/<id>
+case "$NEW_CHANNEL" in "projects/${GCP_PROJECT}/notificationChannels/"?*) ;; *) echo "Set NEW_CHANNEL to a channel this setup created in ${GCP_PROJECT}" >&2; exit 1 ;; esac
+curl -fsS --max-time 30 -X DELETE -H "Authorization: Bearer ${TOKEN}" "${MON_API}/${NEW_CHANNEL}" > /dev/null
+curl -sS --max-time 30 -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer ${TOKEN}" "${MON_API}/${NEW_CHANNEL}"
+```
+
+Expected: `404`. For `GCP-005`, replacing a dead channel means creating the good one, re-pointing every referencing policy ([next section](#attach-channels-to-policies)), verifying, and only then deleting the dead channel, confirmed individually.
 
 ## Attach channels to policies
 
@@ -334,7 +349,20 @@ gcloud logging metrics describe "$METRIC_NAME" --project "$GCP_PROJECT" --format
   | jq -e --arg f "$LOG_FILTER" '.filter == $f'
 ```
 
-Expected: a timestamp from step 1 (empty output stops the section: fix the filter or accept that the service logs no errors, in writing), then exit 0. An empty gate result on a service you know errors means the filter is wrong; shipping it anyway creates the `GCP-051` decoration this section exists to prevent. Then create the alert policy on `logging.googleapis.com/user/<METRIC_NAME>` with the create-verify shape (`GCP-052`), rate over `LOG_ERROR_RATE_WINDOW` (example 300s, tune per service). Rollback: `gcloud logging metrics delete "$METRIC_NAME"` after deleting the policy, each verified by absence. Sink changes (`GCP-053`) are out of write scope: plan them.
+Expected: a timestamp from step 1 (empty output stops the section: fix the filter or accept that the service logs no errors, in writing), then exit 0. An empty gate result on a service you know errors means the filter is wrong; shipping it anyway creates the `GCP-051` decoration this section exists to prevent. Then create the alert policy on `logging.googleapis.com/user/<METRIC_NAME>` with the create-verify shape (`GCP-052`), rate over `LOG_ERROR_RATE_WINDOW` (example 300s, tune per service).
+
+Rollback deletes the alert policy first, then the metric, each in its own fresh shell with the explicit project. The metric half:
+
+```bash
+set -eu
+GCP_PROJECT="your-project-id"   # gcp.project
+SERVICE_NAME="checkout"         # the service whose metric this setup created
+METRIC_NAME="${SERVICE_NAME}-error-count"
+gcloud logging metrics delete "$METRIC_NAME" --project "$GCP_PROJECT" --quiet
+gcloud logging metrics describe "$METRIC_NAME" --project "$GCP_PROJECT" --format=json 2>&1 | grep -c -i -E 'not.found'
+```
+
+Expected: `1` or more (the metric is gone). Sink changes (`GCP-053`) are out of write scope: plan them.
 
 ## Improve alert documentation
 

@@ -58,7 +58,21 @@ Rollback for all: restore previous replica values through the owner, verify with
 
 ## Lock down exposure
 
-Options, least invasive first. Back up every object before changing it: `kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" get ingress <name> -o yaml > "${BACKUP_DIR}/ingress-<name>.yaml"`.
+Options, least invasive first. Back up every object before changing it:
+
+```bash
+set -eu
+# Resolved from ~/.scoutflo/toolkit.yaml
+KUBE_CONTEXT="your-kube-context"   # kubernetes.context
+MON_NS="monitoring"                # kubernetes.monitoring_namespace
+INGRESS_NAME="alertmanager-public"   # from the exposure enumeration in SKILL.md
+BACKUP_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/lgtm/setup-$(date -u +%F)/backups"
+mkdir -p "$BACKUP_DIR"
+kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" get ingress "$INGRESS_NAME" -o yaml > "${BACKUP_DIR}/ingress-${INGRESS_NAME}.yaml"
+[ -s "${BACKUP_DIR}/ingress-${INGRESS_NAME}.yaml" ] && echo "BACKED UP: ${BACKUP_DIR}/ingress-${INGRESS_NAME}.yaml"
+```
+
+Expected: `BACKED UP` with the file path; note the date folder for the rollback.
 
 1. **Delete an ingress nobody should have** (observability APIs rarely need public hosts; internal users can port-forward or use Grafana):
 
@@ -72,7 +86,25 @@ kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" delete ingress "$INGRESS_NAME"
 kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" get ingress "$INGRESS_NAME" 2>&1 | tail -1
 ```
 
-Expected: `NotFound`. Rollback: `kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" apply -f "${BACKUP_DIR}/ingress-${INGRESS_NAME}.yaml"`.
+Expected: `NotFound`. Rollback recreates the ingress from the backup, in its own fresh shell:
+
+```bash
+set -eu
+# Resolved from ~/.scoutflo/toolkit.yaml
+KUBE_CONTEXT="your-kube-context"   # kubernetes.context
+MON_NS="monitoring"                # kubernetes.monitoring_namespace
+INGRESS_NAME="alertmanager-public"   # the ingress deleted above
+BACKUP_DATE="YYYY-MM-DD"           # UTC date of the backup step (its setup-<date>/backups folder)
+BACKUP_FILE="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/lgtm/setup-${BACKUP_DATE}/backups/ingress-${INGRESS_NAME}.yaml"
+[ -s "$BACKUP_FILE" ] || { echo "No backup at ${BACKUP_FILE}: set BACKUP_DATE to the day the backup ran" >&2; exit 1; }
+# A deleted object cannot be recreated with its old resourceVersion/uid, so drop server-set fields first.
+RESTORE_FILE="${BACKUP_FILE%.yaml}.restore.yaml"
+sed -e '/^  resourceVersion: /d' -e '/^  uid: /d' -e '/^  creationTimestamp: /d' -e '/^  generation: /d' "$BACKUP_FILE" > "$RESTORE_FILE"
+kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" apply -f "$RESTORE_FILE"
+kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" get ingress "$INGRESS_NAME" -o jsonpath='{.metadata.name}{"\n"}'
+```
+
+Expected: the ingress name. Repeat the external probe from SKILL.md to confirm access is back as it was.
 
 2. **Convert a LoadBalancer/NodePort Service to ClusterIP:**
 
@@ -157,7 +189,19 @@ Expected after default-deny: timeout (exit 28), unless port 9090 is intentionall
 
 If your CNI does not enforce NetworkPolicy, these objects apply cleanly and do nothing. Confirm enforcement with the probe, not with `kubectl get`.
 
-Rollback: `kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" delete networkpolicy default-deny-ingress allow-monitoring-paths` (deny first).
+Rollback, in its own fresh shell (the deny policy goes first):
+
+```bash
+set -eu
+# Resolved from ~/.scoutflo/toolkit.yaml
+KUBE_CONTEXT="your-kube-context"   # kubernetes.context
+MON_NS="monitoring"                # kubernetes.monitoring_namespace
+kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" delete networkpolicy default-deny-ingress
+kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" delete networkpolicy allow-monitoring-paths
+kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" get networkpolicy default-deny-ingress allow-monitoring-paths 2>&1 | grep -c NotFound
+```
+
+Expected: `2` (both policies gone).
 
 ## PodDisruptionBudgets
 
@@ -186,7 +230,18 @@ kubectl --context "$KUBE_CONTEXT" apply -f pdb-alertmanager.yaml
 kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" get pdb alertmanager
 ```
 
-Expected: `ALLOWED DISRUPTIONS` is 1 or more. `0` means the budget cannot be met and node drains will hang; fix replicas or remove the PDB. Rollback: `kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" delete pdb alertmanager`.
+Expected: `ALLOWED DISRUPTIONS` is 1 or more. `0` means the budget cannot be met and node drains will hang; fix replicas or remove the PDB. Rollback, in its own fresh shell:
+
+```bash
+set -eu
+# Resolved from ~/.scoutflo/toolkit.yaml
+KUBE_CONTEXT="your-kube-context"   # kubernetes.context
+MON_NS="monitoring"                # kubernetes.monitoring_namespace
+kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" delete pdb alertmanager
+kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" get pdb alertmanager 2>&1 | tail -1
+```
+
+Expected: `NotFound`.
 
 ## Service label cookbook
 

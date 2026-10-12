@@ -228,7 +228,20 @@ doctl monitoring uptime alert list "$CHECK_ID" -o json \
   | jq -e '[.[].type] | (index("down") != null) and (index("ssl_expiry") != null) and (index("latency") != null)'
 ```
 
-Expected: final `jq -e` exits 0 printing `true`. Slack destinations add `--slack-channels` plus `--slack-urls` with the URL held in an unechoed variable. Rollback: `doctl monitoring uptime delete "$CHECK_ID"` (confirmed live: unlike `doctl monitoring alert delete`, this subcommand has no `-f`/`--force` flag at all — passing `-f` fails with "unknown shorthand flag"; it also needs none, since it deletes immediately with no confirmation prompt), then verify the list no longer contains the target.
+Expected: final `jq -e` exits 0 printing `true`. Slack destinations add `--slack-channels` plus `--slack-urls` with the URL held in an unechoed variable.
+
+Rollback, in its own fresh shell. Unlike `doctl monitoring alert delete`, `doctl monitoring uptime delete` has no `-f`/`--force` flag at all (confirmed live: passing `-f` fails with "unknown shorthand flag") and needs none, since it deletes immediately with no confirmation prompt:
+
+```bash
+set -eu
+CHECK_ID="<uptime-check-id>"   # the CHECK_ID the create block resolved
+case "$CHECK_ID" in ''|'<'*) echo "Set CHECK_ID to the uptime check this setup created" >&2; exit 1 ;; esac
+doctl account get -o json | jq -r '(if type=="array" then .[0] else . end) | .team.uuid // "personal"'   # must match the live-safety gate's team
+doctl monitoring uptime delete "$CHECK_ID"
+doctl monitoring uptime list -o json | jq -e --arg id "$CHECK_ID" 'all(.[]?; .id != $id)'
+```
+
+Expected: the gate's team, then `true`.
 
 ## Add App Platform alerts
 
@@ -328,7 +341,20 @@ doctl monitoring alert get "$NEW_UUID" -o json \
   | jq -e --arg e "$DB_UUID" '(if type=="array" then .[0] else . end) | (.entities | index($e)) and .enabled'
 ```
 
-Expected: exit 0. If the `type` string is rejected, list existing policies for the accepted spelling on your account, record the doc-versus-API mismatch, and re-announce; the exact enum set varies by engine. Repeat per metric and tier: warning at `DB_WARN_PCT` and saturation at a higher tier (99 is a common example) for CPU, memory, and disk. Rollback: `doctl monitoring alert delete "$NEW_UUID" -f`, then `jq -e` that the UUID is gone from the list.
+Expected: exit 0. If the `type` string is rejected, list existing policies for the accepted spelling on your account, record the doc-versus-API mismatch, and re-announce; the exact enum set varies by engine. Repeat per metric and tier: warning at `DB_WARN_PCT` and saturation at a higher tier (99 is a common example) for CPU, memory, and disk.
+
+Rollback, in its own fresh shell (one policy per run):
+
+```bash
+set -eu
+NEW_UUID="<alert-policy-uuid>"   # the NEW_UUID the create block captured
+case "$NEW_UUID" in ''|'<'*) echo "Set NEW_UUID to the alert policy this setup created" >&2; exit 1 ;; esac
+doctl account get -o json | jq -r '(if type=="array" then .[0] else . end) | .team.uuid // "personal"'   # must match the live-safety gate's team
+doctl monitoring alert delete "$NEW_UUID" -f
+doctl monitoring alert list -o json | jq -e --arg u "$NEW_UUID" 'all(.[]?; .uuid != $u)'
+```
+
+Expected: the gate's team, then `true`.
 
 For `DO-043`, removing a noisy or duplicate policy deletes a detection path: confirm each deletion individually with the policy body quoted, never inside a batch approval. Keep the named tiers, delete the generic duplicate, and verify:
 
@@ -357,7 +383,22 @@ doctl databases logsink create "$DB_UUID" --sink-name "$SINK_NAME" --sink-type o
 doctl databases logsink list "$DB_UUID" -o json | jq -e --arg n "$SINK_NAME" 'any(.[]; .sink_name == $n)'
 ```
 
-Expected: exit 0. The sink config carries credentials on some backends; keep them in the config argument from an unechoed variable and out of every announcement and record. Older doctl versions lack the logsink group; use the API route from the audit reference in that case, announced the same way. Rollback: `doctl databases logsink delete "$DB_UUID" <sink-id>` and verify absence.
+Expected: exit 0. The sink config carries credentials on some backends; keep them in the config argument from an unechoed variable and out of every announcement and record. Older doctl versions lack the logsink group; use the API route from the audit reference in that case, announced the same way.
+
+Rollback, in its own fresh shell:
+
+```bash
+set -eu
+DB_UUID="your-database-uuid"   # the cluster the sink was added to
+SINK_NAME="db-main-logs"       # the sink this setup created
+SINK_ID="<sink-id>"            # read it from: doctl databases logsink list "$DB_UUID"
+case "$SINK_ID" in ''|'<'*) echo "Set SINK_ID to the id of ${SINK_NAME}" >&2; exit 1 ;; esac
+doctl account get -o json | jq -r '(if type=="array" then .[0] else . end) | .team.uuid // "personal"'   # must match the live-safety gate's team
+doctl databases logsink delete "$DB_UUID" "$SINK_ID"
+doctl databases logsink list "$DB_UUID" -o json | jq -e --arg n "$SINK_NAME" 'all(.[]?; .sink_name != $n)'
+```
+
+Expected: the gate's team, then `true`.
 
 ## Enable app log forwarding
 

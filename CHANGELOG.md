@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.1.216
+
+**Rollback commands that are safe to run in a fresh shell.**
+
+- Setup rollbacks and undo steps in setup-lgtm, setup-aws, setup-azure,
+  setup-gcp, setup-digitalocean and setup-sentry were one-line commands
+  that read variables from another block. In a new shell those variables
+  are empty, so a rollback could target the current kube context and its
+  default namespace, the ambient AWS profile, the active gcloud project or
+  the default Azure subscription. Each is now a fenced block that
+  re-declares its target, takes any id from the earlier step explicitly and
+  refuses to run on a placeholder.
+- Kubernetes restores point at the dated backup folder, refuse a missing or
+  empty backup, and strip `resourceVersion`, `uid`, `creationTimestamp` and
+  `generation` before re-applying, so a changed object can be restored and
+  a deleted one recreated. The AWS log-group rollback restores retention
+  from its backup file.
+- `ci/crossblock-check.sh` now also rejects inline write commands that
+  depend on another block's variables, with a dedicated fixture suite.
+
+Audit commands and report formats are unchanged.
+
 ## 0.1.215
 
 **Directory metadata and consistent data-handling disclosures.**

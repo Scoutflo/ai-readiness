@@ -336,7 +336,20 @@ kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" get pdb
 
 Expected: `ALLOWED DISRUPTIONS` of 1 or more for each new PDB. `0` means the PDB is blocking maintenance; fix the replica count or delete the PDB.
 
-Rollback: `kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" delete pdb <name>`.
+Rollback, in its own fresh shell (one PDB per run):
+
+```bash
+set -eu
+# Resolved from ~/.scoutflo/toolkit.yaml
+KUBE_CONTEXT="your-kube-context"   # kubernetes.context
+MON_NS="monitoring"                # kubernetes.monitoring_namespace
+PDB_NAME="<pdb-created-above>"     # one PDB this setup created
+case "$PDB_NAME" in ''|'<'*) echo "Set PDB_NAME to a PDB this setup created" >&2; exit 1 ;; esac
+kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" delete pdb "$PDB_NAME"
+kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" get pdb "$PDB_NAME" 2>&1 | tail -1
+```
+
+Expected: `NotFound`.
 
 ## Record and wrap up
 

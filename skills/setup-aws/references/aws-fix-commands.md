@@ -308,7 +308,22 @@ aws_cli route53 get-health-check --health-check-id "$HC_ID" --output json \
   | jq -e --arg h "$TARGET_HOST" '.HealthCheck.HealthCheckConfig.FullyQualifiedDomainName == $h'
 ```
 
-Expected: exit 0. A Route53 health check alone has no destination; also create a CloudWatch alarm on its `HealthCheckStatus` metric (`Namespace=AWS/Route53, MetricName=HealthCheckStatus, Dimensions=Name=HealthCheckId,Value=<HC_ID>, Statistic=Minimum, Threshold=1, ComparisonOperator=LessThanThreshold`) using the section 1 shape, and attach the SNS topic from [Fix alert routing](#2-fix-alert-routing-aws-010-aws-011-aws-012-aws-014). For `AWS-041`/`AWS-043`, add a CloudWatch alarm on the target group's `UnHealthyHostCount` (`Namespace=AWS/ApplicationELB` or `AWS/NetworkELB`) rather than editing the target group's own health-check parameters: changing an ALB/NLB target group's health-check path, interval, or threshold can eject currently-healthy targets from rotation, which is traffic-impacting and stays out of this skill's write scope; record that edit as a plan with a named owner instead. Synthetics canary alarms (`AWS-042`) follow the same `put-metric-alarm` shape against `SuccessPercent`. Rollback: `aws route53 delete-health-check --health-check-id "$HC_ID"`, verified by a subsequent `get-health-check` returning `NoSuchHealthCheck`.
+Expected: exit 0. A Route53 health check alone has no destination; also create a CloudWatch alarm on its `HealthCheckStatus` metric (`Namespace=AWS/Route53, MetricName=HealthCheckStatus, Dimensions=Name=HealthCheckId,Value=<HC_ID>, Statistic=Minimum, Threshold=1, ComparisonOperator=LessThanThreshold`) using the section 1 shape, and attach the SNS topic from [Fix alert routing](#2-fix-alert-routing-aws-010-aws-011-aws-012-aws-014). For `AWS-041`/`AWS-043`, add a CloudWatch alarm on the target group's `UnHealthyHostCount` (`Namespace=AWS/ApplicationELB` or `AWS/NetworkELB`) rather than editing the target group's own health-check parameters: changing an ALB/NLB target group's health-check path, interval, or threshold can eject currently-healthy targets from rotation, which is traffic-impacting and stays out of this skill's write scope; record that edit as a plan with a named owner instead. Synthetics canary alarms (`AWS-042`) follow the same `put-metric-alarm` shape against `SuccessPercent`.
+
+Rollback, in its own fresh shell (same explicit profile and region as every block here, never the ambient default):
+
+```bash
+set -eu
+AWS_PROFILE_CFG=""; AWS_REGION_CFG="us-east-1"
+aws_cli() { if [ -n "$AWS_PROFILE_CFG" ]; then aws --profile "$AWS_PROFILE_CFG" ${AWS_REGION_CFG:+--region "$AWS_REGION_CFG"} "$@"; else aws ${AWS_REGION_CFG:+--region "$AWS_REGION_CFG"} "$@"; fi; }
+HC_ID="<health-check-id>"   # the id the create block printed as "created:"
+case "$HC_ID" in ''|'<'*) echo "Set HC_ID to the health check this setup created" >&2; exit 1 ;; esac
+aws_cli sts get-caller-identity --query Account --output text   # must match the live-safety gate's account
+aws_cli route53 delete-health-check --health-check-id "$HC_ID"
+aws_cli route53 get-health-check --health-check-id "$HC_ID" 2>&1 | grep -c NoSuchHealthCheck
+```
+
+Expected: the gate's account id, then `1` (`NoSuchHealthCheck`).
 
 ## 7. Enable account observability (AWS-050, AWS-051, AWS-055 write-capable; AWS-052 to AWS-054 plan-only)
 
@@ -334,7 +349,32 @@ aws_cli logs describe-subscription-filters --log-group-name "$LOG_GROUP" --outpu
   | jq -e 'any(.subscriptionFilters[]; .filterName == "central-sink")'
 ```
 
-Expected: both `jq -e` calls exit 0. Rollback: `aws logs delete-subscription-filter --log-group-name "$LOG_GROUP" --filter-name central-sink`, and restore retention from the backup with `aws logs put-retention-policy --log-group-name "$LOG_GROUP" --retention-in-days <value from backup>` (or `aws logs delete-retention-policy` if the backup shows `retentionInDays` was absent, meaning "Never expire"). `AWS-052` (CloudTrail), `AWS-053` (AWS Config recorder), and `AWS-054` (VPC Flow Logs) are account- or VPC-wide controlled rollouts per the four change-risk classes: they change what the account observes about itself and each deserves its own review outside this skill. Record each as a plan (current state, proposed target, blast radius, owner); never `aws cloudtrail update-trail`, `aws cloudtrail start-logging`, `aws configservice start-configuration-recorder`, or `aws ec2 create-flow-logs` from this skill. `AWS-055` is the decision record itself: backend, retention, redaction, and owner, captured in the change record even when the technical write above already ran.
+Expected: both `jq -e` calls exit 0. Rollback removes the filter and restores the backed-up retention, in its own fresh shell:
+
+```bash
+set -eu
+AWS_PROFILE_CFG=""; AWS_REGION_CFG="us-east-1"
+aws_cli() { if [ -n "$AWS_PROFILE_CFG" ]; then aws --profile "$AWS_PROFILE_CFG" ${AWS_REGION_CFG:+--region "$AWS_REGION_CFG"} "$@"; else aws ${AWS_REGION_CFG:+--region "$AWS_REGION_CFG"} "$@"; fi; }
+LOG_GROUP="/ecs/checkout"   # the log group changed above
+BACKUP_DATE="YYYY-MM-DD"    # UTC date of the change (its setup-<date>/backups folder)
+BACKUP_FILE="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/aws/setup-${BACKUP_DATE}/backups/loggroup-$(basename "$LOG_GROUP").json"
+[ -s "$BACKUP_FILE" ] || { echo "No backup at ${BACKUP_FILE}: set BACKUP_DATE to the day of the change" >&2; exit 1; }
+aws_cli sts get-caller-identity --query Account --output text   # must match the live-safety gate's account
+aws_cli logs delete-subscription-filter --log-group-name "$LOG_GROUP" --filter-name central-sink
+PREV="$(jq -r --arg g "$LOG_GROUP" '.logGroups[] | select(.logGroupName == $g) | .retentionInDays // empty' "$BACKUP_FILE")"
+# An absent retentionInDays in the backup means "Never expire".
+if [ -n "$PREV" ]; then
+  aws_cli logs put-retention-policy --log-group-name "$LOG_GROUP" --retention-in-days "$PREV"
+else
+  aws_cli logs delete-retention-policy --log-group-name "$LOG_GROUP"
+fi
+aws_cli logs describe-log-groups --log-group-name-prefix "$LOG_GROUP" --output json \
+  | jq -e --arg g "$LOG_GROUP" --arg p "$PREV" '.logGroups[] | select(.logGroupName == $g) | ((.retentionInDays // "") | tostring) == $p'
+```
+
+Expected: the gate's account id, then a final `jq -e` exit 0 (retention back to the backed-up value).
+
+`AWS-052` (CloudTrail), `AWS-053` (AWS Config recorder), and `AWS-054` (VPC Flow Logs) are account- or VPC-wide controlled rollouts per the four change-risk classes: they change what the account observes about itself and each deserves its own review outside this skill. Record each as a plan (current state, proposed target, blast radius, owner); never `aws cloudtrail update-trail`, `aws cloudtrail start-logging`, `aws configservice start-configuration-recorder`, or `aws ec2 create-flow-logs` from this skill. `AWS-055` is the decision record itself: backend, retention, redaction, and owner, captured in the change record even when the technical write above already ran.
 
 ## 8. Cost guidance commands (read-only, never executed here)
 
