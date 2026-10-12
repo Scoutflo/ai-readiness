@@ -127,7 +127,7 @@ curl -fsS --max-time 10 "${ALERTMANAGER_URL}/api/v2/status" | jq -r '.config.ori
 
 Expected: the new default receiver and routes. Allow up to a minute for the config reloader to pick up the Secret change.
 
-Rollback:
+Rollback, in its own fresh shell:
 
 ```bash
 set -eu
@@ -135,14 +135,20 @@ set -eu
 KUBE_CONTEXT="your-kube-context"   # kubernetes.context
 MON_NS="monitoring"                # kubernetes.monitoring_namespace
 RELEASE="kube-prometheus-stack"    # from: helm list -A, the release you upgraded
-PREV_REV="3"                       # the revision recorded in the backup step's "rollback target" output
+PREV_REV="<revision>"              # the backup step's "rollback target: revision N"
+case "$PREV_REV" in ''|*[!0-9]*) echo "Set PREV_REV to the revision the backup step printed" >&2; exit 1 ;; esac
+CREATED_SECRETS="alertmanager-slack"   # only the Secrets this setup created, space-separated
 helm --kube-context "$KUBE_CONTEXT" -n "$MON_NS" rollback "$RELEASE" "$PREV_REV"
-kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" delete secret alertmanager-slack alertmanager-pagerduty
+for s in $CREATED_SECRETS; do kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" delete secret "$s" --ignore-not-found; done
+helm --kube-context "$KUBE_CONTEXT" -n "$MON_NS" history "$RELEASE" --max 1 -o json \
+  | jq -e --arg r "$PREV_REV" '.[0].description == ("Rollback to " + $r)'
 ```
+
+Expected: `true`. A Secret that existed before this setup stays: leave it out of `CREATED_SECRETS`.
 
 ## Default receiver (raw Secret path)
 
-When the config is a hand-written Secret, edit a decoded copy and replace it:
+When the config is a hand-written Secret, edit a decoded copy and replace it. Extract the copy first:
 
 ```bash
 set -eu
@@ -153,21 +159,84 @@ AM_SECRET_NAME="alertmanager-config"
 AM_KEY="alertmanager.yml"    # the data key inside the Secret
 WORK_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/lgtm/setup-$(date -u +%F)"
 mkdir -p "$WORK_DIR"
+EDIT_FILE="${WORK_DIR}/alertmanager.yml"
+# Never overwrite a copy you may already have edited.
+[ ! -e "$EDIT_FILE" ] || { echo "${EDIT_FILE} already exists: apply or move it first" >&2; exit 1; }
 kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" get secret "$AM_SECRET_NAME" \
-  -o go-template='{{index .data "'"$AM_KEY"'" | base64decode}}' > "${WORK_DIR}/alertmanager.yml"
-# Edit ${WORK_DIR}/alertmanager.yml: route, routes, inhibit_rules, receivers (use *_file for URLs/keys).
+  -o go-template='{{index .data "'"$AM_KEY"'" | base64decode}}' > "$EDIT_FILE"
+echo "edit: ${EDIT_FILE}"
+```
+
+Edit that file: route, routes, inhibit_rules, receivers (use `*_file` options for URLs and keys). If `amtool` is installed, validate it with `amtool check-config` on the file. Then apply it:
+
+```bash
+set -eu
+# Resolved from ~/.scoutflo/toolkit.yaml
+KUBE_CONTEXT="your-kube-context"   # kubernetes.context
+MON_NS="monitoring"                # kubernetes.monitoring_namespace
+AM_SECRET_NAME="alertmanager-config"
+AM_KEY="alertmanager.yml"          # the data key inside the Secret
+EDIT_FILE="<edited-file>"          # the "edit:" path the extract step printed
+case "$EDIT_FILE" in ''|'<'*) echo "Set EDIT_FILE to the copy you edited" >&2; exit 1 ;; esac
+[ -s "$EDIT_FILE" ] || { echo "No edited config at ${EDIT_FILE}" >&2; exit 1; }
 kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" create secret generic "$AM_SECRET_NAME" \
-  --from-file="${AM_KEY}=${WORK_DIR}/alertmanager.yml" --dry-run=client -o yaml \
+  --from-file="${AM_KEY}=${EDIT_FILE}" --dry-run=client -o yaml \
   | kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" apply -f -
 ```
 
-If `amtool` is installed, validate before applying: `amtool check-config "${WORK_DIR}/alertmanager.yml"`. Verify via `/api/v2/status` as above; if the pod does not hot-reload, announce and perform a rollout restart of the Alertmanager StatefulSet as its own change.
+Verify via `/api/v2/status` as above; if the pod does not hot-reload, announce and perform a rollout restart of the Alertmanager StatefulSet as its own change.
 
-Rollback: `kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" apply -f "${BACKUP_DIR}/${AM_SECRET_NAME}.yaml"`.
+Rollback runs in a fresh shell, so it re-declares its target and points at the dated backup folder explicitly:
+
+```bash
+set -eu
+# Resolved from ~/.scoutflo/toolkit.yaml
+KUBE_CONTEXT="your-kube-context"   # kubernetes.context
+MON_NS="monitoring"                # kubernetes.monitoring_namespace
+KIND="secret"
+NAME="alertmanager-config"         # AM_SECRET_NAME from the backup step
+BACKUP_DATE="YYYY-MM-DD"           # UTC date of the backup step (its setup-<date>/backups folder)
+BACKUP_FILE="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/lgtm/setup-${BACKUP_DATE}/backups/${NAME}.yaml"
+[ -s "$BACKUP_FILE" ] || { echo "No backup at ${BACKUP_FILE}: set BACKUP_DATE to the day the backup ran" >&2; exit 1; }
+RESTORE_FILE="${BACKUP_FILE%.yaml}.restore.yaml"
+# Drop server-set fields and the last-applied annotation: a stale resourceVersion makes the update
+# fail with a conflict, and one recorded in the annotation can break later `kubectl apply` runs.
+sed -e '/^  resourceVersion: /d' -e '/^  uid: /d' -e '/^  creationTimestamp: /d' -e '/^  generation: /d' "$BACKUP_FILE" \
+  | awk '/^    kubectl\.kubernetes\.io\/last-applied-configuration:/ {skip=1; next} skip && /^      / {next} {skip=0; print}' > "$RESTORE_FILE"
+# Empty only when the object is absent; a Forbidden, wrong-context or timeout error stops the block.
+LIVE_RV="$(kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" get "$KIND" "$NAME" --ignore-not-found -o jsonpath='{.metadata.resourceVersion}')"
+if [ -n "$LIVE_RV" ]; then
+  # Still there: replace it at its current resourceVersion (custom resources refuse an update without one).
+  awk -v rv="$LIVE_RV" '{print} /^metadata:$/ && !d {print "  resourceVersion: \"" rv "\""; d=1}' "$RESTORE_FILE" > "${RESTORE_FILE}.replace"
+  kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" replace -f "${RESTORE_FILE}.replace"
+else
+  kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" create -f "$RESTORE_FILE"
+fi
+WANT="$(kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" create --dry-run=client -f "$RESTORE_FILE" -o json | jq -S '.data // .spec')"
+LIVE="$(kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" get "$KIND" "$NAME" -o json | jq -S '.data // .spec')"
+[ "$WANT" = "$LIVE" ] && echo "RESTORED: live Secret matches the backup"
+```
+
+Expected: `RESTORED`. Then verify via `/api/v2/status` as above.
 
 ## Operator CR path
 
-Prometheus Operator `AlertmanagerConfig` and VictoriaMetrics `VMAlertmanagerConfig` CRs merge namespaced routing into the global config. Use them when your team already manages routing that way; do not mix CR-managed and values-managed routes for the same severity, the merge order becomes the bug. Back up with `kubectl get <kind> <name> -o yaml`, apply the edited copy, and verify through `/api/v2/status` like every other path. Rollback is applying the backup.
+Prometheus Operator `AlertmanagerConfig` and VictoriaMetrics `VMAlertmanagerConfig` CRs merge namespaced routing into the global config. Use them when your team already manages routing that way; do not mix CR-managed and values-managed routes for the same severity, the merge order becomes the bug. Back up the CR (this block also backs up any other CR or ConfigMap you are about to edit):
+
+```bash
+set -eu
+# Resolved from ~/.scoutflo/toolkit.yaml
+KUBE_CONTEXT="your-kube-context"   # kubernetes.context
+MON_NS="monitoring"                # kubernetes.monitoring_namespace
+KIND="alertmanagerconfig"          # or vmalertmanagerconfig, configmap, ...
+NAME="team-routing"                # from: kubectl get <kind> -n "$MON_NS"
+BACKUP_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/lgtm/setup-$(date -u +%F)/backups"
+mkdir -p "$BACKUP_DIR"
+kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" get "$KIND" "$NAME" -o yaml > "${BACKUP_DIR}/${NAME}.yaml"
+[ -s "${BACKUP_DIR}/${NAME}.yaml" ] && echo "BACKED UP: ${BACKUP_DIR}/${NAME}.yaml"
+```
+
+Then edit and apply a copy with the server-set fields removed, the same two steps as the `PrometheusRule` blocks below, and verify through `/api/v2/status` like every other path. Rollback is the `PrometheusRule` rollback block below with `KIND` and `NAME` set to that object.
 
 ## Test-fire failure shapes
 
@@ -206,10 +275,28 @@ BACKUP_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/lgtm/setup-$(date -u +%F)/b
 RULE_CR="my-app-rules"    # from: kubectl get prometheusrules -n "$MON_NS"
 WORK_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/lgtm/setup-$(date -u +%F)"
 mkdir -p "$WORK_DIR" "$BACKUP_DIR"
+EDIT_FILE="${WORK_DIR}/${RULE_CR}-edit.yaml"
+# Never overwrite a copy you may already have edited.
+[ ! -e "$EDIT_FILE" ] || { echo "${EDIT_FILE} already exists: apply or move it first" >&2; exit 1; }
 kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" get prometheusrule "$RULE_CR" -o yaml > "${BACKUP_DIR}/${RULE_CR}.yaml"
-cp "${BACKUP_DIR}/${RULE_CR}.yaml" "${WORK_DIR}/${RULE_CR}-edit.yaml"
-# Edit the copy: add a `for:` duration, tighten the expr, or remove the noisy rule block.
-kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" apply -f "${WORK_DIR}/${RULE_CR}-edit.yaml"
+# Edit a copy without the server-set fields: applying a raw `get -o yaml` copy records its
+# resourceVersion in the last-applied annotation and breaks every later apply of this rule.
+sed -e '/^  resourceVersion: /d' -e '/^  uid: /d' -e '/^  creationTimestamp: /d' -e '/^  generation: /d' \
+  "${BACKUP_DIR}/${RULE_CR}.yaml" > "$EDIT_FILE"
+echo "edit: ${EDIT_FILE}"
+```
+
+Edit that copy: add a `for:` duration, tighten the expr, or remove the noisy rule block. Then apply it:
+
+```bash
+set -eu
+# Resolved from ~/.scoutflo/toolkit.yaml
+KUBE_CONTEXT="your-kube-context"   # kubernetes.context
+MON_NS="monitoring"                # kubernetes.monitoring_namespace
+EDIT_FILE="<edited-file>"          # the "edit:" path the block above printed
+case "$EDIT_FILE" in ''|'<'*) echo "Set EDIT_FILE to the copy you edited" >&2; exit 1 ;; esac
+[ -s "$EDIT_FILE" ] || { echo "No edited copy at ${EDIT_FILE}" >&2; exit 1; }
+kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" apply -f "$EDIT_FILE"
 ```
 
 **VictoriaMetrics operator (`VMRule` CR):** same pattern with `kubectl get vmrules`; vmalert reloads rules automatically, verify at `${VMALERT_URL}/api/v1/rules`.
@@ -224,7 +311,38 @@ Common edits for the noise classes audit-lgtm flags:
 
 Verify every rule edit against the live rules API (`.duration`, `.state`, and the new `expr`), then watch `/api/v2/alerts` long enough to confirm the noise stopped and real alerts still fire.
 
-Rollback: `kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" apply -f "${BACKUP_DIR}/${RULE_CR}.yaml"`.
+Rollback, in its own fresh shell:
+
+```bash
+set -eu
+# Resolved from ~/.scoutflo/toolkit.yaml
+KUBE_CONTEXT="your-kube-context"   # kubernetes.context
+MON_NS="monitoring"                # kubernetes.monitoring_namespace
+KIND="prometheusrule"
+NAME="my-app-rules"                # RULE_CR from the backup step
+BACKUP_DATE="YYYY-MM-DD"           # UTC date of the backup step (its setup-<date>/backups folder)
+BACKUP_FILE="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/lgtm/setup-${BACKUP_DATE}/backups/${NAME}.yaml"
+[ -s "$BACKUP_FILE" ] || { echo "No backup at ${BACKUP_FILE}: set BACKUP_DATE to the day the backup ran" >&2; exit 1; }
+RESTORE_FILE="${BACKUP_FILE%.yaml}.restore.yaml"
+# Drop server-set fields and the last-applied annotation: a stale resourceVersion makes the update
+# fail with a conflict, and one recorded in the annotation can break later `kubectl apply` runs.
+sed -e '/^  resourceVersion: /d' -e '/^  uid: /d' -e '/^  creationTimestamp: /d' -e '/^  generation: /d' "$BACKUP_FILE" \
+  | awk '/^    kubectl\.kubernetes\.io\/last-applied-configuration:/ {skip=1; next} skip && /^      / {next} {skip=0; print}' > "$RESTORE_FILE"
+# Empty only when the object is absent; a Forbidden, wrong-context or timeout error stops the block.
+LIVE_RV="$(kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" get "$KIND" "$NAME" --ignore-not-found -o jsonpath='{.metadata.resourceVersion}')"
+if [ -n "$LIVE_RV" ]; then
+  # Still there: replace it at its current resourceVersion (custom resources refuse an update without one).
+  awk -v rv="$LIVE_RV" '{print} /^metadata:$/ && !d {print "  resourceVersion: \"" rv "\""; d=1}' "$RESTORE_FILE" > "${RESTORE_FILE}.replace"
+  kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" replace -f "${RESTORE_FILE}.replace"
+else
+  kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" create -f "$RESTORE_FILE"
+fi
+WANT="$(kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" create --dry-run=client -f "$RESTORE_FILE" -o json | jq -S '.data // .spec')"
+LIVE="$(kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" get "$KIND" "$NAME" -o json | jq -S '.data // .spec')"
+[ "$WANT" = "$LIVE" ] && echo "RESTORED: live PrometheusRule matches the backup"
+```
+
+Expected: `RESTORED`. Re-check the rules API as above.
 
 ## vmalert notifier check
 

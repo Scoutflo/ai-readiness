@@ -15,6 +15,15 @@
 #   - excludes environment/runtime externals (below) and ${VAR:-...}-guarded uses;
 #   - recognizes assignments via NAME=, export/local NAME=, `for NAME in`, and `read NAME`.
 #
+# Second pass, same root cause in prose form: a single-backtick inline command (outside any
+# fence) that invokes a cluster/cloud CLI with a WRITE verb and reads an UPPER_SNAKE variable.
+# Those are executable recipes (typically "Rollback: `kubectl ... delete ...`") whose variables
+# live in another block; copied into a fresh shell they are unset, and an empty --context / -n /
+# --subscription or a missing --profile/--project silently targets the CURRENT kube context,
+# default namespace, active subscription or ambient profile. Such a command must be a
+# self-contained fenced block that re-declares its target. Read-only inline commands and
+# placeholder-only commands (`<name>`) are left alone.
+#
 # Read-only. POSIX sh + POSIX awk only (no GNU \b — the macOS/BSD awk does not support it,
 # and this gate must run on any contributor machine incl. Windows Git Bash).
 set -eu
@@ -103,11 +112,38 @@ find "$DIR/skills" "$DIR/report-standard" \( -name '*.md' -o -name '*.sh' \) 2>/
   ' "$f" >> "$TMP"
 done
 
+# Second pass: inline write commands that depend on another block's variables.
+find "$DIR/skills" "$DIR/report-standard" -name '*.md' 2>/dev/null | sort | while IFS= read -r f; do
+  awk -v ext="$EXTERNAL" -v fname="$f" '
+    BEGIN{ split(ext,E," "); for(i in E) extv[E[i]]=1 }
+    /^[ \t]*```/{ infence = !infence; next }
+    infence { next }
+    {
+      line=$0
+      while(match(line,/`[^`]+`/)){
+        span=substr(line,RSTART+1,RLENGTH-2); line=substr(line,RSTART+RLENGTH)
+        if(span !~ /^(kubectl|doctl|gcloud|aws|az|curl|helm) /) continue
+        w=" " span " "
+        iswrite = (w ~ / (apply|delete|create|patch|replace|scale|rollout|annotate|label|edit|drain|cordon|uncordon|taint|put|update|remove|attach|detach|tag|untag|set|modify|enable|disable|install|upgrade|uninstall|rollback|rm|mv|sync|enable-addons|disable-addons) /) \
+          || (w ~ / (delete|put|create|update|remove|attach|detach|tag|untag|set|modify|enable|disable|register|deregister|terminate|reboot|stop|start)-[a-z0-9-]+ /) \
+          || (w ~ /-X *(POST|PUT|PATCH|DELETE)/) || (w ~ /--request *(POST|PUT|PATCH|DELETE)/)
+        if(!iswrite) continue
+        t=span; uses=""
+        while(match(t,/\$\{?[A-Z][A-Z0-9_]+/)){
+          nm=substr(t,RSTART,RLENGTH); gsub(/[^A-Z0-9_]/,"",nm); t=substr(t,RSTART+RLENGTH)
+          if(!(nm in extv)) uses=uses " $" nm
+        }
+        if(uses!="") printf "%s:%d: inline write command reads%s, unset in a fresh shell (falls back to the current context/profile/project) -> make it a self-contained fenced block\n", fname, NR, uses
+      }
+    }
+  ' "$f" >> "$TMP"
+done
+
 if [ -s "$TMP" ]; then
   echo "CROSS-BLOCK CHECK FAILED"
   cat "$TMP"
   FAIL=1
 else
-  echo "CROSSBLOCK-OK (no set-u block references an undeclared cross-block variable)"
+  echo "CROSSBLOCK-OK (no set-u block references an undeclared cross-block variable; no inline write command depends on another block's variables)"
 fi
 exit $FAIL

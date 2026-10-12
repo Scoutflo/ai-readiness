@@ -168,7 +168,22 @@ curl -fsS --max-time 30 -H "Authorization: Bearer ${TOKEN}" "${MON_API}/${NEW_CH
   | jq -e '.enabled == true and .type == "email"'
 ```
 
-Expected: the new channel's resource name and a final `jq -e` exit 0. For webhook, Slack, or PagerDuty channel types the sensitive value (URL, token, service key) goes into the payload file from an unechoed variable, is never printed, and the announcement shows the display name and type only. Rollback: `curl -fsS -X DELETE -H "Authorization: Bearer ${TOKEN}" "${MON_API}/${NEW_CHANNEL}"`, then a GET asserting `404`. For `GCP-005`, replacing a dead channel means creating the good one, re-pointing every referencing policy ([next section](#attach-channels-to-policies)), verifying, and only then deleting the dead channel, confirmed individually.
+Expected: the new channel's resource name and a final `jq -e` exit 0. For webhook, Slack, or PagerDuty channel types the sensitive value (URL, token, service key) goes into the payload file from an unechoed variable, is never printed, and the announcement shows the display name and type only.
+
+Rollback, in its own fresh shell:
+
+```bash
+set -eu
+GCP_PROJECT="your-project-id"   # gcp.project
+MON_API="https://monitoring.googleapis.com/v3"
+if [ -n "${GOOGLE_APPLICATION_CREDENTIALS:-}" ]; then TOKEN="$(gcloud auth application-default print-access-token)"; export CLOUDSDK_AUTH_ACCESS_TOKEN="$TOKEN"; else TOKEN="$(gcloud auth print-access-token)"; fi
+NEW_CHANNEL="<channel-resource-name>"   # the "created:" value, projects/<project>/notificationChannels/<id>
+case "$NEW_CHANNEL" in "projects/${GCP_PROJECT}/notificationChannels/"?*) ;; *) echo "Set NEW_CHANNEL to a channel this setup created in ${GCP_PROJECT}" >&2; exit 1 ;; esac
+curl -fsS --max-time 30 -X DELETE -H "Authorization: Bearer ${TOKEN}" "${MON_API}/${NEW_CHANNEL}" > /dev/null
+curl -sS --max-time 30 -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer ${TOKEN}" "${MON_API}/${NEW_CHANNEL}"
+```
+
+Expected: `404`. For `GCP-005`, replacing a dead channel means creating the good one, re-pointing every referencing policy ([next section](#attach-channels-to-policies)), verifying, and only then deleting the dead channel, confirmed individually.
 
 ## Attach channels to policies
 
@@ -203,16 +218,20 @@ set -eu
 GCP_PROJECT="your-project-id"   # gcp.project
 MON_API="https://monitoring.googleapis.com/v3"
 if [ -n "${GOOGLE_APPLICATION_CREDENTIALS:-}" ]; then TOKEN="$(gcloud auth application-default print-access-token)"; export CLOUDSDK_AUTH_ACCESS_TOKEN="$TOKEN"; else TOKEN="$(gcloud auth print-access-token)"; fi
-POLICY_NAME="projects/your-project-id/alertPolicies/1234567890"   # same policy
-BACKUP_FILE="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/gcp/setup-$(date -u +%Y-%m-%d)/backups/policy-1234567890.json"  # the step-1 backup
+POLICY_NAME="<policy-resource-name>"   # the patched policy, projects/<project>/alertPolicies/<id>
+case "$POLICY_NAME" in "projects/${GCP_PROJECT}/alertPolicies/"?*) ;; *) echo "Set POLICY_NAME to the patched policy in ${GCP_PROJECT}" >&2; exit 1 ;; esac
+BACKUP_DATE="YYYY-MM-DD"   # UTC date of the backup step (its setup-<date>/backups folder)
+BACKUP_FILE="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/gcp/setup-${BACKUP_DATE}/backups/policy-$(basename "$POLICY_NAME").json"
+[ -s "$BACKUP_FILE" ] || { echo "No backup at ${BACKUP_FILE}: set BACKUP_DATE to the day the backup ran" >&2; exit 1; }
 jq '{notificationChannels: (.notificationChannels // [])}' "$BACKUP_FILE" \
   | curl -fsS --max-time 30 -X PATCH -H "Authorization: Bearer ${TOKEN}" -H 'Content-Type: application/json' \
       -d @- "${MON_API}/${POLICY_NAME}?updateMask=notificationChannels" >/dev/null
+# The API omits an empty channel list, so compare both sides with a missing list read as [].
 curl -fsS --max-time 30 -H "Authorization: Bearer ${TOKEN}" "${MON_API}/${POLICY_NAME}" \
-  | jq -e --slurpfile b "$BACKUP_FILE" '.notificationChannels == ($b[0].notificationChannels // [])'
+  | jq -e --slurpfile b "$BACKUP_FILE" '(.notificationChannels // []) == ($b[0].notificationChannels // [])'
 ```
 
-Expected: exit 0, the field byte-equal to the backup. A restore is a change; announce and record it like any other.
+Expected: exit 0, the field equal to the backup. A restore is a change; announce and record it like any other.
 
 ## Prove channel delivery
 
@@ -252,15 +271,29 @@ TARGET_PATH="/healthz"
 CHECK_NAME="checkout production uptime"   # name it for the service and environment
 UPTIME_PERIOD=1        # example: MINUTES between checks. gcloud --period is an integer count of minutes (default 1) — NOT a duration string like "60s", which current gcloud rejects. Tune to your traffic.
 UPTIME_TIMEOUT=10      # example: SECONDS to wait for the request. gcloud --timeout is an integer count of seconds (default 60) — NOT a duration string like "10s".
-gcloud monitoring uptime create "$CHECK_NAME" --project "$GCP_PROJECT" \
+CHECK_RES="$(gcloud monitoring uptime create "$CHECK_NAME" --project "$GCP_PROJECT" \
   --resource-type=uptime-url --resource-labels="host=${TARGET_HOST},project_id=${GCP_PROJECT}" \
-  --protocol=https --port=443 --path="$TARGET_PATH" --period="$UPTIME_PERIOD" --timeout="$UPTIME_TIMEOUT"
-gcloud monitoring uptime list-configs --project "$GCP_PROJECT" --format=json \
+  --protocol=https --port=443 --path="$TARGET_PATH" --period="$UPTIME_PERIOD" --timeout="$UPTIME_TIMEOUT" \
+  --format='value(name)')"
+echo "created: ${CHECK_RES}"
+gcloud monitoring uptime describe "$CHECK_RES" --project "$GCP_PROJECT" --format=json \
   | jq -e --arg h "$TARGET_HOST" --arg p "$TARGET_PATH" \
-      'any(.[]; .monitoredResource.labels.host == $h and .httpCheck.path == $p)'
+      '.monitoredResource.labels.host == $h and .httpCheck.path == $p'
 ```
 
-Expected: exit 0. Capture the new check id (`.name` tail) and create its alert policy via the REST POST in [Add VM pressure policies](#add-vm-pressure-policies), with the condition filter on `monitoring.googleapis.com/uptime_check/check_passed` scoped to `metric.labels.check_id`, a `REDUCE_COUNT_FALSE` aggregation, and your notification channel attached; verify the policy re-fetch shows the channel and the filter. SSL-expiry visibility (`GCP-012`) is one more policy on `uptime_check/time_until_ssl_cert_expires`. Retiring a dead check (`GCP-015`) deletes a detection path: confirm individually with the audit's DNS and status-code evidence quoted, `gcloud monitoring uptime delete` it, verify absence in the re-list, and record where the target lives now. Rollback for creations: delete the created check and policy, verify absence.
+Expected: the new check's resource name and exit 0. Its id (the `.name` tail) scopes the alert policy: create the policy via the REST POST in [Add VM pressure policies](#add-vm-pressure-policies), with the condition filter on `monitoring.googleapis.com/uptime_check/check_passed` scoped to `metric.labels.check_id`, a `REDUCE_COUNT_FALSE` aggregation, and your notification channel attached; verify the policy re-fetch shows the channel and the filter. SSL-expiry visibility (`GCP-012`) is one more policy on `uptime_check/time_until_ssl_cert_expires`. Retiring a dead check (`GCP-015`) deletes a detection path: confirm individually with the audit's DNS and status-code evidence quoted, `gcloud monitoring uptime delete` it, verify absence in the re-list, and record where the target lives now. Rollback for creations removes the check's alert policy with the policy rollback block in [Add VM pressure policies](#add-vm-pressure-policies), then the check, each in its own fresh shell:
+
+```bash
+set -eu
+GCP_PROJECT="your-project-id"   # gcp.project
+CHECK_RES="<uptime-check-resource-name>"   # the "created:" value, projects/<project>/uptimeCheckConfigs/<id>
+case "$CHECK_RES" in "projects/"*"/uptimeCheckConfigs/"?*) ;; *) echo "Set CHECK_RES to the uptime check this setup created" >&2; exit 1 ;; esac
+gcloud monitoring uptime delete "$CHECK_RES" --project "$GCP_PROJECT" --quiet
+gcloud monitoring uptime list-configs --project "$GCP_PROJECT" --format=json \
+  | jq -e --arg n "$CHECK_RES" 'all(.[]; .name != $n)'
+```
+
+Expected: `true`.
 
 ## Add VM pressure policies
 
@@ -294,11 +327,25 @@ jq -n --arg ch "$CHANNEL_NAME" --arg thr "$CPU_WARN_PCT" --arg win "$CPU_WINDOW"
 }' > "${WORK_DIR}/cpu-warn-policy.json"
 NEW_POLICY="$(curl -fsS --max-time 30 -H "Authorization: Bearer ${TOKEN}" -H 'Content-Type: application/json' \
   -d @"${WORK_DIR}/cpu-warn-policy.json" "${MON_API}/projects/${GCP_PROJECT}/alertPolicies" | jq -r '.name')"
+echo "created: ${NEW_POLICY}"
 curl -fsS --max-time 30 -H "Authorization: Bearer ${TOKEN}" "${MON_API}/${NEW_POLICY}" \
   | jq -e '.enabled != false and ((.notificationChannels // []) | length) >= 1'
 ```
 
-Expected: exit 0. Repeat for the saturation tier (a second policy at `CPU_SAT_PCT`, for example 0.95; both examples, tune per workload) and scope the filter to your serving VMs by label once the label probe passed. This same POST-create-verify shape serves uptime, GKE, LB, and log policies; only the filter, threshold, and documentation change. Rollback: `curl -X DELETE` the created policy name, verify `404` on re-fetch.
+Expected: the new policy's resource name and exit 0. Repeat for the saturation tier (a second policy at `CPU_SAT_PCT`, for example 0.95; both examples, tune per workload) and scope the filter to your serving VMs by label once the label probe passed. This same POST-create-verify shape serves uptime, GKE, LB, and log policies; only the filter, threshold, and documentation change. Rollback removes any policy this setup created, in its own fresh shell:
+
+```bash
+set -eu
+GCP_PROJECT="your-project-id"   # gcp.project
+MON_API="https://monitoring.googleapis.com/v3"
+if [ -n "${GOOGLE_APPLICATION_CREDENTIALS:-}" ]; then TOKEN="$(gcloud auth application-default print-access-token)"; export CLOUDSDK_AUTH_ACCESS_TOKEN="$TOKEN"; else TOKEN="$(gcloud auth print-access-token)"; fi
+NEW_POLICY="<policy-resource-name>"   # the "created:" value, projects/<project>/alertPolicies/<id>
+case "$NEW_POLICY" in "projects/${GCP_PROJECT}/alertPolicies/"?*) ;; *) echo "Set NEW_POLICY to a policy this setup created in ${GCP_PROJECT}" >&2; exit 1 ;; esac
+curl -fsS --max-time 30 -X DELETE -H "Authorization: Bearer ${TOKEN}" "${MON_API}/${NEW_POLICY}" > /dev/null
+curl -sS --max-time 30 -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer ${TOKEN}" "${MON_API}/${NEW_POLICY}"
+```
+
+Expected: `404`.
 
 ## Gate memory and disk on the Ops Agent
 
@@ -334,7 +381,20 @@ gcloud logging metrics describe "$METRIC_NAME" --project "$GCP_PROJECT" --format
   | jq -e --arg f "$LOG_FILTER" '.filter == $f'
 ```
 
-Expected: a timestamp from step 1 (empty output stops the section: fix the filter or accept that the service logs no errors, in writing), then exit 0. An empty gate result on a service you know errors means the filter is wrong; shipping it anyway creates the `GCP-051` decoration this section exists to prevent. Then create the alert policy on `logging.googleapis.com/user/<METRIC_NAME>` with the create-verify shape (`GCP-052`), rate over `LOG_ERROR_RATE_WINDOW` (example 300s, tune per service). Rollback: `gcloud logging metrics delete "$METRIC_NAME"` after deleting the policy, each verified by absence. Sink changes (`GCP-053`) are out of write scope: plan them.
+Expected: a timestamp from step 1 (empty output stops the section: fix the filter or accept that the service logs no errors, in writing), then exit 0. An empty gate result on a service you know errors means the filter is wrong; shipping it anyway creates the `GCP-051` decoration this section exists to prevent. Then create the alert policy on `logging.googleapis.com/user/<METRIC_NAME>` with the create-verify shape (`GCP-052`), rate over `LOG_ERROR_RATE_WINDOW` (example 300s, tune per service).
+
+Rollback deletes the metric's alert policy first, with the policy rollback block in [Add VM pressure policies](#add-vm-pressure-policies), then the metric, each in its own fresh shell with the explicit project. The metric half:
+
+```bash
+set -eu
+GCP_PROJECT="your-project-id"   # gcp.project
+METRIC_NAME="<metric-name>"     # the metric this setup created, <service>-error-count
+case "$METRIC_NAME" in ''|'<'*) echo "Set METRIC_NAME to the metric this setup created" >&2; exit 1 ;; esac
+gcloud logging metrics delete "$METRIC_NAME" --project "$GCP_PROJECT" --quiet
+gcloud logging metrics describe "$METRIC_NAME" --project "$GCP_PROJECT" --format=json 2>&1 | grep -c -i -E 'not.found'
+```
+
+Expected: `1` or more (the metric is gone). Sink changes (`GCP-053`) are out of write scope: plan them.
 
 ## Improve alert documentation
 
@@ -364,12 +424,25 @@ set -eu
 GCP_PROJECT="your-project-id"   # gcp.project
 DASH_FILE="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/gcp/setup-$(date -u +%Y-%m-%d)/checkout-dashboard.json"  # the announced layout
 DASH_NAME="checkout service overview"   # displayName inside the file
-gcloud monitoring dashboards create --project "$GCP_PROJECT" --config-from-file="$DASH_FILE"
-gcloud monitoring dashboards list --project "$GCP_PROJECT" --format=json \
-  | jq -e --arg dn "$DASH_NAME" 'any(.[]; .displayName == $dn)'
+DASH_RES="$(gcloud monitoring dashboards create --project "$GCP_PROJECT" --config-from-file="$DASH_FILE" --format='value(name)')"
+echo "created: ${DASH_RES}"
+gcloud monitoring dashboards describe "$DASH_RES" --project "$GCP_PROJECT" --format=json \
+  | jq -e --arg dn "$DASH_NAME" '.displayName == $dn'
 ```
 
-Expected: exit 0. Rollback: `gcloud monitoring dashboards delete` with the created resource name, verified by absence.
+Expected: the new dashboard's resource name and exit 0. Rollback, in its own fresh shell:
+
+```bash
+set -eu
+GCP_PROJECT="your-project-id"   # gcp.project
+DASH_RES="<dashboard-resource-name>"   # the "created:" value, projects/<number>/dashboards/<id>
+case "$DASH_RES" in "projects/"*"/dashboards/"?*) ;; *) echo "Set DASH_RES to the dashboard this setup created" >&2; exit 1 ;; esac
+gcloud monitoring dashboards delete "$DASH_RES" --project "$GCP_PROJECT" --quiet
+gcloud monitoring dashboards list --project "$GCP_PROJECT" --format=json \
+  | jq -e --arg n "$DASH_RES" 'all(.[]; .name != $n)'
+```
+
+Expected: `true`.
 
 ## Plan out-of-scope changes
 

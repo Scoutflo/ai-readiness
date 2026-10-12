@@ -144,7 +144,7 @@ curl -fsS --max-time 10 "${ALERTMANAGER_URL}/api/v2/status" | jq -r '.config.ori
 4. Apply through the owner (helm upgrade, CR apply, or Secret replace).
 5. Verify: re-run the read from step 1 and show the new default receiver name. Then prove delivery with a test-fire (next section).
 
-Rollback: re-apply the backup taken in step 2, or `helm rollback` to the recorded revision.
+Rollback: run the matching rollback block in [references/alerting.md](references/alerting.md) (raw Secret or CR path), or `helm rollback` to the recorded revision.
 
 ### Add severity routes and inhibition
 
@@ -219,7 +219,7 @@ curl -fsS --max-time 10 "${METRICS_URL}/api/v1/rules" \
 
 Expected: the new `for` duration in seconds and a sane state. For vmalert, use `${VMALERT_URL}/api/v1/rules`.
 
-Rollback: `kubectl apply -f` the backup CR, or `helm rollback`.
+Rollback: run the rule rollback block in [references/alerting.md](references/alerting.md#quiet-noisy-rules-per-rule-engine), which restores the backed-up CR, or `helm rollback` to the recorded revision. Never `kubectl apply` the raw backup: its stale resourceVersion conflicts with the changed rule.
 
 Deleting a rule removes a detection path. Confirm rule deletions individually, never inside a batch approval.
 
@@ -246,7 +246,7 @@ Expected: no output once names align. VictoriaLogs and trace-side equivalents ar
 
 Renaming a label breaks every dashboard query and alert `expr` that used the old name, and starts new series. Update the affected rules and dashboards in the same announced change, and re-run the audit's correlation check afterward. `service.name` set inside application SDKs is an application change: record it as pending with the owning team named.
 
-Rollback: re-apply the backed-up collector config; old label values return on the next scrape.
+Rollback: revert the collector change through its owner. For Helm, `helm rollback` to the recorded revision. For a CR or ConfigMap, back it up first with the CR backup block in [references/alerting.md](references/alerting.md#operator-cr-path) and restore it with that section's rollback block, `KIND` and `NAME` set to the object. Old label values return on the next scrape.
 
 ### Set retention
 
@@ -305,7 +305,7 @@ curl -sS -o /dev/null -w '%{http_code}\n' --max-time 10 "https://${INGRESS_HOST}
 
 Before: `200` with no auth is the finding. After the fix: `401`, `403`, `404`, or a timeout.
 
-3. Fix by deleting the ingress, adding an auth layer, or converting the Service to ClusterIP; options with rollbacks are in [references/hardening.md](references/hardening.md). Back up the object first; rollback is re-applying the backup.
+3. Fix by deleting the ingress, adding an auth layer, or converting the Service to ClusterIP; options with rollbacks are in [references/hardening.md](references/hardening.md). Back up the object first; each option's rollback block restores from that backup.
 
 Removing an ingress your team actually uses locks them out too. Confirm who consumes the endpoint before deleting, and name the internal access path they switch to.
 
@@ -317,7 +317,7 @@ For findings about missing NetworkPolicies in the monitoring namespace. Order is
 2. Verify scraping still works: `${METRICS_URL}/api/v1/targets` shows the same number of `up` targets as before.
 3. Only then apply default-deny, and verify both that a cross-namespace probe now times out and that targets stay up. The probe command is in the reference.
 
-Rollback: `kubectl delete networkpolicy` the applied policies, most recent first.
+Rollback: the NetworkPolicy rollback block in [references/hardening.md](references/hardening.md#networkpolicies), which removes the deny policy first.
 
 ### Add disruption budgets
 
@@ -336,7 +336,20 @@ kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" get pdb
 
 Expected: `ALLOWED DISRUPTIONS` of 1 or more for each new PDB. `0` means the PDB is blocking maintenance; fix the replica count or delete the PDB.
 
-Rollback: `kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" delete pdb <name>`.
+Rollback, in its own fresh shell (one PDB per run):
+
+```bash
+set -eu
+# Resolved from ~/.scoutflo/toolkit.yaml
+KUBE_CONTEXT="your-kube-context"   # kubernetes.context
+MON_NS="monitoring"                # kubernetes.monitoring_namespace
+PDB_NAME="<pdb-created-above>"     # one PDB this setup created
+case "$PDB_NAME" in ''|'<'*) echo "Set PDB_NAME to a PDB this setup created" >&2; exit 1 ;; esac
+kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" delete pdb "$PDB_NAME"
+kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" get pdb "$PDB_NAME" 2>&1 | tail -1
+```
+
+Expected: `NotFound`.
 
 ## Record and wrap up
 

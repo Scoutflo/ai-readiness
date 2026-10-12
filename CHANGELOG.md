@@ -1,5 +1,48 @@
 # Changelog
 
+## 0.1.216
+
+**Rollbacks that are safe to run later, in a fresh shell.**
+
+- Setup rollbacks and undo steps in setup-lgtm, setup-aws, setup-azure,
+  setup-gcp, setup-digitalocean and setup-sentry were one-line commands
+  that read variables from another block, or prose with no command at all.
+  In a new shell those variables are empty, so a rollback could target the
+  current kube context and its default namespace, the ambient AWS profile,
+  the active gcloud project or the default Azure subscription. Each is now a
+  fenced block that names its target, takes every id and backup path from
+  the earlier step explicitly, and refuses to run on a placeholder.
+- AWS, Azure and DigitalOcean rollbacks check the account, subscription or
+  team before changing anything, and stop on a mismatch.
+- Kubernetes restores read the dated backup folder and refuse a missing or
+  empty backup. They drop the server-set fields and the last-applied
+  annotation, replace the object at its live version (or create it when it
+  was deleted), and print `RESTORED` only when the live object matches the
+  backup. Re-applying the raw backup after the object changed failed with a
+  conflict, so the old rollback could not restore it.
+- setup-lgtm edits a copy without the server-set fields, and the edit and
+  apply steps are now separate blocks. Applying the raw backup copy recorded
+  its resourceVersion in the last-applied annotation, and every later
+  `kubectl apply` of that rule then failed.
+- Rollbacks no longer remove what existed before the setup. The SNS restore
+  removes only the added subscription from a topic your team already had,
+  the Helm rollback deletes only the Secrets the setup created, and the AWS
+  dashboard and log subscription filter and the Azure diagnostic setting are
+  never created over an existing one of the same name.
+- AWS log-group backups are keyed by the full group name and kept on a
+  re-run. Two groups ending in the same path segment used to share one
+  backup, so a rollback could reset the wrong group's retention.
+- The AWS health-check create no longer sends an empty IP address, which
+  Route53 rejected, so that step never worked.
+- The Azure scheduled-query rollback passes `--yes`, so it no longer stops
+  at a confirmation prompt. The DigitalOcean logsink create and rollback use
+  the API, because doctl has no logsink command and the old ones silently
+  did nothing.
+- `ci/crossblock-check.sh` now also rejects inline write commands that
+  depend on another block's variables, with a dedicated fixture suite.
+
+Audit commands and report formats are unchanged.
+
 ## 0.1.215
 
 **Directory metadata and consistent data-handling disclosures.**

@@ -20,7 +20,7 @@ Fixes reliability findings from an `audit-aws` run. Input is one or more finding
 | AWSOPT-001 to AWSOPT-010 | [Plan cost optimizations](#plan-cost-optimizations) (read-only guidance, no write) |
 | TOPO-* | `/scoutflo:map-topology` (fill watchpoints, re-run) |
 
-**v1 is reliability-fix only.** This skill writes CloudWatch alarms and dashboards, SNS topics and subscriptions, CloudWatch Logs retention and subscription filters, Route53 health checks, and two non-failover RDS config fields (backup retention, storage-autoscaling ceiling). It never writes anything against an `AWSOPT-*` finding: no resize, no deletion, no Reserved Instance or Savings Plan purchase. Deleting or resizing live infrastructure to save money is a materially different risk profile than fixing a missing alarm, and mixing the two would blur the backup/restore and mid-batch-failure guarantees this skill's change protocol depends on. That decision is deliberate and out of scope to revisit here.
+**v1 is reliability-fix only.** This skill writes CloudWatch alarms and dashboards, SNS topics and subscriptions, CloudWatch Logs retention and subscription filters, Route53 health checks, the enabled state of an existing EventBridge rule that routes alarm state changes, and two non-failover RDS config fields (backup retention, storage-autoscaling ceiling). It never writes anything against an `AWSOPT-*` finding: no resize, no deletion, no Reserved Instance or Savings Plan purchase. Deleting or resizing live infrastructure to save money is a materially different risk profile than fixing a missing alarm, and mixing the two would blur the backup/restore and mid-batch-failure guarantees this skill's change protocol depends on. That decision is deliberate and out of scope to revisit here.
 
 Also out of write scope, always, per the same four change-risk classes `audit-aws` uses: RDS Multi-AZ conversion, ASG/ECS desired-count changes, EC2 instance-type resize, security group/VPC/DNS/IAM changes, enabling Container Insights, turning on CloudTrail/AWS Config/VPC Flow Logs account-wide, and editing an ALB/NLB target group's own health-check parameters. Each of those becomes a written plan with a named owner inside the relevant fix section, never an execution here.
 
@@ -41,7 +41,7 @@ Same classes `audit-aws` scores against; every announcement in this skill names 
 | Class | In this skill | Extra gate |
 | --- | --- | --- |
 | Read-only | snapshots, verification reads, everything in [Plan cost optimizations](#plan-cost-optimizations) | none |
-| Monitoring-plane write | Create/update a CloudWatch alarm or dashboard, create/subscribe an SNS topic, set CloudWatch Logs retention or a subscription filter, create a Route53 health check, RDS backup-retention/storage-autoscaling config | announce and confirm |
+| Monitoring-plane write | Create/update a CloudWatch alarm or dashboard, create/subscribe an SNS topic, set CloudWatch Logs retention or a subscription filter, create a Route53 health check, enable or disable an existing EventBridge rule, RDS backup-retention/storage-autoscaling config | announce and confirm |
 | Controlled rollout | Enable Container Insights, turn on CloudTrail/AWS Config/VPC Flow Logs account-wide, edit an ASG's health-check type or grace period | out of `setup-aws`'s write scope; plan only, recorded with a named owner |
 | Traffic-impacting | RDS Multi-AZ conversion, ASG/ECS desired-count changes, EC2 resize, security group/VPC/DNS/IAM changes, editing a live target group's health-check parameters, any `AWSOPT-*` resize or deletion | out of write scope everywhere; plan only, never automated |
 
@@ -54,7 +54,7 @@ Elevated tier: this skill mutates CloudWatch, SNS, CloudWatch Logs, Route53, and
 
 | Integration | Config keys | Minimum scope | Tier |
 | --- | --- | --- | --- |
-| AWS | `aws.account_id`, optional `aws.region`, `aws.profile`, `aws.role_env` | write policy covering `cloudwatch:PutMetricAlarm`/`PutDashboard`/`DeleteAlarms`/`DeleteDashboards`, `sns:CreateTopic`/`Subscribe`/`Unsubscribe`/`DeleteTopic`/`Publish`, `logs:PutRetentionPolicy`/`PutSubscriptionFilter`/`DeleteSubscriptionFilter`, `route53:CreateHealthCheck`/`DeleteHealthCheck`, `rds:ModifyDBInstance` (scoped to backup/storage fields only if your policy supports resource-level condition keys), plus the read-only `Describe*`/`List*`/`Get*` set `audit-aws` already documents | elevated |
+| AWS | `aws.account_id`, optional `aws.region`, `aws.profile`, `aws.role_env` | write policy covering `cloudwatch:PutMetricAlarm`/`PutDashboard`/`DeleteAlarms`/`DeleteDashboards`, `sns:CreateTopic`/`Subscribe`/`Unsubscribe`/`DeleteTopic`/`Publish`, `logs:PutRetentionPolicy`/`DeleteRetentionPolicy`/`PutSubscriptionFilter`/`DeleteSubscriptionFilter`, `events:EnableRule`/`DisableRule`, `route53:CreateHealthCheck`/`DeleteHealthCheck`, `rds:ModifyDBInstance` (scoped to backup/storage fields only if your policy supports resource-level condition keys), plus the read-only `Describe*`/`List*`/`Get*` set `audit-aws` already documents | elevated |
 
 ```bash
 set -eu

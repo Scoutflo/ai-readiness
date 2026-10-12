@@ -81,6 +81,7 @@ mkdir -p "$(dirname "$BACKUP_FILE")"
 
 curl -fsS --max-time 10 "${API}/projects/${SENTRY_ORG}/${PROJECT}/" \
   -H "Authorization: Bearer ${SENTRY_TOKEN}" > "$BACKUP_FILE"
+test -s "$BACKUP_FILE" && echo "backup: ${BACKUP_FILE}"
 
 curl -fsS --max-time 10 -X PUT "${API}/projects/${SENTRY_ORG}/${PROJECT}/" \
   -H "Authorization: Bearer ${SENTRY_TOKEN}" -H "Content-Type: application/json" \
@@ -102,7 +103,7 @@ curl -fsS --max-time 10 "${API}/projects/${SENTRY_ORG}/${PROJECT}/" \
            and .scrapeJavaScript == false and (.sensitiveFields | index("dsn")) != null'
 ```
 
-Expect: exit 0. Restore by piping `jq '{dataScrubber, dataScrubberDefaults, scrubIPAddresses, scrapeJavaScript, sensitiveFields}' "$BACKUP_FILE"` into the same `PUT`.
+Expect: exit 0. Undo it with the privacy restore block in [../SKILL.md#privacy-gates](../SKILL.md#privacy-gates), `BACKUP_FILE` set to the printed backup path.
 
 ### Client-key rate limits
 
@@ -119,6 +120,7 @@ mkdir -p "$(dirname "$BACKUP_FILE")"
 
 curl -fsS --max-time 10 "${API}/projects/${SENTRY_ORG}/${PROJECT}/keys/${KEY_ID}/" \
   -H "Authorization: Bearer ${SENTRY_TOKEN}" > "$BACKUP_FILE"
+test -s "$BACKUP_FILE" && echo "backup: ${BACKUP_FILE}"
 
 curl -fsS --max-time 10 -X PUT "${API}/projects/${SENTRY_ORG}/${PROJECT}/keys/${KEY_ID}/" \
   -H "Authorization: Bearer ${SENTRY_TOKEN}" -H "Content-Type: application/json" \
@@ -130,7 +132,7 @@ curl -fsS --max-time 10 "${API}/projects/${SENTRY_ORG}/${PROJECT}/keys/${KEY_ID}
   | jq -e --argjson limit "$KEY_RATE_LIMIT" '.rateLimit.count == $limit'
 ```
 
-Expect: exit 0. Restore by piping `jq '{rateLimit}' "$BACKUP_FILE"` into the same `PUT`, verified with `jq -e --slurpfile b "$BACKUP_FILE" '.rateLimit == $b[0].rateLimit'` against the re-fetched key.
+Expect: exit 0. Undo it with the client-key restore block in [../SKILL.md#privacy-gates](../SKILL.md#privacy-gates), `BACKUP_FILE` set to the printed backup path.
 
 ## Alert rules
 
@@ -248,13 +250,14 @@ NEW_RULE="$(curl -fsS --max-time 10 -X POST "${API}/projects/${SENTRY_ORG}/${PRO
   -H "Authorization: Bearer ${SENTRY_TOKEN}" -H "Content-Type: application/json" \
   -d @rule-payload.json)"
 RULE_ID="$(printf '%s' "$NEW_RULE" | jq -r '.id')"
+echo "created rule: ${RULE_ID}"
 
 curl -fsS --max-time 10 "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/${RULE_ID}/" \
   -H "Authorization: Bearer ${SENTRY_TOKEN}" \
   | jq -e '.conditions != null and .actions != null and (.actions | length) >= 1'
 ```
 
-Expect: exit 0. Rollback: `curl -X DELETE` the same URL, then `jq -e` that the id no longer appears in the rules list, per [../SKILL.md#alert-rule-taxonomy](../SKILL.md#alert-rule-taxonomy).
+Expect: exit 0. Rollback is the rule rollback block in [../SKILL.md#alert-rule-taxonomy](../SKILL.md#alert-rule-taxonomy), `RULE_ID` set to the printed id.
 
 ### Starting rule set (map to your own severity scheme and event volume)
 
@@ -292,6 +295,7 @@ mkdir -p "$(dirname "$BACKUP_FILE")"
 # 1. Backup (GET-before-write):
 curl -fsS --max-time 10 "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/${RULE_ID}/" \
   -H "Authorization: Bearer ${SENTRY_TOKEN}" > "$BACKUP_FILE"
+test -s "$BACKUP_FILE" && echo "backup: ${BACKUP_FILE}"
 
 # 2. Patch from the backup, full-payload PUT (the endpoint replaces the whole object):
 UPDATED="$(jq \
@@ -319,8 +323,10 @@ Expect: exit 0, confirming `channel_id` populated with a real ID, not just that 
 set -eu
 SENTRY_HOST="us.sentry.io"; SENTRY_ORG="your-org-slug"; API="https://${SENTRY_HOST}/api/0"
 [ -n "${SENTRY_TOKEN:-}" ] || { echo "SENTRY_TOKEN is not set"; exit 1; }
-PROJECT="checkout"; RULE_ID="12345678"
-BACKUP_FILE="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/sentry/setup-$(date -u +%F)/backups/rule-12345678-HHMMSS.json"  # the step-1 backup
+PROJECT="<project-slug>"; RULE_ID="<rule-id>"   # the rule the write changed
+BACKUP_FILE="<backup-path>"     # the "backup:" path step 1 printed
+for v in "$PROJECT" "$RULE_ID" "$BACKUP_FILE"; do case "$v" in ''|'<'*) echo "Fill in every <...> value from the change record first" >&2; exit 1 ;; esac; done
+[ -s "$BACKUP_FILE" ] || { echo "No backup at ${BACKUP_FILE}" >&2; exit 1; }
 
 jq '{name, actionMatch, filterMatch, environment, frequency, conditions, filters, actions}' "$BACKUP_FILE" \
   | curl -fsS --max-time 10 -X PUT "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/${RULE_ID}/" \
@@ -328,7 +334,8 @@ jq '{name, actionMatch, filterMatch, environment, frequency, conditions, filters
 
 curl -fsS --max-time 10 "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/${RULE_ID}/" \
   -H "Authorization: Bearer ${SENTRY_TOKEN}" \
-  | jq -e --slurpfile b "$BACKUP_FILE" '.actions == $b[0].actions'
+  | jq -e --slurpfile b "$BACKUP_FILE" '[., $b[0]]
+      | map({actionMatch, filterMatch, environment, frequency, conditions, filters, actions}) | .[0] == .[1]'
 ```
 
 Expect: exit 0.
@@ -361,32 +368,52 @@ test -s "${BACKUP_DIR}/metric-alert-rules.json" && echo "backed up metric-alert 
 echo "rule-set backup: ${BACKUP_DIR}"
 ```
 
-Expect: one `issue-rules-<project>.json` per project and one `metric-alert-rules.json`, each non-empty. Restore a single issue rule from the per-project file: a PUT for a rule you updated, a POST for one you deleted (the POST assigns a fresh id and sets `createdBy` to the setup identity, per [../SKILL.md#delete-the-auto-created-default-rule](../SKILL.md#delete-the-auto-created-default-rule)).
+Expect: one `issue-rules-<project>.json` per project and one `metric-alert-rules.json`, each non-empty. Restore a single issue rule from the per-project file with one of the two blocks below, never both: the first puts back a rule you updated, the second re-creates one you deleted. Running both on an updated rule would restore it and then add a duplicate.
+
+Restore an **updated** rule, in its own fresh shell:
 
 ```bash
 set -eu
 SENTRY_HOST="us.sentry.io"; SENTRY_ORG="your-org-slug"; API="https://${SENTRY_HOST}/api/0"
 [ -n "${SENTRY_TOKEN:-}" ] || { echo "SENTRY_TOKEN is not set"; exit 1; }
-PROJECT="checkout"; RULE_ID="12345678"
-BACKUP_DIR="$HOME/.scoutflo/sentry-rules-backup-$(date -u +%F)"   # the dir from the backup step
-BACKUP_FILE="${BACKUP_DIR}/issue-rules-${PROJECT}.json"
-
-# Restore an UPDATED rule: PUT the saved body back (full object).
-jq --arg id "$RULE_ID" \
-  '.[] | select(.id == $id) | {name, actionMatch, filterMatch, environment, frequency, conditions, filters, actions}' \
-  "$BACKUP_FILE" \
+PROJECT="<project-slug>"; RULE_ID="<rule-id>"   # the rule you updated
+BACKUP_DATE="YYYY-MM-DD"                        # UTC date of the rule-set backup
+for v in "$PROJECT" "$RULE_ID"; do case "$v" in ''|'<'*) echo "Fill in every <...> value from the change record first" >&2; exit 1 ;; esac; done
+BACKUP_FILE="$HOME/.scoutflo/sentry-rules-backup-${BACKUP_DATE}/issue-rules-${PROJECT}.json"
+[ -s "$BACKUP_FILE" ] || { echo "No backup at ${BACKUP_FILE}: set BACKUP_DATE to the day of the rule-set backup" >&2; exit 1; }
+jq -e --arg id "$RULE_ID" 'any(.[]; .id == $id)' "$BACKUP_FILE" > /dev/null || { echo "Rule ${RULE_ID} is not in ${BACKUP_FILE}" >&2; exit 1; }
+jq --arg id "$RULE_ID" '.[] | select(.id == $id) | {name, actionMatch, filterMatch, environment, frequency, conditions, filters, actions}' "$BACKUP_FILE" \
   | curl -fsS --max-time 10 -X PUT "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/${RULE_ID}/" \
       -H "Authorization: Bearer ${SENTRY_TOKEN}" -H "Content-Type: application/json" -d @-
-
-# Restore a DELETED rule: POST the saved body as a new rule (a new id is assigned).
-jq --arg id "$RULE_ID" \
-  '.[] | select(.id == $id) | {name, actionMatch, filterMatch, environment, frequency, conditions, filters, actions}' \
-  "$BACKUP_FILE" \
-  | curl -fsS --max-time 10 -X POST "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/" \
-      -H "Authorization: Bearer ${SENTRY_TOKEN}" -H "Content-Type: application/json" -d @-
+curl -fsS --max-time 10 "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/${RULE_ID}/" \
+  -H "Authorization: Bearer ${SENTRY_TOKEN}" \
+  | jq -e --slurpfile b "$BACKUP_FILE" --arg id "$RULE_ID" '($b[0][] | select(.id == $id)) as $o
+      | [., $o] | map({actionMatch, filterMatch, environment, frequency, conditions, filters, actions}) | .[0] == .[1]'
 ```
 
-Expect: the PUT (or POST) returns the restored rule as JSON. A restore is itself a change: announce, confirm, and record it like any other.
+Expect: `true`. Re-create a **deleted** rule, in its own fresh shell (the POST assigns a fresh id and sets `createdBy` to the setup identity, per [../SKILL.md#delete-the-auto-created-default-rule](../SKILL.md#delete-the-auto-created-default-rule)):
+
+```bash
+set -eu
+SENTRY_HOST="us.sentry.io"; SENTRY_ORG="your-org-slug"; API="https://${SENTRY_HOST}/api/0"
+[ -n "${SENTRY_TOKEN:-}" ] || { echo "SENTRY_TOKEN is not set"; exit 1; }
+PROJECT="<project-slug>"; RULE_ID="<rule-id>"   # the id the deleted rule had in the backup
+BACKUP_DATE="YYYY-MM-DD"                        # UTC date of the rule-set backup
+for v in "$PROJECT" "$RULE_ID"; do case "$v" in ''|'<'*) echo "Fill in every <...> value from the change record first" >&2; exit 1 ;; esac; done
+BACKUP_FILE="$HOME/.scoutflo/sentry-rules-backup-${BACKUP_DATE}/issue-rules-${PROJECT}.json"
+[ -s "$BACKUP_FILE" ] || { echo "No backup at ${BACKUP_FILE}: set BACKUP_DATE to the day of the rule-set backup" >&2; exit 1; }
+jq -e --arg id "$RULE_ID" 'any(.[]; .id == $id)' "$BACKUP_FILE" > /dev/null || { echo "Rule ${RULE_ID} is not in ${BACKUP_FILE}" >&2; exit 1; }
+NEW_ID="$(jq --arg id "$RULE_ID" '.[] | select(.id == $id) | {name, actionMatch, filterMatch, environment, frequency, conditions, filters, actions}' "$BACKUP_FILE" \
+  | curl -fsS --max-time 10 -X POST "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/" \
+      -H "Authorization: Bearer ${SENTRY_TOKEN}" -H "Content-Type: application/json" -d @- | jq -r '.id')"
+echo "restored as rule: ${NEW_ID}"
+curl -fsS --max-time 10 "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/${NEW_ID}/" \
+  -H "Authorization: Bearer ${SENTRY_TOKEN}" \
+  | jq -e --slurpfile b "$BACKUP_FILE" --arg id "$RULE_ID" '($b[0][] | select(.id == $id)) as $o
+      | .name == $o.name and (.actions | length) == ($o.actions | length)'
+```
+
+Expect: the new rule id, then `true`. A restore is itself a change: announce, confirm, and record it like any other.
 
 ## Bulk verify: PUT and DELETE
 
@@ -455,7 +482,7 @@ curl -fsS --max-time 10 "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/${RULE_I
        and (.filters | any(.id == "sentry.rules.filters.age_comparison.AgeComparisonFilter"))'
 ```
 
-Expect: exit 0. Restore by PUTting the backed-up body: `jq '{name, actionMatch, filterMatch, environment, frequency, conditions, filters, actions}' "$BACKUP_FILE"` piped into the same `PUT`.
+Expect: exit 0. Undo it with the single-rule restore block in [../SKILL.md#receiver-wiring](../SKILL.md#receiver-wiring), `BACKUP_FILE` set to the printed backup path.
 
 ## Silence a metric-alert warning tier
 
@@ -494,8 +521,10 @@ Expect: exit 0. Restore the removed trigger by merging the backed-up `triggers` 
 set -eu
 SENTRY_HOST="us.sentry.io"; SENTRY_ORG="your-org-slug"; API="https://${SENTRY_HOST}/api/0"
 [ -n "${SENTRY_TOKEN:-}" ] || { echo "SENTRY_TOKEN is not set"; exit 1; }
-ALERT_RULE_ID="your-metric-alert-id"
-BACKUP_FILE="$HOME/.scoutflo/sentry-rules-backup-$(date -u +%F)/metric-alert-your-metric-alert-id.json"  # the step-1 backup
+ALERT_RULE_ID="<metric-alert-id>"   # the metric alert the write changed
+BACKUP_FILE="<backup-path>"         # the "backup:" path step 1 printed
+for v in "$ALERT_RULE_ID" "$BACKUP_FILE"; do case "$v" in ''|'<'*) echo "Fill in every <...> value from the change record first" >&2; exit 1 ;; esac; done
+[ -s "$BACKUP_FILE" ] || { echo "No backup at ${BACKUP_FILE}" >&2; exit 1; }
 
 CURRENT="$(curl -fsS --max-time 10 "${API}/organizations/${SENTRY_ORG}/alert-rules/${ALERT_RULE_ID}/" \
   -H "Authorization: Bearer ${SENTRY_TOKEN}")"
@@ -526,12 +555,13 @@ NEW_MAPPING="$(curl -fsS --max-time 10 -X POST "${API}/organizations/${SENTRY_OR
   -d "$(jq -n --arg p "$PROJECT_ID" --arg r "$REPO_ID" --arg b "$DEPLOYED_BRANCH" \
     '{projectId: $p, repoId: $r, defaultBranch: $b, stackRoot: "", sourceRoot: ""}')")"
 MAPPING_ID="$(printf '%s' "$NEW_MAPPING" | jq -r '.id')"
+echo "created mapping: ${MAPPING_ID}"
 
 curl -fsS --max-time 10 "${API}/organizations/${SENTRY_ORG}/code-mappings/${MAPPING_ID}/" \
   -H "Authorization: Bearer ${SENTRY_TOKEN}" | jq -e --arg b "$DEPLOYED_BRANCH" '.defaultBranch == $b'
 ```
 
-Expect: exit 0. Set `defaultBranch` to the branch that is actually deployed. If your deploy branch differs from the repository's configured default branch, use the deploy branch; a code mapping pointed at the wrong branch resolves the wrong file version. Rollback: `curl -X DELETE` the mapping URL, then confirm a re-fetch returns `404`, per [../SKILL.md#github-integration-and-code-mappings](../SKILL.md#github-integration-and-code-mappings).
+Expect: exit 0. Set `defaultBranch` to the branch that is actually deployed. If your deploy branch differs from the repository's configured default branch, use the deploy branch; a code mapping pointed at the wrong branch resolves the wrong file version. Rollback is the code-mapping rollback block in [../SKILL.md#github-integration-and-code-mappings](../SKILL.md#github-integration-and-code-mappings), `MAPPING_ID` set to the printed id.
 
 ## Monitors
 
@@ -567,7 +597,24 @@ curl -fsS --max-time 10 "${API}/projects/${SENTRY_ORG}/${PROJECT}/uptime/${CHECK
   -H "Authorization: Bearer ${SENTRY_TOKEN}" | jq -e --arg u "$CHECK_URL" '.url == $u'
 ```
 
-Expect: exit 0. `intervalSeconds` accepts only `300`, `600`, `1800`, or `3600`; any other value is rejected. Add a matching issue alert rule for the uptime issue type if you want notifications routed the same way as other alerts. Rollback: `curl -X DELETE "${API}/projects/${SENTRY_ORG}/${PROJECT}/uptime/${CHECK_ID}/"`, then confirm a re-fetch returns `404`.
+Expect: exit 0. `intervalSeconds` accepts only `300`, `600`, `1800`, or `3600`; any other value is rejected. Add a matching issue alert rule for the uptime issue type if you want notifications routed the same way as other alerts.
+
+Rollback, in its own fresh shell:
+
+```bash
+set -eu
+SENTRY_HOST="us.sentry.io"; SENTRY_ORG="your-org-slug"; API="https://${SENTRY_HOST}/api/0"
+[ -n "${SENTRY_TOKEN:-}" ] || { echo "SENTRY_TOKEN is not set; run /scoutflo:connect"; exit 1; }
+PROJECT="checkout"
+CHECK_ID="<uptime-check-id>"   # the CHECK_ID the create block captured
+case "$CHECK_ID" in ''|'<'*) echo "Set CHECK_ID to the uptime monitor this setup created" >&2; exit 1 ;; esac
+curl -fsS --max-time 10 -X DELETE "${API}/projects/${SENTRY_ORG}/${PROJECT}/uptime/${CHECK_ID}/" \
+  -H "Authorization: Bearer ${SENTRY_TOKEN}" > /dev/null
+curl -sS --max-time 10 -o /dev/null -w '%{http_code}\n' "${API}/projects/${SENTRY_ORG}/${PROJECT}/uptime/${CHECK_ID}/" \
+  -H "Authorization: Bearer ${SENTRY_TOKEN}"
+```
+
+Expect: `404`.
 
 ## Pagination and rate limits
 
