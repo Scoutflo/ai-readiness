@@ -1,12 +1,12 @@
 ---
 name: setup-sentry
-description: Guided hardening of a Sentry org from audit findings. Creates projects, seeds environments, applies privacy scrubbing, wires two-tier alert routing, and configures monitors. States each change, waits for your confirmation, then verifies live. Use when the user asks to fix a SNTRY-NNN finding, wire up Sentry alert routing or integrations (Slack, PagerDuty, GitHub), apply privacy scrubbing or rate-limit hardening, set up releases and source maps, or harden monitor/cron and uptime check-ins. Do not use for Grafana dashboards that display Sentry data (use setup-lgtm or setup-grafana), for proving the Alertmanager paging path reaches a human (use audit-alertmanager), or for read-only assessment (use audit-sentry).
+description: Guided hardening of a Sentry org from audit-sentry findings (projects, environments, scrubbing, alert rules and routing, monitors); announces each change, waits for confirmation, then verifies live. Use when the user asks to fix a SNTRY-NNN finding, wire Sentry alerts to Slack or PagerDuty, clean up noisy Sentry alert rules, turn on PII scrubbing or key rate limits, check source maps, or set up cron or uptime monitors. Do not use for Grafana dashboards of Sentry data (use setup-grafana) or for read-only assessment (use audit-sentry).
 disable-model-invocation: true
 ---
 
 # setup-sentry
 
-Fixes findings from an `audit-sentry` run. Input is one or more finding IDs from the latest `./scoutflo-audits/sentry/<date>/findings.json`. You usually arrive here from a finding's `remediation` pointer, for example `setup-sentry#privacy-gates`. Starting from scratch works too: this skill can also stand up a greenfield org (zero projects or a bare default project), but run `audit-sentry` first anyway. It produces the baseline score, the finding IDs, and the coverage gaps this skill closes.
+Fixes findings from an `audit-sentry` run. Input is one or more finding IDs from the latest `./scoutflo-audits/sentry/<date>/findings.json` (`sentry/<label>/<date>/` for a labeled multi-target config). You usually arrive here from a finding's `remediation` pointer, for example `setup-sentry#privacy-gates`. Starting from scratch works too: this skill can also stand up a greenfield org (zero projects or a bare default project), but run `audit-sentry` first anyway. It produces the baseline score, the finding IDs, and the coverage gaps this skill closes.
 
 | Finding ID | Fix section |
 | --- | --- |
@@ -24,6 +24,27 @@ Fixes findings from an `audit-sentry` run. Input is one or more finding IDs from
 | SNTRY-012 | [Projects](#projects) |
 | SNTRY-013 | [Alert rule taxonomy](#alert-rule-taxonomy) |
 | SNTRY-014 | [Alert rule taxonomy](#alert-rule-taxonomy) |
+| SNTRY-015 | [Alerting model decision](#alerting-model-decision) |
+| SNTRY-016 | [Alert rule taxonomy](#alert-rule-taxonomy) |
+| SNTRY-017 | [Receiver wiring](#receiver-wiring) |
+| SNTRY-018 | [Quota, spike protection, and privacy-sensitive ingestion](#quota-spike-protection-and-privacy-sensitive-ingestion), [Privacy gates](#privacy-gates) |
+| SNTRY-019 | [Quota, spike protection, and privacy-sensitive ingestion](#quota-spike-protection-and-privacy-sensitive-ingestion), [Privacy gates](#privacy-gates) |
+| SNTRY-020 | [Releases and source maps](#releases-and-source-maps) |
+| SNTRY-021 | [GitHub integration and code mappings](#github-integration-and-code-mappings) |
+| SNTRY-022 | [GitHub integration and code mappings](#github-integration-and-code-mappings) |
+| SNTRY-023 | [Cron and uptime monitors](#cron-and-uptime-monitors) |
+| SNTRY-024 | [Projects](#projects), [SDK instrumentation notes](#sdk-instrumentation-notes) |
+| SNTRY-025 | [Environment seeding](#environment-seeding) |
+| SNTRY-101 | [Alert rule taxonomy](#alert-rule-taxonomy) |
+| SNTRY-102 | [Alert rule taxonomy](#alert-rule-taxonomy), [Map rules to environments by receiver channel, not by rule name](#map-rules-to-environments-by-receiver-channel-not-by-rule-name) |
+| SNTRY-103 | [Alert rule taxonomy](#alert-rule-taxonomy) |
+| SNTRY-104 | [Quota, spike protection, and privacy-sensitive ingestion](#quota-spike-protection-and-privacy-sensitive-ingestion) |
+| SNTRY-105 | [Quota, spike protection, and privacy-sensitive ingestion](#quota-spike-protection-and-privacy-sensitive-ingestion) |
+| SNTRY-106 | [Alert-rule remediation playbook](#alert-rule-remediation-playbook) |
+| SNTRY-107 | [Slow noisy tiers, keep fast tiers fast, never age-gate regressions](#slow-noisy-tiers-keep-fast-tiers-fast-never-age-gate-regressions) |
+| SNTRY-108 | [Map rules to environments by receiver channel, not by rule name](#map-rules-to-environments-by-receiver-channel-not-by-rule-name) |
+| SNTRY-109 | [Alert-rule remediation playbook](#alert-rule-remediation-playbook) |
+| SNTRY-110 | [Alert rule taxonomy](#alert-rule-taxonomy), [Alert-rule remediation playbook](#alert-rule-remediation-playbook) |
 
 In scope: the Sentry account layer. Projects, environments, privacy and rate-limit hardening, issue alert rules and their routing, integrations (Slack, PagerDuty, GitHub), releases and source maps, cron and uptime monitors, and the SDK instrumentation notes for your app team. Boundaries:
 
@@ -45,30 +66,49 @@ Every change follows one loop, no exceptions:
 
 ## Doctor gate
 
-This skill uses the elevated credential tier: it creates and modifies Sentry projects, rules, and monitors. Keep this token separate from your read-only audit token; `audit-sentry` checks the audit token for least privilege, and a shared elevated token would fail that check for a reason.
+This skill uses the elevated credential tier: it creates and modifies Sentry projects, rules, and monitors. Keep this token separate from your read-only audit token; `audit-sentry` checks the audit token for least privilege, and a shared elevated token would fail that check for a reason. Record it in its own `sentry` block with `tier: elevated`, in a separate config file you select with `SCOUTFLO_CONFIG` (audit-sentry audits every item of a `sentry:` list, so an elevated item there would be audited with the elevated token). When that file holds a labeled `sentry:` list, `SCOUTFLO_TARGET` picks the one item this run changes.
 
 | Integration | Config keys | Env var | Minimum scope | Tier |
 | --- | --- | --- | --- | --- |
-| Sentry | `sentry.host`, `sentry.org`, `sentry.token_env` | named by `sentry.token_env` | the read set (`org:read`, `project:read`, `event:read`, `alerts:read`) plus `project:write`, `alerts:write`, `org:write` for the full fix set | elevated |
+| Sentry | `sentry.host`, `sentry.org`, `sentry.token_env`, `sentry.tier` | named by `sentry.token_env` | the read set (`org:read`, `project:read`, `event:read`, `alerts:read`) plus `project:write`, `alerts:write`, `org:write` for the full fix set; `project:admin` only to roll back a project this setup created (rule deletes need only `alerts:write`) | elevated |
 | Slack (optional) | `slack.webhook_env` | named by `slack.webhook_env` | post to one incoming webhook, for the run summary only | optional |
 
 ```bash
 set -eu
-# Resolved from ~/.scoutflo/toolkit.yaml
-SENTRY_HOST="us.sentry.io"   # sentry.host: us.sentry.io, de.sentry.io, or your self-hosted host
-SENTRY_ORG="your-org-slug"   # sentry.org
+# Resolve the sentry target from toolkit.yaml by command: a single block, or the labeled list
+# item SCOUTFLO_TARGET names. $CFG resolves override -> project-local -> home.
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+[ -f "$CFG" ] || { echo "missing $CFG; run /scoutflo:connect"; exit 1; }
+for bin in curl jq; do command -v "$bin" >/dev/null || { echo "$bin is required"; exit 1; }; done
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+SNTRY_KIND=$(sh "$TT" "$CFG" sentry kind); SNTRY_N=$(sh "$TT" "$CFG" sentry count)
+[ "${SNTRY_N:-0}" -ge 1 ] || { echo "no sentry block in $CFG; run /scoutflo:connect"; exit 1; }
+[ "$SNTRY_KIND" != seq ] || [ -n "${SCOUTFLO_TARGET:-}" ] || { echo "sentry in $CFG is a labeled list; set SCOUTFLO_TARGET to one of: $(sh "$TT" "$CFG" sentry labels | tr '\n' ' ')"; exit 1; }
+SNTRY_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$SNTRY_N" ]; do [ "$(sh "$TT" "$CFG" sentry label "$_i")" = "$SCOUTFLO_TARGET" ] && { SNTRY_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+SNTRY_LABEL=$(sh "$TT" "$CFG" sentry label "$SNTRY_IDX")
+[ -z "${SCOUTFLO_TARGET:-}" ] || [ "$SNTRY_LABEL" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no sentry target in $CFG"; exit 1; }
+SENTRY_HOST=$(sh "$TT" "$CFG" sentry get "$SNTRY_IDX" host)        # sentry.host: us.sentry.io, de.sentry.io, or your self-hosted host
+SENTRY_ORG=$(sh "$TT" "$CFG" sentry get "$SNTRY_IDX" org)          # sentry.org
+SNTRY_TOKVAR=$(sh "$TT" "$CFG" sentry get "$SNTRY_IDX" token_env)  # sentry.token_env names the variable, never the value
+SNTRY_TIER=$(sh "$TT" "$CFG" sentry get "$SNTRY_IDX" tier)         # sentry.tier
+[ -n "$SENTRY_HOST" ]  || { echo "sentry target '${SNTRY_LABEL}' has no host in $CFG; run /scoutflo:connect"; exit 1; }
+[ -n "$SENTRY_ORG" ]   || { echo "sentry target '${SNTRY_LABEL}' has no org in $CFG; run /scoutflo:connect"; exit 1; }
+[ -n "$SNTRY_TOKVAR" ] || { echo "sentry target '${SNTRY_LABEL}' has no token_env in $CFG; run /scoutflo:connect"; exit 1; }
+[ "$SNTRY_TIER" = elevated ] || { echo "sentry target '${SNTRY_LABEL}' is tier '${SNTRY_TIER:-unset}'; setup needs its own token recorded with tier: elevated (run /scoutflo:connect)"; exit 1; }
+# Load the secret store the way /scoutflo:doctor does ($SCOUTFLO_ENV_FILE, then ./.scoutflo/env,
+# then ~/.scoutflo/env), then read the token by the name token_env gives. Presence check only.
+SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.scoutflo/env" ]; then SCOUTFLO_ENV="./.scoutflo/env"; else SCOUTFLO_ENV="$HOME/.scoutflo/env"; fi; }
+[ -f "$SCOUTFLO_ENV" ] && . "$SCOUTFLO_ENV" || true
+SENTRY_TOKEN=$(printenv "$SNTRY_TOKVAR" 2>/dev/null || true)
+[ -n "${SENTRY_TOKEN:-}" ] || { echo "${SNTRY_TOKVAR} is not set; add it to ~/.scoutflo/env with /scoutflo:connect"; exit 1; }
 API="https://${SENTRY_HOST}/api/0"
-# sentry.token_env names the variable; presence check only, never print the value.
-[ -f "$HOME/.scoutflo/toolkit.yaml" ] || { echo "missing ~/.scoutflo/toolkit.yaml; run /scoutflo:connect"; exit 1; }
-[ -n "${SENTRY_TOKEN:-}" ] || { echo "SENTRY_TOKEN is not set; run /scoutflo:connect"; exit 1; }
-command -v curl >/dev/null || { echo "curl is required"; exit 1; }
-command -v jq   >/dev/null || { echo "jq is required"; exit 1; }
+echo "sentry target: ${SNTRY_LABEL} host=${SENTRY_HOST} org=${SENTRY_ORG} token_env=${SNTRY_TOKVAR} tier=${SNTRY_TIER}"
 
 curl -fsS --max-time 10 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
-  "${API}/organizations/${SENTRY_ORG}/" | jq -e '.slug != null and .name != null'
+  "${API}/organizations/${SENTRY_ORG}/" | jq -e --arg org "$SENTRY_ORG" '.slug == $org'
 ```
 
-Expect: exit 0, and the org `slug`/`name` are visible in the response. A `401` means the token is wrong for this host; a `404` almost always means the wrong region host, not a missing org (run the region probe in `/scoutflo:connect`, fix `sentry.host`, retry). Write permission is proven only by the first write: if any announced change returns `403`, stop, report the missing scope from the table above, and reconnect with an elevated token. Never proceed past a failed doctor check.
+Expect: the `sentry target:` line names the label, host, org, token variable, and tier you mean, then exit 0 (`true`). A missing key, a tier other than `elevated`, an unmatched `SCOUTFLO_TARGET`, or an unset token variable stops here with the fix. A `401` means the token is wrong for this host; a `404` almost always means the wrong region host, not a missing org (run the region probe in `/scoutflo:connect`, fix `sentry.host`, retry). Write permission is proven only by the first write: if any announced change returns `403`, stop, report the missing scope from the table above, and reconnect with an elevated token. Never proceed past a failed doctor check.
 
 ## Live-safety gate
 
@@ -76,24 +116,40 @@ This gate must be able to fail. It never derives the "live" value from the same 
 
 ```bash
 set -eu
-# Resolved from ~/.scoutflo/toolkit.yaml
-SENTRY_HOST="us.sentry.io"        # sentry.host
-CONFIG_SENTRY_ORG="your-org-slug" # sentry.org, exactly as written in toolkit.yaml
+# Read the target from toolkit.yaml by command, the same target the doctor gate resolved;
+# never retype the host or org here.
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+[ -f "$CFG" ] || { echo "missing $CFG; run /scoutflo:connect"; exit 1; }
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+SNTRY_KIND=$(sh "$TT" "$CFG" sentry kind); SNTRY_N=$(sh "$TT" "$CFG" sentry count)
+[ "$SNTRY_KIND" != seq ] || [ -n "${SCOUTFLO_TARGET:-}" ] || { echo "set SCOUTFLO_TARGET to the sentry label the doctor gate resolved"; exit 1; }
+SNTRY_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "${SNTRY_N:-0}" ]; do [ "$(sh "$TT" "$CFG" sentry label "$_i")" = "$SCOUTFLO_TARGET" ] && { SNTRY_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+SNTRY_LABEL=$(sh "$TT" "$CFG" sentry label "$SNTRY_IDX")
+[ -z "${SCOUTFLO_TARGET:-}" ] || [ "$SNTRY_LABEL" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no sentry target in $CFG"; exit 1; }
+SENTRY_HOST=$(sh "$TT" "$CFG" sentry get "$SNTRY_IDX" host)         # sentry.host
+CONFIG_SENTRY_ORG=$(sh "$TT" "$CFG" sentry get "$SNTRY_IDX" org)    # sentry.org, exactly as written in toolkit.yaml
+SNTRY_TOKVAR=$(sh "$TT" "$CFG" sentry get "$SNTRY_IDX" token_env)   # sentry.token_env
+[ -n "$SENTRY_HOST" ] && [ -n "$CONFIG_SENTRY_ORG" ] && [ -n "$SNTRY_TOKVAR" ] || { echo "sentry target '${SNTRY_LABEL}' is incomplete in $CFG; run the doctor gate first"; exit 1; }
+SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.scoutflo/env" ]; then SCOUTFLO_ENV="./.scoutflo/env"; else SCOUTFLO_ENV="$HOME/.scoutflo/env"; fi; }
+[ -f "$SCOUTFLO_ENV" ] && . "$SCOUTFLO_ENV" || true
+SENTRY_TOKEN=$(printenv "$SNTRY_TOKVAR" 2>/dev/null || true)
+[ -n "${SENTRY_TOKEN:-}" ] || { echo "${SNTRY_TOKVAR} is not set; run the doctor gate first"; exit 1; }
 API="https://${SENTRY_HOST}/api/0"
-[ -n "${SENTRY_TOKEN:-}" ] || { echo "SENTRY_TOKEN is not set; run /scoutflo:connect"; exit 1; }
 
 # Independent live fetch: list every org this token can actually reach.
 # CONFIG_SENTRY_ORG is never passed into this request, so it cannot pass by
 # construction the way "echo the config back at itself" can.
 LIVE_ORGS="$(curl -fsS --max-time 10 -H "Authorization: Bearer ${SENTRY_TOKEN}" "${API}/organizations/")"
-echo "target: ${API}"
+echo "target: ${API} (sentry target ${SNTRY_LABEL})"
 echo "configured org (sentry.org): ${CONFIG_SENTRY_ORG}"
 printf '%s' "$LIVE_ORGS" | jq -r '.[] | "live-visible org: \(.slug)\t\(.name)"'
 
 printf '%s' "$LIVE_ORGS" | jq -e --arg cfg "$CONFIG_SENTRY_ORG" 'any(.[]; .slug == $cfg)'
 ```
 
-Expect: exit 0, and `configured org` appears in the printed `live-visible org` list. If the assertion fails, or the live list is empty, or it lists only orgs with a different slug (a sandbox or personal org with a similar name), stop and report the mismatch. Never proceed on "probably the right org" and never edit this block to accept a close-enough slug.
+Expect: exit 0, and `configured org` appears in the printed `live-visible org` list. If the assertion fails, or the live list is empty, or it lists only orgs with a different slug (a sandbox or personal org with a similar name), stop and report the mismatch. Never proceed on "probably the right org" and never edit this block to accept a close-enough slug. A user token sees every org its user belongs to, so read the printed list before you approve anything: the assertion proves the configured org is reachable, and only you can confirm it is the org you mean to change.
+
+Every block below declares `SENTRY_HOST` and `SENTRY_ORG` at its top and reads the token as `SENTRY_TOKEN`. Set both to the exact host and org this gate printed, never a slug typed from memory. When your `token_env` is not `SENTRY_TOKEN`, bind it by name on the line after each block's `set -eu` (for example `export SENTRY_TOKEN="$(printenv SENTRY_SETUP_TOKEN)"` for `token_env: SENTRY_SETUP_TOKEN`), so every write sends the elevated token the doctor gate checked, never the read-only audit token.
 
 - ❌ `echo "target: ${API} org: ${SENTRY_ORG}"` where `SENTRY_ORG` was itself read from `sentry.org` two lines earlier: this compares config against itself and can never fail, even when the token is bound to the wrong org.
 - ✅ Fetch `GET /organizations/` (no org slug in the request) and assert the configured slug appears in that independently-fetched list; a token scoped to the wrong org fails this by construction.
@@ -106,12 +162,17 @@ Load `./scoutflo-audits/topology.md` if it exists; its service list defines whic
 
 ```bash
 set -eu
-LATEST_RUN="$(ls -d ${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/sentry/[0-9]*/ 2>/dev/null | sort | tail -1)"
-[ -n "$LATEST_RUN" ] || echo "no audit run found; running greenfield setup without a findings baseline"
+# audit-sentry writes sentry/<date>/ for a single block and sentry/<label>/<date>/ for a labeled list.
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+SNTRY_SEG="sentry"; [ "$(sh "$TT" "$CFG" sentry kind)" != seq ] || SNTRY_SEG="sentry/${SCOUTFLO_TARGET:?set SCOUTFLO_TARGET to the sentry label the doctor gate resolved}"
+AUDIT_ROOT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}"
+LATEST_RUN="$(ls -d "${AUDIT_ROOT}/${SNTRY_SEG}"/[0-9]*/ 2>/dev/null | sort | tail -1)"
+[ -n "$LATEST_RUN" ] || echo "no audit run found under ${AUDIT_ROOT}/${SNTRY_SEG}/; running greenfield setup without a findings baseline"
 [ -z "$LATEST_RUN" ] || jq -r '.findings[] | [.id, .severity, .title, .remediation] | @tsv' "${LATEST_RUN}findings.json"
 ```
 
-2. Select scope. Take the finding IDs you were asked to fix, or, if asked for "everything critical and high", enumerate those IDs explicitly so the plan names each one. Map each finding's `remediation` anchor to a section above.
+2. Select scope. Take the finding IDs you were asked to fix, or, if asked for "everything critical and high", enumerate those IDs explicitly so the plan names each one. Map each finding's `remediation` anchor to a section above. Where a section says it has no verified write for a finding, put that finding in the plan as a pending item with a named owner, never as an applied row.
 
 3. Create the working directory:
 
@@ -138,7 +199,7 @@ Execute approved rows one at a time, verifying each before starting the next, pe
 
 ## Projects
 
-For SNTRY-012 (a service with no Sentry project) or a greenfield build. Decide project boundaries by runtime ownership, not by copying another org's layout:
+For SNTRY-012 (a service with no Sentry project) or a greenfield build. SNTRY-024 (a project that has never received an event) needs no new project: the SDK was never wired, so its fix is [SDK instrumentation notes](#sdk-instrumentation-notes). Decide project boundaries by runtime ownership, not by copying another org's layout:
 
 | Pattern | Use when |
 | --- | --- |
@@ -197,6 +258,8 @@ Expect: `post-delete: 404`.
 For SNTRY-004. A project with no environments cannot scope alerts or releases to production, so every rule fires on dev noise too. Sentry environments exist only once an event carries that environment name; on a greenfield project with no SDK yet, seed them with a single envelope event per environment. Full payload, byte-length handling, and DSN retrieval in [references/api-cookbook.md#environment-seeding](references/api-cookbook.md#environment-seeding).
 
 Seed `production` and `staging` (or your actual promotion stages) on every project. This is additive (one low-noise event) and has no meaningful rollback beyond leaving the seeded environment unused; nothing to restore.
+
+For SNTRY-025 (synonym environments such as `prod` and `production` on one project), seed and scope rules to one canonical name only, fix the app's SDK `environment` value ([SDK instrumentation notes](#sdk-instrumentation-notes)), and list the retired synonym as a pending item; this skill does not rename or hide environments.
 
 Verify:
 
@@ -348,9 +411,11 @@ Decide before creating any rule, and record the decision:
 
 Project issue rules are what the rest of this section builds. If you use workflow-engine alerts instead, resolve every ID against the live `/organizations/${SENTRY_ORG}/workflows/` schema before writing payloads; that endpoint is feature-gated and 404s on many orgs.
 
+For SNTRY-015 (a workflow-engine detector connected to no workflow), this skill has no verified workflow write: list the detector as a pending item for its owner to connect to a workflow or delete in Sentry's Monitors and Alerts UI, then re-run `audit-sentry` to confirm it clears.
+
 ## Alert rule taxonomy
 
-For SNTRY-001, SNTRY-013, SNTRY-014. Build a small, severity-based rule set per project, not one rule per person and not one rule per every possible condition. Two tiers, each routed to a receiver your team actually watches (channel names below are placeholders, pick your own):
+For SNTRY-001, SNTRY-013, SNTRY-014, SNTRY-016, SNTRY-101, SNTRY-102, SNTRY-103, and SNTRY-110. Build a small, severity-based rule set per project, not one rule per person and not one rule per every possible condition. Two tiers, each routed to a receiver your team actually watches (channel names below are placeholders, pick your own):
 
 | Tier | Fires on | Example receiver | Frequency |
 | --- | --- | --- | --- |
@@ -361,24 +426,49 @@ Every production project needs at least one rule in each tier before it counts a
 
 Start every rule with the email action (works with no integration required); add Slack or PagerDuty actions once that integration is live, in Receiver wiring below. Thresholds (`USER_IMPACT_THRESHOLD`, `ERROR_SURGE_THRESHOLD`, `FREQ_FLOOR_MIN`, and the rest) are starting points from the reference table; tune every one to your event volume before treating it as final.
 
+Existing rules that audit-sentry flags:
+
+- **SNTRY-016** (a disabled or muted rule credited to a tier): create an active rule for that tier with the block below, and list the switched-off rule as a pending item for its owner to re-enable or delete.
+- **SNTRY-101** (no filter) and **SNTRY-102** (no rule-level `environment`): burst and spike rules get both in the [Alert-rule remediation playbook](#alert-rule-remediation-playbook); for any other rule, list the missing filter or scope as a pending item for the rule's owner.
+- **SNTRY-103** (a flap-prone metric alert): this skill has no metric-alert create or threshold-edit block; list the threshold change as a pending item with the alert's owner.
+
 ```bash
 set -eu
 SENTRY_HOST="us.sentry.io"; SENTRY_ORG="your-org-slug"; API="https://${SENTRY_HOST}/api/0"
 [ -n "${SENTRY_TOKEN:-}" ] || { echo "SENTRY_TOKEN is not set; run /scoutflo:connect"; exit 1; }
 PROJECT="checkout"
+# One rule per run: rule 1 of the starting set in references/api-cookbook.md#alert-rules.
+# For another rule in the set, change only these declarations.
+RULE_NAME="Fatal crash, immediate"
+RULE_ENV="production"          # the production environment you seeded; the rule's own scope
+RULE_FREQ_MIN="5"              # IMMEDIATE_FREQ_MIN, re-notify minutes; example, tune to your event volume
+OWNER_TEAM_ID="your-team-id"   # numeric id of the team that maintains the rule, from GET /organizations/${SENTRY_ORG}/teams/
+RULE_CONDITIONS='[{"id": "sentry.rules.conditions.every_event.EveryEventCondition"}]'
+RULE_FILTERS='[{"id": "sentry.rules.filters.level.LevelFilter", "level": "fatal", "match": "eq"}]'
+
+# The payload is built here, so no payload file is needed (shape: references/api-cookbook.md#full-rule-payload-example).
+RULE_PAYLOAD="$(jq -n --arg name "$RULE_NAME" --arg env "$RULE_ENV" --argjson freq "$RULE_FREQ_MIN" \
+  --arg owner "team:${OWNER_TEAM_ID}" --argjson cond "$RULE_CONDITIONS" --argjson filt "$RULE_FILTERS" \
+  '{name: $name, actionMatch: "any", filterMatch: "all", environment: $env, frequency: $freq, owner: $owner,
+    conditions: $cond, filters: $filt,
+    actions: [{id: "sentry.mail.actions.NotifyEmailAction", targetType: "IssueOwners", fallthroughType: "AllMembers"}]}')"
 
 NEW_RULE="$(curl -fsS --max-time 10 -X POST "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/" \
-  -H "Authorization: Bearer ${SENTRY_TOKEN}" -H "Content-Type: application/json" \
-  -d @rule-payload.json)"   # payload shape in references/api-cookbook.md#full-rule-payload-example
+  -H "Authorization: Bearer ${SENTRY_TOKEN}" -H "Content-Type: application/json" -d "$RULE_PAYLOAD")"
 RULE_ID="$(printf '%s' "$NEW_RULE" | jq -r '.id')"
 echo "created rule: ${RULE_ID}"
 
+# Verify the re-fetched rule against the payload it was created from.
 curl -fsS --max-time 10 "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/${RULE_ID}/" \
   -H "Authorization: Bearer ${SENTRY_TOKEN}" \
-  | jq -e '.conditions != null and .actions != null and (.actions | length) >= 1'
+  | jq -e --argjson p "$RULE_PAYLOAD" '.environment == $p.environment and .frequency == $p.frequency
+      and .owner == $p.owner
+      and ([(.conditions // [])[].id] | sort) == ([$p.conditions[].id] | sort)
+      and ([(.filters // [])[].id] | sort) == ([$p.filters[].id] | sort)
+      and (.actions | length) == ($p.actions | length)'
 ```
 
-Expect: exit 0. **Rollback** (this is a create; rollback deletes and verifies absence):
+Expect: exit 0, because the re-fetched rule's `environment`, `frequency`, `owner`, condition and filter ids, and action count all match the payload. A rule created this way sets the rule-level `environment` and an `owner`, so it passes audit-sentry's SNTRY-102 and SNTRY-110; one created with `RULE_FILTERS='[]'` fails SNTRY-101 (a notifying rule with no filter), as the cookbook's starting rule set explains. The `IssueOwners` email action fails SNTRY-017 on a project with no ownership rules; see [Receiver wiring](#receiver-wiring). **Rollback** (this is a create; rollback deletes and verifies absence):
 
 ```bash
 set -eu
@@ -398,7 +488,7 @@ Expect: exit 0.
 
 ## Delete the auto-created default rule
 
-For SNTRY-001 on any project that predates `defaultRules: false`, or where it was omitted. New projects get a "Send a notification for high priority issues" rule with `createdBy: null`. Find it, back up its full body, confirm the match, delete it, then verify the list no longer contains it:
+For SNTRY-001 on any project that predates `defaultRules: false`, or where it was omitted. New projects get a "Send a notification for high priority issues" rule with `createdBy: null`. Find it, back up its full body, assert the backup still matches that signature, delete it, then verify the list no longer contains it:
 
 ```bash
 set -eu
@@ -418,6 +508,9 @@ BACKUP_FILE="${BACKUP_DIR}/default-rule-${RULE_ID}.json"
 curl -fsS --max-time 10 "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/${RULE_ID}/" \
   -H "Authorization: Bearer ${SENTRY_TOKEN}" > "$BACKUP_FILE"
 test -s "$BACKUP_FILE" && echo "backup: ${BACKUP_FILE}"
+# Confirm the match by assertion: only an untouched, auto-created high-priority rule is deleted here.
+jq -e '.createdBy == null and (.name | ascii_downcase | contains("high priority"))' "$BACKUP_FILE" > /dev/null \
+  || { echo "rule ${RULE_ID} is not the auto-created default rule; not deleting" >&2; exit 1; }
 
 # 2. The write:
 curl -fsS --max-time 10 -X DELETE "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/${RULE_ID}/" \
@@ -429,7 +522,7 @@ curl -fsS --max-time 10 "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/" \
   | jq -e --arg id "$RULE_ID" '[.[] | select(.id == $id)] | length == 0'
 ```
 
-Expect: exit 0. Confirmed live: this delete succeeds with just `alerts:write` — no `project:admin` scope is actually required, contrary to an earlier version of this doc; a token that has `alerts:write` but lacks `project:write` can still delete this rule the same as any other issue alert rule.
+Expect: exit 0. A rule that fails the signature assertion stops the block before the DELETE. Confirmed live: this delete succeeds with just `alerts:write` and needs no `project:admin` scope; a token that has `alerts:write` but lacks `project:write` can still delete this rule the same as any other issue alert rule.
 
 **Restore pair**, run as written if something depended on this rule and it needs to come back:
 
@@ -454,15 +547,16 @@ curl -fsS --max-time 10 "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/${NEW_ID
 
 Expect: exit 0. Deleting a rule is a lightweight change, but it is still confirmed individually, never inside a batch.
 
-Confirmed live: a restored default rule is not byte-identical to the original. Sentry assigns `createdBy` from the requesting token's identity on every `POST`, so the restored rule's `createdBy` is the setup identity, not the original `null` that marks an untouched, auto-created rule. This means the `createdBy == null` signature this section uses to find the rule in the first place will no longer match a restored copy — a future run treats it as a normal, manually-created rule, not the auto-created default. Note this in the change record so nobody expects a future automated pass to re-detect a restored rule the same way.
+Confirmed live: a restored default rule is not byte-identical to the original. Sentry assigns `createdBy` from the requesting token's identity on every `POST`, so the restored rule's `createdBy` is the setup identity, not the original `null` that marks an untouched, auto-created rule. This means the `createdBy == null` signature this section uses to find the rule in the first place will no longer match a restored copy: a future run treats it as a normal, manually-created rule, not the auto-created default. Note this in the change record so nobody expects a future automated pass to re-detect a restored rule the same way.
 
 ## Receiver wiring
 
-For SNTRY-005 (rules whose only action is email, a temporary path, not a proven route) and SNTRY-011 (duplicate alerting paths).
+For SNTRY-005 (rules whose only action is email, a temporary path, not a proven route), SNTRY-011 (duplicate alerting paths), and SNTRY-017 (rules routed to issue owners on a project with no ownership rules).
 
 - **Slack.** Once the Slack integration is connected, resolve the integration ID and the channel ID (not just the display name), back up the current rule body, then add a Slack action to it alongside its existing email action with a full-payload `PUT`: Sentry replaces the rule on write, so the request body must include every existing field, not only the new action.
 - **PagerDuty.** Same pattern: resolve the integration and service ID, back up the rule, add the PagerDuty action alongside email, full-payload `PUT`. Payload in [references/api-cookbook.md#alert-rules](references/api-cookbook.md#alert-rules).
 - **Duplicate paths (SNTRY-011).** Pick one primary alerting surface per signal. If Sentry uptime monitors duplicate an external synthetic tool, or if an issue rule duplicates a metric alert on the same condition, disable one side and record which system is the source of truth.
+- **Owner routing (SNTRY-017).** An `IssueOwners` email action on a project with no ownership rules notifies nobody, or every member when it falls through to `AllMembers`. It clears only once the project has ownership rules: list them as a pending item for the owning team, and wire a Slack or PagerDuty action below in the meantime so matched issues reach a channel someone watches.
 
 ```bash
 set -eu
@@ -527,6 +621,8 @@ Expect: exit 0. A rule that lists a Slack action is `configured`; only a deliver
 
 For a bulk cleanup of an org's existing alert rules (slowing noisy tiers, deleting dead rules, rescoping rules by environment) rather than a single new-rule fix. It extends [Alert rule taxonomy](#alert-rule-taxonomy) and [Receiver wiring](#receiver-wiring): the taxonomy decides what each tier should be; this playbook moves a live, historically-grown rule set onto it without going dark. Every step still runs under [The change protocol](#the-change-protocol) (announce, confirm, execute, verify, record) and nothing here auto-mutates. This is a real cleanup shape: dozens of rule updates and a handful of deletions across several projects, every one GET-verified.
 
+It also takes audit-sentry's rule-hygiene findings. SNTRY-106 is evidence only: its fire counts pick which rules to touch, and nothing changes for it. SNTRY-107 is fixed by [Slow noisy tiers, keep fast tiers fast, never age-gate regressions](#slow-noisy-tiers-keep-fast-tiers-fast-never-age-gate-regressions). For SNTRY-108, [Map rules to environments by receiver channel, not by rule name](#map-rules-to-environments-by-receiver-channel-not-by-rule-name) decides the environment; the slow-a-noisy-rule block applies it to a burst or spike rule, and any other rule's rescope is a pending item for its owner. A SNTRY-109 dead-weight rule is deleted only after the rule-set backup below, one confirmed deletion at a time, with the rule rollback block in [Alert rule taxonomy](#alert-rule-taxonomy) (`RULE_ID` set to that rule) and the per-rule `404` verify. For SNTRY-110, rules this skill creates carry an `owner`; list each existing ownerless rule as a pending item naming the team that should own it.
+
 ### Back up the whole rule set before the first mutation
 
 Mandatory before the first PUT or DELETE, no exceptions. Dump the full current JSON of every rule you might touch into a dated local directory `~/.scoutflo/sentry-rules-backup-<date>/`: one file per project for its issue-alert rules, plus one file for the org's metric-alert rules. Restore is a PUT of the saved body for a rule you updated, or a POST for one you deleted. A single wrong bulk edit across dozens of rules is unrecoverable without this snapshot, and a sentence claiming a backup exists is not a backup. The runnable backup-all and restore commands are in [references/api-cookbook.md#rule-set-backup-and-restore](references/api-cookbook.md#rule-set-backup-and-restore).
@@ -548,7 +644,7 @@ So you cannot silence a warning tier by stripping its action and keeping the tri
 
 ### Slow noisy tiers, keep fast tiers fast, never age-gate regressions
 
-Slowing every rule is as wrong as slowing none: it buries the fast tier the team relies on. Move each rule family by what it is for, not uniformly. The cadence figures are examples, tune them to your event volume.
+For SNTRY-107 (chronic issues that re-page without bound). Slowing every rule is as wrong as slowing none: it buries the fast tier the team relies on. Move each rule family by what it is for, not uniformly. The cadence figures are examples, tune them to your event volume.
 
 | Rule family | Change | Why |
 | --- | --- | --- |
@@ -563,7 +659,7 @@ Named defaults for the block: `RULE_AGE_GATE_DAYS="7"`, `FAST_RENOTIFY_MIN="15"`
 
 ### Map rules to environments by receiver channel, not by rule name
 
-When you rescope rules by environment, derive the target environment from the receiver channel the rule routes to, not from the rule's own name. Rule names are historical fiction: a rule called "- Prod" can route to a dev channel after years of edits, and the channel it delivers to is the ground truth.
+For SNTRY-108 (a rule whose name or channel claims an environment its `environment` field does not set). When you rescope rules by environment, derive the target environment from the receiver channel the rule routes to, not from the rule's own name. Rule names are historical fiction: a rule called "- Prod" can route to a dev channel after years of edits, and the channel it delivers to is the ground truth.
 
 - A rule routing to a production receiver: scope `environment: production`.
 - A rule whose action posts to a pre-prod channel (for example `sentry-alert-pp-<env>`): scope `environment` to your pre-prod stage, whatever the rule name claims.
@@ -586,7 +682,7 @@ Enumerate the full change-set up front as the plan table ([Load findings and bui
 
 ## GitHub integration and code mappings
 
-For SNTRY-009. A repo integration without code mappings resolves nothing, and a code mapping whose `defaultBranch` differs from the branch you actually deploy resolves the wrong file. Treat the three pieces as a chain:
+For SNTRY-009, SNTRY-021, and SNTRY-022. A repo integration without code mappings resolves nothing, and a code mapping whose `defaultBranch` differs from the branch you actually deploy resolves the wrong file. SNTRY-021 (a release-bound repo with no `integrations:*` provider) is fixed in CI: point `sentry-cli releases set-commits` at a repo this integration connects, recorded as a pending CI item. For SNTRY-022 (a duplicate mapping, or a `stackRoot` under a build-host path), create the correct mapping below and list the bad one as a pending item for the project's owner to remove. Treat the three pieces as a chain:
 
 ```bash
 set -eu
@@ -650,7 +746,7 @@ Expect: `post-delete: 404`.
 
 ## Cron and uptime monitors
 
-For SNTRY-007. Create a monitor per scheduled job, disabled until the job actually emits check-ins; an active monitor with zero check-ins is a false-page risk, not coverage.
+For SNTRY-007 and SNTRY-023 (no monitors at all on an org whose backend projects carry real event volume). Create a monitor per scheduled job, disabled until the job actually emits check-ins; an active monitor with zero check-ins is a false-page risk, not coverage.
 
 ```bash
 set -eu
@@ -660,14 +756,20 @@ MONITOR_SLUG="nightly-data-sync"
 PROJECT="backend-services"
 CRON_SCHEDULE="0 2 * * *"      # example; use the scheduler's real crontab
 CRON_TIMEZONE="UTC"            # example; use the timezone your scheduler actually runs in
+CHECKIN_MARGIN_MIN="5"         # example: minutes late before a check-in counts as missed; tune to the job's start jitter
+MAX_RUNTIME_MIN="30"           # example: minutes in progress before a run counts as timed out; tune to the job's real runtime
+FAILURE_ISSUE_THRESHOLD="2"    # example: consecutive failed check-ins before Sentry opens an issue
+RECOVERY_THRESHOLD="1"         # example: consecutive good check-ins before it resolves
 
 curl -fsS --max-time 10 -X POST "${API}/organizations/${SENTRY_ORG}/monitors/" \
   -H "Authorization: Bearer ${SENTRY_TOKEN}" -H "Content-Type: application/json" \
   -d "$(jq -n --arg name "$MONITOR_SLUG" --arg proj "$PROJECT" --arg slug "$MONITOR_SLUG" \
         --arg sched "$CRON_SCHEDULE" --arg tz "$CRON_TIMEZONE" \
+        --argjson margin "$CHECKIN_MARGIN_MIN" --argjson runtime "$MAX_RUNTIME_MIN" \
+        --argjson fail "$FAILURE_ISSUE_THRESHOLD" --argjson recover "$RECOVERY_THRESHOLD" \
     '{name: $name, project: $proj, slug: $slug, status: "disabled",
-      config: {schedule_type: "crontab", schedule: $sched, checkin_margin: 5,
-               max_runtime: 30, failure_issue_threshold: 2, recovery_threshold: 1, timezone: $tz}}')"
+      config: {schedule_type: "crontab", schedule: $sched, checkin_margin: $margin,
+               max_runtime: $runtime, failure_issue_threshold: $fail, recovery_threshold: $recover, timezone: $tz}}')"
 
 curl -fsS --max-time 10 "${API}/organizations/${SENTRY_ORG}/monitors/${MONITOR_SLUG}/" \
   -H "Authorization: Bearer ${SENTRY_TOKEN}" \
@@ -715,7 +817,7 @@ For uptime monitors, use `intervalSeconds` from the fixed set `300, 600, 1800, 3
 
 ## Releases and source maps
 
-For SNTRY-006. Agree one release-naming convention (git SHA or semantic version) and set it as `SENTRY_RELEASE` in the runtime environment before the app team deploys. This skill does not upload source maps itself; that runs in your CI/CD pipeline, from the release-naming convention this section sets. You can, however, verify whether previously uploaded maps are resolving:
+For SNTRY-006 and SNTRY-020 (a sampled event that carries a `js_no_source` symbolication error). Agree one release-naming convention (git SHA or semantic version) and set it as `SENTRY_RELEASE` in the runtime environment before the app team deploys. This skill does not upload source maps itself; that runs in your CI/CD pipeline, from the release-naming convention this section sets. You can, however, verify whether previously uploaded maps are resolving:
 
 ```bash
 set -eu
@@ -745,7 +847,7 @@ Record the CI-side steps your team still owns (source-map or debug-ID upload, ke
 
 ## Quota, spike protection, and privacy-sensitive ingestion
 
-For SNTRY-008 and SNTRY-010. These are decisions to record, most of them not API writes; where a live check exists, it is machine-checked, not just inspected.
+For SNTRY-008, SNTRY-010, SNTRY-018, SNTRY-019, SNTRY-104, and SNTRY-105. These are decisions to record, most of them not API writes; where a live check exists, it is machine-checked, not just inspected.
 
 - **Quota pressure (SNTRY-008).**
 
@@ -753,13 +855,21 @@ For SNTRY-008 and SNTRY-010. These are decisions to record, most of them not API
 set -eu
 SENTRY_HOST="us.sentry.io"; SENTRY_ORG="your-org-slug"; API="https://${SENTRY_HOST}/api/0"
 [ -n "${SENTRY_TOKEN:-}" ] || { echo "SENTRY_TOKEN is not set; run /scoutflo:connect"; exit 1; }
+STATS_PERIOD="7d"    # example window, tune it; audit-sentry's SNTRY-008 reads 14d
+DROP_RATIO="0.05"    # example, tune to your quota; the dropped share of accepted volume audit-sentry tolerates for SNTRY-008
 
-curl -fsS --max-time 10 "${API}/organizations/${SENTRY_ORG}/stats_v2/?field=sum(quantity)&groupBy=outcome&interval=1d&statsPeriod=7d" \
+curl -fsS --max-time 10 "${API}/organizations/${SENTRY_ORG}/stats_v2/?field=sum(quantity)&groupBy=outcome&interval=1d&statsPeriod=${STATS_PERIOD}" \
   -H "Authorization: Bearer ${SENTRY_TOKEN}" \
-  | jq -e '[.groups[]? | select(.by.outcome == "rate_limited" or .by.outcome == "cardinality_limited") | .totals."sum(quantity)"] | add // 0 | . == 0'
+  | jq -e --argjson r "$DROP_RATIO" '[.groups[]? | {o: .by.outcome, n: .totals."sum(quantity)"}]
+      | ([.[] | select(.o == "rate_limited" or .o == "cardinality_limited" or .o == "abuse") | .n] | add // 0) as $dropped
+      | ([.[] | select(.o == "accepted") | .n] | add // 0) as $accepted
+      | $dropped <= $accepted * $r'
 ```
 
-Expect: exit 0 (no rate-limited or cardinality-limited volume in the last 7 days). A nonzero total is real evidence: raise the client-key rate limit ([Privacy gates](#privacy-gates)) only after confirming the new ceiling fits your plan's quota, or reduce trace/replay sampling first if the volume is from those categories rather than errors.
+Expect: exit 0 (rate-limited, cardinality-limited, and abuse drops over the last `STATS_PERIOD` stay at or under `DROP_RATIO` of accepted volume). A failing assertion is real evidence: raise the client-key rate limit ([Privacy gates](#privacy-gates)) only after confirming the new ceiling fits your plan's quota, or reduce trace/replay sampling first if the volume is from those categories rather than errors.
+
+- **Per-project drops and their cause (SNTRY-018, SNTRY-019).** audit-sentry names the project and splits the drop reason. A per-key or cardinality quota cause is fixed by that project's client-key rate limit in [Privacy gates](#privacy-gates); a `spike_protection` cause is a Spike Protection setting (next item), not a key change.
+- **Spike Protection and inbound data filters (SNTRY-104, SNTRY-105).** Both are project settings this skill does not write. Record for each production project whether Spike Protection and the inbound data filters (web crawlers and localhost, plus browser extensions and legacy browsers on browser projects) are on, list each change as a pending item with an owner, and re-run audit-sentry to confirm.
 
 - **Privacy-sensitive ingestion (SNTRY-010).**
 
