@@ -175,20 +175,22 @@ az monitor action-group show --name "$AG_NAME" --resource-group "$RG" --subscrip
   | jq -e '.enabled == true and (.emailReceivers | length) >= 1'
 ```
 
-Expected: the created group and a final `jq -e` exit 0. Capture the group's resource id for the alert sections: `AG_ID="$(az monitor action-group show --name "$AG_NAME" --resource-group "$RG" --subscription "$SUB" --query id -o tsv)"`. **Rollback**, in its own fresh shell:
+Expected: the created group and a final `jq -e` exit 0. Every alert section below declares `AG_ID`, this group's full resource id; add `--query id -o tsv` to the verify `show` to print it. **Rollback**, in its own fresh shell. Rollbacks never fall back to the CLI's default subscription: they name the one the live-safety gate verified.
 
 ```bash
 set -eu
-AZ_SUBSCRIPTION_CFG=""   # azure.subscription_id
-SUB="${AZ_SUBSCRIPTION_CFG:-$(az account show --query id -o tsv)}"
-echo "subscription: ${SUB}"   # must match the live-safety gate's subscription
-RG="observability-rg"                  # the resource group that owns the action group
-AG_NAME="payments-production-alerts"   # the action group this setup created
+SUB="<subscription-id>"         # azure.subscription_id: the subscription the live-safety gate printed
+RG="<resource-group>"           # the resource group that owns the action group
+AG_NAME="<action-group-name>"   # the action group this setup created
+for v in "$SUB" "$RG" "$AG_NAME"; do case "$v" in ''|'<'*) echo "Fill in every <...> value from the change record first" >&2; exit 1 ;; esac; done
+az account show --subscription "$SUB" --query id -o tsv   # stops here if this login cannot see the subscription
+az monitor action-group show --name "$AG_NAME" --resource-group "$RG" --subscription "$SUB" --query id -o tsv   # what will be deleted
 az monitor action-group delete --name "$AG_NAME" --resource-group "$RG" --subscription "$SUB"
-az monitor action-group show --name "$AG_NAME" --resource-group "$RG" --subscription "$SUB" -o json 2>&1 | grep -c -i -E 'not.?found'
+OUT="$(az monitor action-group show --name "$AG_NAME" --resource-group "$RG" --subscription "$SUB" -o json 2>&1)" && { echo "still present" >&2; exit 1; }
+printf '%s\n' "$OUT" | grep -q -i -E 'not.?found' && echo "DELETED" || { printf '%s\n' "$OUT" >&2; exit 1; }
 ```
 
-Expected: the gate's subscription, then `1` (not found).
+Expected: the subscription id, the group's resource id, then `DELETED`. Any other error on the final read (403, throttling) is printed and fails the block instead of passing as "gone".
 
 For `AZR-060` (alert quality), the fix is mostly attachment and hygiene, not new objects: attach this group to an alert that has none (`--add-action-groups <AG_ID>` in the relevant alert section's update), correct a mis-tiered `--severity` (0 critical … 4 verbose), and retune or remove a permanently-firing rule in its own alert section with the rule body quoted and confirmed individually. Replacing a dead receiver means creating the good one, re-pointing every referencing alert, verifying, then deleting the dead one — confirmed individually.
 
@@ -218,16 +220,18 @@ Expected: exit 0. Tune `--condition`, `--severity`, `--window-size`, and `--eval
 
 ```bash
 set -eu
-AZ_SUBSCRIPTION_CFG=""   # azure.subscription_id
-SUB="${AZ_SUBSCRIPTION_CFG:-$(az account show --query id -o tsv)}"
-echo "subscription: ${SUB}"   # must match the live-safety gate's subscription
-RG="observability-rg"
-ALERT_NAME="checkout-5xx-warning"   # the alert this setup created
+SUB="<subscription-id>"      # azure.subscription_id: the subscription the live-safety gate printed
+RG="<resource-group>"        # the resource group that owns the alert
+ALERT_NAME="<alert-name>"    # the metric alert this setup created
+for v in "$SUB" "$RG" "$ALERT_NAME"; do case "$v" in ''|'<'*) echo "Fill in every <...> value from the change record first" >&2; exit 1 ;; esac; done
+az account show --subscription "$SUB" --query id -o tsv   # stops here if this login cannot see the subscription
+az monitor metrics alert show --name "$ALERT_NAME" --resource-group "$RG" --subscription "$SUB" --query id -o tsv   # what will be deleted
 az monitor metrics alert delete --name "$ALERT_NAME" --resource-group "$RG" --subscription "$SUB"
-az monitor metrics alert show --name "$ALERT_NAME" --resource-group "$RG" --subscription "$SUB" -o json 2>&1 | grep -c -i -E 'not.?found'
+OUT="$(az monitor metrics alert show --name "$ALERT_NAME" --resource-group "$RG" --subscription "$SUB" -o json 2>&1)" && { echo "still present" >&2; exit 1; }
+printf '%s\n' "$OUT" | grep -q -i -E 'not.?found' && echo "DELETED" || { printf '%s\n' "$OUT" >&2; exit 1; }
 ```
 
-Expected: the gate's subscription, then `1` (not found). This create-verify shape serves every critical resource type; only the `--scopes`, `--condition`, and `--description` change.
+Expected: the subscription id, the alert's resource id, then `DELETED`. This create-verify shape serves every critical resource type; only the `--scopes`, `--condition`, and `--description` change.
 
 ## Add log alerts
 
@@ -261,16 +265,19 @@ Expected: the gate query parses and returns (inspect the count — an empty resu
 
 ```bash
 set -eu
-AZ_SUBSCRIPTION_CFG=""   # azure.subscription_id
-SUB="${AZ_SUBSCRIPTION_CFG:-$(az account show --query id -o tsv)}"
-echo "subscription: ${SUB}"   # must match the live-safety gate's subscription
-RG="observability-rg"
-ALERT_NAME="checkout-error-log-rate"   # the alert this setup created
-az monitor scheduled-query delete --name "$ALERT_NAME" --resource-group "$RG" --subscription "$SUB"
-az monitor scheduled-query show --name "$ALERT_NAME" --resource-group "$RG" --subscription "$SUB" -o json 2>&1 | grep -c -i -E 'not.?found'
+SUB="<subscription-id>"      # azure.subscription_id: the subscription the live-safety gate printed
+RG="<resource-group>"        # the resource group that owns the rule
+ALERT_NAME="<alert-name>"    # the scheduled-query rule this setup created
+for v in "$SUB" "$RG" "$ALERT_NAME"; do case "$v" in ''|'<'*) echo "Fill in every <...> value from the change record first" >&2; exit 1 ;; esac; done
+az account show --subscription "$SUB" --query id -o tsv   # stops here if this login cannot see the subscription
+az monitor scheduled-query show --name "$ALERT_NAME" --resource-group "$RG" --subscription "$SUB" --query id -o tsv   # what will be deleted
+# --yes: this delete otherwise stops at a confirmation prompt.
+az monitor scheduled-query delete --name "$ALERT_NAME" --resource-group "$RG" --subscription "$SUB" --yes
+OUT="$(az monitor scheduled-query show --name "$ALERT_NAME" --resource-group "$RG" --subscription "$SUB" -o json 2>&1)" && { echo "still present" >&2; exit 1; }
+printf '%s\n' "$OUT" | grep -q -i -E 'not.?found' && echo "DELETED" || { printf '%s\n' "$OUT" >&2; exit 1; }
 ```
 
-Expected: the gate's subscription, then `1` (not found). The `az monitor scheduled-query` flag shape varies across CLI versions more than most — run `az monitor scheduled-query create --help` and re-announce if it differs.
+Expected: the subscription id, the rule's resource id, then `DELETED`. The `az monitor scheduled-query` flag shape varies across CLI versions more than most — run `az monitor scheduled-query create --help` and re-announce if it differs.
 
 ## Add activity-log alerts
 
@@ -297,16 +304,18 @@ Expected: exit 0. Repeat with `category=ResourceHealth` for per-resource health 
 
 ```bash
 set -eu
-AZ_SUBSCRIPTION_CFG=""   # azure.subscription_id
-SUB="${AZ_SUBSCRIPTION_CFG:-$(az account show --query id -o tsv)}"
-echo "subscription: ${SUB}"   # must match the live-safety gate's subscription
-RG="observability-rg"
-ALERT_NAME="service-health-incidents"   # the alert this setup created
+SUB="<subscription-id>"      # azure.subscription_id: the subscription the live-safety gate printed
+RG="<resource-group>"        # the resource group that owns the alert
+ALERT_NAME="<alert-name>"    # the activity-log alert this setup created
+for v in "$SUB" "$RG" "$ALERT_NAME"; do case "$v" in ''|'<'*) echo "Fill in every <...> value from the change record first" >&2; exit 1 ;; esac; done
+az account show --subscription "$SUB" --query id -o tsv   # stops here if this login cannot see the subscription
+az monitor activity-log alert show --name "$ALERT_NAME" --resource-group "$RG" --subscription "$SUB" --query id -o tsv   # what will be deleted
 az monitor activity-log alert delete --name "$ALERT_NAME" --resource-group "$RG" --subscription "$SUB"
-az monitor activity-log alert show --name "$ALERT_NAME" --resource-group "$RG" --subscription "$SUB" -o json 2>&1 | grep -c -i -E 'not.?found'
+OUT="$(az monitor activity-log alert show --name "$ALERT_NAME" --resource-group "$RG" --subscription "$SUB" -o json 2>&1)" && { echo "still present" >&2; exit 1; }
+printf '%s\n' "$OUT" | grep -q -i -E 'not.?found' && echo "DELETED" || { printf '%s\n' "$OUT" >&2; exit 1; }
 ```
 
-Expected: the gate's subscription, then `1` (not found).
+Expected: the subscription id, the alert's resource id, then `DELETED`.
 
 ## Enable VM diagnostics
 
@@ -332,16 +341,18 @@ Expected: exit 0. **Rollback**, in its own fresh shell:
 
 ```bash
 set -eu
-AZ_SUBSCRIPTION_CFG=""   # azure.subscription_id
-SUB="${AZ_SUBSCRIPTION_CFG:-$(az account show --query id -o tsv)}"
-echo "subscription: ${SUB}"   # must match the live-safety gate's subscription
-RG="observability-rg"
-ALERT_NAME="api-01-cpu-warning"   # the alert this setup created
+SUB="<subscription-id>"      # azure.subscription_id: the subscription the live-safety gate printed
+RG="<resource-group>"        # the resource group that owns the alert
+ALERT_NAME="<alert-name>"    # the VM metric alert this setup created
+for v in "$SUB" "$RG" "$ALERT_NAME"; do case "$v" in ''|'<'*) echo "Fill in every <...> value from the change record first" >&2; exit 1 ;; esac; done
+az account show --subscription "$SUB" --query id -o tsv   # stops here if this login cannot see the subscription
+az monitor metrics alert show --name "$ALERT_NAME" --resource-group "$RG" --subscription "$SUB" --query id -o tsv   # what will be deleted
 az monitor metrics alert delete --name "$ALERT_NAME" --resource-group "$RG" --subscription "$SUB"
-az monitor metrics alert show --name "$ALERT_NAME" --resource-group "$RG" --subscription "$SUB" -o json 2>&1 | grep -c -i -E 'not.?found'
+OUT="$(az monitor metrics alert show --name "$ALERT_NAME" --resource-group "$RG" --subscription "$SUB" -o json 2>&1)" && { echo "still present" >&2; exit 1; }
+printf '%s\n' "$OUT" | grep -q -i -E 'not.?found' && echo "DELETED" || { printf '%s\n' "$OUT" >&2; exit 1; }
 ```
 
-Expected: the gate's subscription, then `1` (not found). The **guest-level half** — memory, disk-free, per-process, and log collection — needs the Azure Monitor Agent (or the legacy diagnostic extension) plus a Data Collection Rule on each VM. Installing an agent and wiring a DCR is a per-VM controlled rollout on a surface this skill does not own (it can also require a role assignment for the VM's managed identity, which a Contributor identity cannot make): record it in [Plan cost and out-of-scope changes](#plan-cost-and-out-of-scope-changes) with the VM list from the finding and a named owner, and leave the guest-metric part of `AZR-010` open until the agent metrics exist.
+Expected: the subscription id, the alert's resource id, then `DELETED`. The **guest-level half** — memory, disk-free, per-process, and log collection — needs the Azure Monitor Agent (or the legacy diagnostic extension) plus a Data Collection Rule on each VM. Installing an agent and wiring a DCR is a per-VM controlled rollout on a surface this skill does not own (it can also require a role assignment for the VM's managed identity, which a Contributor identity cannot make): record it in [Plan cost and out-of-scope changes](#plan-cost-and-out-of-scope-changes) with the VM list from the finding and a named owner, and leave the guest-metric part of `AZR-010` open until the agent metrics exist.
 
 - ❌ `Installed the Azure Monitor Agent on all six VMs and wired the DCRs under the same batch as the CPU alerts.`
 - ✅ `Created the platform CPU/disk metric alerts this run; filed the AMA + DCR install for guest metrics as a plan with the platform owner; the guest-metric half of AZR-010 stays open.`
@@ -368,17 +379,17 @@ Expected: exit 0 (`addonProfiles.omsagent.enabled == true`, confirmed path). **R
 
 ```bash
 set -eu
-AZ_SUBSCRIPTION_CFG=""   # azure.subscription_id
-SUB="${AZ_SUBSCRIPTION_CFG:-$(az account show --query id -o tsv)}"
-echo "subscription: ${SUB}"   # must match the live-safety gate's subscription
-RG="app-rg"
-CLUSTER="prod-aks"   # the cluster this setup changed
+SUB="<subscription-id>"     # azure.subscription_id: the subscription the live-safety gate printed
+RG="<resource-group>"       # the cluster's resource group
+CLUSTER="<cluster-name>"    # the cluster this setup changed
+for v in "$SUB" "$RG" "$CLUSTER"; do case "$v" in ''|'<'*) echo "Fill in every <...> value from the change record first" >&2; exit 1 ;; esac; done
+az account show --subscription "$SUB" --query id -o tsv   # stops here if this login cannot see the subscription
 az aks disable-addons --addons monitoring --name "$CLUSTER" --resource-group "$RG" --subscription "$SUB"
 az aks show --name "$CLUSTER" --resource-group "$RG" --subscription "$SUB" -o json \
   | jq -e '(.addonProfiles.omsagent.enabled // false) == false'
 ```
 
-Expected: the gate's subscription, then exit 0.
+Expected: the subscription id, then `true`.
 
 `AZR-031` managed Prometheus, in its own block (optionally add `--azure-monitor-workspace-resource-id <amw-id>` to the update):
 
@@ -394,7 +405,22 @@ az aks show --name "$CLUSTER" --resource-group "$RG" --subscription "$SUB" -o js
   | jq -e '.azureMonitorProfile.metrics.enabled == true'
 ```
 
-Expected: exit 0. Rollback is the same block with `--disable-azure-monitor-metrics` and the check flipped to `== false`. **RBAC caveat, load-bearing:** enabling managed Prometheus provisions a Data Collection Rule and can grant the cluster's managed identity a Monitoring role on the Azure Monitor Workspace. That grant is a `Microsoft.Authorization/roleAssignments/write`, which the confirmed validation identity (**Contributor**) could not perform (`AuthorizationFailed`). If your identity is Contributor and the enablement fails on the role assignment, stop and record `AZR-031` as **plan-with-named-owner** for the subscription Owner / a `User Access Administrator`; do not self-grant the role.
+Expected: exit 0. **Rollback**, in its own fresh shell:
+
+```bash
+set -eu
+SUB="<subscription-id>"     # azure.subscription_id: the subscription the live-safety gate printed
+RG="<resource-group>"       # the cluster's resource group
+CLUSTER="<cluster-name>"    # the cluster this setup changed
+for v in "$SUB" "$RG" "$CLUSTER"; do case "$v" in ''|'<'*) echo "Fill in every <...> value from the change record first" >&2; exit 1 ;; esac; done
+az account show --subscription "$SUB" --query id -o tsv   # stops here if this login cannot see the subscription
+az aks update --disable-azure-monitor-metrics --name "$CLUSTER" --resource-group "$RG" --subscription "$SUB" --yes
+# A null azureMonitorProfile is the "off" signal, so read a missing value as false.
+az aks show --name "$CLUSTER" --resource-group "$RG" --subscription "$SUB" -o json \
+  | jq -e '(.azureMonitorProfile.metrics.enabled // false) == false'
+```
+
+Expected: the subscription id, then `true`. **RBAC caveat, load-bearing:** enabling managed Prometheus provisions a Data Collection Rule and can grant the cluster's managed identity a Monitoring role on the Azure Monitor Workspace. That grant is a `Microsoft.Authorization/roleAssignments/write`, which the confirmed validation identity (**Contributor**) could not perform (`AuthorizationFailed`). If your identity is Contributor and the enablement fails on the role assignment, stop and record `AZR-031` as **plan-with-named-owner** for the subscription Owner / a `User Access Administrator`; do not self-grant the role.
 
 - ❌ `--enable-azure-monitor-metrics failed with AuthorizationFailed on the DCR role; created the role assignment myself to finish the fix.`
 - ✅ `Container Insights enabled and verified (omsagent.enabled true). Managed Prometheus needs a role assignment the Contributor identity cannot make; filed as a plan for the Owner, AZR-031 stays open.`
@@ -412,8 +438,12 @@ LA_WS_ID="/subscriptions/${SUB}/resourceGroups/observability-rg/providers/Micros
 DS_NAME="to-central-logs"
 BACKUP_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/azure/setup-$(date -u +%Y-%m-%d)/backups"
 mkdir -p "$BACKUP_DIR"
-# GET-before-write: capture any existing settings on this resource so rollback is exact.
-az monitor diagnostic-settings list --resource "$TARGET_ID" -o json > "${BACKUP_DIR}/diag-$(basename "$TARGET_ID").json" || true
+# GET-before-write: capture any existing settings on this resource. A failed read stops here.
+DIAG_BACKUP="${BACKUP_DIR}/diag-$(basename "$TARGET_ID").json"
+az monitor diagnostic-settings list --resource "$TARGET_ID" -o json > "$DIAG_BACKUP"
+# The rollback deletes DS_NAME, so never create over a setting that already exists under that name.
+jq -e --arg n "$DS_NAME" 'all((.value? // .)[]?; .name != $n)' "$DIAG_BACKUP" > /dev/null \
+  || { echo "A diagnostic setting named ${DS_NAME} already exists here: pick another name, or announce an edit of it" >&2; exit 1; }
 # NOTE: diagnosticSettings has NO confirmed ARM api-version in the validation run (no resource was
 # attached to during it). The 'az' CLI selects its own version; confirm the categories your resource
 # supports first with: az monitor diagnostic-settings categories list --resource "$TARGET_ID"
@@ -425,21 +455,23 @@ az monitor diagnostic-settings show --name "$DS_NAME" --resource "$TARGET_ID" -o
   | jq -e --arg ws "$LA_WS_ID" '.workspaceId == $ws'
 ```
 
-Expected: exit 0. **Rollback** (or re-apply the captured backup if you were editing an existing setting), in its own fresh shell:
+Expected: exit 0. **Rollback** removes the setting this setup created (the create block refuses a name that already existed), in its own fresh shell:
 
 ```bash
 set -eu
-AZ_SUBSCRIPTION_CFG=""   # azure.subscription_id
-SUB="${AZ_SUBSCRIPTION_CFG:-$(az account show --query id -o tsv)}"
-echo "subscription: ${SUB}"   # must match the live-safety gate's subscription
-TARGET_ID="/subscriptions/${SUB}/resourceGroups/app-rg/providers/Microsoft.ContainerService/managedClusters/prod-aks"  # the resource whose setting this setup created
-DS_NAME="to-central-logs"
+SUB="<subscription-id>"            # azure.subscription_id: the subscription the live-safety gate printed
+TARGET_ID="<target-resource-id>"   # the resource whose setting this setup created
+DS_NAME="<setting-name>"           # the diagnostic setting this setup created
+for v in "$SUB" "$TARGET_ID" "$DS_NAME"; do case "$v" in ''|'<'*) echo "Fill in every <...> value from the change record first" >&2; exit 1 ;; esac; done
+case "$TARGET_ID" in "/subscriptions/${SUB}/"*) ;; *) echo "TARGET_ID is not in subscription ${SUB}" >&2; exit 1 ;; esac
+az account show --subscription "$SUB" --query id -o tsv   # stops here if this login cannot see the subscription
+az monitor diagnostic-settings show --name "$DS_NAME" --resource "$TARGET_ID" --query id -o tsv   # what will be deleted
 az monitor diagnostic-settings delete --name "$DS_NAME" --resource "$TARGET_ID"
 az monitor diagnostic-settings list --resource "$TARGET_ID" -o json \
   | jq -e --arg n "$DS_NAME" 'all((.value? // .)[]?; .name != $n)'
 ```
 
-Expected: the gate's subscription, then `true`.
+Expected: the subscription id, the setting's id, then `true`.
 
 `AZR-040` retention (workspaces read is confirmed at `2022-10-01`). The GET-before-write captures the prior `retentionInDays`, so rollback is this same block with `RETENTION_DAYS` set to the backed-up value:
 

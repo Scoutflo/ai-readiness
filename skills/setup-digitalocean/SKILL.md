@@ -215,9 +215,11 @@ ALERT_EMAIL="oncall@example.org"           # the recipient your team actually wa
 UPTIME_DOWN_WINDOW="2m"                    # example, tune to your traffic
 SSL_EXPIRY_DAYS="21"                       # example
 UPTIME_LATENCY_MS="1000"                   # example, set from observed latency
-doctl monitoring uptime create "$CHECK_NAME" --target "$TARGET_URL" --type https --regions "$REGIONS"
-CHECK_ID="$(doctl monitoring uptime list -o json | jq -r --arg t "$TARGET_URL" '.[] | select(.target == $t) | .id' | head -1)"
-[ -n "$CHECK_ID" ] || { echo "check not found after create; stop"; exit 1; }
+# Take the id from the create itself: a lookup by target can return an older check for the same URL.
+CHECK_ID="$(doctl monitoring uptime create "$CHECK_NAME" --target "$TARGET_URL" --type https --regions "$REGIONS" -o json \
+  | jq -r '(if type=="array" then .[0] else . end).id')"
+case "$CHECK_ID" in ''|null) echo "check not created; stop" >&2; exit 1 ;; esac
+echo "created: ${CHECK_ID}"
 doctl monitoring uptime alert create "$CHECK_ID" --name "${CHECK_NAME}-down" --type down \
   --period "$UPTIME_DOWN_WINDOW" --emails "$ALERT_EMAIL"
 doctl monitoring uptime alert create "$CHECK_ID" --name "${CHECK_NAME}-ssl" --type ssl_expiry \
@@ -234,14 +236,16 @@ Rollback, in its own fresh shell. Unlike `doctl monitoring alert delete`, `doctl
 
 ```bash
 set -eu
-CHECK_ID="<uptime-check-id>"   # the CHECK_ID the create block resolved
-case "$CHECK_ID" in ''|'<'*) echo "Set CHECK_ID to the uptime check this setup created" >&2; exit 1 ;; esac
-doctl account get -o json | jq -r '(if type=="array" then .[0] else . end) | .team.uuid // "personal"'   # must match the live-safety gate's team
+EXPECTED_TEAM="<team-uuid>"    # digitalocean.team: the team the live-safety gate printed, or "personal"
+CHECK_ID="<uptime-check-id>"   # the "created:" value from the create block
+for v in "$EXPECTED_TEAM" "$CHECK_ID"; do case "$v" in ''|'<'*) echo "Fill in every <...> value from the change record first" >&2; exit 1 ;; esac; done
+LIVE_TEAM="$(doctl account get -o json | jq -r '(if type=="array" then .[0] else . end) | .team.uuid // "personal"')"
+[ "$LIVE_TEAM" = "$EXPECTED_TEAM" ] || { echo "This token is for team ${LIVE_TEAM}, not ${EXPECTED_TEAM}; stopping" >&2; exit 1; }
 doctl monitoring uptime delete "$CHECK_ID"
 doctl monitoring uptime list -o json | jq -e --arg id "$CHECK_ID" 'all(.[]?; .id != $id)'
 ```
 
-Expected: the gate's team, then `true`.
+Expected: `true`. A token for another team stops the block before the delete.
 
 ## Add App Platform alerts
 
@@ -297,15 +301,23 @@ Expected: `jq -e` exits 0, post-deploy code `200`, and the new rules listed. If 
 
 ```bash
 set -eu
-APP_ID="your-app-id"
-BACKUP_FILE="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/digitalocean/setup-$(date -u +%Y-%m-%d)/backups/app-${APP_ID}-HHMMSS.yaml"  # the snapshot from step 1
-PUBLIC_URL="https://www.example.com/"
+EXPECTED_TEAM="<team-uuid>"     # digitalocean.team: the team the live-safety gate printed, or "personal"
+APP_ID="<app-id>"               # the app this setup changed
+BACKUP_FILE="<snapshot-path>"   # the "snapshot:" path step 1 printed
+PUBLIC_URL="https://www.example.com/"   # the app's live URL
+for v in "$EXPECTED_TEAM" "$APP_ID" "$BACKUP_FILE"; do case "$v" in ''|'<'*) echo "Fill in every <...> value from the change record first" >&2; exit 1 ;; esac; done
+[ -s "$BACKUP_FILE" ] || { echo "No snapshot at ${BACKUP_FILE}" >&2; exit 1; }
+LIVE_TEAM="$(doctl account get -o json | jq -r '(if type=="array" then .[0] else . end) | .team.uuid // "personal"')"
+[ "$LIVE_TEAM" = "$EXPECTED_TEAM" ] || { echo "This token is for team ${LIVE_TEAM}, not ${EXPECTED_TEAM}; stopping" >&2; exit 1; }
+PREV_DEPLOY="$(doctl apps get "$APP_ID" -o json | jq -r '(if type=="array" then .[0] else . end).active_deployment.id')"
 doctl apps update "$APP_ID" --spec "$BACKUP_FILE" --wait
-doctl apps get "$APP_ID" -o json | jq -e '(if type=="array" then .[0] else . end).active_deployment.phase == "ACTIVE"'
+# A new active deployment proves the restore deployed; ACTIVE alone is also true of the old one.
+doctl apps get "$APP_ID" -o json | jq -e --arg prev "$PREV_DEPLOY" \
+  '(if type=="array" then .[0] else . end).active_deployment | (.id != $prev) and (.phase == "ACTIVE")'
 code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 "$PUBLIC_URL")"; echo "post-rollback: ${code}"
 ```
 
-Expected: `ACTIVE` and `200`. A rollback is itself a deployment; it needs the same announcement it just proved the need for.
+Expected: `true` and `post-rollback: 200`. A rollback is itself a deployment; it needs the same announcement it just proved the need for.
 
 ## Harden health checks
 
@@ -337,6 +349,7 @@ NEW_UUID="$(doctl monitoring alert create \
   --entities "$DB_UUID" \
   --description "PROD db-main WARNING cpu >${DB_WARN_PCT}% for ${DB_WINDOW} | capture CPU chart, connections, slow queries" \
   --emails "$ALERT_EMAIL" -o json | jq -r '(if type=="array" then .[0] else . end).uuid')"
+echo "created: ${NEW_UUID}"
 doctl monitoring alert get "$NEW_UUID" -o json \
   | jq -e --arg e "$DB_UUID" '(if type=="array" then .[0] else . end) | (.entities | index($e)) and .enabled'
 ```
@@ -347,14 +360,16 @@ Rollback, in its own fresh shell (one policy per run):
 
 ```bash
 set -eu
-NEW_UUID="<alert-policy-uuid>"   # the NEW_UUID the create block captured
-case "$NEW_UUID" in ''|'<'*) echo "Set NEW_UUID to the alert policy this setup created" >&2; exit 1 ;; esac
-doctl account get -o json | jq -r '(if type=="array" then .[0] else . end) | .team.uuid // "personal"'   # must match the live-safety gate's team
+EXPECTED_TEAM="<team-uuid>"      # digitalocean.team: the team the live-safety gate printed, or "personal"
+NEW_UUID="<alert-policy-uuid>"   # the "created:" value from the create block
+for v in "$EXPECTED_TEAM" "$NEW_UUID"; do case "$v" in ''|'<'*) echo "Fill in every <...> value from the change record first" >&2; exit 1 ;; esac; done
+LIVE_TEAM="$(doctl account get -o json | jq -r '(if type=="array" then .[0] else . end) | .team.uuid // "personal"')"
+[ "$LIVE_TEAM" = "$EXPECTED_TEAM" ] || { echo "This token is for team ${LIVE_TEAM}, not ${EXPECTED_TEAM}; stopping" >&2; exit 1; }
 doctl monitoring alert delete "$NEW_UUID" -f
 doctl monitoring alert list -o json | jq -e --arg u "$NEW_UUID" 'all(.[]?; .uuid != $u)'
 ```
 
-Expected: the gate's team, then `true`.
+Expected: `true`.
 
 For `DO-043`, removing a noisy or duplicate policy deletes a detection path: confirm each deletion individually with the policy body quoted, never inside a batch approval. Keep the named tiers, delete the generic duplicate, and verify:
 
@@ -374,31 +389,49 @@ For `DO-048`, where the engine exposes no native policy for a signal (connection
 
 For `DO-047`. Non-disruptive write, but decision-gated: name the backend, retention, redaction, index naming, and owner in the announcement, or record `DO-047` as blocked on that decision instead of shipping logs somewhere unowned. Database logsinks support a different destination list from app log forwarding (historically rsyslog, Elasticsearch, OpenSearch); verify the accepted types against current DO docs at run time.
 
+doctl has no `databases logsink` command (on 1.155.0 it prints the `databases` help and exits 0, so it fails silently), so this uses the API's singular `/logsink` route directly, the same route the audit reads:
+
 ```bash
 set -eu
-DB_UUID="your-database-uuid"
+DB_UUID="your-database-uuid"   # doctl databases list
 SINK_NAME="db-main-logs"
-doctl databases logsink create "$DB_UUID" --sink-name "$SINK_NAME" --sink-type opensearch \
-  --sink-config '{"url":"https://logs.example.com:9200","index_prefix":"db-main"}'
-doctl databases logsink list "$DB_UUID" -o json | jq -e --arg n "$SINK_NAME" 'any(.[]; .sink_name == $n)'
+SINK_TYPE="opensearch"         # opensearch or elasticsearch here; rsyslog takes server/port/tls/format instead of url
+INDEX_PREFIX="db-main"
+[ -n "${DIGITALOCEAN_ACCESS_TOKEN:-}" ] || { echo "DIGITALOCEAN_ACCESS_TOKEN is not set" >&2; exit 1; }
+# LOGSINK_URL embeds the backend credential: export it from your secret store, never echo it.
+[ -n "${LOGSINK_URL:-}" ] || { echo "LOGSINK_URL is not set" >&2; exit 1; }
+API="https://api.digitalocean.com/v2/databases/${DB_UUID}/logsink"
+SINK_ID="$(jq -n --arg n "$SINK_NAME" --arg t "$SINK_TYPE" --arg u "$LOGSINK_URL" --arg p "$INDEX_PREFIX" \
+    '{sink_name: $n, sink_type: $t, config: {url: $u, index_prefix: $p}}' \
+  | curl -fsS --max-time 30 -X POST -H "Authorization: Bearer ${DIGITALOCEAN_ACCESS_TOKEN}" \
+      -H 'Content-Type: application/json' -d @- "$API" \
+  | jq -r '.sink.sink_id')"
+echo "created: ${SINK_ID}"
+# The list returns each sink's config, credential included: assert on the id only, print nothing else.
+curl -fsS --max-time 30 -H "Authorization: Bearer ${DIGITALOCEAN_ACCESS_TOKEN}" "$API" \
+  | jq -e --arg id "$SINK_ID" 'any(.sinks[]?; .sink_id == $id)'
 ```
 
-Expected: exit 0. The sink config carries credentials on some backends; keep them in the config argument from an unechoed variable and out of every announcement and record. Older doctl versions lack the logsink group; use the API route from the audit reference in that case, announced the same way.
+Expected: the new sink id, then `true`. The sink config carries credentials on some backends; keep them in an unechoed variable and out of every announcement and record.
 
 Rollback, in its own fresh shell:
 
 ```bash
 set -eu
-DB_UUID="your-database-uuid"   # the cluster the sink was added to
-SINK_NAME="db-main-logs"       # the sink this setup created
-SINK_ID="<sink-id>"            # read it from: doctl databases logsink list "$DB_UUID"
-case "$SINK_ID" in ''|'<'*) echo "Set SINK_ID to the id of ${SINK_NAME}" >&2; exit 1 ;; esac
-doctl account get -o json | jq -r '(if type=="array" then .[0] else . end) | .team.uuid // "personal"'   # must match the live-safety gate's team
-doctl databases logsink delete "$DB_UUID" "$SINK_ID"
-doctl databases logsink list "$DB_UUID" -o json | jq -e --arg n "$SINK_NAME" 'all(.[]?; .sink_name != $n)'
+EXPECTED_TEAM="<team-uuid>"    # digitalocean.team: the team the live-safety gate printed, or "personal"
+DB_UUID="<database-uuid>"      # the cluster the sink was added to
+SINK_ID="<sink-id>"            # the "created:" value from the create block
+for v in "$EXPECTED_TEAM" "$DB_UUID" "$SINK_ID"; do case "$v" in ''|'<'*) echo "Fill in every <...> value from the change record first" >&2; exit 1 ;; esac; done
+[ -n "${DIGITALOCEAN_ACCESS_TOKEN:-}" ] || { echo "DIGITALOCEAN_ACCESS_TOKEN is not set" >&2; exit 1; }
+LIVE_TEAM="$(doctl account get -o json | jq -r '(if type=="array" then .[0] else . end) | .team.uuid // "personal"')"
+[ "$LIVE_TEAM" = "$EXPECTED_TEAM" ] || { echo "This token is for team ${LIVE_TEAM}, not ${EXPECTED_TEAM}; stopping" >&2; exit 1; }
+API="https://api.digitalocean.com/v2/databases/${DB_UUID}/logsink"
+curl -fsS --max-time 30 -X DELETE -H "Authorization: Bearer ${DIGITALOCEAN_ACCESS_TOKEN}" "${API}/${SINK_ID}" > /dev/null
+curl -fsS --max-time 30 -H "Authorization: Bearer ${DIGITALOCEAN_ACCESS_TOKEN}" "$API" \
+  | jq -e --arg id "$SINK_ID" 'all(.sinks[]?; .sink_id != $id)'
 ```
 
-Expected: the gate's team, then `true`.
+Expected: `true`.
 
 ## Enable app log forwarding
 

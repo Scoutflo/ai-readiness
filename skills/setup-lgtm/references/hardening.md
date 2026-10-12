@@ -93,18 +93,31 @@ set -eu
 # Resolved from ~/.scoutflo/toolkit.yaml
 KUBE_CONTEXT="your-kube-context"   # kubernetes.context
 MON_NS="monitoring"                # kubernetes.monitoring_namespace
-INGRESS_NAME="alertmanager-public"   # the ingress deleted above
+KIND="ingress"
+NAME="alertmanager-public"         # the ingress deleted above
 BACKUP_DATE="YYYY-MM-DD"           # UTC date of the backup step (its setup-<date>/backups folder)
-BACKUP_FILE="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/lgtm/setup-${BACKUP_DATE}/backups/ingress-${INGRESS_NAME}.yaml"
+BACKUP_FILE="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/lgtm/setup-${BACKUP_DATE}/backups/ingress-${NAME}.yaml"
 [ -s "$BACKUP_FILE" ] || { echo "No backup at ${BACKUP_FILE}: set BACKUP_DATE to the day the backup ran" >&2; exit 1; }
-# A deleted object cannot be recreated with its old resourceVersion/uid, so drop server-set fields first.
 RESTORE_FILE="${BACKUP_FILE%.yaml}.restore.yaml"
-sed -e '/^  resourceVersion: /d' -e '/^  uid: /d' -e '/^  creationTimestamp: /d' -e '/^  generation: /d' "$BACKUP_FILE" > "$RESTORE_FILE"
-kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" apply -f "$RESTORE_FILE"
-kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" get ingress "$INGRESS_NAME" -o jsonpath='{.metadata.name}{"\n"}'
+# Drop server-set fields and the last-applied annotation: a stale resourceVersion makes the update
+# fail with a conflict, and one recorded in the annotation can break later `kubectl apply` runs.
+sed -e '/^  resourceVersion: /d' -e '/^  uid: /d' -e '/^  creationTimestamp: /d' -e '/^  generation: /d' "$BACKUP_FILE" \
+  | awk '/^    kubectl\.kubernetes\.io\/last-applied-configuration:/ {skip=1; next} skip && /^      / {next} {skip=0; print}' > "$RESTORE_FILE"
+# Empty only when the object is absent; a Forbidden, wrong-context or timeout error stops the block.
+LIVE_RV="$(kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" get "$KIND" "$NAME" --ignore-not-found -o jsonpath='{.metadata.resourceVersion}')"
+if [ -n "$LIVE_RV" ]; then
+  # Still there: replace it at its current resourceVersion (custom resources refuse an update without one).
+  awk -v rv="$LIVE_RV" '{print} /^metadata:$/ && !d {print "  resourceVersion: \"" rv "\""; d=1}' "$RESTORE_FILE" > "${RESTORE_FILE}.replace"
+  kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" replace -f "${RESTORE_FILE}.replace"
+else
+  kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" create -f "$RESTORE_FILE"
+fi
+WANT="$(kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" create --dry-run=client -f "$RESTORE_FILE" -o json | jq -S '.data // .spec')"
+LIVE="$(kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" get "$KIND" "$NAME" -o json | jq -S '.data // .spec')"
+[ "$WANT" = "$LIVE" ] && echo "RESTORED: live ingress matches the backup"
 ```
 
-Expected: the ingress name. Repeat the external probe from SKILL.md to confirm access is back as it was.
+Expected: `RESTORED`. Repeat the external probe from SKILL.md to confirm access is back as it was.
 
 2. **Convert a LoadBalancer/NodePort Service to ClusterIP:**
 
@@ -121,7 +134,38 @@ kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" patch svc "$SVC" -p '{"spec":{"ty
 kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" get svc "$SVC" -o jsonpath='{.spec.type}{"\n"}'
 ```
 
-Expected: `ClusterIP`. If Helm or GitOps owns the Service, make the same change in values or Git instead. Rollback: apply the backup.
+Expected: `ClusterIP`. If Helm or GitOps owns the Service, make the same change in values or Git instead. Rollback restores the backup, in its own fresh shell:
+
+```bash
+set -eu
+# Resolved from ~/.scoutflo/toolkit.yaml
+KUBE_CONTEXT="your-kube-context"   # kubernetes.context
+MON_NS="monitoring"                # kubernetes.monitoring_namespace
+KIND="service"
+NAME="victoriametrics"             # SVC from the block above
+BACKUP_DATE="YYYY-MM-DD"           # UTC date of the backup step (its setup-<date>/backups folder)
+BACKUP_FILE="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/lgtm/setup-${BACKUP_DATE}/backups/svc-${NAME}.yaml"
+[ -s "$BACKUP_FILE" ] || { echo "No backup at ${BACKUP_FILE}: set BACKUP_DATE to the day the backup ran" >&2; exit 1; }
+RESTORE_FILE="${BACKUP_FILE%.yaml}.restore.yaml"
+# Drop server-set fields and the last-applied annotation: a stale resourceVersion makes the update
+# fail with a conflict, and one recorded in the annotation can break later `kubectl apply` runs.
+sed -e '/^  resourceVersion: /d' -e '/^  uid: /d' -e '/^  creationTimestamp: /d' -e '/^  generation: /d' "$BACKUP_FILE" \
+  | awk '/^    kubectl\.kubernetes\.io\/last-applied-configuration:/ {skip=1; next} skip && /^      / {next} {skip=0; print}' > "$RESTORE_FILE"
+# Empty only when the object is absent; a Forbidden, wrong-context or timeout error stops the block.
+LIVE_RV="$(kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" get "$KIND" "$NAME" --ignore-not-found -o jsonpath='{.metadata.resourceVersion}')"
+if [ -n "$LIVE_RV" ]; then
+  # Still there: replace it at its current resourceVersion (custom resources refuse an update without one).
+  awk -v rv="$LIVE_RV" '{print} /^metadata:$/ && !d {print "  resourceVersion: \"" rv "\""; d=1}' "$RESTORE_FILE" > "${RESTORE_FILE}.replace"
+  kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" replace -f "${RESTORE_FILE}.replace"
+else
+  kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" create -f "$RESTORE_FILE"
+fi
+WANT="$(kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" create --dry-run=client -f "$RESTORE_FILE" -o json | jq -S '.data // .spec')"
+LIVE="$(kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" get "$KIND" "$NAME" -o json | jq -S '.data // .spec')"
+[ "$WANT" = "$LIVE" ] && echo "RESTORED: live Service matches the backup"
+```
+
+Expected: `RESTORED`.
 
 3. **Keep the host but add auth** when your team genuinely needs external access: an authenticating reverse proxy or your ingress controller's auth annotations, with TLS. The exact mechanism depends on your ingress controller; announce the chosen mechanism and verify by repeating the external probe from SKILL.md and getting `401` or `403` without credentials.
 
@@ -196,8 +240,10 @@ set -eu
 # Resolved from ~/.scoutflo/toolkit.yaml
 KUBE_CONTEXT="your-kube-context"   # kubernetes.context
 MON_NS="monitoring"                # kubernetes.monitoring_namespace
-kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" delete networkpolicy default-deny-ingress
-kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" delete networkpolicy allow-monitoring-paths
+# --ignore-not-found: after a mid-batch stop the deny policy may never have been applied, and the
+# allow policy alone still isolates the namespace, so it must come out either way.
+kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" delete networkpolicy default-deny-ingress --ignore-not-found
+kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" delete networkpolicy allow-monitoring-paths --ignore-not-found
 kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" get networkpolicy default-deny-ingress allow-monitoring-paths 2>&1 | grep -c NotFound
 ```
 

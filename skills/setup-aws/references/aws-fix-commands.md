@@ -35,7 +35,9 @@ aws_cli() { if [ -n "$AWS_PROFILE_CFG" ]; then aws --profile "$AWS_PROFILE_CFG" 
 ALARM_NAME="prod-db-main-cpu-warning"   # from the audit's alarm inventory, or a new name you are about to create
 BACKUP_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/aws/setup-$(date -u +%Y-%m-%d)/backups"
 mkdir -p "$BACKUP_DIR"
-aws_cli cloudwatch describe-alarms --alarm-names "$ALARM_NAME" --output json > "${BACKUP_DIR}/alarm-${ALARM_NAME}.json"
+# Keep the first backup of the day: re-running after the change must not overwrite the prior state.
+[ -s "${BACKUP_DIR}/alarm-${ALARM_NAME}.json" ] \
+  || aws_cli cloudwatch describe-alarms --alarm-names "$ALARM_NAME" --output json > "${BACKUP_DIR}/alarm-${ALARM_NAME}.json"
 test -s "${BACKUP_DIR}/alarm-${ALARM_NAME}.json" && echo "backup: ${BACKUP_DIR}/alarm-${ALARM_NAME}.json"
 ```
 
@@ -91,22 +93,72 @@ Expected: final `jq -e` exits 0. Fixing an `AWS-004` INSUFFICIENT_DATA alarm is 
 
 ```bash
 set -eu
-AWS_PROFILE_CFG=""; AWS_REGION_CFG="us-east-1"
+AWS_PROFILE_CFG=""                 # aws.profile
+AWS_REGION_CFG="<region>"          # aws.region: the region the alarm lives in
 aws_cli() { if [ -n "$AWS_PROFILE_CFG" ]; then aws --profile "$AWS_PROFILE_CFG" ${AWS_REGION_CFG:+--region "$AWS_REGION_CFG"} "$@"; else aws ${AWS_REGION_CFG:+--region "$AWS_REGION_CFG"} "$@"; fi; }
-ALARM_NAME="prod-db-main-cpu-warning"
-BACKUP_FILE="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/aws/setup-$(date -u +%Y-%m-%d)/backups/alarm-${ALARM_NAME}.json"   # step-1 backup
-# Empty backup (alarm did not exist before) restores by deletion:
-if jq -e '.MetricAlarms | length == 0' "$BACKUP_FILE" >/dev/null 2>&1; then
+AWS_ACCOUNT="<account-id>"         # aws.account_id: the account the live-safety gate printed
+ALARM_NAME="<alarm-name>"          # the alarm this setup created or updated
+BACKUP_DATE="YYYY-MM-DD"           # UTC date of the backup step (its setup-<date>/backups folder)
+for v in "$AWS_REGION_CFG" "$AWS_ACCOUNT" "$ALARM_NAME"; do case "$v" in ''|'<'*) echo "Fill in every <...> value from the change record first" >&2; exit 1 ;; esac; done
+BACKUP_FILE="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/aws/setup-${BACKUP_DATE}/backups/alarm-${ALARM_NAME}.json"
+[ -s "$BACKUP_FILE" ] || { echo "No backup at ${BACKUP_FILE}: set BACKUP_DATE to the day the backup ran" >&2; exit 1; }
+LIVE_ACCOUNT="$(aws_cli sts get-caller-identity --query Account --output text)"
+[ "$LIVE_ACCOUNT" = "$AWS_ACCOUNT" ] || { echo "Signed in to account ${LIVE_ACCOUNT}, not ${AWS_ACCOUNT}; stopping" >&2; exit 1; }
+if jq -e '.MetricAlarms | length == 0' "$BACKUP_FILE" > /dev/null; then
+  # The alarm did not exist before: restore by deletion.
   aws_cli cloudwatch delete-alarms --alarm-names "$ALARM_NAME"
-  echo "restored: alarm did not exist before, deleted"
+  aws_cli cloudwatch describe-alarms --alarm-names "$ALARM_NAME" --output json | jq -e '.MetricAlarms | length == 0'
 else
-  # Non-empty backup restores by re-putting the exact prior parameters.
-  jq -r '.MetricAlarms[0] | [.AlarmName, .Namespace, .MetricName, .Statistic, (.Period|tostring), (.EvaluationPeriods|tostring), (.Threshold|tostring), .ComparisonOperator] | @tsv' "$BACKUP_FILE"
-  echo "re-run put-metric-alarm with these exact prior values, then verify with describe-alarms"
+  # Re-put the exact prior definition: every PutMetricAlarm input the backup holds.
+  RESTORE_FILE="${BACKUP_FILE%.json}.restore.json"
+  jq '.MetricAlarms[0] | {AlarmName, AlarmDescription, ActionsEnabled, OKActions, AlarmActions, InsufficientDataActions,
+      MetricName, Namespace, Statistic, ExtendedStatistic, Dimensions, Period, Unit, EvaluationPeriods,
+      DatapointsToAlarm, Threshold, ComparisonOperator, TreatMissingData, EvaluateLowSampleCountPercentile,
+      Metrics, ThresholdMetricId} | with_entries(select(.value != null))' "$BACKUP_FILE" > "$RESTORE_FILE"
+  aws_cli cloudwatch put-metric-alarm --cli-input-json "file://${RESTORE_FILE}"
+  aws_cli cloudwatch describe-alarms --alarm-names "$ALARM_NAME" --output json \
+    | jq -e --slurpfile b "$BACKUP_FILE" '[.MetricAlarms[0], $b[0].MetricAlarms[0]]
+        | map({Dimensions, AlarmActions, OKActions, Threshold, Period, EvaluationPeriods, ComparisonOperator, TreatMissingData})
+        | .[0] == .[1]'
 fi
 ```
 
-Dashboards (`AWS-005`): `aws cloudwatch put-dashboard --dashboard-name "<service>-overview" --dashboard-body file://dashboard.json`, verified with `aws cloudwatch get-dashboard --dashboard-name ... | jq -e '.DashboardBody | length > 0'`. Rollback: `aws cloudwatch delete-dashboards --dashboard-names "<name>"`.
+Expected: `true`, from the deletion check or from the restored alarm matching its backup on dimensions, actions, threshold, period, evaluation periods, comparison, and missing-data treatment.
+
+Dashboards (`AWS-005`). Create only when no dashboard of that name exists, so the rollback's delete can never remove one your team built:
+
+```bash
+set -eu
+AWS_PROFILE_CFG=""; AWS_REGION_CFG="us-east-1"
+aws_cli() { if [ -n "$AWS_PROFILE_CFG" ]; then aws --profile "$AWS_PROFILE_CFG" ${AWS_REGION_CFG:+--region "$AWS_REGION_CFG"} "$@"; else aws ${AWS_REGION_CFG:+--region "$AWS_REGION_CFG"} "$@"; fi; }
+DASHBOARD_NAME="checkout-overview"   # <service>-overview
+DASHBOARD_FILE="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/aws/setup-$(date -u +%Y-%m-%d)/checkout-dashboard.json"   # the announced body
+[ -s "$DASHBOARD_FILE" ] || { echo "No dashboard body at ${DASHBOARD_FILE}" >&2; exit 1; }
+aws_cli cloudwatch list-dashboards --dashboard-name-prefix "$DASHBOARD_NAME" --output json \
+  | jq -e --arg n "$DASHBOARD_NAME" 'all(.DashboardEntries[]?; .DashboardName != $n)' > /dev/null \
+  || { echo "A dashboard named ${DASHBOARD_NAME} already exists: pick another name, or announce an edit of it" >&2; exit 1; }
+aws_cli cloudwatch put-dashboard --dashboard-name "$DASHBOARD_NAME" --dashboard-body "file://${DASHBOARD_FILE}"
+aws_cli cloudwatch get-dashboard --dashboard-name "$DASHBOARD_NAME" --output json | jq -e '.DashboardBody | length > 0'
+```
+
+Expected: an empty `DashboardValidationMessages` list, then `true`. Rollback, in its own fresh shell:
+
+```bash
+set -eu
+AWS_PROFILE_CFG=""                 # aws.profile
+AWS_REGION_CFG="<region>"          # aws.region: the region the dashboard was created in
+aws_cli() { if [ -n "$AWS_PROFILE_CFG" ]; then aws --profile "$AWS_PROFILE_CFG" ${AWS_REGION_CFG:+--region "$AWS_REGION_CFG"} "$@"; else aws ${AWS_REGION_CFG:+--region "$AWS_REGION_CFG"} "$@"; fi; }
+AWS_ACCOUNT="<account-id>"         # aws.account_id: the account the live-safety gate printed
+DASHBOARD_NAME="<dashboard-name>"  # the dashboard this setup created
+for v in "$AWS_REGION_CFG" "$AWS_ACCOUNT" "$DASHBOARD_NAME"; do case "$v" in ''|'<'*) echo "Fill in every <...> value from the change record first" >&2; exit 1 ;; esac; done
+LIVE_ACCOUNT="$(aws_cli sts get-caller-identity --query Account --output text)"
+[ "$LIVE_ACCOUNT" = "$AWS_ACCOUNT" ] || { echo "Signed in to account ${LIVE_ACCOUNT}, not ${AWS_ACCOUNT}; stopping" >&2; exit 1; }
+aws_cli cloudwatch delete-dashboards --dashboard-names "$DASHBOARD_NAME"
+aws_cli cloudwatch list-dashboards --dashboard-name-prefix "$DASHBOARD_NAME" --output json \
+  | jq -e --arg n "$DASHBOARD_NAME" 'all(.DashboardEntries[]?; .DashboardName != $n)'
+```
+
+Expected: `true`.
 
 ## 2. Fix alert routing (AWS-010, AWS-011, AWS-012, AWS-014)
 
@@ -122,7 +174,9 @@ BACKUP_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/aws/setup-$(date -u +%Y-%m-
 mkdir -p "$BACKUP_DIR"
 
 # 1. Backup (GET-before-write): capture existing topics so a restore knows what existed.
-aws_cli sns list-topics --output json > "${BACKUP_DIR}/sns-topics-before.json"
+#    Keep the first one of the day: create-topic returns an existing same-named topic, and the
+#    restore must be able to tell a topic your team already had from one this setup made.
+[ -s "${BACKUP_DIR}/sns-topics-before.json" ] || aws_cli sns list-topics --output json > "${BACKUP_DIR}/sns-topics-before.json"
 
 # 2. Create the topic (announced first), then subscribe:
 TOPIC_ARN="$(aws_cli sns create-topic --name "$TOPIC_NAME" --output json | jq -r '.TopicArn')"
@@ -142,23 +196,68 @@ Expected: exit 0. Email and SMS subscriptions still need a human to click the co
 
 ```bash
 set -eu
-AWS_PROFILE_CFG=""; AWS_REGION_CFG="us-east-1"
+AWS_PROFILE_CFG=""                 # aws.profile
+AWS_REGION_CFG="<region>"          # aws.region: the region the topic lives in
 aws_cli() { if [ -n "$AWS_PROFILE_CFG" ]; then aws --profile "$AWS_PROFILE_CFG" ${AWS_REGION_CFG:+--region "$AWS_REGION_CFG"} "$@"; else aws ${AWS_REGION_CFG:+--region "$AWS_REGION_CFG"} "$@"; fi; }
-TOPIC_ARN="arn:aws:sns:us-east-1:123456789012:prod-critical-alerts"   # the topic created above
-SUB_ARN="arn:aws:sns:us-east-1:123456789012:prod-critical-alerts:abc-123"   # the subscription created above; may still be the literal string PendingConfirmation
-# Only call unsubscribe when the subscription was actually confirmed; an unconfirmed
-# email/SMS subscription's ARN is the literal string PendingConfirmation, not a real ARN,
-# and unsubscribe on it fails live with "InvalidParameter: An ARN must have at least
-# 6 elements, not 1". Deleting the topic removes pending subscriptions along with it,
-# so skipping unsubscribe in that case is correct, not a shortcut.
-if [ "$SUB_ARN" != "PendingConfirmation" ] && [ "$SUB_ARN" != "pending confirmation" ]; then
-  aws_cli sns unsubscribe --subscription-arn "$SUB_ARN"
+AWS_ACCOUNT="<account-id>"         # aws.account_id: the account the live-safety gate printed
+TOPIC_ARN="<topic-arn>"            # the "created:" value from the block above
+SUB_ARN="<subscription-arn>"       # the "subscription:" value; may be the literal string PendingConfirmation
+BACKUP_DATE="YYYY-MM-DD"           # UTC date of the change (its setup-<date>/backups folder)
+for v in "$AWS_REGION_CFG" "$AWS_ACCOUNT" "$TOPIC_ARN" "$SUB_ARN"; do case "$v" in ''|'<'*) echo "Fill in every <...> value from the change record first" >&2; exit 1 ;; esac; done
+BACKUP_FILE="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/aws/setup-${BACKUP_DATE}/backups/sns-topics-before.json"
+[ -s "$BACKUP_FILE" ] || { echo "No backup at ${BACKUP_FILE}: set BACKUP_DATE to the day of the change" >&2; exit 1; }
+LIVE_ACCOUNT="$(aws_cli sts get-caller-identity --query Account --output text)"
+[ "$LIVE_ACCOUNT" = "$AWS_ACCOUNT" ] || { echo "Signed in to account ${LIVE_ACCOUNT}, not ${AWS_ACCOUNT}; stopping" >&2; exit 1; }
+# An unconfirmed email/SMS subscription's ARN is the literal string PendingConfirmation, and
+# unsubscribe on it fails live with "InvalidParameter: An ARN must have at least 6 elements, not 1".
+case "$SUB_ARN" in PendingConfirmation|"pending confirmation") CONFIRMED="no" ;; *) CONFIRMED="yes" ;; esac
+if jq -e --arg t "$TOPIC_ARN" 'any(.Topics[]?; .TopicArn == $t)' "$BACKUP_FILE" > /dev/null; then
+  # The topic existed before this setup: remove only the subscription it added, never the topic.
+  if [ "$CONFIRMED" = "yes" ]; then
+    aws_cli sns unsubscribe --subscription-arn "$SUB_ARN"
+    aws_cli sns list-subscriptions-by-topic --topic-arn "$TOPIC_ARN" --output json \
+      | jq -e --arg s "$SUB_ARN" 'all(.Subscriptions[]?; .SubscriptionArn != $s)'
+  else
+    echo "Topic kept. The pending subscription cannot be removed while unconfirmed: ask its recipient not to confirm it."
+  fi
+else
+  # This setup created the topic: deleting it removes every subscription on it, pending or not.
+  aws_cli sns delete-topic --topic-arn "$TOPIC_ARN"
+  aws_cli sns list-topics --output json | jq -e --arg t "$TOPIC_ARN" 'all(.Topics[]?; .TopicArn != $t)'
 fi
-aws_cli sns delete-topic --topic-arn "$TOPIC_ARN"
-aws_cli sns list-topics --output json | jq -e --arg t "$TOPIC_ARN" '[.Topics[] | select(.TopicArn == $t)] | length == 0'
 ```
 
-Expected: exit 0, the topic absent from the re-fetched list. Confirmed live: `sns delete-topic` alone is sufficient cleanup even when the subscription was never confirmed, since deleting the topic removes every subscription on it, pending or not. `AWS-012` (severity tiering): create separate `<env>-critical-alerts` and `<env>-warning-alerts` topics rather than routing every severity into one; re-point alarms per severity using the same attach step. `AWS-014`: for EventBridge rules targeting alarm state changes, `aws events enable-rule --name "<rule>"` and verify with `aws events describe-rule --name "<rule>" | jq -e '.State == "ENABLED"'`; rollback is `aws events disable-rule --name "<rule>"`.
+Expected: `true`, from the subscription gone from a topic your team already had, or the topic gone when this setup created it. Confirmed live: `sns delete-topic` alone is sufficient cleanup for a topic this setup created even when the subscription was never confirmed, since deleting the topic removes every subscription on it, pending or not. `AWS-012` (severity tiering): create separate `<env>-critical-alerts` and `<env>-warning-alerts` topics rather than routing every severity into one; re-point alarms per severity using the same attach step.
+
+`AWS-014`: enable the existing EventBridge rule that routes alarm state changes:
+
+```bash
+set -eu
+AWS_PROFILE_CFG=""; AWS_REGION_CFG="us-east-1"
+aws_cli() { if [ -n "$AWS_PROFILE_CFG" ]; then aws --profile "$AWS_PROFILE_CFG" ${AWS_REGION_CFG:+--region "$AWS_REGION_CFG"} "$@"; else aws ${AWS_REGION_CFG:+--region "$AWS_REGION_CFG"} "$@"; fi; }
+RULE_NAME="alarm-state-to-oncall"   # the disabled rule from the audit evidence
+aws_cli events describe-rule --name "$RULE_NAME" --output json | jq -e '.State == "DISABLED"'
+aws_cli events enable-rule --name "$RULE_NAME"
+aws_cli events describe-rule --name "$RULE_NAME" --output json | jq -e '.State == "ENABLED"'
+```
+
+Expected: `true` twice: the rule was disabled before, and is enabled now. Rollback, in its own fresh shell:
+
+```bash
+set -eu
+AWS_PROFILE_CFG=""                 # aws.profile
+AWS_REGION_CFG="<region>"          # aws.region: the region the rule lives in
+aws_cli() { if [ -n "$AWS_PROFILE_CFG" ]; then aws --profile "$AWS_PROFILE_CFG" ${AWS_REGION_CFG:+--region "$AWS_REGION_CFG"} "$@"; else aws ${AWS_REGION_CFG:+--region "$AWS_REGION_CFG"} "$@"; fi; }
+AWS_ACCOUNT="<account-id>"         # aws.account_id: the account the live-safety gate printed
+RULE_NAME="<rule-name>"            # the rule this setup enabled
+for v in "$AWS_REGION_CFG" "$AWS_ACCOUNT" "$RULE_NAME"; do case "$v" in ''|'<'*) echo "Fill in every <...> value from the change record first" >&2; exit 1 ;; esac; done
+LIVE_ACCOUNT="$(aws_cli sts get-caller-identity --query Account --output text)"
+[ "$LIVE_ACCOUNT" = "$AWS_ACCOUNT" ] || { echo "Signed in to account ${LIVE_ACCOUNT}, not ${AWS_ACCOUNT}; stopping" >&2; exit 1; }
+aws_cli events disable-rule --name "$RULE_NAME"
+aws_cli events describe-rule --name "$RULE_NAME" --output json | jq -e '.State == "DISABLED"'
+```
+
+Expected: `true`.
 
 ## 3. Prove alert delivery (AWS-013)
 
@@ -241,8 +340,9 @@ MAX_ALLOCATED_STORAGE_GB="500"  # example ceiling for storage autoscaling
 BACKUP_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/aws/setup-$(date -u +%Y-%m-%d)/backups"
 mkdir -p "$BACKUP_DIR"
 
-# 1. Backup (GET-before-write):
-aws_cli rds describe-db-instances --db-instance-identifier "$DB_ID" --output json > "${BACKUP_DIR}/rds-${DB_ID}.json"
+# 1. Backup (GET-before-write). Keep the first one of the day so a re-run never overwrites the prior state:
+[ -s "${BACKUP_DIR}/rds-${DB_ID}.json" ] \
+  || aws_cli rds describe-db-instances --db-instance-identifier "$DB_ID" --output json > "${BACKUP_DIR}/rds-${DB_ID}.json"
 test -s "${BACKUP_DIR}/rds-${DB_ID}.json" && echo "backup: ${BACKUP_DIR}/rds-${DB_ID}.json"
 
 # 2. Write: backup retention and storage autoscaling apply without a failover or reboot
@@ -262,12 +362,25 @@ Expected: exit 0. **Restore, run as written when the change must be undone:**
 
 ```bash
 set -eu
-AWS_PROFILE_CFG=""; AWS_REGION_CFG="us-east-1"
+AWS_PROFILE_CFG=""                 # aws.profile
+AWS_REGION_CFG="<region>"          # aws.region: the region the instance lives in
 aws_cli() { if [ -n "$AWS_PROFILE_CFG" ]; then aws --profile "$AWS_PROFILE_CFG" ${AWS_REGION_CFG:+--region "$AWS_REGION_CFG"} "$@"; else aws ${AWS_REGION_CFG:+--region "$AWS_REGION_CFG"} "$@"; fi; }
-DB_ID="db-main"
-BACKUP_FILE="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/aws/setup-$(date -u +%Y-%m-%d)/backups/rds-${DB_ID}.json"   # step-1 backup
-PREV_RETENTION="$(jq -r '.DBInstances[0].BackupRetentionPeriod' "$BACKUP_FILE")"
-PREV_MAX_STORAGE="$(jq -r '.DBInstances[0].MaxAllocatedStorage // 0' "$BACKUP_FILE")"
+AWS_ACCOUNT="<account-id>"         # aws.account_id: the account the live-safety gate printed
+DB_ID="<db-instance-id>"           # the instance this setup changed
+BACKUP_DATE="YYYY-MM-DD"           # UTC date of the backup step (its setup-<date>/backups folder)
+ALLOW_BACKUP_DELETION="no"         # yes only after announcing that restoring retention 0 deletes every automated backup
+for v in "$AWS_REGION_CFG" "$AWS_ACCOUNT" "$DB_ID"; do case "$v" in ''|'<'*) echo "Fill in every <...> value from the change record first" >&2; exit 1 ;; esac; done
+BACKUP_FILE="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/aws/setup-${BACKUP_DATE}/backups/rds-${DB_ID}.json"
+[ -s "$BACKUP_FILE" ] || { echo "No backup at ${BACKUP_FILE}: set BACKUP_DATE to the day the backup ran" >&2; exit 1; }
+LIVE_ACCOUNT="$(aws_cli sts get-caller-identity --query Account --output text)"
+[ "$LIVE_ACCOUNT" = "$AWS_ACCOUNT" ] || { echo "Signed in to account ${LIVE_ACCOUNT}, not ${AWS_ACCOUNT}; stopping" >&2; exit 1; }
+PREV_RETENTION="$(jq -er '.DBInstances[0].BackupRetentionPeriod' "$BACKUP_FILE")"
+[ "$PREV_RETENTION" != "0" ] || [ "$ALLOW_BACKUP_DELETION" = "yes" ] \
+  || { echo "The prior retention is 0: restoring it turns automated backups off and deletes them all. Announce that, then set ALLOW_BACKUP_DELETION=yes" >&2; exit 1; }
+PREV_MAX_STORAGE="$(jq -r '.DBInstances[0].MaxAllocatedStorage // empty' "$BACKUP_FILE")"
+# No ceiling in the backup means autoscaling was off: turn it off again by setting the ceiling to
+# the storage allocated now (it may have grown since the backup).
+[ -n "$PREV_MAX_STORAGE" ] || PREV_MAX_STORAGE="$(aws_cli rds describe-db-instances --db-instance-identifier "$DB_ID" --query 'DBInstances[0].AllocatedStorage' --output text)"
 aws_cli rds modify-db-instance --db-instance-identifier "$DB_ID" \
   --backup-retention-period "$PREV_RETENTION" \
   --max-allocated-storage "$PREV_MAX_STORAGE" \
@@ -276,7 +389,7 @@ aws_cli rds describe-db-instances --db-instance-identifier "$DB_ID" --output jso
   | jq -e --argjson r "$PREV_RETENTION" '.DBInstances[0].BackupRetentionPeriod == $r'
 ```
 
-Expected: exit 0. Then CPU/connections/freeable-memory/replication-lag alarms follow the same `put-metric-alarm` shape as section 1, metric names `CPUUtilization`, `DatabaseConnections`, `FreeableMemory`, `ReplicaLag` (the last only on read replicas), dimensions `Name=DBInstanceIdentifier,Value=<id>`. `AWS-030` Multi-AZ conversion is traffic-impacting (triggers a brief failover) and never executes here: record it as a plan with current state, blast radius, maintenance window, and a named owner.
+Expected: `true`. Then CPU/connections/freeable-memory/replication-lag alarms follow the same `put-metric-alarm` shape as section 1, metric names `CPUUtilization`, `DatabaseConnections`, `FreeableMemory`, `ReplicaLag` (the last only on read replicas), dimensions `Name=DBInstanceIdentifier,Value=<id>`. `AWS-030` Multi-AZ conversion is traffic-impacting (triggers a brief failover) and never executes here: record it as a plan with current state, blast radius, maintenance window, and a named owner.
 
 ## 6. Fix uptime coverage (AWS-040 to AWS-043)
 
@@ -301,7 +414,7 @@ TARGET_PATH="/healthz"
 CHECK_INTERVAL="30"   # example seconds; Route53 accepts 10 or 30
 
 HC_ID="$(aws_cli route53 create-health-check --caller-reference "checkout-prod-$(date -u +%s)" \
-  --health-check-config "IPAddress=,FullyQualifiedDomainName=${TARGET_HOST},Port=443,Type=HTTPS,ResourcePath=${TARGET_PATH},RequestInterval=${CHECK_INTERVAL},FailureThreshold=3" \
+  --health-check-config "FullyQualifiedDomainName=${TARGET_HOST},Port=443,Type=HTTPS,ResourcePath=${TARGET_PATH},RequestInterval=${CHECK_INTERVAL},FailureThreshold=3" \
   --output json | jq -r '.HealthCheck.Id')"
 echo "created: ${HC_ID}"
 aws_cli route53 get-health-check --health-check-id "$HC_ID" --output json \
@@ -314,16 +427,19 @@ Rollback, in its own fresh shell (same explicit profile and region as every bloc
 
 ```bash
 set -eu
-AWS_PROFILE_CFG=""; AWS_REGION_CFG="us-east-1"
+AWS_PROFILE_CFG=""                 # aws.profile
+AWS_REGION_CFG="<region>"          # aws.region: the region the create block ran with
 aws_cli() { if [ -n "$AWS_PROFILE_CFG" ]; then aws --profile "$AWS_PROFILE_CFG" ${AWS_REGION_CFG:+--region "$AWS_REGION_CFG"} "$@"; else aws ${AWS_REGION_CFG:+--region "$AWS_REGION_CFG"} "$@"; fi; }
-HC_ID="<health-check-id>"   # the id the create block printed as "created:"
-case "$HC_ID" in ''|'<'*) echo "Set HC_ID to the health check this setup created" >&2; exit 1 ;; esac
-aws_cli sts get-caller-identity --query Account --output text   # must match the live-safety gate's account
+AWS_ACCOUNT="<account-id>"         # aws.account_id: the account the live-safety gate printed
+HC_ID="<health-check-id>"          # the id the create block printed as "created:"
+for v in "$AWS_REGION_CFG" "$AWS_ACCOUNT" "$HC_ID"; do case "$v" in ''|'<'*) echo "Fill in every <...> value from the change record first" >&2; exit 1 ;; esac; done
+LIVE_ACCOUNT="$(aws_cli sts get-caller-identity --query Account --output text)"
+[ "$LIVE_ACCOUNT" = "$AWS_ACCOUNT" ] || { echo "Signed in to account ${LIVE_ACCOUNT}, not ${AWS_ACCOUNT}; stopping" >&2; exit 1; }
 aws_cli route53 delete-health-check --health-check-id "$HC_ID"
 aws_cli route53 get-health-check --health-check-id "$HC_ID" 2>&1 | grep -c NoSuchHealthCheck
 ```
 
-Expected: the gate's account id, then `1` (`NoSuchHealthCheck`).
+Expected: `1` (`NoSuchHealthCheck`). Signed in to any other account, the block stops before the delete.
 
 ## 7. Enable account observability (AWS-050, AWS-051, AWS-055 write-capable; AWS-052 to AWS-054 plan-only)
 
@@ -339,7 +455,17 @@ RETENTION_DAYS="365"                        # example, tune to your compliance a
 BACKUP_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/aws/setup-$(date -u +%Y-%m-%d)/backups"
 mkdir -p "$BACKUP_DIR"
 
-aws_cli logs describe-log-groups --log-group-name-prefix "$LOG_GROUP" --output json > "${BACKUP_DIR}/loggroup-$(basename "$LOG_GROUP").json"
+# Key the backup by the full group name (groups sharing a last path segment must not collide),
+# and keep the first one of the day so a re-run never overwrites the prior state.
+GROUP_KEY="$(printf '%s' "$LOG_GROUP" | tr -c 'A-Za-z0-9._-' '_')"
+GROUP_BACKUP="${BACKUP_DIR}/loggroup-${GROUP_KEY}.json"
+[ -s "$GROUP_BACKUP" ] || aws_cli logs describe-log-groups --log-group-name-prefix "$LOG_GROUP" --output json > "$GROUP_BACKUP"
+jq -e --arg g "$LOG_GROUP" 'any(.logGroups[]; .logGroupName == $g)' "$GROUP_BACKUP" > /dev/null \
+  || { echo "Log group ${LOG_GROUP} not found" >&2; exit 1; }
+# The rollback deletes the central-sink filter, so never put one over a filter that already has that name.
+aws_cli logs describe-subscription-filters --log-group-name "$LOG_GROUP" --output json \
+  | jq -e 'all(.subscriptionFilters[]?; .filterName != "central-sink")' > /dev/null \
+  || { echo "${LOG_GROUP} already has a central-sink filter: announce an edit of it instead" >&2; exit 1; }
 aws_cli logs put-retention-policy --log-group-name "$LOG_GROUP" --retention-in-days "$RETENTION_DAYS"
 aws_cli logs put-subscription-filter --log-group-name "$LOG_GROUP" --filter-name "central-sink" \
   --filter-pattern "" --destination-arn "$DEST_ARN"
@@ -353,26 +479,40 @@ Expected: both `jq -e` calls exit 0. Rollback removes the filter and restores th
 
 ```bash
 set -eu
-AWS_PROFILE_CFG=""; AWS_REGION_CFG="us-east-1"
+AWS_PROFILE_CFG=""                 # aws.profile
+AWS_REGION_CFG="<region>"          # aws.region: the region the log group lives in
 aws_cli() { if [ -n "$AWS_PROFILE_CFG" ]; then aws --profile "$AWS_PROFILE_CFG" ${AWS_REGION_CFG:+--region "$AWS_REGION_CFG"} "$@"; else aws ${AWS_REGION_CFG:+--region "$AWS_REGION_CFG"} "$@"; fi; }
-LOG_GROUP="/ecs/checkout"   # the log group changed above
-BACKUP_DATE="YYYY-MM-DD"    # UTC date of the change (its setup-<date>/backups folder)
-BACKUP_FILE="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/aws/setup-${BACKUP_DATE}/backups/loggroup-$(basename "$LOG_GROUP").json"
+AWS_ACCOUNT="<account-id>"         # aws.account_id: the account the live-safety gate printed
+LOG_GROUP="<log-group-name>"       # the log group changed above
+BACKUP_DATE="YYYY-MM-DD"           # UTC date of the change (its setup-<date>/backups folder)
+for v in "$AWS_REGION_CFG" "$AWS_ACCOUNT" "$LOG_GROUP"; do case "$v" in ''|'<'*) echo "Fill in every <...> value from the change record first" >&2; exit 1 ;; esac; done
+GROUP_KEY="$(printf '%s' "$LOG_GROUP" | tr -c 'A-Za-z0-9._-' '_')"
+BACKUP_FILE="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/aws/setup-${BACKUP_DATE}/backups/loggroup-${GROUP_KEY}.json"
 [ -s "$BACKUP_FILE" ] || { echo "No backup at ${BACKUP_FILE}: set BACKUP_DATE to the day of the change" >&2; exit 1; }
-aws_cli sts get-caller-identity --query Account --output text   # must match the live-safety gate's account
-aws_cli logs delete-subscription-filter --log-group-name "$LOG_GROUP" --filter-name central-sink
+# A group missing from its backup is an error, never a sign that it had no retention.
+jq -e --arg g "$LOG_GROUP" 'any(.logGroups[]; .logGroupName == $g)' "$BACKUP_FILE" > /dev/null \
+  || { echo "${LOG_GROUP} is not in ${BACKUP_FILE}; refusing to guess its retention" >&2; exit 1; }
+LIVE_ACCOUNT="$(aws_cli sts get-caller-identity --query Account --output text)"
+[ "$LIVE_ACCOUNT" = "$AWS_ACCOUNT" ] || { echo "Signed in to account ${LIVE_ACCOUNT}, not ${AWS_ACCOUNT}; stopping" >&2; exit 1; }
+# After a mid-batch stop the filter may never have been added: remove it only when present.
+if aws_cli logs describe-subscription-filters --log-group-name "$LOG_GROUP" --output json \
+     | jq -e 'any(.subscriptionFilters[]?; .filterName == "central-sink")' > /dev/null; then
+  aws_cli logs delete-subscription-filter --log-group-name "$LOG_GROUP" --filter-name central-sink
+fi
 PREV="$(jq -r --arg g "$LOG_GROUP" '.logGroups[] | select(.logGroupName == $g) | .retentionInDays // empty' "$BACKUP_FILE")"
-# An absent retentionInDays in the backup means "Never expire".
+# The group is in the backup, so an absent retentionInDays means "Never expire".
 if [ -n "$PREV" ]; then
   aws_cli logs put-retention-policy --log-group-name "$LOG_GROUP" --retention-in-days "$PREV"
 else
   aws_cli logs delete-retention-policy --log-group-name "$LOG_GROUP"
 fi
 aws_cli logs describe-log-groups --log-group-name-prefix "$LOG_GROUP" --output json \
-  | jq -e --arg g "$LOG_GROUP" --arg p "$PREV" '.logGroups[] | select(.logGroupName == $g) | ((.retentionInDays // "") | tostring) == $p'
+  | jq -e --arg g "$LOG_GROUP" --arg p "$PREV" '[.logGroups[] | select(.logGroupName == $g) | ((.retentionInDays // "") | tostring)] == [$p]'
+aws_cli logs describe-subscription-filters --log-group-name "$LOG_GROUP" --output json \
+  | jq -e 'all(.subscriptionFilters[]?; .filterName != "central-sink")'
 ```
 
-Expected: the gate's account id, then a final `jq -e` exit 0 (retention back to the backed-up value).
+Expected: `true` twice: retention back to the backed-up value, and no `central-sink` filter left.
 
 `AWS-052` (CloudTrail), `AWS-053` (AWS Config recorder), and `AWS-054` (VPC Flow Logs) are account- or VPC-wide controlled rollouts per the four change-risk classes: they change what the account observes about itself and each deserves its own review outside this skill. Record each as a plan (current state, proposed target, blast radius, owner); never `aws cloudtrail update-trail`, `aws cloudtrail start-logging`, `aws configservice start-configuration-recorder`, or `aws ec2 create-flow-logs` from this skill. `AWS-055` is the decision record itself: backend, retention, redaction, and owner, captured in the change record even when the technical write above already ran.
 

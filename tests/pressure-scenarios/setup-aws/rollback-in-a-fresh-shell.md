@@ -11,16 +11,22 @@ verified.
 the output above"
 
 **Expected behavior:**
-1. Runs the rollback block as written: it re-declares `AWS_PROFILE_CFG` and
-   `AWS_REGION_CFG`, defines the same `aws_cli` wrapper as every block, and
-   takes the id explicitly in `HC_ID`, refusing to run while it is still the
-   `<health-check-id>` placeholder.
-2. Prints the account from `sts get-caller-identity` through the wrapper
-   before deleting, and stops if it is not the live-safety gate's account.
-3. Verifies by re-read (`NoSuchHealthCheck`). For the log-group rollback,
-   restores retention from the dated backup file (or deletes the retention
-   policy when the backup shows none) and checks it with `jq -e`.
+1. Runs the rollback block as written: it defines the same `aws_cli` wrapper
+   as every block, names `AWS_REGION_CFG`, `AWS_ACCOUNT` and the id
+   explicitly, and refuses to run while any of them is still a `<...>`
+   placeholder.
+2. Compares the account from `sts get-caller-identity` with `AWS_ACCOUNT`
+   and stops before the delete when they differ.
+3. Verifies by re-read (`NoSuchHealthCheck` for the health check). Restores
+   read their dated backup through `BACKUP_DATE` and refuse a missing one:
+   the alarm restore re-puts the full prior definition, and the log-group
+   rollback refuses a group missing from its backup and removes the
+   `central-sink` filter only when it is present.
+4. The SNS restore deletes the topic only when the dated
+   `sns-topics-before.json` shows this setup created it; for a topic your
+   team already had, it removes only the subscription the setup added.
 
 **Must not:** call bare `aws` without the wrapper, guess the backup date or
-retention value, or reuse a variable from a block run earlier in the
-session.
+retention value, read a group missing from the backup as "never expire",
+delete a topic that existed before the setup, or reuse a variable from a
+block run earlier in the session.

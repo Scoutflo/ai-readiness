@@ -160,15 +160,17 @@ TEAM="your-team-slug"          # a team slug from GET /organizations/${SENTRY_OR
 PROJECT_NAME="checkout"        # the service or app name
 PLATFORM="node"                # see references/api-cookbook.md#platform-values
 
-curl -fsS --max-time 10 -X POST "${API}/teams/${SENTRY_ORG}/${TEAM}/projects/" \
+# Sentry derives the slug from the name: take it from the response, the rollback needs the exact one.
+PROJECT_SLUG="$(curl -fsS --max-time 10 -X POST "${API}/teams/${SENTRY_ORG}/${TEAM}/projects/" \
   -H "Authorization: Bearer ${SENTRY_TOKEN}" -H "Content-Type: application/json" \
   -d "$(jq -n --arg n "$PROJECT_NAME" --arg p "$PLATFORM" \
-    '{name: $n, platform: $p, defaultRules: false}')"
+    '{name: $n, platform: $p, defaultRules: false}')" | jq -r '.slug')"
+echo "created project: ${PROJECT_SLUG}"
 
-curl -fsS --max-time 10 "${API}/projects/${SENTRY_ORG}/${PROJECT_NAME}/" \
+curl -fsS --max-time 10 "${API}/projects/${SENTRY_ORG}/${PROJECT_SLUG}/" \
   -H "Authorization: Bearer ${SENTRY_TOKEN}" \
   | jq -e --arg p "$PLATFORM" '.platform == $p'
-curl -fsS --max-time 10 "${API}/projects/${SENTRY_ORG}/${PROJECT_NAME}/rules/" \
+curl -fsS --max-time 10 "${API}/projects/${SENTRY_ORG}/${PROJECT_SLUG}/rules/" \
   -H "Authorization: Bearer ${SENTRY_TOKEN}" | jq -e 'length == 0'
 ```
 
@@ -178,12 +180,13 @@ Expect: both `jq -e` calls exit 0; the second prints `true` because the rules li
 set -eu
 SENTRY_HOST="us.sentry.io"; SENTRY_ORG="your-org-slug"; API="https://${SENTRY_HOST}/api/0"
 [ -n "${SENTRY_TOKEN:-}" ] || { echo "SENTRY_TOKEN is not set"; exit 1; }
-PROJECT_NAME="checkout"   # the project just created
+PROJECT_SLUG="<project-slug>"   # the "created project:" slug, never a guess: this deletes the project and its events
+case "$PROJECT_SLUG" in ''|'<'*) echo "Set PROJECT_SLUG to the project this setup created" >&2; exit 1 ;; esac
 
-curl -fsS --max-time 10 -X DELETE "${API}/projects/${SENTRY_ORG}/${PROJECT_NAME}/" \
+curl -fsS --max-time 10 -X DELETE "${API}/projects/${SENTRY_ORG}/${PROJECT_SLUG}/" \
   -H "Authorization: Bearer ${SENTRY_TOKEN}"
 code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 \
-  -H "Authorization: Bearer ${SENTRY_TOKEN}" "${API}/projects/${SENTRY_ORG}/${PROJECT_NAME}/")"
+  -H "Authorization: Bearer ${SENTRY_TOKEN}" "${API}/projects/${SENTRY_ORG}/${PROJECT_SLUG}/")"
 echo "post-delete: ${code}"
 ```
 
@@ -264,8 +267,11 @@ Expect: the backup file is non-empty, and the final `jq -e` exits 0. Add domain-
 set -eu
 SENTRY_HOST="us.sentry.io"; SENTRY_ORG="your-org-slug"; API="https://${SENTRY_HOST}/api/0"
 [ -n "${SENTRY_TOKEN:-}" ] || { echo "SENTRY_TOKEN is not set"; exit 1; }
-PROJECT="checkout"
-BACKUP_FILE="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/sentry/setup-$(date -u +%F)/backups/project-checkout-HHMMSS.json"  # the step-1 backup
+PROJECT="<project-slug>"        # the project the write changed
+BACKUP_FILE="<backup-path>"     # the "backup:" path step 1 printed
+for v in "$PROJECT" "$BACKUP_FILE"; do case "$v" in ''|'<'*) echo "Fill in every <...> value from the change record first" >&2; exit 1 ;; esac; done
+# Without this check a missing file would still send an empty PUT.
+[ -s "$BACKUP_FILE" ] || { echo "No backup at ${BACKUP_FILE}" >&2; exit 1; }
 
 # Sentry's project PUT accepts a partial body; restore only the fields this
 # section touched, taken byte-for-byte from the backup.
@@ -275,8 +281,8 @@ jq '{dataScrubber, dataScrubberDefaults, scrubIPAddresses, scrapeJavaScript, sen
 
 curl -fsS --max-time 10 "${API}/projects/${SENTRY_ORG}/${PROJECT}/" \
   -H "Authorization: Bearer ${SENTRY_TOKEN}" \
-  | jq -e --slurpfile b "$BACKUP_FILE" \
-      '.dataScrubber == $b[0].dataScrubber and .sensitiveFields == $b[0].sensitiveFields'
+  | jq -e --slurpfile b "$BACKUP_FILE" '[., $b[0]]
+      | map({dataScrubber, dataScrubberDefaults, scrubIPAddresses, scrapeJavaScript, sensitiveFields}) | .[0] == .[1]'
 ```
 
 Expect: exit 0, the fields byte-equal to the backup. A restore is itself a change; announce and record it like any other.
@@ -309,7 +315,27 @@ curl -fsS --max-time 10 "${API}/projects/${SENTRY_ORG}/${PROJECT}/keys/${KEY_ID}
   | jq -e --argjson limit "$KEY_RATE_LIMIT" '.rateLimit.count == $limit'
 ```
 
-Expect: exit 0. Restore: `jq '{rateLimit}' "$BACKUP_FILE"` piped into the same `PUT`, verified with `jq -e --slurpfile b "$BACKUP_FILE" '.rateLimit == $b[0].rateLimit'` against the re-fetched key. An unlimited key means one crash loop or one leaked DSN burns the whole quota and drowns real errors, so `KEY_RATE_LIMIT`/`KEY_RATE_WINDOW` are examples to tune, not universal constants.
+Expect: exit 0. An unlimited key means one crash loop or one leaked DSN burns the whole quota and drowns real errors, so `KEY_RATE_LIMIT`/`KEY_RATE_WINDOW` are examples to tune, not universal constants. Restore, in its own fresh shell:
+
+```bash
+set -eu
+SENTRY_HOST="us.sentry.io"; SENTRY_ORG="your-org-slug"; API="https://${SENTRY_HOST}/api/0"
+[ -n "${SENTRY_TOKEN:-}" ] || { echo "SENTRY_TOKEN is not set"; exit 1; }
+PROJECT="<project-slug>"        # the project that owns the key
+KEY_ID="<key-id>"               # the key the write changed
+BACKUP_FILE="<backup-path>"     # the "backup:" path the block above printed
+for v in "$PROJECT" "$KEY_ID" "$BACKUP_FILE"; do case "$v" in ''|'<'*) echo "Fill in every <...> value from the change record first" >&2; exit 1 ;; esac; done
+[ -s "$BACKUP_FILE" ] || { echo "No backup at ${BACKUP_FILE}" >&2; exit 1; }
+# A null rateLimit in the backup restores an unlimited key (Sentry disables the limit on null).
+jq '{rateLimit}' "$BACKUP_FILE" \
+  | curl -fsS --max-time 10 -X PUT "${API}/projects/${SENTRY_ORG}/${PROJECT}/keys/${KEY_ID}/" \
+      -H "Authorization: Bearer ${SENTRY_TOKEN}" -H "Content-Type: application/json" -d @-
+curl -fsS --max-time 10 "${API}/projects/${SENTRY_ORG}/${PROJECT}/keys/${KEY_ID}/" \
+  -H "Authorization: Bearer ${SENTRY_TOKEN}" \
+  | jq -e --slurpfile b "$BACKUP_FILE" '.rateLimit == $b[0].rateLimit'
+```
+
+Expect: exit 0.
 
 ## Alerting model decision
 
@@ -358,7 +384,8 @@ Expect: exit 0. **Rollback** (this is a create; rollback deletes and verifies ab
 set -eu
 SENTRY_HOST="us.sentry.io"; SENTRY_ORG="your-org-slug"; API="https://${SENTRY_HOST}/api/0"
 [ -n "${SENTRY_TOKEN:-}" ] || { echo "SENTRY_TOKEN is not set"; exit 1; }
-PROJECT="checkout"; RULE_ID="12345678"   # the rule just created
+PROJECT="<project-slug>"; RULE_ID="<rule-id>"   # the "created rule:" id from the create block
+for v in "$PROJECT" "$RULE_ID"; do case "$v" in ''|'<'*) echo "Fill in every <...> value from the change record first" >&2; exit 1 ;; esac; done
 
 curl -fsS --max-time 10 -X DELETE "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/${RULE_ID}/" \
   -H "Authorization: Bearer ${SENTRY_TOKEN}"
@@ -410,16 +437,19 @@ Expect: exit 0. Confirmed live: this delete succeeds with just `alerts:write` â€
 set -eu
 SENTRY_HOST="us.sentry.io"; SENTRY_ORG="your-org-slug"; API="https://${SENTRY_HOST}/api/0"
 [ -n "${SENTRY_TOKEN:-}" ] || { echo "SENTRY_TOKEN is not set"; exit 1; }
-PROJECT="checkout"
-BACKUP_FILE="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/sentry/setup-$(date -u +%F)/backups/default-rule-12345678.json"  # the step-1 backup
+PROJECT="<project-slug>"        # the project the rule was deleted from
+BACKUP_FILE="<backup-path>"     # the "backup:" path step 1 printed
+for v in "$PROJECT" "$BACKUP_FILE"; do case "$v" in ''|'<'*) echo "Fill in every <...> value from the change record first" >&2; exit 1 ;; esac; done
+[ -s "$BACKUP_FILE" ] || { echo "No backup at ${BACKUP_FILE}" >&2; exit 1; }
 
-jq '{name, actionMatch, filterMatch, environment, frequency, conditions, filters, actions}' "$BACKUP_FILE" \
+NEW_ID="$(jq '{name, actionMatch, filterMatch, environment, frequency, conditions, filters, actions}' "$BACKUP_FILE" \
   | curl -fsS --max-time 10 -X POST "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/" \
-      -H "Authorization: Bearer ${SENTRY_TOKEN}" -H "Content-Type: application/json" -d @-
-
-curl -fsS --max-time 10 "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/" \
+      -H "Authorization: Bearer ${SENTRY_TOKEN}" -H "Content-Type: application/json" -d @- | jq -r '.id')"
+echo "restored as rule: ${NEW_ID}"
+# Check the recreated rule itself, not any rule that happens to share its name.
+curl -fsS --max-time 10 "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/${NEW_ID}/" \
   -H "Authorization: Bearer ${SENTRY_TOKEN}" \
-  | jq -e --slurpfile b "$BACKUP_FILE" 'any(.[]; .name == $b[0].name)'
+  | jq -e --slurpfile b "$BACKUP_FILE" '.name == $b[0].name and (.actions | length) == ($b[0].actions | length)'
 ```
 
 Expect: exit 0. Deleting a rule is a lightweight change, but it is still confirmed individually, never inside a batch.
@@ -476,8 +506,10 @@ Expect: the backup file is non-empty, and the final `jq -e` exits 0 confirming `
 set -eu
 SENTRY_HOST="us.sentry.io"; SENTRY_ORG="your-org-slug"; API="https://${SENTRY_HOST}/api/0"
 [ -n "${SENTRY_TOKEN:-}" ] || { echo "SENTRY_TOKEN is not set"; exit 1; }
-PROJECT="checkout"; RULE_ID="12345678"
-BACKUP_FILE="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/sentry/setup-$(date -u +%F)/backups/rule-12345678-HHMMSS.json"  # the step-1 backup
+PROJECT="<project-slug>"; RULE_ID="<rule-id>"   # the rule the write changed
+BACKUP_FILE="<backup-path>"     # the "backup:" path step 1 printed
+for v in "$PROJECT" "$RULE_ID" "$BACKUP_FILE"; do case "$v" in ''|'<'*) echo "Fill in every <...> value from the change record first" >&2; exit 1 ;; esac; done
+[ -s "$BACKUP_FILE" ] || { echo "No backup at ${BACKUP_FILE}" >&2; exit 1; }
 
 jq '{name, actionMatch, filterMatch, environment, frequency, conditions, filters, actions}' "$BACKUP_FILE" \
   | curl -fsS --max-time 10 -X PUT "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/${RULE_ID}/" \
@@ -485,7 +517,8 @@ jq '{name, actionMatch, filterMatch, environment, frequency, conditions, filters
 
 curl -fsS --max-time 10 "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/${RULE_ID}/" \
   -H "Authorization: Bearer ${SENTRY_TOKEN}" \
-  | jq -e --slurpfile b "$BACKUP_FILE" '.actions == $b[0].actions'
+  | jq -e --slurpfile b "$BACKUP_FILE" '[., $b[0]]
+      | map({actionMatch, filterMatch, environment, frequency, conditions, filters, actions}) | .[0] == .[1]'
 ```
 
 Expect: exit 0. A rule that lists a Slack action is `configured`; only a delivered test notification proves the receiver is live. Send one low-risk test event once wiring is approved and re-confirmed (`POST /projects/${SENTRY_ORG}/${PROJECT}/rules/${RULE_ID}/tasks/` or the rule's test-fire endpoint on your API version), and record who confirmed receipt in the change log; do not mark SNTRY-005/SNTRY-011 fixed on the `jq -e` above alone.
@@ -603,7 +636,8 @@ Expect: exit 0. A failing assertion here is evidence to record, not silence: it 
 set -eu
 SENTRY_HOST="us.sentry.io"; SENTRY_ORG="your-org-slug"; API="https://${SENTRY_HOST}/api/0"
 [ -n "${SENTRY_TOKEN:-}" ] || { echo "SENTRY_TOKEN is not set"; exit 1; }
-MAPPING_ID="your-mapping-id"   # the mapping just created
+MAPPING_ID="<mapping-id>"   # the "created mapping:" id from the create block
+case "$MAPPING_ID" in ''|'<'*) echo "Set MAPPING_ID to the mapping this setup created" >&2; exit 1 ;; esac
 
 curl -fsS --max-time 10 -X DELETE "${API}/organizations/${SENTRY_ORG}/code-mappings/${MAPPING_ID}/" \
   -H "Authorization: Bearer ${SENTRY_TOKEN}"
@@ -665,7 +699,8 @@ Expect: exit 0 on the final assertion. Check-in URL format and rate limits are i
 set -eu
 SENTRY_HOST="us.sentry.io"; SENTRY_ORG="your-org-slug"; API="https://${SENTRY_HOST}/api/0"
 [ -n "${SENTRY_TOKEN:-}" ] || { echo "SENTRY_TOKEN is not set"; exit 1; }
-MONITOR_SLUG="nightly-data-sync"
+MONITOR_SLUG="<monitor-slug>"   # the slug of the monitor this setup created
+case "$MONITOR_SLUG" in ''|'<'*) echo "Set MONITOR_SLUG to the monitor this setup created" >&2; exit 1 ;; esac
 
 curl -fsS --max-time 10 -X DELETE "${API}/organizations/${SENTRY_ORG}/monitors/${MONITOR_SLUG}/" \
   -H "Authorization: Bearer ${SENTRY_TOKEN}"
