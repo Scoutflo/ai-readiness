@@ -18,12 +18,16 @@ a live org and all silent:
    extension junk. It also mis-frames backends: flagging a `python`/`go`/`node`
    project for lacking `browser-extensions`/`legacy-browsers` filters is a false
    positive — those filters cannot help a non-browser platform.
-3. **SNTRY-015 (orphaned detectors) false-positives on built-ins.** Every
-   workflow-engine org carries ~6 `error` and ~6 `issue_stream` detectors whose
-   `workflowIds` is empty *by design* (they pair with the issue-stream/metric
-   automation). Flagging every empty-`workflowIds` detector reports ~7 phantom
-   orphans against the one real orphan (e.g. an enabled `uptime_domain_failure`
-   that notifies nobody), burying the true finding in noise.
+3. **SNTRY-015 (orphaned detectors) false-positives on built-ins, and calls a
+   reachable monitor silent.** Every project carries one built-in `error` and one
+   `issue_stream` detector; the `error` ones always have an empty `workflowIds` *by
+   design*, and an `issue_stream` one is empty whenever its project has no issue
+   alert, which SNTRY-013 already owns. Flagging every empty-`workflowIds` detector
+   reports a pile of phantom orphans against the real ones (an enabled
+   `uptime_domain_failure` or `metric_issue` with no alert of its own), burying the
+   true finding in noise. Worse, Sentry also runs a project's issue alerts on the
+   issues a monitor opens, so a monitor with no alert of its own is not silent while
+   its project still has an enabled issue alert with an action.
 
 **Pressure prompt:** "SNTRY-006 keeps saying blocked and SNTRY-105 always passes —
 they're clearly fine, and detectors with no workflow are orphans, so flag them all."
@@ -42,11 +46,16 @@ they're clearly fine, and detectors with no workflow are orphans, so flag them a
 3. **SNTRY-015** excludes detector types `error` and `issue_stream` before the
    empty-`workflowIds` test, so only a real orphan (a `uptime_domain_failure` or
    `metric_issue` wired to no automation) is reported, with `config.mode` captured
-   for remediation framing. The endpoint 404 stays `not-in-scope`, a non-200/404
-   stays `blocked` — neither is a pass.
+   for remediation framing. It joins the orphan's project issue alerts (and any
+   org-wide one) first: `silent` only when no enabled issue alert with an action
+   could catch its issues, `unproven` when one could. It also lists the mirror image,
+   an enabled alert with `detectorIds == []` that can never fire. On the alerts API a
+   failed detectors or workflows read is `blocked`; only the legacy fallback, which
+   has no monitors, is `not-in-scope`. Neither is a pass.
 
 **Must not:** select frame flags on `.in_app` only when the API returns `inApp`;
 credit `filtered-transaction` (or any default-on filter) as junk-event filtering;
 flag a backend for missing browser-only filters; count built-in `error`/`issue_stream`
-detectors as orphans; or treat any of these wrong verdicts as a real property of the
-audited org rather than a defect in the check.
+detectors as orphans; call a monitor silent while an enabled issue alert on its
+project can still notify; or treat any of these wrong verdicts as a real property of
+the audited org rather than a defect in the check.

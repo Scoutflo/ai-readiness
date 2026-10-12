@@ -16,14 +16,18 @@ All paths are relative to `${API}` (`https://${SENTRY_HOST}/api/0`, `sentry.host
 | Code mappings | GET | `/organizations/{org}/code-mappings/` | Paginated; requires a connected VCS integration |
 | Releases | GET | `/organizations/{org}/releases/` | Paginated; `deployCount`, `commitCount` per release |
 | Monitors (cron) | GET | `/organizations/{org}/monitors/` | Paginated; env-scoped check-in state |
-| Metric alerts | GET | `/organizations/{org}/alert-rules/` | Paginated; threshold-based alerts, distinct from issue rules |
-| Workflow-engine rules | GET | `/organizations/{org}/workflows/` | Feature-gated; a 404 means the feature is absent, not that the org is broken |
+| Alert API probe | GET | `/organizations/{org}/workflows/?per_page=1`, `/organizations/{org}/combined-rules/?per_page=1` | Doctor gate only: `200` JSON on workflows means the alerts API; a route-missing `404` (empty body, `Allow: OPTIONS`) on combined-rules means the legacy routes are gone |
+| Alerts | GET | `/organizations/{org}/workflows/` | Paginated (`per_page` up to 100); `project` (id or slug), `detector`, and `id` filters. Every issue alert, and the notifying half of every metric alert |
+| Monitors | GET | `/organizations/{org}/detectors/` | Paginated; `project` and `type` filters (`metric_issue`, `uptime_domain_failure`, `issue_stream`, `error`; aliases `metric`, `uptime`). Thresholds and windows live here, actions do not |
+| Live action targets | GET | `/organizations/{org}/available-actions/` | The action types an alert can use and the installed integrations behind them (`.[].integrations[].id`); the integrations SNTRY-005 accepts as live |
+| Alert fire stats | GET | `/organizations/{org}/workflows/{id}/stats/?statsPeriod=90d` | Hourly buckets at `timeSeries[0].values[].value`; Sentry marks it experimental |
+| Metric alerts (legacy fallback) | GET | `/organizations/{org}/alert-rules/` | Self-hosted Sentry that still serves the legacy routes only; on SaaS it answers a route-missing 404 |
 | Volume and outcomes | GET | `/organizations/{org}/stats_v2/` | `groupBy=category`, `groupBy=outcome`, `groupBy=project`; source for quota and privacy-telemetry checks |
 | Project detail | GET | `/projects/{org}/{project}/` | Privacy flags, scrubbers, sensitive fields, source-scrape setting |
-| Project issue rules | GET | `/projects/{org}/{project}/rules/` | The primary alerting surface; always list this per project regardless of workflow-engine availability |
+| Project issue rules (legacy fallback) | GET | `/projects/{org}/{project}/rules/` | Self-hosted Sentry that still serves the legacy routes only; on SaaS it answers a route-missing 404, so read the project's alerts from `/workflows/?project=` |
 | Project environments | GET | `/projects/{org}/{project}/environments/` | Environment inventory |
 | Project client keys | GET | `/projects/{org}/{project}/keys/` | Keep only `name`, `isActive`, `rateLimit`; never store the DSN |
-| Project uptime monitors | GET | `/projects/{org}/{project}/uptime/` | Tolerate 404 when the feature or the project has none; confirmed live that a real Sentry SaaS org can also answer this path with `405 Method Not Allowed` (`{"detail":"Method \"GET\" not allowed."}`) rather than 404 — the fallback (`|| echo '[]'`) already covers this shape too, so no behavior change, just don't be surprised by the status code |
+| Project uptime monitors (legacy fallback) | GET | `/projects/{org}/{project}/uptime/` | Confirmed live: Sentry SaaS answers GET here with `405 Method Not Allowed` (`{"detail":"Method \"GET\" not allowed."}`), because uptime monitors are `uptime_domain_failure` detectors on the alerts API. On the legacy fallback a failed read is recorded in `blocked-reads.tsv`, never stored as an empty list |
 | Issue list | GET | `/organizations/{org}/issues/` | Sample recent issues per project for the source-map minified-frame check; never use its length as a total |
 | One event | GET | `/organizations/{org}/issues/{id}/events/latest/` | Requires `event:read`; source for the minified-frame check |
 
@@ -57,7 +61,8 @@ Build a dedicated read-only auth token for auditing. Token scopes required per c
 | Org, teams, members | `org:read` |
 | Projects, project detail, environments | `project:read` |
 | Client keys | `project:read` |
-| Issue rules, metric alerts, workflow rules | `alerts:read` |
+| Alerts, monitors, fire stats (legacy fallback: issue rules, metric alerts) | `alerts:read` |
+| Live action targets (`available-actions`) | `org:read` |
 | Issues, events (minified-frame check) | `event:read` |
 | Releases, monitors | `project:read` |
 | Repos, code mappings | `org:read` |
@@ -172,6 +177,7 @@ RUN_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/sentry/runs/20260717T140500Z" 
 WORKLIST="${RUN_DIR}/worklist.tsv"
 BATCH="checkout
 payments"   # example; the batch claimed in step 2, one slug per line
+SENTRY_ALERT_API="workflows"   # the doctor gate's "alert api:" value: workflows, or legacy for the fallback
 
 fetch_all() {
   url="$1"; hdr="$(mktemp)"; acc="$(mktemp)"
@@ -190,12 +196,18 @@ echo "${BATCH}" | while IFS= read -r p; do
   ok=1
   curl -fsS --max-time 30 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
     "${API}/projects/${SENTRY_ORG}/${p}/" > "${d}/detail.json" || ok=0
-  fetch_all "${API}/projects/${SENTRY_ORG}/${p}/rules/"        > "${d}/rules.json"        || ok=0
   fetch_all "${API}/projects/${SENTRY_ORG}/${p}/environments/" > "${d}/environments.json" || ok=0
   fetch_all "${API}/projects/${SENTRY_ORG}/${p}/keys/" \
     | jq 'map({name, isActive, rateLimit})' > "${d}/keys.json" || ok=0
   [ -s "${d}/keys.json" ] || echo '[]' > "${d}/keys.json"
-  fetch_all "${API}/projects/${SENTRY_ORG}/${p}/uptime/" > "${d}/uptime.json" 2>/dev/null || echo '[]' > "${d}/uptime.json"
+  if [ "${SENTRY_ALERT_API}" = legacy ]; then
+    # Legacy fallback: this project's issue rules and uptime monitors. On the alerts API the
+    # project's alerts and monitors come from the org-wide reads in Phase 1, with no call here.
+    fetch_all "${API}/projects/${SENTRY_ORG}/${p}/rules/" > "${d}/rules.json" || ok=0
+    # A failed uptime read leaves no uptime.json (its uptime half is blocked), never an empty list.
+    fetch_all "${API}/projects/${SENTRY_ORG}/${p}/uptime/" > "${d}/uptime.json" 2>/dev/null \
+      || { rm -f "${d}/uptime.json"; echo "uptime read failed for ${p}; its uptime half is blocked"; }
+  fi
   if [ "$ok" -eq 1 ]; then
     awk -F'\t' -v s="$p" 'BEGIN{OFS="\t"} $1==s{$2="done"} 1' "${WORKLIST}" > "${WORKLIST}.tmp" && mv "${WORKLIST}.tmp" "${WORKLIST}"
     echo "done: ${p}"
@@ -232,7 +244,7 @@ done
 echo "merged $(find "${RAW_DIR}/projects" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ') project directories into ${RAW_DIR}"
 ```
 
-Expect: `worklist incomplete` and a nonzero exit on a partial run; the merge only happens once `pending=0`. After merging, run the org-level fetches (`teams.json`, `integrations.json`, `releases.json`, `monitors.json`, `metric-alerts.json`, `org.json`, the stats calls) from the Phase 1 block in [SKILL.md](../SKILL.md#phase-1-inventory) exactly as written; they are cheap and were never batched.
+Expect: `worklist incomplete` and a nonzero exit on a partial run; the merge only happens once `pending=0`. After merging, run the org-level fetches (`teams.json`, `integrations.json`, `releases.json`, `monitors.json`, `org.json`, the stats calls, and the alert reads: `workflows.json`, `detectors.json`, and `available-actions.json` on the alerts API, `metric-alerts.json` on the legacy fallback) from the Phase 1 block in [SKILL.md](../SKILL.md#phase-1-inventory) exactly as written, then everything after its per-project loop (the per-project alert views, the redaction pass, the counts); they are cheap, make no per-project call, and were never batched.
 
 Rules, same as the large-path map for clusters:
 
@@ -326,31 +338,35 @@ Expect: exit 0 and `SNTRY-004 pass: <project>`. A project with no matching envir
 
 ## Alert rule checks
 
-Snippets for SNTRY-001, SNTRY-005, SNTRY-011, SNTRY-013, SNTRY-014. All read from `/projects/{org}/{project}/rules/`, re-fetched per project, cross-checked against `integrations.json` from Phase 1.
+Snippets for SNTRY-001, SNTRY-005, SNTRY-011, SNTRY-013, SNTRY-014, and SNTRY-015. Each per-project check re-reads the project's alerts live from `/organizations/{org}/workflows/?project={project}` and, where it must tell issue alerts from metric ones, the project's monitors from `/organizations/{org}/detectors/?project={project}`; SNTRY-005 also reads the live action targets. Set `SENTRY_ALERT_API` at the top of each block to the doctor gate's `alert api:` value: every block reads the alerts API by default and runs its labeled legacy branch (`/projects/{org}/{project}/rules/`, cross-checked against `integrations.json`) only for self-hosted Sentry that still serves it. A read that does not return `200` JSON prints a `blocked` line with its status and stops the block: a project whose alerts could not be read is never judged as a project with no alerts.
 
-**Condition and filter reference**, needed to classify each rule into a tier and to catch the environment-scoping bug:
+**Reading an alert on the alerts API.** An alert (workflow) carries `triggers` (when it evaluates: `triggers.conditions`, or `triggers: null`; empty conditions mean every event), `actionFilters[]` (each holds the `conditions` that gate it and the `actions` it sends), `config.frequency` (re-notify minutes), `environment` (null means every environment), `owner` (`team:<id>` or null), `enabled`, `lastTriggered`, `createdBy` (null when Sentry created it), and `detectorIds` (the monitors it listens to). An issue alert is attached to an issue-stream detector: the project's own, or the org-wide one that `?project=` also returns. A workflow attached only to the project's `metric_issue` or `uptime_domain_failure` monitor is the notifying half of a metric or uptime alert; its triggers are empty by design, so the issue-alert checks below leave it out. Rules Sentry migrated from the legacy API keep frequency conditions in `triggers` (logic `all`), while alerts made in the new UI put them in `actionFilters`, so every check reads conditions from both places. An org-wide alert appears in every project's list, so when one fails a per-project check it fails that check on every project: file it once, naming the alert in `affected`, not once per project.
 
-| Rule name | Condition ID | Tier signal |
-| --- | --- | --- |
-| Any event | `sentry.rules.conditions.every_event.EveryEventCondition` | immediate only when paired with a level filter; every-event with no filter and a paging action is noise (SNTRY-014) |
-| New issue | `sentry.rules.conditions.first_seen_event.FirstSeenEventCondition` | review |
-| Regression | `sentry.rules.conditions.regression_event.RegressionEventCondition` | immediate |
-| Escalation | `sentry.rules.conditions.escalating_event.EscalatingEventCondition` | immediate |
-| Event frequency > N in interval | `sentry.rules.conditions.event_frequency.EventFrequencyCondition` | immediate when interval is short and threshold is business-relevant |
-| Unique users > N in interval | `sentry.rules.conditions.event_frequency.EventUniqueUserFrequencyCondition` | immediate |
-| Session/event percent > N% | `sentry.rules.conditions.event_frequency.EventFrequencyPercentCondition` | immediate |
-| High priority, new issue | `sentry.rules.conditions.high_priority_issue.NewHighPriorityIssueCondition` | immediate |
-| High priority, existing issue | `sentry.rules.conditions.high_priority_issue.ExistingHighPriorityIssueCondition` | review |
+**Condition and filter reference**, needed to classify each alert into a tier and to catch the environment-scoping bug:
 
-| Filter name | Filter ID | Reading it correctly |
-| --- | --- | --- |
-| Level | `sentry.rules.filters.level.LevelFilter` | `level` plus `match: "eq"/"gte"/"lte"` |
-| Error is unhandled | `sentry.rules.filters.event_attribute.EventAttributeFilter` | `attribute: "error.unhandled"`, `match: "is"`. A rule using `match: "eq"` here is misconfigured, not merely undocumented; file it as a noise or coverage defect depending on direction |
-| HTTP status starts with 5 | `sentry.rules.filters.event_attribute.EventAttributeFilter` | `attribute: "http.status_code"`, `match: "sw"`, `value` as an integer; a string `value` silently never matches |
-| Issue category | `sentry.rules.filters.issue_category.IssueCategoryFilter` | narrows by issue type, not environment |
-| Release-adoption stage | `sentry.rules.filters.latest_adopted_release.LatestAdoptedReleaseFilter` | filters by whether the release has reached an adoption stage, **not** by environment. A rule using this filter with an `environment` field set is not environment-scoped by it; the only true environment scope on an issue rule is the rule object's own top-level `environment` field. Treat any rule that relies on `LatestAdoptedReleaseFilter` to mean "production only" as a coverage defect: it fires on every environment. |
+| Signal | Alerts API `type` (where it sits) | Legacy fallback id | Tier signal |
+| --- | --- | --- | --- |
+| Any event | empty `triggers.conditions`, or `every_event` (trigger) | `sentry.rules.conditions.every_event.EveryEventCondition` | immediate only when paired with a level filter; every-event with no filter and a paging action is noise (SNTRY-014) |
+| New issue | `first_seen_event` (trigger) | `sentry.rules.conditions.first_seen_event.FirstSeenEventCondition` | review |
+| Regression | `regression_event` (trigger) | `sentry.rules.conditions.regression_event.RegressionEventCondition` | immediate |
+| Escalation (an archived issue escalates) | `reappeared_event` (trigger) | `sentry.rules.conditions.reappeared_event.ReappearedEventCondition` | immediate |
+| Event frequency > N in interval | `event_frequency_count`, `event_frequency_percent` (filter; trigger on migrated rules) | `sentry.rules.conditions.event_frequency.EventFrequencyCondition` | immediate when interval is short and threshold is business-relevant |
+| Unique users > N in interval | `event_unique_user_frequency_count`, `event_unique_user_frequency_percent` (same) | `sentry.rules.conditions.event_frequency.EventUniqueUserFrequencyCondition` | immediate |
+| Session/event percent > N% | `percent_sessions_count`, `percent_sessions_percent` (same) | `sentry.rules.conditions.event_frequency.EventFrequencyPercentCondition` | immediate |
+| High priority, new issue | `new_high_priority_issue` (trigger; migrated rules only, new alerts cannot use it) | `sentry.rules.conditions.high_priority_issue.NewHighPriorityIssueCondition` | immediate |
+| High priority, existing issue | `existing_high_priority_issue` (trigger; migrated rules only) | `sentry.rules.conditions.high_priority_issue.ExistingHighPriorityIssueCondition` | review |
 
-**SNTRY-001, default auto-created rule.** Sentry auto-creates a "Send a notification for high priority issues" rule on projects created without `defaultRules: false`, and marks it `createdBy: null`:
+Escalation is `reappeared_event` (legacy `ReappearedEventCondition`). Sentry has no `EscalatingEventCondition`, so a check that matches that name never matches anything.
+
+| Filter | Alerts API condition (`actionFilters[].conditions[]`) | Legacy fallback | Reading it correctly |
+| --- | --- | --- | --- |
+| Level | `level` with `comparison: {level, match}`: `level` is an integer (50 fatal, 40 error, 30 warning, 20 info, 10 debug), `match` is `eq`, `gte`, or `lte` | `sentry.rules.filters.level.LevelFilter` with `level` and `match` | A level gate is what turns an every-event trigger into a fatal-only page |
+| Error is unhandled | `event_attribute` with `comparison: {attribute: "error.unhandled", match: "is"}`; `is` and `ns` take no `value` | `sentry.rules.filters.event_attribute.EventAttributeFilter`, `attribute: "error.unhandled"`, `match: "is"` | A rule using `match: "eq"` here is misconfigured, not merely undocumented; file it as a noise or coverage defect depending on direction |
+| HTTP status starts with 5 | `event_attribute` with `comparison: {attribute: "http.status_code", match: "sw", value: "5"}` | `EventAttributeFilter`, `attribute: "http.status_code"`, `match: "sw"`, `value` as an integer | On the alerts API `value` is always a string; only the legacy API wanted an integer, where a string `value` silently never matched |
+| Issue category | `issue_category` with `comparison: {value, include}` | `sentry.rules.filters.issue_category.IssueCategoryFilter` | narrows by issue type, not environment |
+| Release-adoption stage | `latest_adopted_release` | `sentry.rules.filters.latest_adopted_release.LatestAdoptedReleaseFilter` | filters by whether the release has reached an adoption stage, **not** by environment. A rule using this filter with an `environment` field set is not environment-scoped by it; the only true environment scope on an issue rule is the rule object's own top-level `environment` field. Treat any rule that relies on this filter to mean "production only" as a coverage defect: it fires on every environment. |
+
+**SNTRY-001, default auto-created rule.** Sentry auto-creates a "Send a notification for high priority issues" alert on projects created without `defaultRules: false`, and marks it `createdBy: null`. On the alerts API its triggers are the migrated `new_high_priority_issue` and `existing_high_priority_issue`, and its one action emails issue owners:
 
 ```bash
 set -eu
@@ -358,18 +374,35 @@ set -eu
 SENTRY_HOST="us.sentry.io"   # sentry.host
 SENTRY_ORG="your-org-slug"   # sentry.org
 PROJECT="your-project-slug"  # from projects.json
+SENTRY_ALERT_API="workflows" # the doctor gate's "alert api:" value
 API="https://${SENTRY_HOST}/api/0"
 [ -n "${SENTRY_TOKEN:-}" ] || { echo "SENTRY_TOKEN is not set; run /scoutflo:connect"; exit 1; }
 
-curl -fsS --max-time 15 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
-  "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/" \
-  | tee /dev/stderr \
-  | jq -e '[ .[] | select(.createdBy == null and (.name | test("high priority"; "i"))) ] | length == 0' \
-    >/dev/null \
-  && echo "SNTRY-001 pass: ${PROJECT}" || echo "SNTRY-001 fail: ${PROJECT}"
+if [ "${SENTRY_ALERT_API}" = workflows ]; then
+  wf="$(mktemp)"; trap 'rm -f "$wf"' EXIT
+  code="$(curl -sS -o "$wf" -w '%{http_code} %{content_type}' --max-time 30 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
+    "${API}/organizations/${SENTRY_ORG}/workflows/?project=${PROJECT}&per_page=100" || true)"
+  case "$code" in "200 application/json"*) ;; *) echo "SNTRY-001 blocked: ${PROJECT} alerts read returned ${code:-no response}"; exit 0 ;; esac
+  [ "$(jq 'length' "$wf")" -lt 100 ] || { echo "SNTRY-001 blocked: ${PROJECT} has 100+ alerts; judge raw/projects/${PROJECT}/workflows.json instead"; exit 0; }
+  tee /dev/stderr < "$wf" \
+    | jq -e '[ .[] | [(.triggers.conditions // [])[].type] as $t | [(.actionFilters // [])[].actions[]] as $a
+        | select(.createdBy == null and ((.name | test("high priority"; "i"))
+            or (($t | length) > 0 and ($t - ["new_high_priority_issue", "existing_high_priority_issue"] | length) == 0
+                and ($a | length) == 1 and $a[0].type == "email" and $a[0].config.targetType == "issue_owners"))) ]
+        | length == 0' >/dev/null \
+    && echo "SNTRY-001 pass: ${PROJECT}" || echo "SNTRY-001 fail: ${PROJECT}"
+else
+  # Legacy fallback (self-hosted Sentry that still serves /rules/):
+  curl -fsS --max-time 15 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
+    "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/" \
+    | tee /dev/stderr \
+    | jq -e '[ .[] | select(.createdBy == null and (.name | test("high priority"; "i"))) ] | length == 0' \
+      >/dev/null \
+    && echo "SNTRY-001 pass: ${PROJECT}" || echo "SNTRY-001 fail: ${PROJECT}"
+fi
 ```
 
-Expect: exit 0 and `SNTRY-001 pass: <project>`. A nonzero-length match (exit 1, `SNTRY-001 fail`) is the finding: an unowned `createdBy == null` high-priority rule with a `NotifyEmailAction targetType=Members` action.
+Expect: exit 0 and `SNTRY-001 pass: <project>`. A nonzero-length match (`SNTRY-001 fail`) is the finding: an unowned `createdBy == null` high-priority alert whose email action goes to issue owners and falls through to every active member (`data.fallthroughType`; legacy: a `NotifyEmailAction`). `SNTRY-001 blocked` means the project's alerts could not be read: record the status as evidence, never a pass.
 
 **Blast radius — compute the fan-out, never assert it.** The pass/fail above finds the unowned rule; the finding's blast radius is the fan-out it causes, and both numbers are already in the estate this run pulled. Join the org member count with this project's accepted-error volume: *"the unowned high-priority rule pages all N org members on every high-priority issue; this project accepted E error events in the 14d window, so it is E pages fanned to N inboxes — the mechanism that trains the whole org to filter Sentry to a folder."* The member count needs `member:read`, which is an **optional** ownership add-on in the doctor gate, not the base `org:read`+`project:read`+`alerts:read` recipe, so the fan-out quantifier degrades to `blocked` on a 403 while the `createdBy == null` finding still stands on its own — never emit a fabricated member count N:
 
@@ -406,7 +439,7 @@ jq -r --arg pid "$PROJECT_ID" '
 
 **Correlate:** SNTRY-001 chains with SNTRY-014 (it is the canonical un-tuned noise source) and with SNTRY-005/SNTRY-013 — if this default rule is the *only* rule on the project, the noise finding and the "no immediate tier reaching a live receiver" finding are the same gap seen twice; say so and rank them as one story.
 
-**SNTRY-005, receiver liveness.** Cross-check every rule action against the live integrations list. An action is proven only when its referenced integration exists and is active:
+**SNTRY-005, receiver liveness.** Cross-check every alert action against the integrations Sentry offers as live action targets. An action is proven only when its integration is among them (`/organizations/{org}/available-actions/` lists only installed, usable integrations, per action type):
 
 ```bash
 set -eu
@@ -414,49 +447,78 @@ set -eu
 SENTRY_HOST="us.sentry.io"   # sentry.host
 SENTRY_ORG="your-org-slug"   # sentry.org
 PROJECT="your-project-slug"  # from projects.json
+SENTRY_ALERT_API="workflows" # the doctor gate's "alert api:" value
 API="https://${SENTRY_HOST}/api/0"
 [ -n "${SENTRY_TOKEN:-}" ] || { echo "SENTRY_TOKEN is not set; run /scoutflo:connect"; exit 1; }
-# INTEGRATIONS_JSON: re-fetch or point at this run's raw dump, e.g.
-# ./scoutflo-audits/sentry/$(date -u +%Y-%m-%d)/raw/integrations.json
-INTEGRATIONS_JSON="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/sentry/$(date -u +%Y-%m-%d)/raw/integrations.json"
-[ -s "${INTEGRATIONS_JSON}" ] || curl -fsS --max-time 30 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
-  "${API}/organizations/${SENTRY_ORG}/integrations/" > "${INTEGRATIONS_JSON}"
 
-rules_tmp="$(mktemp)"
-curl -fsS --max-time 15 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
-  "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/" \
-  | tee /dev/stderr \
-  | jq '[ .[] | { id, name,
-        actions: [ .actions[] | {
-          id, kind: (.id | split(".") | .[2] // .id),
-          integration_id: (.workspace // .account // null),
-          live_target: (
-            if (.id | test("mail\\.")) then "email"
-            elif has("channel_id") and (.channel_id != null) then "chat-with-channel-id"
-            elif has("channel") then "chat-name-only"
-            else "other" end
-          ) } ] } ]' > "${rules_tmp}"
+if [ "${SENTRY_ALERT_API}" = workflows ]; then
+  TMPD="$(mktemp -d)"; trap 'rm -rf "$TMPD"' EXIT
+  # The project's alerts, and the integrations each action type can reach right now.
+  for r in "workflows/?project=${PROJECT}&per_page=100" "available-actions/"; do
+    code="$(curl -sS -o "${TMPD}/${r%%/*}.json" -w '%{http_code} %{content_type}' --max-time 30 \
+      -H "Authorization: Bearer ${SENTRY_TOKEN}" "${API}/organizations/${SENTRY_ORG}/${r}" || true)"
+    case "$code" in "200 application/json"*) ;; *) echo "SNTRY-005 blocked: ${PROJECT} ${r%%/*} read returned ${code:-no response}"; exit 0 ;; esac
+  done
+  [ "$(jq 'length' "${TMPD}/workflows.json")" -lt 100 ] || { echo "SNTRY-005 blocked: ${PROJECT} has 100+ alerts; judge raw/projects/${PROJECT}/workflows.json instead"; exit 0; }
+  tee /dev/stderr < "${TMPD}/workflows.json" \
+    | jq --slurpfile aa "${TMPD}/available-actions.json" '
+        ($aa[0] | map({key: .type, value: [(.integrations // [])[].id | tostring]}) | from_entries) as $live
+        | [ .[] | . as $w | (.actionFilters // [])[].actions[]
+            | .type as $t | ((.integrationId // "") | tostring) as $i
+            | { alert: $w.id, name: $w.name, type: $t, integration_id: .integrationId,
+                live_target: (
+                  if $t == "email" then "email"
+                  elif ($t | IN("slack", "msteams", "discord")) and ((.config.targetIdentifier // "") != "") then "chat-with-channel-id"
+                  elif ($t | IN("slack", "msteams", "discord")) then "chat-name-only"
+                  else "other" end),
+                live: ([($live[$t] // [])[] | select(. == $i)] | length > 0) } ]' > "${TMPD}/actions.json"
+  jq -e '[ .[] | select(.live_target == "chat-with-channel-id" or .live_target == "other") | select(.live | not) ]
+      | length == 0' "${TMPD}/actions.json" >/dev/null \
+    && echo "SNTRY-005 pass: ${PROJECT} (every non-email action resolves to a live integration)" \
+    || echo "SNTRY-005 fail: ${PROJECT} (one or more actions reference a missing or inactive integration)"
+else
+  # Legacy fallback (self-hosted Sentry that still serves /rules/). INTEGRATIONS_JSON: re-fetch
+  # or point at this run's raw dump, e.g. ./scoutflo-audits/sentry/$(date -u +%Y-%m-%d)/raw/integrations.json
+  INTEGRATIONS_JSON="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/sentry/$(date -u +%Y-%m-%d)/raw/integrations.json"
+  [ -s "${INTEGRATIONS_JSON}" ] || curl -fsS --max-time 30 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
+    "${API}/organizations/${SENTRY_ORG}/integrations/" > "${INTEGRATIONS_JSON}"
 
-jq -e --slurpfile ints "${INTEGRATIONS_JSON}" '
-  (($ints[0] // []) | map(select(.status == "active") | .id)) as $active
-  | [ .[] | .actions[] | select(.live_target == "chat-with-channel-id" or .live_target == "other")
-      | select(.integration_id as $id | ($id == null or ($active | index($id)) == null)) ] as $dead
-  | ($dead | length == 0)' "${rules_tmp}" >/dev/null \
-  && echo "SNTRY-005 pass: ${PROJECT} (every non-email action resolves to an active integration)" \
-  || echo "SNTRY-005 fail: ${PROJECT} (one or more actions reference a missing or inactive integration)"
-rm -f "${rules_tmp}"
+  rules_tmp="$(mktemp)"
+  curl -fsS --max-time 15 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
+    "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/" \
+    | tee /dev/stderr \
+    | jq '[ .[] | { id, name,
+          actions: [ .actions[] | {
+            id, kind: (.id | split(".") | .[2] // .id),
+            integration_id: (.workspace // .account // null),
+            live_target: (
+              if (.id | test("mail\\.")) then "email"
+              elif has("channel_id") and (.channel_id != null) then "chat-with-channel-id"
+              elif has("channel") then "chat-name-only"
+              else "other" end
+            ) } ] } ]' > "${rules_tmp}"
+
+  jq -e --slurpfile ints "${INTEGRATIONS_JSON}" '
+    (($ints[0] // []) | map(select(.status == "active") | .id)) as $active
+    | [ .[] | .actions[] | select(.live_target == "chat-with-channel-id" or .live_target == "other")
+        | select(.integration_id as $id | ($id == null or ($active | index($id)) == null)) ] as $dead
+    | ($dead | length == 0)' "${rules_tmp}" >/dev/null \
+    && echo "SNTRY-005 pass: ${PROJECT} (every non-email action resolves to an active integration)" \
+    || echo "SNTRY-005 fail: ${PROJECT} (one or more actions reference a missing or inactive integration)"
+  rm -f "${rules_tmp}"
+fi
 ```
 
 Reading order for a fail:
 
 - `email` actions are `configured`, a temporary path; credit them as present, never as a proven paging route on their own.
-- `chat-with-channel-id` with a matching active integration is the strongest signal short of a delivered notification.
+- `chat-with-channel-id` with a live integration is the strongest signal short of a delivered notification. On the alerts API the channel id is `config.targetIdentifier` and the display name `config.targetDisplay`.
 - `chat-name-only` (a channel name with no ID) cannot be resolved from this API alone; treat as unproven and note the gap.
-- An action referencing an integration `id` absent from `integrations.json`, or present but not `active`, is a dead route: the rule looks configured and delivers nothing.
+- An action whose integration is not among the live action targets for its type (legacy fallback: an integration `id` absent from `integrations.json`, or present but not `active`) is a dead route: the rule looks configured and delivers nothing.
 
 An org where every rule's only actions are email, or reference dead integrations, is critical: incidents fire and nobody finds out through a channel anyone actually watches.
 
-**SNTRY-013, tier coverage.** For each production project, bucket its rules by the condition table above into immediate versus review, and check environment scope using the rule's own `environment` field, not any filter:
+**SNTRY-013, tier coverage.** For each production project, bucket its enabled issue alerts by the condition table above into immediate versus review, and check environment scope using the alert's own `environment` field, not any filter:
 
 ```bash
 set -eu
@@ -464,30 +526,53 @@ set -eu
 SENTRY_HOST="us.sentry.io"   # sentry.host
 SENTRY_ORG="your-org-slug"   # sentry.org
 PROJECT="your-project-slug"  # from projects.json
+SENTRY_ALERT_API="workflows" # the doctor gate's "alert api:" value
 API="https://${SENTRY_HOST}/api/0"
 [ -n "${SENTRY_TOKEN:-}" ] || { echo "SENTRY_TOKEN is not set; run /scoutflo:connect"; exit 1; }
-# Condition IDs mapped from the tier table above; immediate first, review second.
-IMMEDIATE_RE='RegressionEventCondition|EscalatingEventCondition|EventFrequencyCondition|EventUniqueUserFrequencyCondition|EventFrequencyPercentCondition|NewHighPriorityIssueCondition'
-REVIEW_RE='FirstSeenEventCondition|ExistingHighPriorityIssueCondition'
+# Tier signals from the condition table above; immediate first, review second.
+IMMEDIATE_TYPES='["regression_event","reappeared_event","new_high_priority_issue","event_frequency_count","event_frequency_percent","event_unique_user_frequency_count","event_unique_user_frequency_percent","percent_sessions_count","percent_sessions_percent"]'
+REVIEW_TYPES='["first_seen_event","existing_high_priority_issue"]'
+IMMEDIATE_RE='RegressionEventCondition|ReappearedEventCondition|EventFrequencyCondition|EventUniqueUserFrequencyCondition|EventFrequencyPercentCondition|NewHighPriorityIssueCondition'   # legacy fallback ids
+REVIEW_RE='FirstSeenEventCondition|ExistingHighPriorityIssueCondition'                                                                                                  # legacy fallback ids
 
-curl -fsS --max-time 15 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
-  "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/" \
-  | tee /dev/stderr \
-  | jq -e --arg imm "$IMMEDIATE_RE" --arg rev "$REVIEW_RE" '
-      [ .[] | select((.status // "active") == "active")
-            | { environment: (.environment // "all"), conditions: [ .conditions[].id ] } ] as $rules
-      | ($rules | any(.conditions | any(test($imm)))) as $has_immediate
-      | ($rules | any(.conditions | any(test($rev)))) as $has_review
-      | $has_immediate and $has_review' >/dev/null \
-  && echo "SNTRY-013 pass: ${PROJECT} (has immediate-tier and review-tier rules)" \
-  || echo "SNTRY-013 fail: ${PROJECT} (missing at least one tier)"
+if [ "${SENTRY_ALERT_API}" = workflows ]; then
+  TMPD="$(mktemp -d)"; trap 'rm -rf "$TMPD"' EXIT
+  for r in workflows detectors; do
+    code="$(curl -sS -o "${TMPD}/${r}.json" -w '%{http_code} %{content_type}' --max-time 30 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
+      "${API}/organizations/${SENTRY_ORG}/${r}/?project=${PROJECT}&per_page=100" || true)"
+    case "$code" in "200 application/json"*) ;; *) echo "SNTRY-013 blocked: ${PROJECT} ${r} read returned ${code:-no response}"; exit 0 ;; esac
+    [ "$(jq 'length' "${TMPD}/${r}.json")" -lt 100 ] || { echo "SNTRY-013 blocked: ${PROJECT} has 100+ ${r}; judge raw/projects/${PROJECT}/${r}.json instead"; exit 0; }
+  done
+  tee /dev/stderr < "${TMPD}/workflows.json" \
+    | jq -e --slurpfile det "${TMPD}/detectors.json" --argjson imm "$IMMEDIATE_TYPES" --argjson rev "$REVIEW_TYPES" '
+        [$det[0][] | select(.type != "issue_stream") | .id] as $monitors
+        | [ .[] | select(.enabled == true)
+                | select(any((.detectorIds // [])[]; IN($monitors[]) | not))
+                | [((.triggers.conditions // [])[], ((.actionFilters // [])[].conditions[])) | .type] ] as $alerts
+        | ($alerts | any(any(.[]; IN($imm[])))) and ($alerts | any(any(.[]; IN($rev[]))))' >/dev/null \
+    && echo "SNTRY-013 pass: ${PROJECT} (has immediate-tier and review-tier rules)" \
+    || echo "SNTRY-013 fail: ${PROJECT} (missing at least one tier)"
+else
+  # Legacy fallback (self-hosted Sentry that still serves /rules/):
+  curl -fsS --max-time 15 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
+    "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/" \
+    | tee /dev/stderr \
+    | jq -e --arg imm "$IMMEDIATE_RE" --arg rev "$REVIEW_RE" '
+        [ .[] | select((.status // "active") == "active")
+              | { environment: (.environment // "all"), conditions: [ .conditions[].id ] } ] as $rules
+        | ($rules | any(.conditions | any(test($imm)))) as $has_immediate
+        | ($rules | any(.conditions | any(test($rev)))) as $has_review
+        | $has_immediate and $has_review' >/dev/null \
+    && echo "SNTRY-013 pass: ${PROJECT} (has immediate-tier and review-tier rules)" \
+    || echo "SNTRY-013 fail: ${PROJECT} (missing at least one tier)"
+fi
 ```
 
-Expect: exit 0 and `SNTRY-013 pass: <project>`. The assertion checks tier presence only; still confirm by eye that each tier's `environment` is set to your production environment name or intentionally `all` on a single-environment project. A project with only review-tier conditions, or with every rule scoped to `all` on a multi-environment project, is a coverage gap.
+Expect: exit 0 and `SNTRY-013 pass: <project>`. The assertion checks tier presence only; still confirm by eye that each tier's `environment` is set to your production environment name or intentionally `all` on a single-environment project. A project with only review-tier conditions, or with every rule scoped to `all` on a multi-environment project, is a coverage gap. `SNTRY-013 blocked` means the read failed: the project is unassessed, not uncovered.
 
-**Tier presence excludes non-active rules (gated by SNTRY-016).** The `select((.status // "active") == "active")` filter above is load-bearing: without it a `status: disabled` immediate rule would still satisfy tier presence, so a project reads as covered while the rule that is supposed to page fires nothing. SNTRY-013 and SNTRY-016 must agree on the same estate — a disabled immediate rule that this filter drops from tier coverage is exactly what SNTRY-016 files as a finding. If you ever loosen this filter, SNTRY-016 and SNTRY-013 disagree and a switched-off rule silently credits coverage again.
+**Tier presence excludes disabled alerts (gated by SNTRY-016).** The `select(.enabled == true)` filter above (legacy fallback: `select((.status // "active") == "active")`) is load-bearing: without it a disabled immediate alert would still satisfy tier presence, so a project reads as covered while the alert that is supposed to page fires nothing. SNTRY-013 and SNTRY-016 must agree on the same estate — a disabled immediate alert that this filter drops from tier coverage is exactly what SNTRY-016 files as a finding. If you ever loosen this filter, SNTRY-016 and SNTRY-013 disagree and a switched-off alert silently credits coverage again.
 
-**SNTRY-014, noise posture.** From the same rule dump:
+**SNTRY-014, noise posture.** From the same alert read, issue alerts only:
 
 ```bash
 set -eu
@@ -495,59 +580,100 @@ set -eu
 SENTRY_HOST="us.sentry.io"   # sentry.host
 SENTRY_ORG="your-org-slug"   # sentry.org
 PROJECT="your-project-slug"  # from projects.json
+SENTRY_ALERT_API="workflows" # the doctor gate's "alert api:" value
 API="https://${SENTRY_HOST}/api/0"
 [ -n "${SENTRY_TOKEN:-}" ] || { echo "SENTRY_TOKEN is not set; run /scoutflo:connect"; exit 1; }
 FREQ_FLOOR_MIN="30"   # example, tune to your event volume
 
-curl -fsS --max-time 15 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
-  "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/" \
-  | tee /dev/stderr \
-  | jq -e --argjson floor "$FREQ_FLOOR_MIN" '
-    [ .[] | select(
-        (.conditions | any(.id | test("EveryEventCondition"))) and (.filters | length == 0)
-        or (.frequency // 999999) < $floor
-      ) ] | length == 0' >/dev/null \
-  && echo "SNTRY-014 pass: ${PROJECT}" || echo "SNTRY-014 fail: ${PROJECT}"
+if [ "${SENTRY_ALERT_API}" = workflows ]; then
+  TMPD="$(mktemp -d)"; trap 'rm -rf "$TMPD"' EXIT
+  for r in workflows detectors; do
+    code="$(curl -sS -o "${TMPD}/${r}.json" -w '%{http_code} %{content_type}' --max-time 30 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
+      "${API}/organizations/${SENTRY_ORG}/${r}/?project=${PROJECT}&per_page=100" || true)"
+    case "$code" in "200 application/json"*) ;; *) echo "SNTRY-014 blocked: ${PROJECT} ${r} read returned ${code:-no response}"; exit 0 ;; esac
+    [ "$(jq 'length' "${TMPD}/${r}.json")" -lt 100 ] || { echo "SNTRY-014 blocked: ${PROJECT} has 100+ ${r}; judge raw/projects/${PROJECT}/${r}.json instead"; exit 0; }
+  done
+  # Every-event = no trigger conditions (or an every_event trigger); frequency is config.frequency, in minutes.
+  tee /dev/stderr < "${TMPD}/workflows.json" \
+    | jq -e --slurpfile det "${TMPD}/detectors.json" --argjson floor "$FREQ_FLOOR_MIN" '
+        [$det[0][] | select(.type != "issue_stream") | .id] as $monitors
+        | [ .[] | select(.enabled == true)
+                | select(any((.detectorIds // [])[]; IN($monitors[]) | not))
+                | select(
+                    (((((.triggers.conditions // []) | length) == 0) or any((.triggers.conditions // [])[]; .type == "every_event"))
+                      and (([(.actionFilters // [])[].conditions[]] | length) == 0))
+                    or ((.config.frequency // 30) < $floor)) ]
+        | length == 0' >/dev/null \
+    && echo "SNTRY-014 pass: ${PROJECT}" || echo "SNTRY-014 fail: ${PROJECT}"
+else
+  # Legacy fallback (self-hosted Sentry that still serves /rules/):
+  curl -fsS --max-time 15 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
+    "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/" \
+    | tee /dev/stderr \
+    | jq -e --argjson floor "$FREQ_FLOOR_MIN" '
+      [ .[] | select(
+          (.conditions | any(.id | test("EveryEventCondition"))) and (.filters | length == 0)
+          or (.frequency // 999999) < $floor
+        ) ] | length == 0' >/dev/null \
+    && echo "SNTRY-014 pass: ${PROJECT}" || echo "SNTRY-014 fail: ${PROJECT}"
+fi
 ```
 
-Expect: exit 0 and `SNTRY-014 pass: <project>`. A fail is either an unfiltered every-event condition with a paging action (pages on every single error at any level) or a re-page frequency below your floor (repeatedly re-pages the same open issue). Both train responders to mute the channel.
+Expect: exit 0 and `SNTRY-014 pass: <project>`. A fail is either an unfiltered every-event condition with a paging action (pages on every single error at any level) or a re-page frequency below your floor (repeatedly re-pages the same open issue). Both train responders to mute the channel. A `frequency` of `0` re-notifies on every match.
 
-A rule migrated to Sentry's newer workflow-engine model can come back from `/rules/` with both `conditions: []` and `filters: []` yet carry a non-empty `errors` array (for example `"Filter not supported: issue_priority_greater_or_equal"`) — confirmed live. Read as literally empty conditions/filters, this jq would flag it as an unconditioned catch-all every time; check for a populated `errors` array first and treat that case as "condition present but not representable in this API view," not proven noise, before scoring SNTRY-014 fail on it.
+Legacy fallback only: a rule migrated to Sentry's workflow model can come back from `/rules/` with both `conditions: []` and `filters: []` yet carry a non-empty `errors` array (for example `"Filter not supported: issue_priority_greater_or_equal"`) — confirmed live. Read as literally empty conditions/filters, the legacy jq would flag it as an unconditioned catch-all every time; check for a populated `errors` array first and treat that case as "condition present but not representable in this API view," not proven noise, before scoring SNTRY-014 fail on it. The alerts API returns the real conditions, so this case does not arise there.
 
-**SNTRY-015, orphaned detectors (workflow-engine orgs, capability-gated).** Probe the org-level detectors endpoint once. It 404s on classic-model orgs — that is `not-in-scope`, not a fail. On a 200, a *non-built-in* detector with an empty `workflowIds` array detects a condition but drives no automation, so it notifies nobody (the new-model equivalent of SNTRY-001/SNTRY-005's no-receiver case). **Exclude the built-in `error` and `issue_stream` detector types (grounded live):** every org carries ~6 `error` and ~6 `issue_stream` detectors whose empty `workflowIds` is *by design* (they pair with the issue-stream/metric automation, not their own workflowIds) — counting them flags ~7 phantom orphans against the one real orphan (e.g. an enabled `uptime_domain_failure` with no workflow). Capture `config.mode` (3 = auto-detected) for remediation framing:
+**SNTRY-015, monitor-to-alert wiring.** On the alerts API a monitor (detector) notifies only through the alerts (workflows) connected to it, so read both org-wide lists once. **Exclude the built-in `error` and `issue_stream` detector types (grounded live):** every project carries one of each, and issue alerts attach to the issue-stream one; an empty `workflowIds` on them is by design. A remaining enabled monitor with `workflowIds == []` has no alert of its own, but Sentry also runs a project's issue alerts on the issues a monitor opens (unless Sentry has turned that off for the issue type, which the API does not show), so join those before calling it silent. Then list the mirror image: an enabled alert with `detectorIds == []` listens to no monitor and never fires (live: migrated metric alerts whose monitor is gone). Capture `config.mode` where present (3 = auto-detected) for remediation framing:
 
 ```bash
 set -eu
 # Resolved from ~/.scoutflo/toolkit.yaml
 SENTRY_HOST="us.sentry.io"   # sentry.host
 SENTRY_ORG="your-org-slug"   # sentry.org
+SENTRY_ALERT_API="workflows" # the doctor gate's "alert api:" value
 API="https://${SENTRY_HOST}/api/0"
 [ -n "${SENTRY_TOKEN:-}" ] || { echo "SENTRY_TOKEN is not set; run /scoutflo:connect"; exit 1; }
 
-det="$(mktemp)"
-code=$(curl -s -o "$det" -w '%{http_code}' --max-time 30 \
-  -H "Authorization: Bearer ${SENTRY_TOKEN}" "${API}/organizations/${SENTRY_ORG}/detectors/")
-if [ "$code" = "404" ]; then
-  echo "SNTRY-015 not-in-scope: workflow-engine detectors endpoint absent (classic-model org); SNTRY-001/005 cover the no-receiver case"
-elif [ "$code" = "200" ]; then
-  jq -r '[.[]
-       # exclude built-in per-project detectors whose empty workflowIds is BY DESIGN:
-       # every org carries 6 `error` + N `issue_stream` detectors that pair with the
-       # issue-stream/metric automation, not their own workflowIds. Counting them flags
-       # ~7 phantom orphans against the 1 real one (e.g. an enabled uptime_domain_failure).
-       | select(.type != "error" and .type != "issue_stream")
-       | select(((.workflowIds // []) | length) == 0)
-       | {id, name, type, mode: (.config.mode // null)}]' "$det"
-  echo "SNTRY-015: each listed detector (built-in error/issue_stream types excluded) has workflowIds == [] — connected to no automation, notifies nobody (high); config.mode 3 = auto-detected, frame remediation accordingly"
-else
-  echo "SNTRY-015 blocked: detectors read returned ${code}; record as blocked evidence, not a pass"
+if [ "${SENTRY_ALERT_API}" = legacy ]; then
+  echo "SNTRY-015 not-in-scope: the legacy alert API has no monitors to wire; SNTRY-001/005 cover the no-receiver case"
+  exit 0
 fi
-rm -f "$det"
+fetch_all() { # $1: full API URL. Follows cursor pagination, prints one merged JSON array.
+  url="$1"; hdr="$(mktemp)"; acc="$(mktemp)"
+  while [ -n "$url" ]; do
+    curl -fsS --max-time 30 -H "Authorization: Bearer ${SENTRY_TOKEN}" -D "$hdr" "$url" >> "$acc" \
+      || { rm -f "$hdr" "$acc"; return 1; }
+    printf '\n' >> "$acc"
+    url="$(tr -d '\r' < "$hdr" | sed -n 's/.*<\([^>]*\)>; rel="next"; results="true".*/\1/p')"
+  done
+  jq -s 'add // []' "$acc"; rm -f "$hdr" "$acc"
+}
+TMPD="$(mktemp -d)"; trap 'rm -rf "$TMPD"' EXIT
+for r in detectors workflows; do
+  fetch_all "${API}/organizations/${SENTRY_ORG}/${r}/" > "${TMPD}/${r}.json" \
+    || { echo "SNTRY-015 blocked: ${r} read failed (status in the curl error above); not a pass"; exit 0; }
+done
+# Monitors with no alert of their own. "silent" when their project (and the org) has no enabled
+# issue alert with an action; "unproven" when one exists that may still match their issues.
+jq -r --slurpfile wf "${TMPD}/workflows.json" '
+  ([.[] | select(.type == "issue_stream") | {key: .id, value: (.projectId // "org")}] | from_entries) as $stream
+  | ([$wf[0][] | select(.enabled == true and ([(.actionFilters // [])[].actions[]] | length) > 0)
+      | (.detectorIds // [])[] | $stream[.] // empty] | unique) as $notified
+  | .[] | select(.type != "error" and .type != "issue_stream")
+  | select(.enabled == true and ((.workflowIds // []) | length) == 0)
+  | (.projectId // "org") as $p
+  | if ([$notified[] | select(. == $p or . == "org")] | length) > 0
+    then "SNTRY-015 unproven: monitor \(.id) (\(.type), mode \(.config.mode // "n/a")) has no alert of its own; only an issue alert on its project that matches its issues reaches anyone"
+    else "SNTRY-015 silent: monitor \(.id) (\(.type), mode \(.config.mode // "n/a")) has no alert and its project has no enabled issue alert with an action: it notifies nobody" end' \
+  "${TMPD}/detectors.json"
+# The mirror image: enabled alerts connected to no monitor never fire.
+jq -r '.[] | select(.enabled == true and ((.detectorIds // []) | length) == 0)
+  | "SNTRY-015 detached: alert \(.id) is enabled but listens to no monitor, so it never fires"' "${TMPD}/workflows.json"
 ```
 
-Expect: on a classic org, the `not-in-scope` line and nothing scored. On a workflow-engine org, an empty array (`[]`) is the healthy result; any listed detector is an orphaned-detector finding named in `affected`. A non-200/404 status blocks the check with the code as evidence. Uptime lives here as a detector `type` of `uptime_domain_failure`, not a separate endpoint.
+Expect: no rows on a well-wired org. A `silent` row is a fail object (high): the monitor detects and nobody hears. An `unproven` row is partial: it reaches people only if one of its project's issue alerts happens to match its issues, which nothing guarantees. A `detached` row is a fail object: an alert that looks configured and can never fire. Name every monitor and alert in `affected`. `blocked` means a read failed and the check is unassessed; on the legacy fallback the check is `not-in-scope`. Uptime lives here as a detector `type` of `uptime_domain_failure`, not a separate endpoint.
 
-**SNTRY-011, duplicate paths.** Compare condition sets across a project's own rules, and compare its issue rules against any metric alert on the same signal from `metric-alerts.json`:
+**SNTRY-011, duplicate paths.** Compare condition sets across a project's own enabled issue alerts, and compare its issue alerts against any metric monitor on the same signal (the project's `metric_issue` detectors; legacy fallback `metric-alerts.json`):
 
 ```bash
 set -eu
@@ -555,27 +681,50 @@ set -eu
 SENTRY_HOST="us.sentry.io"   # sentry.host
 SENTRY_ORG="your-org-slug"   # sentry.org
 PROJECT="your-project-slug"  # from projects.json
+SENTRY_ALERT_API="workflows" # the doctor gate's "alert api:" value
 API="https://${SENTRY_HOST}/api/0"
 [ -n "${SENTRY_TOKEN:-}" ] || { echo "SENTRY_TOKEN is not set; run /scoutflo:connect"; exit 1; }
 
-curl -fsS --max-time 15 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
-  "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/" \
-  | tee /dev/stderr \
-  | jq -e '[ .[] | { id, name,
-      key: ([ .conditions[].id ] | sort | join(",")) } ]
-    | group_by(.key) | map(select(length > 1)) | length == 0' >/dev/null \
-  && echo "SNTRY-011 pass: ${PROJECT}" || echo "SNTRY-011 fail: ${PROJECT}"
+if [ "${SENTRY_ALERT_API}" = workflows ]; then
+  TMPD="$(mktemp -d)"; trap 'rm -rf "$TMPD"' EXIT
+  for r in workflows detectors; do
+    code="$(curl -sS -o "${TMPD}/${r}.json" -w '%{http_code} %{content_type}' --max-time 30 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
+      "${API}/organizations/${SENTRY_ORG}/${r}/?project=${PROJECT}&per_page=100" || true)"
+    case "$code" in "200 application/json"*) ;; *) echo "SNTRY-011 blocked: ${PROJECT} ${r} read returned ${code:-no response}"; exit 0 ;; esac
+    [ "$(jq 'length' "${TMPD}/${r}.json")" -lt 100 ] || { echo "SNTRY-011 blocked: ${PROJECT} has 100+ ${r}; judge raw/projects/${PROJECT}/${r}.json instead"; exit 0; }
+  done
+  # Key: every trigger and filter condition with its comparison, sorted, plus the environment.
+  tee /dev/stderr < "${TMPD}/workflows.json" \
+    | jq -e --slurpfile det "${TMPD}/detectors.json" '
+        [$det[0][] | select(.type != "issue_stream") | .id] as $monitors
+        | [ .[] | select(.enabled == true)
+                | select(any((.detectorIds // [])[]; IN($monitors[]) | not))
+                | { id, name,
+                    key: (([((.triggers.conditions // [])[], ((.actionFilters // [])[].conditions[]))
+                            | "\(.type):\(.comparison | tojson)"] | sort | join("|")) + "@" + (.environment // "all")) } ]
+        | group_by(.key) | map(select(length > 1)) | length == 0' >/dev/null \
+    && echo "SNTRY-011 pass: ${PROJECT}" || echo "SNTRY-011 fail: ${PROJECT}"
+else
+  # Legacy fallback (self-hosted Sentry that still serves /rules/):
+  curl -fsS --max-time 15 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
+    "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/" \
+    | tee /dev/stderr \
+    | jq -e '[ .[] | { id, name,
+        key: ([ .conditions[].id ] | sort | join(",")) } ]
+      | group_by(.key) | map(select(length > 1)) | length == 0' >/dev/null \
+    && echo "SNTRY-011 pass: ${PROJECT}" || echo "SNTRY-011 fail: ${PROJECT}"
+fi
 ```
 
-Expect: exit 0 and `SNTRY-011 pass: <project>`. A fail means two rules share the exact same condition set and both page on the same trigger.
+Expect: exit 0 and `SNTRY-011 pass: <project>`. A fail means two alerts share the exact same condition set in the same environment and both page on the same trigger.
 
-**Blast radius — name the receiver being doubled, do not stop at "double-page."** "Two rules share a condition set" does not tell the reader whether it doubles one on-call's pages or is harmless. Resolve both duplicate rules' actions to their integration ids in `integrations.json` (the SNTRY-005 join above already extracts `integration_id` per action) and name the shared target: *"rules R1 and R2 on `<project>` carry the same condition set and both route to Slack integration id X / PagerDuty service Y — one incident fires two pages to the same on-call."* For an issue-rule-versus-metric-alert overlap (a `/rules/` rule and an `alert-rules/` metric alert on the same signal), note that the two pages **cannot be deduplicated**: they originate from different object types with no shared fingerprint, so grouping never collapses them. **Correlate:** SNTRY-005 (the shared receiver is the join key), SNTRY-014 (contributes to the same responder-fatigue story), SNTRY-103 (a metric alert is the other half of an issue/metric overlap). Also check `uptime.json` for the project: a Sentry uptime monitor duplicating an external synthetic tool your team already treats as the source of truth is the same class of defect; record which tool wins in the finding.
+**Blast radius — name the receiver being doubled, do not stop at "double-page."** "Two rules share a condition set" does not tell the reader whether it doubles one on-call's pages or is harmless. Resolve both duplicate alerts' actions to their integration ids (the SNTRY-005 join above extracts `integration_id` per action) and name the shared target: *"rules R1 and R2 on `<project>` carry the same condition set and both route to Slack integration id X / PagerDuty service Y — one incident fires two pages to the same on-call."* For an issue-alert-versus-metric-alert overlap (an issue alert and a `metric_issue` monitor's alert on the same signal), note that the two pages **cannot be deduplicated**: they originate from different object types with no shared fingerprint, so grouping never collapses them. **Correlate:** SNTRY-005 (the shared receiver is the join key), SNTRY-014 (contributes to the same responder-fatigue story), SNTRY-103 (a metric alert is the other half of an issue/metric overlap). Also check the project's uptime monitors (`uptime_domain_failure` detectors; legacy fallback `uptime.json`): a Sentry uptime monitor duplicating an external synthetic tool your team already treats as the source of truth is the same class of defect; record which tool wins in the finding.
 
 ### Disabled/muted rules and owner-routing gaps (SNTRY-016, SNTRY-017)
 
-> **Live-verified (read-only).** Both checks below were run read-only against a live Sentry org: alert rules carry the `status` field (observed value `active`; SNTRY-016 flags anything other than `active` — disabled/muted), and the project ownership endpoint returns 200 with an ownership document (SNTRY-017). The mechanisms are proven on a real tenant; the findings themselves still reflect that org's actual state each run.
+> **Live-verified (read-only).** Both checks below were run read-only against a live Sentry org: every alert and monitor carries a boolean `enabled` (SNTRY-016 flags `enabled: false`), and the project ownership endpoint returns 200 with an ownership document (SNTRY-017). The mechanisms are proven on a real tenant; the findings themselves still reflect that org's actual state each run.
 
-**SNTRY-016, disabled or muted rules that make tier coverage falsely pass.** SNTRY-013 credits tier coverage from any rule carrying the right condition — and, until the `status`-filter added to it in this wave, it counted a switched-off rule too. This check surfaces the rules SNTRY-013 must now exclude, so the two agree on the same estate. The issue-rule half (command 1) is the load-bearing gate; the metric-alert half (command 2) is verify-pending on the field shape:
+**SNTRY-016, disabled or muted rules that make tier coverage falsely pass.** SNTRY-013 credits tier coverage only from enabled alerts. This check surfaces the disabled ones it excludes, so the two agree on the same estate. The issue-alert half (command 1) is the load-bearing gate; the metric half (command 2) reads `enabled` on the project's `metric_issue` monitors:
 
 ```bash
 set -eu
@@ -583,37 +732,53 @@ set -eu
 SENTRY_HOST="us.sentry.io"   # sentry.host
 SENTRY_ORG="your-org-slug"   # sentry.org
 PROJECT="your-project-slug"  # from projects.json
+SENTRY_ALERT_API="workflows" # the doctor gate's "alert api:" value
 API="https://${SENTRY_HOST}/api/0"
 [ -n "${SENTRY_TOKEN:-}" ] || { echo "SENTRY_TOKEN is not set; run /scoutflo:connect"; exit 1; }
 
-# Command 1 (load-bearing): issue rules whose status is not active. `status` on an issue
-# rule is the string "active"/"disabled"; default to active when the key is absent.
-curl -fsS --max-time 15 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
-  "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/" \
-  | tee /dev/stderr \
-  | jq -r '.[] | select((.status // "active") != "active")
-      | "\(.id)\t\(.name)\tstatus=\(.status)\tactions=\((.actions|length))\tconditions=\([.conditions[]?.id]|join(","))"'
-# Any row is a rule that is present (so SNTRY-013 could once credit it) but switched off:
-# it fires nothing. Cross-check the row's conditions against the SNTRY-013 immediate/review
-# tiers — a disabled immediate-tier rule on a production project is the finding.
-
-# Command 2 (metric-alert half — status confirmed numeric, disabled-enum residual): do NOT assert
-# a string `status` on metric alerts. Confirmed live: the metric-alert (AlertRule) `status` is a
-# numeric enum (observed `0` on active rules), so a string compare never matches. The guard below
-# only compares when `status` is a string, so on real (numeric) data it reports nothing rather
-# than a wrong result. Fixed the ASCII pipe here.
-curl -fsS --max-time 30 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
-  "${API}/organizations/${SENTRY_ORG}/alert-rules/" \
-  | jq -r '.[] | select((.status | type) == "string" and (.status | ascii_downcase) != "active")
-      | "\(.name)\tstatus=\(.status)"'
-# `status` is confirmed a numeric enum on live data; once a disabled metric alert is observed,
-# replace the string guard with the observed disabled-enum value before scoring the metric-alert
-# half. Until then it reports nothing rather than a wrong result.
+if [ "${SENTRY_ALERT_API}" = workflows ]; then
+  TMPD="$(mktemp -d)"; trap 'rm -rf "$TMPD"' EXIT
+  for r in workflows detectors; do
+    code="$(curl -sS -o "${TMPD}/${r}.json" -w '%{http_code} %{content_type}' --max-time 30 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
+      "${API}/organizations/${SENTRY_ORG}/${r}/?project=${PROJECT}&per_page=100" || true)"
+    case "$code" in "200 application/json"*) ;; *) echo "SNTRY-016 blocked: ${PROJECT} ${r} read returned ${code:-no response}"; exit 0 ;; esac
+    [ "$(jq 'length' "${TMPD}/${r}.json")" -lt 100 ] || { echo "SNTRY-016 blocked: ${PROJECT} has 100+ ${r}; judge raw/projects/${PROJECT}/${r}.json instead"; exit 0; }
+  done
+  # Command 1 (load-bearing): disabled issue alerts.
+  tee /dev/stderr < "${TMPD}/workflows.json" \
+    | jq -r --slurpfile det "${TMPD}/detectors.json" '
+        [$det[0][] | select(.type != "issue_stream") | .id] as $monitors
+        | .[] | select(any((.detectorIds // [])[]; IN($monitors[]) | not))
+        | select(.enabled == false)
+        | "\(.id)\t\(.name)\tenabled=false\tactions=\([(.actionFilters // [])[].actions[]] | length)\tconditions=\([((.triggers.conditions // [])[], ((.actionFilters // [])[].conditions[])) | .type] | join(","))"'
+  # Command 2 (metric half): disabled metric monitors on this project.
+  jq -r '.[] | select(.type == "metric_issue" and .enabled == false) | "\(.id)\t\(.name)\tmetric monitor enabled=false"' \
+    "${TMPD}/detectors.json"
+else
+  # Legacy fallback (self-hosted Sentry that still serves the legacy routes).
+  # Command 1 (load-bearing): issue rules whose status is not active. `status` on an issue
+  # rule is the string "active"/"disabled"; default to active when the key is absent.
+  curl -fsS --max-time 15 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
+    "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/" \
+    | tee /dev/stderr \
+    | jq -r '.[] | select((.status // "active") != "active")
+        | "\(.id)\t\(.name)\tstatus=\(.status)\tactions=\((.actions|length))\tconditions=\([.conditions[]?.id]|join(","))"'
+  # Command 2 (metric-alert half): the legacy metric-alert `status` is a numeric enum (observed
+  # `0` on active rules), so this guard only compares a string `status` and reports nothing on
+  # numeric data rather than a wrong result; the disabled-enum value stays verify-pending.
+  curl -fsS --max-time 30 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
+    "${API}/organizations/${SENTRY_ORG}/alert-rules/" \
+    | jq -r '.[] | select((.status | type) == "string" and (.status | ascii_downcase) != "active")
+        | "\(.name)\tstatus=\(.status)"'
+fi
+# Any row is an alert that is present but switched off: it fires nothing. Cross-check the
+# row's conditions against the SNTRY-013 immediate/review tiers; a disabled immediate-tier
+# alert on a production project is the finding.
 ```
 
-Healthy: command 1 prints no rows (every rule is active). Fail (SNTRY-016, high): a disabled/muted rule whose conditions match an immediate or review tier — quantify with the SNTRY-001 accepted-error volume snippet for the project (*"checkout's only regression rule is `status=disabled`, so a fatal regression matches a switched-off rule and pages nobody; this project accepted E errors in the window and the coverage matrix currently scores it green"*). **Correlate:** SNTRY-016 directly gates SNTRY-013 (tier presence now excludes non-active rules) and SNTRY-012 (a disabled immediate rule is functionally no coverage); it chains with SNTRY-005 into the silent-incident flagship. Remediation `setup-sentry#alert-rule-taxonomy`; verification: re-GET `/projects/{org}/{project}/rules/` → the rule crediting the tier has `status == "active"`.
+Healthy: both commands print no rows (every alert and metric monitor is enabled). Fail (SNTRY-016, high): a disabled alert whose conditions match an immediate or review tier — quantify with the SNTRY-001 accepted-error volume snippet for the project (*"checkout's only regression rule is disabled, so a fatal regression matches a switched-off rule and pages nobody; this project accepted E errors in the window and the coverage matrix currently scores it green"*). `SNTRY-016 blocked` means the read failed, never "nothing is disabled". **Correlate:** SNTRY-016 directly gates SNTRY-013 (tier presence excludes disabled alerts) and SNTRY-012 (a disabled immediate rule is functionally no coverage); it chains with SNTRY-005 into the silent-incident flagship. Remediation `setup-sentry#alert-rule-taxonomy`; verification: re-GET `/organizations/{org}/workflows/{id}/` → the alert crediting the tier has `enabled == true` (legacy fallback: re-GET `/projects/{org}/{project}/rules/` → `status == "active"`).
 
-**SNTRY-017, rules route to issue owners but the project has no ownership rules.** A notify action with `targetType: IssueOwners` delegates delivery to whoever owns the matching code path; with no ownership rules, delivery falls through per the project's fallthrough setting — to every member (noise, mirrors SNTRY-001) or, with fallthrough off, to nobody (silent):
+**SNTRY-017, rules route to issue owners but the project has no ownership rules.** An email action to issue owners (`config.targetType: issue_owners`; legacy `targetType: IssueOwners`) delegates delivery to whoever owns the matching code path; with no ownership rules, delivery falls through per the action's fallthrough setting — to every member (noise, mirrors SNTRY-001) or, with fallthrough off, to nobody (silent):
 
 ```bash
 set -eu
@@ -621,15 +786,29 @@ set -eu
 SENTRY_HOST="us.sentry.io"   # sentry.host
 SENTRY_ORG="your-org-slug"   # sentry.org
 PROJECT="your-project-slug"  # from projects.json
+SENTRY_ALERT_API="workflows" # the doctor gate's "alert api:" value
 API="https://${SENTRY_HOST}/api/0"
 [ -n "${SENTRY_TOKEN:-}" ] || { echo "SENTRY_TOKEN is not set; run /scoutflo:connect"; exit 1; }
 
 # Rules that route to issue owners.
-curl -fsS --max-time 15 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
-  "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/" \
-  | tee /dev/stderr \
-  | jq -r '.[] | . as $r | .actions[]? | select((.targetType // "") == "IssueOwners")
-      | "\($r.id)\t\($r.name)\ttargetType=IssueOwners"'
+if [ "${SENTRY_ALERT_API}" = workflows ]; then
+  wf="$(mktemp)"; trap 'rm -f "$wf"' EXIT
+  code="$(curl -sS -o "$wf" -w '%{http_code} %{content_type}' --max-time 30 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
+    "${API}/organizations/${SENTRY_ORG}/workflows/?project=${PROJECT}&per_page=100" || true)"
+  case "$code" in "200 application/json"*) ;; *) echo "SNTRY-017 blocked: ${PROJECT} alerts read returned ${code:-no response}"; exit 0 ;; esac
+  [ "$(jq 'length' "$wf")" -lt 100 ] || { echo "SNTRY-017 blocked: ${PROJECT} has 100+ alerts; judge raw/projects/${PROJECT}/workflows.json instead"; exit 0; }
+  tee /dev/stderr < "$wf" \
+    | jq -r '.[] | . as $r | (.actionFilters // [])[].actions[]
+        | select(.type == "email" and .config.targetType == "issue_owners")
+        | "\($r.id)\t\($r.name)\ttargetType=issue_owners\tfallthrough=\(.data.fallthroughType // "unset")"'
+else
+  # Legacy fallback (self-hosted Sentry that still serves /rules/):
+  curl -fsS --max-time 15 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
+    "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/" \
+    | tee /dev/stderr \
+    | jq -r '.[] | . as $r | .actions[]? | select((.targetType // "") == "IssueOwners")
+        | "\($r.id)\t\($r.name)\ttargetType=IssueOwners"'
+fi
 
 # Ownership raw rules + fallthrough posture. Live-verified: /ownership/ returns 200 with `raw`
 # and a boolean `fallthrough` (the `fallthroughChoice` fallback below is kept for older orgs).
@@ -646,17 +825,17 @@ fi
 rm -f "$own"
 ```
 
-Healthy: no owner-routed rule, or owner-routed rules with a non-empty `raw` ownership set. Fail (SNTRY-017, medium): an owner-routed rule with empty ownership `raw` — name the direction, *"the immediate rule on `<project>` routes to issue owners, but ownership raw is empty and fallthrough is off — matched issues notify nobody"* (or fallthrough on → pages everyone, mirroring SNTRY-001). A 403 on `/ownership/` blocks the check with the code as evidence, never a clean pass. **Correlate:** SNTRY-005 (owner-routed actions are a receiver-liveness blind spot the current SNTRY-005 chat/email classifier does not cover) and SNTRY-001 (fallthrough-to-all is the same over-paging failure). Remediation `setup-sentry#receiver-wiring`; verification: re-GET `/projects/{org}/{project}/ownership/` → non-empty `raw` for the owner-routed rule's paths, or the rule re-pointed at a concrete team/integration target.
+Healthy: no owner-routed rule, or owner-routed rules with a non-empty `raw` ownership set. Fail (SNTRY-017, medium): an owner-routed rule with empty ownership `raw` — name the direction, *"the immediate rule on `<project>` routes to issue owners, but ownership raw is empty and fallthrough is off — matched issues notify nobody"* (or fallthrough on → pages everyone, mirroring SNTRY-001). The action's own `data.fallthroughType` (`AllMembers`, `ActiveMembers`, or `NoOne`) names where its fallthrough goes. A 403 on `/ownership/` blocks the check with the code as evidence, never a clean pass. **Correlate:** SNTRY-005 (owner-routed actions are a receiver-liveness blind spot the current SNTRY-005 chat/email classifier does not cover) and SNTRY-001 (fallthrough-to-all is the same over-paging failure). Remediation `setup-sentry#receiver-wiring`; verification: re-GET `/projects/{org}/{project}/ownership/` → non-empty `raw` for the owner-routed rule's paths, or the rule re-pointed at a concrete team/integration target.
 
-**live_verify_plan — confirmed live (read-only GETs); one residual remains:**
+**live_verify_plan — confirmed live (read-only GETs):**
 
-1. `GET /organizations/{org}/alert-rules/` → `jq '.[0].status, (.[0].status|type)'` — **confirmed:** metric-alert `status` is a number (observed `0` on active rules). **Residual:** the disabled-enum value, which needs a disabled metric alert to observe before command 2 can score the metric-alert half.
-2. `GET /projects/{org}/{project}/rules/` → `jq '.[0].status'` — **confirmed:** issue-rule `status` is the string `active` that command 1 relies on.
+1. `GET /organizations/{org}/workflows/` → `jq '[.[].enabled | type] | unique'`: **confirmed:** `enabled` is a boolean on every alert; disabled alerts carry `false`. Per Sentry's source, self-hosted 26.x's legacy view of the same alerts shows `status: "active"` with `snooze: true`, so a `status` check there never sees them.
+2. `GET /organizations/{org}/detectors/?type=metric_issue` → `jq '[.[].enabled | type] | unique'`: **confirmed:** `enabled` is a boolean on every metric monitor, which settles the old numeric-`status` residual for the metric half.
 3. `GET /projects/{org}/{project}/ownership/` → `jq '{raw, fallthrough, fallthroughChoice, autoAssignment}'` — **confirmed:** `/ownership/` returns 200 with `raw` and a boolean `fallthrough` (SNTRY-017 live-verified).
-4. `GET /projects/{org}/{project}/rules/` → `jq '[.[].actions[]?|select(.targetType=="IssueOwners")]'` — confirm `NotifyEmailAction targetType=IssueOwners` for SNTRY-017.
+4. `GET /organizations/{org}/workflows/?project={project}` → `jq '[.[].actionFilters[].actions[] | select(.type == "email") | .config.targetType]'`: **confirmed:** an owner-routed email action reads `targetType: "issue_owners"` with `data.fallthroughType` for SNTRY-017.
 5. `curl -o /dev/null -w '%{http_code}' GET /organizations/{org}/members/` — confirm `member:read` is present (200) before SNTRY-001 computes a member count; a 403 means SNTRY-001 files the fan-out sub-part blocked, never a fabricated N.
 
-All five are GETs; nothing here mutates the org.
+All five are GETs; nothing here mutates the org. Legacy fallback residual: the legacy metric-alert `status` is a numeric enum (observed `0` on active rules) whose disabled value was never observed.
 
 ## Integration and source context checks
 
@@ -755,18 +934,18 @@ Permanent IDs. Never renumber, never reuse a retired ID; deltas depend on stabil
 | SNTRY-012 | Service coverage | medium | Every critical service maps to a project with recent accepted events, or the mapping is explicitly `not-in-scope` by decision |
 | SNTRY-013 | Alert rules and routing | high | Every production project has at least one immediate-tier and one review-tier rule, correctly environment-scoped by the rule's own `environment` field |
 | SNTRY-014 | Alert rules and routing | medium | No rule pages on unfiltered every-event conditions or re-pages below your frequency floor |
-| SNTRY-015 | Alert rules and routing | high | Workflow-engine orgs (capability-gated): no *non-built-in* detector with an empty `workflowIds` array — a detector connected to no automation notifies nobody. Excludes the built-in `error`/`issue_stream` detectors every org carries (their empty `workflowIds` is by design); `not-in-scope` on classic-model orgs where the endpoint 404s |
-| SNTRY-016 | Alert rules and routing | high | No disabled or muted alert rule is silently crediting tier coverage: a `status != active` issue rule still satisfies SNTRY-013 today, so a service reads covered while its immediate-tier rule fires nothing *(issue-rule half live-verified; metric-alert half verify-pending on the disabled-enum value)* |
+| SNTRY-015 | Alert rules and routing | high | No monitor is wired to nothing: no enabled *non-built-in* detector with an empty `workflowIds` array is left silent (silent when its project also has no enabled issue alert with an action; unproven when one exists that may match its issues), and no enabled alert has an empty `detectorIds` (it never fires). Excludes the built-in `error`/`issue_stream` detectors every project carries (their empty `workflowIds` is by design); `not-in-scope` on the legacy alert API fallback |
+| SNTRY-016 | Alert rules and routing | high | No disabled or muted alert rule is silently crediting tier coverage: a disabled issue alert (`enabled: false`; legacy `status != active`) would still satisfy a tier test that ignores the flag, so a service reads covered while its immediate-tier rule fires nothing; the metric half reads `enabled` on `metric_issue` monitors *(both halves live-verified; legacy metric-alert half verify-pending on its disabled-enum value)* |
 | SNTRY-017 | Alert rules and routing | medium | Rules that route to issue owners (`targetType: IssueOwners`) have real ownership rules behind them; empty ownership with fallthrough off notifies nobody, fallthrough on pages everyone |
-| SNTRY-101 | Alert rules and routing | medium | Every notifying issue rule gates with a non-empty `filters` set; a broad trigger with an empty `filters` array fires un-tuned (every-event/frequency subset stays owned by SNTRY-014) |
+| SNTRY-101 | Alert rules and routing | medium | Every notifying issue rule gates with at least one filter (an action-filter condition other than a frequency threshold; legacy: a non-empty `filters` array); a broad trigger with no gate fires un-tuned (every-event/frequency subset stays owned by SNTRY-014) |
 | SNTRY-102 | Alert rules and routing | medium | On a multi-environment project, every notifying issue rule sets its own `environment`; a null `environment` runs the rule across all environments and pages on dev/staging noise |
-| SNTRY-103 | Alert rules and routing | medium | Every metric alert sets `resolveThreshold` (and not hugging the trigger, e.g. 0.5 vs 1.0), pairs a `warning` trigger with `critical`, uses a flap-safe `timeWindow`; a percent/rate aggregate also needs a minimum-volume guard (else it reads 100% on a tiny overnight denominator), and `warning`+`critical` must not resolve to the *same* channel (double-post) |
+| SNTRY-103 | Alert rules and routing | medium | Every metric alert sets a resolve threshold of its own (a `conditionResult` 0 condition not sitting on, or hugging, the trigger threshold, e.g. 0.5 vs 1.0; legacy: a non-null `resolveThreshold`), pairs a warning tier (`conditionResult` 50) with critical (75), uses a flap-safe window (`timeWindow` is in seconds on the alerts API); a percent/rate aggregate also needs a minimum-volume guard (else it reads 100% on a tiny overnight denominator), and warning and critical must not resolve to the *same* channel (double-post) |
 | SNTRY-104 | Alert rules and routing | low | Spike Protection is live per production project; readable only indirectly from a `spike_protection` drop reason in stats outcomes, and OFF by default per project on new orgs |
 | SNTRY-105 | Alert rules and routing | low | Inbound Data Filters are active on production projects, discarding known-junk events (bots, extensions, localhost) at ingest before they create issues |
-| SNTRY-106 | Alert rules and routing | low | Rule fire-history inventory: each notifying rule's measured fire count (`/rules/{id}/stats/`) and last-fired (`lastTriggered`), so every noise finding quotes real blast radius and never-fired rules surface — bounded by the ~90d stats window, so "never fired" means "not in the observable window" |
+| SNTRY-106 | Alert rules and routing | low | Rule fire-history inventory: each notifying rule's measured fire count (`/workflows/{id}/stats/`; legacy `/rules/{id}/stats/`) and last-fired (`lastTriggered`), so every noise finding quotes real blast radius and never-fired rules surface — bounded by the ~90d stats window, so "never fired" means "not in the observable window" |
 | SNTRY-107 | Alert rules and routing | high | No chronically-open issue can legally re-page without bound: an `ongoing` issue older than the age floor, matched by an un-gated frequency/every-event notifying rule, yields a re-page ceiling (`matching_rules × 1440/frequency_min` pages/day) — the "why is my channel unusable" join |
 | SNTRY-108 | Alert rules and routing | medium | Rule-name and receiver-channel environment claims agree with the rule's actual `environment`: a `- Dev`/`- Prod`-named or `*-pp-*`-channel rule whose `environment` is null or contradicts the claim is silent mis-scoping name-trusting humans never question |
-| SNTRY-109 | Alert rules and routing | low | No dead-weight rules: never-fired (per SNTRY-106) AND (snoozed OR a hair-trigger generic-keyword condition — `message contains <generic>` with a sub-floor frequency); on, dead, and pointless — distinct from SNTRY-016 (switched off *while* crediting coverage) |
+| SNTRY-109 | Alert rules and routing | low | No dead-weight rules: never-fired (per SNTRY-106) AND (disabled or snoozed OR a hair-trigger generic-keyword condition — `message contains <generic>` with a sub-floor frequency); on, dead, and pointless — distinct from SNTRY-016 (switched off *while* crediting coverage) |
 | SNTRY-110 | Alert rules and routing | low | Every alert rule (issue + metric) has an `owner`; an estate where no rule is owned has no one accountable for tuning — maintenance accountability, distinct from SNTRY-017 (delivery routing) |
 | SNTRY-018 | Volume and quota | medium | Per-project dropped/accepted ratio stays under your declared floor; a hot project's drops are invisible in the org-wide average SNTRY-008 reads |
 | SNTRY-019 | Volume and quota | low | Rate-limit drops are split by `reason` (Spike Protection versus per-key/cardinality quota) so the two distinct remediations are never conflated; a drop is never attributed to a specific key |
@@ -781,11 +960,11 @@ Remediation pointers: every SNTRY finding points at `setup-sentry`, anchored to 
 
 ## Alert hygiene noise-control checks
 
-Snippets for SNTRY-101 through SNTRY-110 (Phase 9). Every call is read-only. SNTRY-101, 102, 105, 106, 108, 109 read per project; SNTRY-103, 104, 110 read once at the org level; SNTRY-107 joins per-project issues with per-project rules. Each block redeclares `SENTRY_HOST`, `SENTRY_ORG`, `API`, and the token check at its own top and relies on no earlier block. These join the Alert rules and routing category and grow its denominator; they never re-weight it, and they never re-check the re-page `frequency` floor (SNTRY-014) or DSN client-key rate limits (SNTRY-003).
+Snippets for SNTRY-101 through SNTRY-110 (Phase 9). Every call is read-only. SNTRY-101, 102, 105, 106, 108, 109, 110 read per project (SNTRY-110's legacy fallback adds one org-level metric-alert read); SNTRY-103 and 104 read once at the org level; SNTRY-107 joins per-project issues with per-project alerts. Each block redeclares `SENTRY_HOST`, `SENTRY_ORG`, `API`, the token check, and `SENTRY_ALERT_API` (the doctor gate's `alert api:` value) at its own top and relies on no earlier block. Each alert read follows the rules in [Alert rule checks](#alert-rule-checks): a read that fails prints `blocked` with its status, never a pass, and issue-alert checks skip the alerts that only notify for a metric or uptime monitor. These join the Alert rules and routing category and grow its denominator; they never re-weight it, and they never re-check the re-page `frequency` floor (SNTRY-014) or DSN client-key rate limits (SNTRY-003).
 
-**Fire-history is the shared data source for SNTRY-106/107/109 (grounded live).** The project rules list (`/projects/{org}/{proj}/rules/`) already returns `lastTriggered` (an ISO timestamp, or `null` = never fired in the observable window) and `owner` on each rule — so never-fired and ownerless are FREE from the inventory the audit already fetched, no extra call. The *magnitude* (fire count) needs one more GET per rule: `/projects/{org}/{proj}/rules/{ruleId}/stats/` returns an array of `{date, count}` buckets (confirmed live: ~2160 hourly buckets over ~90d); the fire count is `[.[].count] | add`. Cost discipline: fetch `/stats/` only for rules that already tripped a structural check (SNTRY-011/014/101/102) or that you are ranking as noisiest — never for every rule on the large path (respect the estate scope checkpoint).
+**Fire-history is the shared data source for SNTRY-106/107/109 (grounded live).** The alerts list (`/organizations/{org}/workflows/?project={project}`) already returns `lastTriggered` (an ISO timestamp, or `null` = never fired in the observable window) and `owner` on each alert — so never-fired and ownerless are FREE from the inventory the audit already fetched, no extra call. The *magnitude* (fire count) needs one more GET per alert: `/organizations/{org}/workflows/{id}/stats/?statsPeriod=90d` returns `timeSeries[0].values[]` hourly buckets (confirmed live: 2160 buckets over 90 days); the fire count is `[.timeSeries[0].values[].value] | add`. Legacy fallback: the project rules list carries the same two fields, and `/projects/{org}/{proj}/rules/{ruleId}/stats/` returns `[{date, count}]` buckets whose fire count is `[.[].count] | add`. Cost discipline: fetch stats only for alerts that already tripped a structural check (SNTRY-011/014/101/102) or that you are ranking as noisiest — never for every alert on the large path (respect the estate scope checkpoint).
 
-**SNTRY-101, un-tuned issue rules.** A notifying rule with an empty `filters` array fires on every event its trigger matches. The every-event and frequency subset is owned by SNTRY-014, so exclude `EveryEventCondition` here:
+**SNTRY-101, un-tuned issue rules.** A notifying alert with no gating filter fires on every event its trigger matches. On the alerts API a gate is any action-filter condition other than a frequency threshold, since new alerts keep their frequency thresholds in `actionFilters` and migrated rules keep them in `triggers`; on the legacy fallback a gate is any entry in `filters`. The every-event and frequency subset is owned by SNTRY-014, so exclude every-event alerts here:
 
 ```bash
 set -eu
@@ -793,22 +972,47 @@ set -eu
 SENTRY_HOST="us.sentry.io"   # sentry.host
 SENTRY_ORG="your-org-slug"   # sentry.org
 PROJECT="your-project-slug"  # from projects.json
+SENTRY_ALERT_API="workflows" # the doctor gate's "alert api:" value
 API="https://${SENTRY_HOST}/api/0"
 [ -n "${SENTRY_TOKEN:-}" ] || { echo "SENTRY_TOKEN is not set; run /scoutflo:connect"; exit 1; }
+FREQ_TYPES='["event_frequency_count","event_frequency_percent","event_unique_user_frequency_count","event_unique_user_frequency_percent","percent_sessions_count","percent_sessions_percent"]'
 
-curl -fsS --max-time 15 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
-  "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/" \
-  | tee /dev/stderr \
-  | jq -e '[ .[]
-        | select((.actions // []) | length > 0)
-        | select((.filters // []) | length == 0)
-        | select([ .conditions[]?.id ] | any(test("EveryEventCondition")) | not) ]
-      | length == 0' >/dev/null \
-  && echo "SNTRY-101 pass: ${PROJECT}" \
-  || echo "SNTRY-101 fail: ${PROJECT} (rule(s) notify with no filters gating them)"
+if [ "${SENTRY_ALERT_API}" = workflows ]; then
+  TMPD="$(mktemp -d)"; trap 'rm -rf "$TMPD"' EXIT
+  for r in workflows detectors; do
+    code="$(curl -sS -o "${TMPD}/${r}.json" -w '%{http_code} %{content_type}' --max-time 30 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
+      "${API}/organizations/${SENTRY_ORG}/${r}/?project=${PROJECT}&per_page=100" || true)"
+    case "$code" in "200 application/json"*) ;; *) echo "SNTRY-101 blocked: ${PROJECT} ${r} read returned ${code:-no response}"; exit 0 ;; esac
+    [ "$(jq 'length' "${TMPD}/${r}.json")" -lt 100 ] || { echo "SNTRY-101 blocked: ${PROJECT} has 100+ ${r}; judge raw/projects/${PROJECT}/${r}.json instead"; exit 0; }
+  done
+  tee /dev/stderr < "${TMPD}/workflows.json" \
+    | jq -e --slurpfile det "${TMPD}/detectors.json" --argjson freq "$FREQ_TYPES" '
+        [$det[0][] | select(.type != "issue_stream") | .id] as $monitors
+        | [ .[] | select(.enabled == true)
+                | select(any((.detectorIds // [])[]; IN($monitors[]) | not))
+                | select(([(.actionFilters // [])[].actions[]] | length) > 0)
+                | select(((((.triggers.conditions // []) | length) == 0)
+                          or any((.triggers.conditions // [])[]; .type == "every_event")) | not)
+                | select([(.actionFilters // [])[].conditions[].type | select(IN($freq[]) | not)] | length == 0) ]
+        | length == 0' >/dev/null \
+    && echo "SNTRY-101 pass: ${PROJECT}" \
+    || echo "SNTRY-101 fail: ${PROJECT} (rule(s) notify with no filters gating them)"
+else
+  # Legacy fallback (self-hosted Sentry that still serves /rules/):
+  curl -fsS --max-time 15 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
+    "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/" \
+    | tee /dev/stderr \
+    | jq -e '[ .[]
+          | select((.actions // []) | length > 0)
+          | select((.filters // []) | length == 0)
+          | select([ .conditions[]?.id ] | any(test("EveryEventCondition")) | not) ]
+        | length == 0' >/dev/null \
+    && echo "SNTRY-101 pass: ${PROJECT}" \
+    || echo "SNTRY-101 fail: ${PROJECT} (rule(s) notify with no filters gating them)"
+fi
 ```
 
-Expect: exit 0 and `SNTRY-101 pass: <project>`. A fail lists rules that carry an action but no `filters` and no every-event condition: they fire on every trigger match with nothing narrowing them by issue age, times-seen, level, or assignment. `filterMatch` (`all`/`any`/`none`) is only meaningful once `filters` is non-empty; an empty `filters` makes `filterMatch` moot. Name the rules in `affected`; the fix is to add gating filters, not to delete the rule.
+Expect: exit 0 and `SNTRY-101 pass: <project>`. A fail lists rules that carry an action but no gate and no every-event condition: they fire on every trigger match with nothing narrowing them by issue age, times-seen, level, or assignment. The filter's `logicType` (legacy `filterMatch`: `all`/`any`/`none`) is only meaningful once a gate exists. Name the rules in `affected`; the fix is to add gating filters, not to delete the rule.
 
 **SNTRY-102, all-environment scope.** An issue rule's `environment` is null by default and then evaluates across every environment. Only score this on a project with more than one environment; a single-environment project has nothing to scope and passes trivially:
 
@@ -818,6 +1022,7 @@ set -eu
 SENTRY_HOST="us.sentry.io"   # sentry.host
 SENTRY_ORG="your-org-slug"   # sentry.org
 PROJECT="your-project-slug"  # from projects.json
+SENTRY_ALERT_API="workflows" # the doctor gate's "alert api:" value
 API="https://${SENTRY_HOST}/api/0"
 [ -n "${SENTRY_TOKEN:-}" ] || { echo "SENTRY_TOKEN is not set; run /scoutflo:connect"; exit 1; }
 
@@ -825,67 +1030,154 @@ ENV_COUNT="$(curl -fsS --max-time 15 -H "Authorization: Bearer ${SENTRY_TOKEN}" 
   "${API}/projects/${SENTRY_ORG}/${PROJECT}/environments/" | jq 'length')"
 [ "${ENV_COUNT}" -gt 1 ] || { echo "SNTRY-102 n/a: ${PROJECT} has ${ENV_COUNT} environment(s); null scope is not noise here"; exit 0; }
 
-curl -fsS --max-time 15 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
-  "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/" \
-  | tee /dev/stderr \
-  | jq -e '[ .[]
-        | select((.actions // []) | length > 0)
-        | select(.environment == null) ]
-      | length == 0' >/dev/null \
-  && echo "SNTRY-102 pass: ${PROJECT}" \
-  || echo "SNTRY-102 fail: ${PROJECT} (rule(s) run across all environments)"
+if [ "${SENTRY_ALERT_API}" = workflows ]; then
+  TMPD="$(mktemp -d)"; trap 'rm -rf "$TMPD"' EXIT
+  for r in workflows detectors; do
+    code="$(curl -sS -o "${TMPD}/${r}.json" -w '%{http_code} %{content_type}' --max-time 30 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
+      "${API}/organizations/${SENTRY_ORG}/${r}/?project=${PROJECT}&per_page=100" || true)"
+    case "$code" in "200 application/json"*) ;; *) echo "SNTRY-102 blocked: ${PROJECT} ${r} read returned ${code:-no response}"; exit 0 ;; esac
+    [ "$(jq 'length' "${TMPD}/${r}.json")" -lt 100 ] || { echo "SNTRY-102 blocked: ${PROJECT} has 100+ ${r}; judge raw/projects/${PROJECT}/${r}.json instead"; exit 0; }
+  done
+  tee /dev/stderr < "${TMPD}/workflows.json" \
+    | jq -e --slurpfile det "${TMPD}/detectors.json" '
+        [$det[0][] | select(.type != "issue_stream") | .id] as $monitors
+        | [ .[] | select(.enabled == true)
+                | select(any((.detectorIds // [])[]; IN($monitors[]) | not))
+                | select(([(.actionFilters // [])[].actions[]] | length) > 0)
+                | select(.environment == null) ]
+        | length == 0' >/dev/null \
+    && echo "SNTRY-102 pass: ${PROJECT}" \
+    || echo "SNTRY-102 fail: ${PROJECT} (rule(s) run across all environments)"
+else
+  # Legacy fallback (self-hosted Sentry that still serves /rules/):
+  curl -fsS --max-time 15 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
+    "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/" \
+    | tee /dev/stderr \
+    | jq -e '[ .[]
+          | select((.actions // []) | length > 0)
+          | select(.environment == null) ]
+        | length == 0' >/dev/null \
+    && echo "SNTRY-102 pass: ${PROJECT}" \
+    || echo "SNTRY-102 fail: ${PROJECT} (rule(s) run across all environments)"
+fi
 ```
 
-Expect: exit 0 and `SNTRY-102 pass: <project>`, or the `n/a` line on a single-environment project. The rule-level `environment` field is the only true environment scope (a `LatestAdoptedReleaseFilter` does not scope by environment — see the filter table above); a null value on a multi-environment project pages on dev and staging traffic too. This is the noise axis; SNTRY-013 separately owns whether both alert tiers exist, so a rule can pass one and fail the other.
+Expect: exit 0 and `SNTRY-102 pass: <project>`, or the `n/a` line on a single-environment project. The rule-level `environment` field is the only true environment scope (a `latest_adopted_release` filter does not scope by environment — see the filter table above); a null value on a multi-environment project pages on dev and staging traffic too. This is the noise axis; SNTRY-013 separately owns whether both alert tiers exist, so a rule can pass one and fail the other.
 
-**SNTRY-103, flap-prone metric alerts.** From the org metric-alerts endpoint. Read null `resolveThreshold` as the core flap defect; the missing warning tier and short window are contributing signals:
+**SNTRY-103, flap-prone metric alerts.** From the org's metric monitors. Each holds its thresholds as `conditionGroup.conditions` (`conditionResult` 75 = critical, 50 = warning, 0 = resolve) and its window in **seconds** at `dataSources[0].queryObj.snubaQuery.timeWindow`. A resolve condition that sits on a trigger threshold is how Sentry migrated a null legacy `resolveThreshold`, so read it as the core flap defect; the missing warning tier and short window are contributing signals:
 
 ```bash
 set -eu
 # Resolved from ~/.scoutflo/toolkit.yaml
 SENTRY_HOST="us.sentry.io"   # sentry.host
 SENTRY_ORG="your-org-slug"   # sentry.org
+SENTRY_ALERT_API="workflows" # the doctor gate's "alert api:" value
 API="https://${SENTRY_HOST}/api/0"
 [ -n "${SENTRY_TOKEN:-}" ] || { echo "SENTRY_TOKEN is not set; run /scoutflo:connect"; exit 1; }
-TIMEWINDOW_FLOOR_MIN="5"   # example, tune it: metric-alert window below which a fixed-threshold rule flaps on transients
+TIMEWINDOW_FLOOR_MIN="5"   # example, tune it: metric-alert window (minutes) below which a fixed-threshold rule flaps on transients
 
-curl -fsS --max-time 30 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
-  "${API}/organizations/${SENTRY_ORG}/alert-rules/" \
-  | tee /dev/stderr \
-  | jq -e --argjson floor "$TIMEWINDOW_FLOOR_MIN" '[ .[]
-        | { name,
-            has_resolve: (.resolveThreshold != null),
-            has_warning: ([ .triggers[]?.label ] | index("warning") != null),
-            flap_safe:  (((.timeWindow // 0) >= $floor)
-                         or (.comparisonDelta != null)
-                         or ((.detectionType // "static") != "static")) }
-        | select((.has_resolve and .has_warning and .flap_safe) | not) ]
-      | length == 0' >/dev/null \
-  && echo "SNTRY-103 pass" \
-  || echo "SNTRY-103 fail (metric alert(s) missing resolveThreshold, a warning tier, or a flap-safe window)"
+if [ "${SENTRY_ALERT_API}" = workflows ]; then
+  fetch_all() { # $1: full API URL. Follows cursor pagination, prints one merged JSON array.
+    url="$1"; hdr="$(mktemp)"; acc="$(mktemp)"
+    while [ -n "$url" ]; do
+      curl -fsS --max-time 30 -H "Authorization: Bearer ${SENTRY_TOKEN}" -D "$hdr" "$url" >> "$acc" \
+        || { rm -f "$hdr" "$acc"; return 1; }
+      printf '\n' >> "$acc"
+      url="$(tr -d '\r' < "$hdr" | sed -n 's/.*<\([^>]*\)>; rel="next"; results="true".*/\1/p')"
+    done
+    jq -s 'add // []' "$acc"; rm -f "$hdr" "$acc"
+  }
+  det="$(mktemp)"; trap 'rm -f "$det"' EXIT
+  fetch_all "${API}/organizations/${SENTRY_ORG}/detectors/?type=metric_issue" > "$det" \
+    || { echo "SNTRY-103 blocked: metric monitors read failed (status in the curl error above)"; exit 0; }
+  # timeWindow is seconds: divide by 60 before comparing with the minute floor.
+  tee /dev/stderr < "$det" \
+    | jq -e --argjson floor "$TIMEWINDOW_FLOOR_MIN" '[ .[] | select(.type == "metric_issue")
+          | [(.conditionGroup.conditions // [])[] | select(.conditionResult > 0) | .comparison] as $trig
+          | [(.conditionGroup.conditions // [])[] | select(.conditionResult == 0) | .comparison] as $res
+          | { name,
+              has_resolve: (($res | length) > 0 and ([$res[] | IN($trig[])] | any | not)),
+              has_warning: ([(.conditionGroup.conditions // [])[] | select(.conditionResult == 50)] | length > 0),
+              flap_safe:  ((((.dataSources[0].queryObj.snubaQuery.timeWindow // 0) / 60) >= $floor)
+                           or (.config.comparisonDelta != null)
+                           or ((.config.detectionType // "static") != "static")) }
+          | select((.has_resolve and .has_warning and .flap_safe) | not) ]
+        | length == 0' >/dev/null \
+    && echo "SNTRY-103 pass" \
+    || echo "SNTRY-103 fail (metric alert(s) missing a resolve threshold of their own, a warning tier, or a flap-safe window)"
+else
+  # Legacy fallback (self-hosted Sentry that still serves /alert-rules/; timeWindow in minutes there):
+  curl -fsS --max-time 30 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
+    "${API}/organizations/${SENTRY_ORG}/alert-rules/" \
+    | tee /dev/stderr \
+    | jq -e --argjson floor "$TIMEWINDOW_FLOOR_MIN" '[ .[]
+          | { name,
+              has_resolve: (.resolveThreshold != null),
+              has_warning: ([ .triggers[]?.label ] | index("warning") != null),
+              flap_safe:  (((.timeWindow // 0) >= $floor)
+                           or (.comparisonDelta != null)
+                           or ((.detectionType // "static") != "static")) }
+          | select((.has_resolve and .has_warning and .flap_safe) | not) ]
+        | length == 0' >/dev/null \
+    && echo "SNTRY-103 pass" \
+    || echo "SNTRY-103 fail (metric alert(s) missing resolveThreshold, a warning tier, or a flap-safe window)"
+fi
 ```
 
-Expect: exit 0 and `SNTRY-103 pass`. A `resolveThreshold` of null means recovery falls back to the inverse of the critical threshold and the alert flaps across the boundary; a `triggers` array with no `warning` label means single-threshold paging with no severity tiering; a `timeWindow` below the floor on a fixed static threshold fires on transient spikes. `comparisonDelta` (percent-vs-previous mode) or a non-static `detectionType` (dynamic anomaly, with `sensitivity`) each count as flap resistance and satisfy `flap_safe`. Name each failing rule and which of the three it missed.
+Expect: exit 0 and `SNTRY-103 pass`. A resolve condition on the trigger threshold (legacy: `resolveThreshold` null) means recovery falls back to the inverse of the critical threshold and the alert flaps across the boundary; no warning condition (legacy: no `warning` trigger label) means single-threshold paging with no severity tiering; a window below the floor on a fixed static threshold fires on transient spikes. `config.comparisonDelta` (percent-vs-previous mode; seconds, legacy minutes) or a non-static `config.detectionType` (dynamic anomaly, with `sensitivity`) each count as flap resistance and satisfy `flap_safe`. Name each failing rule and which of the three it missed. `SNTRY-103 blocked` means the monitors read failed: the check is unassessed, never "no metric alerts".
 
-Two further flap modes a live estate showed (extend the same read, don't add an ID): (a) **percent/rate aggregate with no throughput floor** — a `failure_rate()`/`percentage(...)` aggregate on a static threshold reads `100%` on a 2-transaction overnight hour; flag a percent-aggregate rule whose `timeWindow` is under a wider floor (e.g. 120 min) or that carries no minimum-volume guard, using org overnight volume from `stats_v2` as supporting evidence. (b) **warning + critical posting to the same target** — when both triggers' actions resolve to the *same* channel/integration id, every incident double-posts; flag identical trigger targets. Also treat a `resolveThreshold` that hugs the trigger (e.g. resolve 0.5 vs trigger 1.0) as flap-prone, not just a null one.
+Two further flap modes a live estate showed (extend the same read, don't add an ID): (a) **percent/rate aggregate with no throughput floor** — a `failure_rate()`/`percentage(...)` aggregate on a static threshold reads `100%` on a 2-transaction overnight hour; flag a percent-aggregate rule whose window is under a wider floor (e.g. 120 min) or that carries no minimum-volume guard, using org overnight volume from `stats_v2` as supporting evidence. (b) **warning + critical posting to the same target** — when both tiers' actions resolve to the *same* channel/integration id, every incident double-posts; flag identical targets. On the alerts API the tiers live in the alerts connected to the monitor: Sentry migrated a warning and a critical trigger into two action filters (issue priority at least 50, and at least 75), and an issue at high priority passes both, so the same target in both filters posts twice. An alert with one unconditioned filter sends every priority to the same actions by design and is not this defect. Also treat a resolve threshold that hugs the trigger (e.g. resolve 0.5 vs trigger 1.0) as flap-prone, not just one that sits on it.
 
 ```bash
 set -eu
 SENTRY_HOST="us.sentry.io"; SENTRY_ORG="your-org-slug"; API="https://${SENTRY_HOST}/api/0"
 [ -n "${SENTRY_TOKEN:-}" ] || { echo "SENTRY_TOKEN is not set; run /scoutflo:connect"; exit 1; }
-PCT_WINDOW_FLOOR_MIN="120"   # example, tune: percent/rate aggregate below this flaps on tiny overnight denominators
-curl -fsS --max-time 30 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
-  "${API}/organizations/${SENTRY_ORG}/alert-rules/" \
-  | jq -r --argjson pf "$PCT_WINDOW_FLOOR_MIN" '.[]
-      | { name, aggregate,
-          is_pct: ((.aggregate // "") | test("failure_rate|percentage|percent";"i")),
-          window: (.timeWindow // 0),
-          targets: [ .triggers[]?.actions[]? | (.targetIdentifier // .targetType // "?") ] }
-      | select(
-          (.is_pct and .window < $pf)                                  # (a) percent aggregate, sub-floor window
-          or ((.targets | length) > (.targets | unique | length))      # (b) warning+critical share a target
-        )
-      | "SNTRY-103 flap-risk: \(.name) — \(if .is_pct and .window < $pf then "percent aggregate, \(.window)m window (no throughput floor)" else "warning+critical share a channel target" end)"'
+SENTRY_ALERT_API="workflows" # the doctor gate's "alert api:" value
+PCT_WINDOW_FLOOR_MIN="120"   # example, tune: percent/rate aggregate below this (minutes) flaps on tiny overnight denominators
+if [ "${SENTRY_ALERT_API}" = workflows ]; then
+  fetch_all() { # $1: full API URL. Follows cursor pagination, prints one merged JSON array.
+    url="$1"; hdr="$(mktemp)"; acc="$(mktemp)"
+    while [ -n "$url" ]; do
+      curl -fsS --max-time 30 -H "Authorization: Bearer ${SENTRY_TOKEN}" -D "$hdr" "$url" >> "$acc" \
+        || { rm -f "$hdr" "$acc"; return 1; }
+      printf '\n' >> "$acc"
+      url="$(tr -d '\r' < "$hdr" | sed -n 's/.*<\([^>]*\)>; rel="next"; results="true".*/\1/p')"
+    done
+    jq -s 'add // []' "$acc"; rm -f "$hdr" "$acc"
+  }
+  TMPD="$(mktemp -d)"; trap 'rm -rf "$TMPD"' EXIT
+  fetch_all "${API}/organizations/${SENTRY_ORG}/detectors/?type=metric_issue" > "${TMPD}/detectors.json" \
+    || { echo "SNTRY-103 blocked: metric monitors read failed (status in the curl error above)"; exit 0; }
+  fetch_all "${API}/organizations/${SENTRY_ORG}/workflows/" > "${TMPD}/workflows.json" \
+    || { echo "SNTRY-103 blocked: alerts read failed (status in the curl error above)"; exit 0; }
+  jq -r --argjson pf "$PCT_WINDOW_FLOOR_MIN" --slurpfile wf "${TMPD}/workflows.json" '
+      ($wf[0] | map({key: .id, value: .}) | from_entries) as $alerts
+      | .[] | select(.type == "metric_issue")
+      | (.dataSources[0].queryObj.snubaQuery // {}) as $q
+      | (($q.aggregate // "") | test("failure_rate|percentage|percent"; "i")) as $is_pct
+      | (($q.timeWindow // 0) / 60) as $window
+      | ([ (.workflowIds // [])[] | $alerts[.] // empty
+           | select(((.actionFilters // []) | length) > 1)
+           | [ .actionFilters[] | [ .actions[] | "\(.type):\(.integrationId // ""):\(.config.targetIdentifier // .config.targetType // "?")" ] | unique ]
+           | add | (length > (unique | length)) ] | any) as $shared
+      | select(($is_pct and $window < $pf) or $shared)
+      | "SNTRY-103 flap-risk: \(.name) (\(if $is_pct and $window < $pf then "percent aggregate, \($window)m window, no throughput floor" else "warning and critical notify the same target" end))"' \
+    "${TMPD}/detectors.json"
+else
+  # Legacy fallback (self-hosted Sentry that still serves /alert-rules/; timeWindow in minutes there):
+  curl -fsS --max-time 30 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
+    "${API}/organizations/${SENTRY_ORG}/alert-rules/" \
+    | jq -r --argjson pf "$PCT_WINDOW_FLOOR_MIN" '.[]
+        | { name, aggregate,
+            is_pct: ((.aggregate // "") | test("failure_rate|percentage|percent";"i")),
+            window: (.timeWindow // 0),
+            targets: [ .triggers[]?.actions[]? | (.targetIdentifier // .targetType // "?") ] }
+        | select(
+            (.is_pct and .window < $pf)                                  # (a) percent aggregate, sub-floor window
+            or ((.targets | length) > (.targets | unique | length))      # (b) warning+critical share a target
+          )
+        | "SNTRY-103 flap-risk: \(.name) — \(if .is_pct and .window < $pf then "percent aggregate, \(.window)m window (no throughput floor)" else "warning+critical share a channel target" end)"'
+fi
 # No rows printed = pass on both extended modes. A row names the rule and which mode; for (a) join
 # org overnight sum(quantity) from stats_v2 as the "reads 100% on N transactions" evidence.
 ```
@@ -953,7 +1245,7 @@ curl -fsS --max-time 15 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
 
 Expect: exit 0 and `SNTRY-105 pass: <project>`. The `/filters/` list carries one entry per inbound filter (web crawlers, browser-extension errors, localhost, legacy browsers, `filtered-transaction`, and filters by error message, release, or IP). **Two corrections that prevent a false pass and a false fail (grounded live):** (1) `filtered-transaction` is **default-on on every modern project** — it is a transaction sampler, not junk-error filtering, so crediting it makes the check pass vacuously on essentially every org; the jq **excludes it** and only a *real* junk filter (web-crawlers, localhost, browser-extensions, legacy-browsers, or a custom message/release/IP filter) can credit a pass. (2) `browser-extensions` and `legacy-browsers` only apply to **browser platforms** — flagging a `python`/`go`/`node` backend for lacking browser filters is a false positive, so those two count toward a pass (and toward the finding) only when the project `platform` is browser-family; on a backend the applicable filters are web-crawlers, localhost, and custom filters. `active` is a boolean for most filters and a non-empty subfilter array for legacy browsers; treat either shape as active. Filtered events do not consume quota, so a fail here also feeds the quota-pressure reading in SNTRY-008; cross-reference rather than double-file the same dropped-event story.
 
-**SNTRY-106, rule fire-history inventory.** The fire-count blast radius behind every noise finding, and never-fired detection. `lastTriggered` and `owner` are already on the rules list (no extra call); the fire *count* is one GET per rule against `/rules/{id}/stats/` — run it only for rules a structural check already flagged, never the whole estate:
+**SNTRY-106, rule fire-history inventory.** The fire-count blast radius behind every noise finding, and never-fired detection. `lastTriggered` and `owner` are already on the alerts list (no extra call); the fire *count* is one GET per alert against its stats endpoint — run it only for alerts a structural check already flagged, never the whole estate:
 
 ```bash
 set -eu
@@ -961,24 +1253,42 @@ set -eu
 SENTRY_HOST="us.sentry.io"   # sentry.host
 SENTRY_ORG="your-org-slug"   # sentry.org
 PROJECT="your-project-slug"  # from projects.json
+SENTRY_ALERT_API="workflows" # the doctor gate's "alert api:" value
 API="https://${SENTRY_HOST}/api/0"
 [ -n "${SENTRY_TOKEN:-}" ] || { echo "SENTRY_TOKEN is not set; run /scoutflo:connect"; exit 1; }
+RULE_ID="16700000"   # an alert (legacy: rule) id from a tripped structural finding
 
-# never-fired is FREE from the rules list (lastTriggered null == not fired in the observable window):
-curl -fsS --max-time 15 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
-  "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/" \
-  | tee /dev/stderr \
-  | jq -r '.[] | "\(.id)\t\(.name)\tlastTriggered=\(.lastTriggered // "never-in-window")"'
-
-# fire COUNT for one rule (run ONLY for a rule already flagged by SNTRY-011/014/101/102, or the
-# noisiest you are ranking): /stats/ returns [{date,count}] hourly buckets over the ~90d window.
-RULE_ID="16700000"   # a rule id from a tripped structural finding
-curl -fsS --max-time 20 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
-  "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/${RULE_ID}/stats/" \
-  | jq '[ .[].count ] | add // 0'   # total fires in the stats window — the number to quote as blast radius
+TMPD="$(mktemp -d)"; trap 'rm -rf "$TMPD"' EXIT
+if [ "${SENTRY_ALERT_API}" = workflows ]; then
+  # never-fired is FREE from the alerts list (lastTriggered null == not fired in the observable window):
+  code="$(curl -sS -o "${TMPD}/workflows.json" -w '%{http_code} %{content_type}' --max-time 30 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
+    "${API}/organizations/${SENTRY_ORG}/workflows/?project=${PROJECT}&per_page=100" || true)"
+  case "$code" in "200 application/json"*) ;; *) echo "SNTRY-106 blocked: ${PROJECT} alerts read returned ${code:-no response}"; exit 0 ;; esac
+  [ "$(jq 'length' "${TMPD}/workflows.json")" -lt 100 ] || echo "SNTRY-106 note: ${PROJECT} has 100+ alerts; the list below is the first page, read raw/projects/${PROJECT}/workflows.json for the rest"
+  tee /dev/stderr < "${TMPD}/workflows.json" \
+    | jq -r '.[] | "\(.id)\t\(.name)\tlastTriggered=\(.lastTriggered // "never-in-window")"'
+  # fire COUNT for one alert (run ONLY for an alert already flagged by SNTRY-011/014/101/102, or the
+  # noisiest you are ranking): hourly buckets over the 90-day window. A failed read is blocked, not 0 fires.
+  code="$(curl -sS -o "${TMPD}/stats.json" -w '%{http_code} %{content_type}' --max-time 20 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
+    "${API}/organizations/${SENTRY_ORG}/workflows/${RULE_ID}/stats/?statsPeriod=90d" || true)"
+  case "$code" in
+    "200 application/json"*) jq '[ .timeSeries[0].values[]?.value ] | add // 0' "${TMPD}/stats.json" ;;   # total fires in the window
+    *) echo "SNTRY-106 fire count blocked: stats read returned ${code:-no response}; never read as zero fires" ;;
+  esac
+else
+  # Legacy fallback (self-hosted Sentry that still serves /rules/):
+  curl -fsS --max-time 15 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
+    "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/" \
+    | tee /dev/stderr \
+    | jq -r '.[] | "\(.id)\t\(.name)\tlastTriggered=\(.lastTriggered // "never-in-window")"'
+  # /stats/ returns [{date,count}] hourly buckets over the ~90d window.
+  curl -fsS --max-time 20 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
+    "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/${RULE_ID}/stats/" \
+    | jq '[ .[].count ] | add // 0'   # total fires in the stats window — the number to quote as blast radius
+fi
 ```
 
-Expect: a rule→last-fired list, and for a flagged rule its summed fire count. `lastTriggered == null` means *never fired in the observable window* — state it that way, never "dead forever" (the window is bounded, ~90d). This is inventory, not a scored pass/fail on its own; its value is that SNTRY-011/014/101/102 findings now read "rule X fired N times / 0 times" instead of "rule X is structurally noisy". Cap the per-rule `/stats/` calls under the estate scope checkpoint.
+Expect: an alert→last-fired list, and for a flagged alert its summed fire count. `lastTriggered == null` means *never fired in the observable window* — state it that way, never "dead forever" (the window is bounded, 90 days). This is inventory, not a scored pass/fail on its own; its value is that SNTRY-011/014/101/102 findings now read "rule X fired N times / 0 times" instead of "rule X is structurally noisy". Cap the per-alert stats calls under the estate scope checkpoint; Sentry marks the stats endpoint experimental, so a non-`200` blocks the fire-count sub-part rather than changing the verdict.
 
 **SNTRY-107, chronic-issue re-page ceiling (the flagship noise join).** Joins two surfaces the audit already touches separately: long-open `ongoing` issues × un-gated notifying rules that still match them. It answers "why is my channel unusable", not "which field is null":
 
@@ -988,9 +1298,11 @@ set -eu
 SENTRY_HOST="us.sentry.io"   # sentry.host
 SENTRY_ORG="your-org-slug"   # sentry.org
 PROJECT="your-project-slug"  # a production project from projects.json
+SENTRY_ALERT_API="workflows" # the doctor gate's "alert api:" value
 API="https://${SENTRY_HOST}/api/0"
 [ -n "${SENTRY_TOKEN:-}" ] || { echo "SENTRY_TOKEN is not set; run /scoutflo:connect"; exit 1; }
 AGE_FLOOR_DAYS="30"   # example, tune it: an ongoing issue older than this that still re-pages is chronic
+FREQ_TYPES='["event_frequency_count","event_frequency_percent","event_unique_user_frequency_count","event_unique_user_frequency_percent","percent_sessions_count","percent_sessions_percent"]'
 
 # 1) chronic issues: unresolved + ongoing + older than the age floor, most events first.
 #    The age floor is applied server-side via the `age:+Nd` search token (grounded live:
@@ -1003,18 +1315,42 @@ curl -fsS --max-time 20 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
   | jq -r '.[] | "\(.shortId)\tevents=\(.count)\tfirstSeen=\(.firstSeen)\tsubstatus=\(.substatus // "?")"' | head
 
 # 2) un-gated re-paging rules: a frequency/every-event condition, an action, and NO age /
-#    times-seen / new-issue gate in filters (so a permanently-open issue keeps matching)
-curl -fsS --max-time 15 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
-  "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/" \
-  | jq -r '[ .[]
-      | select((.actions // []) | length > 0)
-      | select([ .conditions[]?.id ] | any(test("EventFrequencyCondition|EventFrequencyPercentCondition|EveryEventCondition")))
-      | select([ .filters[]?.id ] | any(test("AgeComparison|IssueOccurrences|FirstSeenEvent|latest")) | not)
-      | { name, freq: (.frequency // 30) } ]
-      | "un-gated re-paging rules: \(length); re-page ceiling/day per matching issue = sum over rules of (1440 / freq_min)"'
+#    times-seen / new-issue gate (so a permanently-open issue keeps matching)
+if [ "${SENTRY_ALERT_API}" = workflows ]; then
+  TMPD="$(mktemp -d)"; trap 'rm -rf "$TMPD"' EXIT
+  for r in workflows detectors; do
+    code="$(curl -sS -o "${TMPD}/${r}.json" -w '%{http_code} %{content_type}' --max-time 30 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
+      "${API}/organizations/${SENTRY_ORG}/${r}/?project=${PROJECT}&per_page=100" || true)"
+    case "$code" in "200 application/json"*) ;; *) echo "SNTRY-107 blocked: ${PROJECT} ${r} read returned ${code:-no response}"; exit 0 ;; esac
+    [ "$(jq 'length' "${TMPD}/${r}.json")" -lt 100 ] || { echo "SNTRY-107 blocked: ${PROJECT} has 100+ ${r}; judge raw/projects/${PROJECT}/${r}.json instead"; exit 0; }
+  done
+  jq -r --slurpfile det "${TMPD}/detectors.json" --argjson freq "$FREQ_TYPES" '
+      [$det[0][] | select(.type != "issue_stream") | .id] as $monitors
+      | [ .[] | select(.enabled == true)
+          | select(any((.detectorIds // [])[]; IN($monitors[]) | not))
+          | select(([(.actionFilters // [])[].actions[]] | length) > 0)
+          | [(.triggers.conditions // [])[].type] as $tt
+          | [(.actionFilters // [])[].conditions[].type] as $ft
+          | select((($tt | length) == 0) or any($tt[]; . == "every_event") or any(($tt + $ft)[]; IN($freq[])))
+          | select(any($ft[]; IN("age_comparison", "issue_occurrences", "latest_release", "latest_adopted_release")) | not)
+          | select(any($tt[]; . == "first_seen_event") | not)
+          | { name, freq: (.config.frequency // 30) } ]
+      | "un-gated re-paging rules: \(length); re-page ceiling/day per matching issue = sum over rules of (1440 / freq_min)"' \
+    "${TMPD}/workflows.json"
+else
+  # Legacy fallback (self-hosted Sentry that still serves /rules/):
+  curl -fsS --max-time 15 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
+    "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/" \
+    | jq -r '[ .[]
+        | select((.actions // []) | length > 0)
+        | select([ .conditions[]?.id ] | any(test("EventFrequencyCondition|EventFrequencyPercentCondition|EveryEventCondition")))
+        | select([ .filters[]?.id ] | any(test("AgeComparison|IssueOccurrences|FirstSeenEvent|latest")) | not)
+        | { name, freq: (.frequency // 30) } ]
+        | "un-gated re-paging rules: \(length); re-page ceiling/day per matching issue = sum over rules of (1440 / freq_min)"'
+fi
 ```
 
-Expect: the chronic-issue list and the count of un-gated re-paging rules. The finding (high) is the **legal re-page ceiling**: for one permanently-`ongoing` issue matched by those rules, `Σ (1440 / rule.frequency_min)` pages/day/channel (the classic result: one 117-day-old issue × two 15-min burst rules ≈ 96 pages/day). Quote it as a *ceiling*, not an observed count — and when SNTRY-106 stats exist, quote both ("ceiling 96/day; observed 278 last week"). Name the issue(s) and the rules in `affected`. This is the check that explains an unusable channel; it degrades to a structural finding (un-gated rules exist) when the issues endpoint is not readable.
+Expect: the chronic-issue list and the count of un-gated re-paging rules. The finding (high) is the **legal re-page ceiling**: for one permanently-`ongoing` issue matched by those rules, `Σ (1440 / rule.frequency_min)` pages/day/channel (the classic result: one 117-day-old issue × two 15-min burst rules ≈ 96 pages/day). A rule with `frequency` 0 re-notifies on every match, so its ceiling is the issue's own event rate, not a number of minutes. Quote it as a *ceiling*, not an observed count — and when SNTRY-106 stats exist, quote both ("ceiling 96/day; observed 278 last week"). Name the issue(s) and the rules in `affected`. This is the check that explains an unusable channel; it degrades to a structural finding (un-gated rules exist) when the issues endpoint is not readable.
 
 **SNTRY-108, name / scope / receiver coherence.** A rule whose *name* or *receiver channel* claims an environment while its actual `environment` field is null or contradicts the claim is silent mis-scoping — name-trusting humans never question a "- Prod" rule that is really firing on everything:
 
@@ -1024,25 +1360,49 @@ set -eu
 SENTRY_HOST="us.sentry.io"   # sentry.host
 SENTRY_ORG="your-org-slug"   # sentry.org
 PROJECT="your-project-slug"  # from projects.json
+SENTRY_ALERT_API="workflows" # the doctor gate's "alert api:" value
 API="https://${SENTRY_HOST}/api/0"
 [ -n "${SENTRY_TOKEN:-}" ] || { echo "SENTRY_TOKEN is not set; run /scoutflo:connect"; exit 1; }
 
-curl -fsS --max-time 15 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
-  "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/" \
-  | tee /dev/stderr \
-  | jq -r '.[]
-      | (.name | ascii_downcase) as $nm
-      | ([ .actions[]? | (.channel // .targetIdentifier // "") ] | join(",") | ascii_downcase) as $chan
-      | (if ($nm|test("prod")) or ($chan|test("-prod|_prod|prod-")) then "production"
-         elif ($nm|test("- ?dev|staging|pre-?prod|-pp|_pp|pp-")) or ($chan|test("-pp-|pre-?prod|staging|dev")) then "non-prod"
-         else null end) as $claim
-      | select($claim != null and ((.environment == null) or ((.environment|ascii_downcase|test($claim[0:4])) | not)))
-      | "SNTRY-108: \(.name) claims \($claim) (name/channel) but environment=\(.environment // "null")"'
+if [ "${SENTRY_ALERT_API}" = workflows ]; then
+  TMPD="$(mktemp -d)"; trap 'rm -rf "$TMPD"' EXIT
+  for r in workflows detectors; do
+    code="$(curl -sS -o "${TMPD}/${r}.json" -w '%{http_code} %{content_type}' --max-time 30 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
+      "${API}/organizations/${SENTRY_ORG}/${r}/?project=${PROJECT}&per_page=100" || true)"
+    case "$code" in "200 application/json"*) ;; *) echo "SNTRY-108 blocked: ${PROJECT} ${r} read returned ${code:-no response}"; exit 0 ;; esac
+    [ "$(jq 'length' "${TMPD}/${r}.json")" -lt 100 ] || { echo "SNTRY-108 blocked: ${PROJECT} has 100+ ${r}; judge raw/projects/${PROJECT}/${r}.json instead"; exit 0; }
+  done
+  # The channel claim reads each action's display name (config.targetDisplay), else its target id.
+  tee /dev/stderr < "${TMPD}/workflows.json" \
+    | jq -r --slurpfile det "${TMPD}/detectors.json" '
+        [$det[0][] | select(.type != "issue_stream") | .id] as $monitors
+        | .[] | select(any((.detectorIds // [])[]; IN($monitors[]) | not))
+        | (.name | ascii_downcase) as $nm
+        | ([ (.actionFilters // [])[].actions[] | (.config.targetDisplay // .config.targetIdentifier // "") ] | join(",") | ascii_downcase) as $chan
+        | (if ($nm|test("prod")) or ($chan|test("-prod|_prod|prod-")) then "production"
+           elif ($nm|test("- ?dev|staging|pre-?prod|-pp|_pp|pp-")) or ($chan|test("-pp-|pre-?prod|staging|dev")) then "non-prod"
+           else null end) as $claim
+        | select($claim != null and ((.environment == null) or ((.environment|ascii_downcase|test($claim[0:4])) | not)))
+        | "SNTRY-108: \(.name) claims \($claim) (name/channel) but environment=\(.environment // "null")"'
+else
+  # Legacy fallback (self-hosted Sentry that still serves /rules/):
+  curl -fsS --max-time 15 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
+    "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/" \
+    | tee /dev/stderr \
+    | jq -r '.[]
+        | (.name | ascii_downcase) as $nm
+        | ([ .actions[]? | (.channel // .targetIdentifier // "") ] | join(",") | ascii_downcase) as $chan
+        | (if ($nm|test("prod")) or ($chan|test("-prod|_prod|prod-")) then "production"
+           elif ($nm|test("- ?dev|staging|pre-?prod|-pp|_pp|pp-")) or ($chan|test("-pp-|pre-?prod|staging|dev")) then "non-prod"
+           else null end) as $claim
+        | select($claim != null and ((.environment == null) or ((.environment|ascii_downcase|test($claim[0:4])) | not)))
+        | "SNTRY-108: \(.name) claims \($claim) (name/channel) but environment=\(.environment // "null")"'
+fi
 ```
 
 Expect: no rows on a coherent estate. A row is a rule whose stated env (from its name or the channel it posts to) disagrees with its `environment` field — the clearest case being a claim with `environment: null` (fires on all envs while looking scoped). This is deliberately conservative: it only fires when there is an explicit claim to contradict. SNTRY-102 owns the plain "env is null" gap; SNTRY-108 owns the *lie in the name* and the set-but-contradicting case. Regex is heuristic — record the claimed-vs-actual pair as the evidence and let the reader judge non-standard names.
 
-**SNTRY-109, dead-weight rules.** Never-fired AND (snoozed OR a hair-trigger generic-keyword condition) — on, dead, and safe to delete. Distinct from SNTRY-016 (switched off *while crediting* coverage):
+**SNTRY-109, dead-weight rules.** Never-fired AND (disabled or snoozed OR a hair-trigger generic-keyword condition) — on, dead, and safe to delete. Distinct from SNTRY-016 (switched off *while crediting* coverage):
 
 ```bash
 set -eu
@@ -1050,23 +1410,47 @@ set -eu
 SENTRY_HOST="us.sentry.io"   # sentry.host
 SENTRY_ORG="your-org-slug"   # sentry.org
 PROJECT="your-project-slug"  # from projects.json
+SENTRY_ALERT_API="workflows" # the doctor gate's "alert api:" value
 API="https://${SENTRY_HOST}/api/0"
 [ -n "${SENTRY_TOKEN:-}" ] || { echo "SENTRY_TOKEN is not set; run /scoutflo:connect"; exit 1; }
 
-curl -fsS --max-time 15 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
-  "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/" \
-  | tee /dev/stderr \
-  | jq -r '.[]
-      | select(.lastTriggered == null)                                   # never fired in window (SNTRY-106)
-      | select((.snooze != null)                                         # snoozed, OR ...
-        or ([ .conditions[]? | select(.id|test("EventFrequencyCondition")) | (.value // 999) ] | any(. < 60))  # hair-trigger freq
-        or ([ .filters[]?.value // .filters[]?.key // empty ] | any(test("timeout|memory|error|exception";"i"))))  # generic keyword
-      | "SNTRY-109 dead-weight: \(.name) (never fired; snoozed or hair-trigger keyword)"'
+if [ "${SENTRY_ALERT_API}" = workflows ]; then
+  TMPD="$(mktemp -d)"; trap 'rm -rf "$TMPD"' EXIT
+  for r in workflows detectors; do
+    code="$(curl -sS -o "${TMPD}/${r}.json" -w '%{http_code} %{content_type}' --max-time 30 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
+      "${API}/organizations/${SENTRY_ORG}/${r}/?project=${PROJECT}&per_page=100" || true)"
+    case "$code" in "200 application/json"*) ;; *) echo "SNTRY-109 blocked: ${PROJECT} ${r} read returned ${code:-no response}"; exit 0 ;; esac
+    [ "$(jq 'length' "${TMPD}/${r}.json")" -lt 100 ] || { echo "SNTRY-109 blocked: ${PROJECT} has 100+ ${r}; judge raw/projects/${PROJECT}/${r}.json instead"; exit 0; }
+  done
+  # Disabled replaces the legacy snooze; keyword values are strings on the alerts API.
+  tee /dev/stderr < "${TMPD}/workflows.json" \
+    | jq -r --slurpfile det "${TMPD}/detectors.json" '
+        [$det[0][] | select(.type != "issue_stream") | .id] as $monitors
+        | .[] | select(any((.detectorIds // [])[]; IN($monitors[]) | not))
+        | [((.triggers.conditions // [])[], ((.actionFilters // [])[].conditions[]))] as $c
+        | select(.lastTriggered == null)                                     # never fired in window (SNTRY-106)
+        | select((.enabled == false)                                         # disabled, OR ...
+          or any($c[]; (.type | startswith("event_frequency")) and ((.comparison.value // 999) < 60))   # hair-trigger freq
+          or any($c[]; (.type == "event_attribute" or .type == "tagged_event")
+                 and ((.comparison.value // "") | tostring | test("timeout|memory|error|exception"; "i"))))  # generic keyword
+        | "SNTRY-109 dead-weight: \(.name) (never fired; disabled or hair-trigger keyword)"'
+else
+  # Legacy fallback (self-hosted Sentry that still serves /rules/):
+  curl -fsS --max-time 15 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
+    "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/" \
+    | tee /dev/stderr \
+    | jq -r '.[]
+        | select(.lastTriggered == null)                                   # never fired in window (SNTRY-106)
+        | select((.snooze != null)                                         # snoozed, OR ...
+          or ([ .conditions[]? | select(.id|test("EventFrequencyCondition")) | (.value // 999) ] | any(. < 60))  # hair-trigger freq
+          or ([ .filters[]?.value // .filters[]?.key // empty ] | any(test("timeout|memory|error|exception";"i"))))  # generic keyword
+        | "SNTRY-109 dead-weight: \(.name) (never fired; snoozed or hair-trigger keyword)"'
+fi
 ```
 
-Expect: no rows on a lean estate. Rows are rules that never fired in the window AND are either snoozed or gated only by a generic keyword with a sub-60 frequency — review surface that inflates coverage counts and deletes with no loss. Cross-reference SNTRY-106 (the never-fired signal) and honor its window ceiling; a rule "never fired" only within the observable window is a review candidate, not an automatic delete — the fix is a confirmed deletion via `setup-sentry`, never by this read-only audit.
+Expect: no rows on a lean estate. Rows are rules that never fired in the window AND are either disabled (legacy: snoozed) or gated only by a generic keyword with a sub-60 frequency — review surface that inflates coverage counts and deletes with no loss. Cross-reference SNTRY-106 (the never-fired signal) and honor its window ceiling; a rule "never fired" only within the observable window is a review candidate, not an automatic delete — the fix is a confirmed deletion via `setup-sentry`, never by this read-only audit.
 
-**SNTRY-110, ownerless rules.** Maintenance accountability across the whole rule estate — issue rules and metric alerts. An estate where no rule has an `owner` has no one accountable for tuning, which is how a rule set rots:
+**SNTRY-110, ownerless rules.** Maintenance accountability across the whole rule estate — issue alerts and metric alerts (their `metric_issue` monitors on the alerts API). An estate where no rule has an `owner` has no one accountable for tuning, which is how a rule set rots:
 
 ```bash
 set -eu
@@ -1074,20 +1458,38 @@ set -eu
 SENTRY_HOST="us.sentry.io"   # sentry.host
 SENTRY_ORG="your-org-slug"   # sentry.org
 PROJECT="your-project-slug"  # from projects.json
+SENTRY_ALERT_API="workflows" # the doctor gate's "alert api:" value
 API="https://${SENTRY_HOST}/api/0"
 [ -n "${SENTRY_TOKEN:-}" ] || { echo "SENTRY_TOKEN is not set; run /scoutflo:connect"; exit 1; }
 
-# issue rules (per project) + metric alerts (org-level) with no owner
-ISSUE_UNOWNED="$(curl -fsS --max-time 15 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
-  "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/" | jq '[ .[] | select(.owner == null) ] | length')"
-METRIC_UNOWNED="$(curl -fsS --max-time 30 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
-  "${API}/organizations/${SENTRY_ORG}/alert-rules/" | jq '[ .[] | select(.owner == null) ] | length')"
-echo "SNTRY-110: ${PROJECT} unowned issue rules=${ISSUE_UNOWNED}; org unowned metric alerts=${METRIC_UNOWNED}"
+if [ "${SENTRY_ALERT_API}" = workflows ]; then
+  TMPD="$(mktemp -d)"; trap 'rm -rf "$TMPD"' EXIT
+  for r in workflows detectors; do
+    code="$(curl -sS -o "${TMPD}/${r}.json" -w '%{http_code} %{content_type}' --max-time 30 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
+      "${API}/organizations/${SENTRY_ORG}/${r}/?project=${PROJECT}&per_page=100" || true)"
+    case "$code" in "200 application/json"*) ;; *) echo "SNTRY-110 blocked: ${PROJECT} ${r} read returned ${code:-no response}"; exit 0 ;; esac
+    [ "$(jq 'length' "${TMPD}/${r}.json")" -lt 100 ] || { echo "SNTRY-110 blocked: ${PROJECT} has 100+ ${r}; judge raw/projects/${PROJECT}/${r}.json instead"; exit 0; }
+  done
+  # issue alerts (owner is a "team:<id>" string) + this project's metric monitors (owner is an object)
+  ISSUE_UNOWNED="$(jq --slurpfile det "${TMPD}/detectors.json" '
+      [$det[0][] | select(.type != "issue_stream") | .id] as $monitors
+      | [ .[] | select(any((.detectorIds // [])[]; IN($monitors[]) | not)) | select(.owner == null) ] | length' \
+    "${TMPD}/workflows.json")"
+  METRIC_UNOWNED="$(jq '[ .[] | select(.type == "metric_issue" and .owner == null) ] | length' "${TMPD}/detectors.json")"
+  echo "SNTRY-110: ${PROJECT} unowned issue rules=${ISSUE_UNOWNED}; unowned metric monitors=${METRIC_UNOWNED}"
+else
+  # Legacy fallback: issue rules (per project) + metric alerts (org-level) with no owner
+  ISSUE_UNOWNED="$(curl -fsS --max-time 15 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
+    "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/" | jq '[ .[] | select(.owner == null) ] | length')"
+  METRIC_UNOWNED="$(curl -fsS --max-time 30 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
+    "${API}/organizations/${SENTRY_ORG}/alert-rules/" | jq '[ .[] | select(.owner == null) ] | length')"
+  echo "SNTRY-110: ${PROJECT} unowned issue rules=${ISSUE_UNOWNED}; org unowned metric alerts=${METRIC_UNOWNED}"
+fi
 [ "${ISSUE_UNOWNED}" -eq 0 ] && [ "${METRIC_UNOWNED}" -eq 0 ] \
   && echo "SNTRY-110 pass" || echo "SNTRY-110 fail (ownerless rules: no one accountable for tuning)"
 ```
 
-Expect: `SNTRY-110 pass` when every rule carries `owner: team:<id>` or `member:<id>`. Ownerless rules are low severity but high explanatory value — an all-ownerless estate is the root of alert rot. This is distinct from SNTRY-017 (which is about delivery routing to issue owners); SNTRY-110 is about who maintains the rule. The fix (assign owners) is a `setup-sentry` mutation, not this audit's job.
+Expect: `SNTRY-110 pass` when every rule carries an owner (an issue alert's `owner` reads `team:<id>` or `user:<id>`; a metric monitor's `owner` is an object with `type` and `id`). Ownerless rules are low severity but high explanatory value — an all-ownerless estate is the root of alert rot. This is distinct from SNTRY-017 (which is about delivery routing to issue owners); SNTRY-110 is about who maintains the rule. The fix (assign owners) is a `setup-sentry` mutation, not this audit's job.
 
 ### Honest ceiling for the fire-history checks (SNTRY-106/107/109)
 
