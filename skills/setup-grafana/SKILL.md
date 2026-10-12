@@ -116,7 +116,7 @@ CHANGE_LOG="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/grafana/changes.md"
 mkdir -p "$BACKUP_DIR"
 ```
 
-Backups are the GET response of each target object taken immediately before the write. Secure fields come back masked, so a rollback that must restore a credential needs the value from your secret store, not from the backup. `./scoutflo-audits/` stays out of version control.
+Backups are the GET response of each target object taken immediately before the write: the backup block in [references/payloads.md](references/payloads.md#backups) covers datasources, alert rules, and contact points, and the dashboard and notification-policy write blocks take their own. Record the `backup:` path each one prints; the restore blocks read that exact path. Every create block also appends what it created to `${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/grafana/created.tsv` (kind, uid, Grafana URL) once the create succeeds, and a delete rollback refuses any object that ledger does not list, so a failed or misattributed create can never lead to deleting an object that existed before. Secure fields come back masked, so a rollback that must restore a credential needs the value from your secret store, not from the backup. `./scoutflo-audits/` stays out of version control.
 
 Two real rollback gotchas, confirmed live, not theoretical:
 
@@ -165,7 +165,7 @@ For failing health checks (GRAF-001), plaintext credentials (GRAF-002), implicit
 4. Consolidating duplicates (GRAF-005) is destructive: repoint every dashboard and rule at the survivor first, verify their queries still replay, and only then delete the duplicate, confirmed individually.
 5. For GRAF-006, create a dedicated Viewer-tier service account for future audits instead of reusing this elevated token.
 
-Rollback: re-apply the backed-up definition; credentials must come back from your secret store.
+Rollback: run the datasource rollback blocks in [references/payloads.md](references/payloads.md#datasources), each in its own fresh shell. They delete a datasource this run created, or re-apply the backup of one it updated or deleted at the live `version`. Credentials come back from your secret store, never from the masked backup, and a file-provisioned (`readOnly`) datasource is refused: restore it in its provisioning file and record the rollback as incomplete.
 
 ### Dashboards
 
@@ -176,7 +176,7 @@ For GRAF-020 through GRAF-028 repairs and for new builds. Design rules, the dash
 3. Write with `overwrite: false` and the current `version` so you cannot clobber concurrent edits.
 4. Verify every write the same way, no exceptions: re-fetch by UID, replay every panel target through `/api/ds/query`, confirm variables resolve to real values, and hold the live JSON to the build-time QA rules (scope filters, stable IDs, reducer validity, pagination, link scope). This is the same bar `audit-grafana` will score it against.
 
-Rollback: rewrite the backed-up JSON with a version bump, or delete the dashboard when it was new.
+Rollback: run the dashboard rollback blocks in [references/payloads.md](references/payloads.md#dashboards). They re-save the backed-up JSON at the live `version` (the version bump), or delete a dashboard this run built new.
 
 ### Alert rules
 
@@ -193,7 +193,7 @@ Cover, per critical service: availability, request rate, errors, and latency; sa
 
 Workflow per rule: announce title, folder, group, query, threshold, labels, and annotations, with thresholds declared as tunable variables (`ERROR_RATE_THRESHOLD="0.05"` is an example, tune to your traffic). Confirm, create through the provisioning API, set the rule-group evaluation interval deliberately, and set `noDataState` and `execErrState` per rule, deciding what silence means. Verify: re-fetch the rule by UID, replay its query through `/api/ds/query`, and read its state from the rules endpoint. Payloads in [references/payloads.md](references/payloads.md#alerting).
 
-Rollback: re-apply the backup, or delete the rule when it was new. Deleting a rule removes a detection path; confirm deletions individually.
+Rollback: run the alert-rule rollback blocks in [references/payloads.md](references/payloads.md#alert-rules). They PUT the backup back to the same uid, or delete a rule this run created. Deleting a rule removes a detection path; confirm deletions individually.
 
 ### Contact points
 
@@ -201,7 +201,7 @@ For GRAF-050: routes to missing, empty, or placeholder receivers (a webhook to l
 
 Webhook URLs and receiver API keys are secrets: export them in env vars, build the payload with `jq`, pipe into `curl`. Verify by re-fetching the contact point and confirming name, type, and settings shape; secure settings come back masked, so the receiver is `configured` until a test-fire proves delivery. Payloads in [references/payloads.md](references/payloads.md#alerting).
 
-Rollback: re-apply the backup; secrets from your secret store.
+Rollback: run the contact-point rollback blocks in [references/payloads.md](references/payloads.md#contact-points). They PUT the backup back, with a replaced secret taken from your secret store, or delete a contact point this run created once no policy routes to it.
 
 ### Notification policies
 
@@ -209,7 +209,7 @@ For GRAF-056 and routing-structure gaps. The policies endpoint replaces the enti
 
 Add severity routes that match your rule labels, and set `group_by`, `group_wait`, `group_interval`, and `repeat_interval` deliberately on high-volume routes; defaults everywhere predict alert fatigue. Add mute timings for maintenance windows. Verify by re-fetching the tree and diffing against the intended version. Payloads in [references/payloads.md](references/payloads.md#alerting).
 
-Rollback: PUT the backed-up tree.
+Rollback: run the policy-tree restore block in [references/payloads.md](references/payloads.md#notification-policies). It refuses unless the live tree still equals the `after:` tree your write saved, then PUTs the backed-up tree and verifies the live tree equals it.
 
 ### Test-fire delivery
 
@@ -275,6 +275,7 @@ End the run with:
 | Test-fire pages the on-call without warning | Tell your on-call before firing at any paging receiver; confirm every test-fire individually |
 | Canary rule left firing after a routing test | Delete the canary, verify the read returns 404, and bound the test with a short evaluation interval |
 | Dashboard write clobbers concurrent edits | `overwrite: false` with the current `version` in the payload; re-fetch immediately before writing |
+| Rollback pasted into a fresh shell with empty variables, or restored from a masked or stale backup | Run the rollback blocks in references/payloads.md: they resolve the target from `toolkit.yaml`, take the uid and the printed `backup:` path explicitly, refuse placeholders and empty backups, delete only what `created.tsv` lists, write at the live `version`, and take secrets from your secret store |
 | Dashboard validated against local JSON only | Re-fetch by UID after upload and replay every target through `/api/ds/query` |
 | Imported dashboard ships broken panels | Adapt panels to your real datasources and labels; duplicate provisioned dashboards before editing |
 | New datasource points at the wrong backend or tenant | Health check plus one minimal query for known data before building anything on it |

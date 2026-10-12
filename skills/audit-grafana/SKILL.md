@@ -171,7 +171,7 @@ echo "dashboards=${DASHBOARDS} alert_rules=${RULES} datasources=${DATASOURCES} s
 # compare against the last run rather than a blank slate. State the result in the executive summary;
 # never silently omit it. This never skips a live check - every check in later phases still runs fresh.
 TARGET_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${GRAF_SEG}"
-PREV_RUN="$(find "$TARGET_DIR" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort | tail -1)"
+PREV_RUN="$(find "$TARGET_DIR" -mindepth 1 -maxdepth 1 -type d -name '[0-9]*-[0-9]*-[0-9]*' 2>/dev/null | sort | tail -1)"
 DRIFT="first run"
 if [ -n "$PREV_RUN" ] && [ -f "${PREV_RUN}/findings.json" ]; then
   PREV_TOTAL="$(jq -r '.estate.objects // empty' "${PREV_RUN}/findings.json")"

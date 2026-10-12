@@ -208,7 +208,7 @@ echo "vms=${VMS} vmss=${VMSS} aks=${AKS} app_gateways=${APPGW} load_balancers=${
 # Guided-walkthrough drift check: compare against the last run's estate.objects rather than a blank
 # slate and state it in the executive summary (per report-standard/README.md). Never skips a live check.
 TARGET_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${AZ_SEG}"
-PREV_RUN="$(find "$TARGET_DIR" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | grep -v '/runs$' | sort | tail -1)"
+PREV_RUN="$(find "$TARGET_DIR" -mindepth 1 -maxdepth 1 -type d -name '[0-9]*-[0-9]*-[0-9]*' 2>/dev/null | sort | tail -1)"
 if [ -n "$PREV_RUN" ] && [ -f "${PREV_RUN}/findings.json" ]; then
   PREV_TOTAL="$(jq -r '.estate.objects // empty' "${PREV_RUN}/findings.json")"
   [ -n "$PREV_TOTAL" ] && { [ "$PREV_TOTAL" -eq "$TOTAL" ] \
@@ -461,7 +461,7 @@ if [ -n "${SCOUTFLO_SLACK_WEBHOOK:-}" ]; then
   TOP="$(jq -r '[.findings[] | select((.lifecycle // "new") != "suppressed") | select(.area != "cost-optimization") | "\(.id) \(.title)"] | .[0:5] | join("\n")' "$OUT/findings.json")"
   AZROPT_COUNT="$(jq -r '[.findings[] | select(.area == "cost-optimization")] | length' "$OUT/findings.json")"
   [ "$AZROPT_COUNT" -gt 0 ] && COST_LINE="Cost: ${AZROPT_COUNT} optimization opportunities found"
-  PREV="$(find "$TARGET_DIR" -mindepth 1 -maxdepth 1 -type d | grep -v '/runs$' | sort | tail -2 | head -1)"
+  PREV="$(find "$TARGET_DIR" -mindepth 1 -maxdepth 1 -type d -name '[0-9]*-[0-9]*-[0-9]*' | sort | tail -2 | head -1)"
   MOVE=""; DELTA="first run"
   if [ -n "$PREV" ] && [ "$PREV" != "$OUT" ]; then
     PREV_MODEL="$(jq -r '.score.scoring_model // ""' "$PREV/findings.json")"

@@ -21,7 +21,8 @@ plan table was announced for approval, policy backups already on disk)
    findings stay open, and the plan can be re-announced unchanged when the
    user is ready. If the user later approves only some rows, only those
    execute, and the dead-channel deletion still gets its own individual
-   confirmation with the channel body quoted.
+   confirmation quoting the channel's display name, type and label keys,
+   never its label values (webhook URLs and tokens live there).
 
 **Must not:** apply any row of the plan, treat captured backups or earlier
 enthusiasm as consent, slip the "harmless" channel creation through while

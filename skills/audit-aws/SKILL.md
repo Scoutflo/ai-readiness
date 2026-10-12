@@ -229,7 +229,7 @@ echo "ec2=${EC2} rds_instances=${RDS} rds_clusters=${RDS_CLUSTERS} docdb_instanc
 # $TOTAL is unbound and, under set -eu, abort. The value of the step is telling the reader
 # whether their estate actually changed, not silently re-scanning the same ground every run.
 TARGET_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${AWS_SEG}"
-PREV_RUN="$(find "$TARGET_DIR" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | grep -v '/runs$' | sort | tail -1)"
+PREV_RUN="$(find "$TARGET_DIR" -mindepth 1 -maxdepth 1 -type d -name '[0-9]*-[0-9]*-[0-9]*' 2>/dev/null | sort | tail -1)"
 DRIFT="first run"
 if [ -n "$PREV_RUN" ] && [ -f "${PREV_RUN}/findings.json" ]; then
   PREV_TOTAL="$(jq -r '.estate.objects // empty' "${PREV_RUN}/findings.json")"
@@ -497,7 +497,7 @@ if [ -n "${SCOUTFLO_SLACK_WEBHOOK:-}" ]; then
   TOP="$(jq -r '[.findings[] | select((.lifecycle // "new") != "suppressed") | select(.area != "cost-optimization") | "\(.id) \(.title)"] | .[0:5] | join("\n")' "$OUT/findings.json")"
   AWSOPT_COUNT="$(jq -r '[.findings[] | select(.area == "cost-optimization")] | length' "$OUT/findings.json")"
   [ "$AWSOPT_COUNT" -gt 0 ] && COST_LINE="Cost: ${AWSOPT_COUNT} optimization opportunities found"
-  PREV="$(find "$TARGET_DIR" -mindepth 1 -maxdepth 1 -type d | grep -v '/runs$' | sort | tail -2 | head -1)"
+  PREV="$(find "$TARGET_DIR" -mindepth 1 -maxdepth 1 -type d -name '[0-9]*-[0-9]*-[0-9]*' | sort | tail -2 | head -1)"
   MOVE=""; DELTA="first run"
   if [ -n "$PREV" ] && [ "$PREV" != "$OUT" ]; then
     PREV_MODEL="$(jq -r '.score.scoring_model // ""' "$PREV/findings.json")"

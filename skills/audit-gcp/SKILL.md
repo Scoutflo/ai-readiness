@@ -215,7 +215,7 @@ echo "vms=${VMS} clusters=${CLUSTERS} uptime_checks=${CHECKS} backend_services=$
 # compare against the last run rather than a blank slate. State the result in the executive summary;
 # never silently omit it. This never skips a live check - every check in later phases still runs fresh.
 TARGET_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${GCP_SEG}"
-PREV_RUN="$(find "$TARGET_DIR" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | grep -v '/runs$' | sort | tail -1)"
+PREV_RUN="$(find "$TARGET_DIR" -mindepth 1 -maxdepth 1 -type d -name '[0-9]*-[0-9]*-[0-9]*' 2>/dev/null | sort | tail -1)"
 DRIFT="first run"
 if [ -n "$PREV_RUN" ] && [ -f "${PREV_RUN}/findings.json" ]; then
   PREV_TOTAL="$(jq -r '.estate.objects // empty' "${PREV_RUN}/findings.json")"
@@ -489,7 +489,7 @@ if [ -n "${SCOUTFLO_SLACK_WEBHOOK:-}" ]; then
   COUNTS="$(jq -r '.severity_counts | "\(.critical) critical, \(.high) high, \(.medium) medium, \(.low) low"' "$OUT/findings.json")"
   CHECKS="$(jq -r '"\([.score.categories[].checks_passed] | add)/\([.score.categories[].checks_total] | add) checks passed"' "$OUT/findings.json")"
   TOP="$(jq -r '[.findings[] | select((.lifecycle // "new") != "suppressed") | "\(.id) \(.title)"] | .[0:5] | join("\n")' "$OUT/findings.json")"
-  PREV="$(find "$TARGET_DIR" -mindepth 1 -maxdepth 1 -type d | grep -v '/runs$' | sort | tail -2 | head -1)"
+  PREV="$(find "$TARGET_DIR" -mindepth 1 -maxdepth 1 -type d -name '[0-9]*-[0-9]*-[0-9]*' | sort | tail -2 | head -1)"
   MOVE=""; DELTA="first run"
   if [ -n "$PREV" ] && [ "$PREV" != "$OUT" ]; then
     PREV_MODEL="$(jq -r '.score.scoring_model // ""' "$PREV/findings.json")"

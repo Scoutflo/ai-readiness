@@ -168,10 +168,12 @@ CH_URL="https://your-clickhouse-host:8123"; CH_DB="default"
 TABLE="otel_logs"                 # the otel_* table from the finding
 BACKUP_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/clickstack/setup-$(date -u +%F)/backups"
 mkdir -p "$BACKUP_DIR"
-BACKUP_FILE="${BACKUP_DIR}/ttl-${TABLE}-$(date -u +%H%M%S).txt"
+BACKUP_FILE="${BACKUP_DIR}/ttl-${TABLE}-$(date -u +%H%M%S).json"
 
+# The server's hostName(), the database and the table go next to engine_full, so the rollback
+# can refuse a backup taken from another instance, database or table.
 curl -fsS --max-time 15 "${CH_URL}/" -H "X-ClickHouse-User: ${CH_USER}" -H "X-ClickHouse-Key: ${CH_PASSWORD}" \
-  --data-binary "SELECT engine_full FROM system.tables WHERE database='${CH_DB}' AND name='${TABLE}' FORMAT TabSeparatedRaw" \
+  --data-binary "SELECT hostName() AS host, database, name, engine_full FROM system.tables WHERE database='${CH_DB}' AND name='${TABLE}' FORMAT JSONEachRow" \
   > "$BACKUP_FILE"
 test -s "$BACKUP_FILE" && echo "backup (prior TTL): ${BACKUP_FILE}"
 ```
@@ -216,7 +218,35 @@ curl -fsS --max-time 15 "${CH_URL}/" -H "X-ClickHouse-User: ${CH_USER}" -H "X-Cl
   | jq -r '.data[0].is_done'
 ```
 
-Expected: the `jq -e` exits 0 (new interval present in `engine_full`) and the latest mutation reports `is_done` moving to `1`. **Rollback:** re-apply the `TTL ...` clause captured in step 1 from the backup file with another `MODIFY TTL`. Reducing retention deletes expired data as the mutation runs and does not come back; that is exactly why a reduction takes the second confirmation with the data loss stated.
+Expected: the `jq -e` exits 0 (new interval present in `engine_full`) and the latest mutation reports `is_done` moving to `1`. **Rollback** re-applies the TTL clause from the step 1 backup, or removes the TTL when the table had none, in its own fresh shell. It is itself a `MODIFY TTL` with the same part-rewrite cost, so announce it and take the second confirmation like the change it undoes:
+
+```bash
+set -eu
+[ -f "$HOME/.scoutflo/env" ] && . "$HOME/.scoutflo/env"
+CH_URL="https://your-clickhouse-host:8123"   # clickhouse.http_url
+CH_DB="default"                              # clickhouse.database
+TABLE="<otel-table>"                         # the table step 3 changed
+BACKUP_FILE="<backup-file>"                  # the exact "backup (prior TTL)" path step 1 printed
+for v in "$TABLE" "$BACKUP_FILE"; do case "$v" in ''|'<'*) echo "Fill in every <...> value from the change record first" >&2; exit 1 ;; esac; done
+[ -s "$BACKUP_FILE" ] || { echo "No backup at ${BACKUP_FILE}: use the exact path step 1 printed" >&2; exit 1; }
+[ -n "${CH_USER:-}" ] && [ -n "${CH_PASSWORD:-}" ] || { echo "CH_USER/CH_PASSWORD not set; run /scoutflo:connect"; exit 1; }
+# The backup must come from this instance, database and table: step 1 saved them next to engine_full.
+LIVE_HOST="$(curl -fsS --max-time 15 "${CH_URL}/" -H "X-ClickHouse-User: ${CH_USER}" -H "X-ClickHouse-Key: ${CH_PASSWORD}" \
+  --data-binary "SELECT hostName() FORMAT TabSeparatedRaw")"
+jq -e --arg h "$LIVE_HOST" --arg d "$CH_DB" --arg t "$TABLE" '.host == $h and .database == $d and .name == $t' "$BACKUP_FILE" > /dev/null \
+  || { echo "${BACKUP_FILE} is not a backup of ${CH_DB}.${TABLE} on ${LIVE_HOST}; stopping" >&2; exit 1; }
+# The TTL clause sits between " TTL " and " SETTINGS " (or the end) of engine_full; none means unbounded.
+OLD_TTL="$(jq -r '[.engine_full | capture(" TTL (?<t>.+?)(?: SETTINGS |$)").t] | first // ""' "$BACKUP_FILE")"
+if [ -n "$OLD_TTL" ]; then SQL="ALTER TABLE ${CH_DB}.${TABLE} MODIFY TTL ${OLD_TTL}"; else SQL="ALTER TABLE ${CH_DB}.${TABLE} REMOVE TTL"; fi
+echo "running: ${SQL}"
+curl -fsS --max-time 60 "${CH_URL}/" -H "X-ClickHouse-User: ${CH_USER}" -H "X-ClickHouse-Key: ${CH_PASSWORD}" \
+  --data-binary "$SQL"
+curl -fsS --max-time 15 "${CH_URL}/" -H "X-ClickHouse-User: ${CH_USER}" -H "X-ClickHouse-Key: ${CH_PASSWORD}" \
+  --data-binary "SELECT engine_full FROM system.tables WHERE database='${CH_DB}' AND name='${TABLE}' FORMAT TabSeparatedRaw" \
+  | jq -Rse --arg want "$OLD_TTL" 'rtrimstr("\n") | ([capture(" TTL (?<t>.+?)(?: SETTINGS |$)").t] | first // "") == $want'
+```
+
+Expected: the `running:` statement, then `true` (the table's TTL clause matches the backup again, or is gone when the table had none). If `CH_URL` balances across replicas, `hostName()` can differ per request and the block refuses; point `CH_URL` at the replica the backup names. Watch the mutation with the `system.mutations` read from step 4. Reducing retention deletes expired data as the mutation runs and does not come back; that is exactly why a reduction takes the second confirmation with the data loss stated.
 
 ## Create HyperDX alert
 
@@ -251,19 +281,25 @@ curl -fsS --max-time 10 -H "Authorization: Bearer ${HDX_API_KEY}" "${HDX_URL}/ap
   | jq -e --arg id "$ALERT_ID" 'any(.[]; (.id // ._id) == $id)'
 ```
 
-Expected: exit 0 (the alert is present in the live list). A HyperDX alert that lists a receiver is `configured`; only a delivered test notification proves the receiver is live. Trigger a controlled test through the receiver and record who confirmed receipt before marking CS-040 fixed. **Rollback** (this is a create; rollback deletes and verifies absence):
+Expected: exit 0 (the alert is present in the live list). A HyperDX alert that lists a receiver is `configured`; only a delivered test notification proves the receiver is live. Trigger a controlled test through the receiver and record who confirmed receipt before marking CS-040 fixed. **Rollback** deletes the alert this setup created and verifies it is gone, in its own fresh shell:
 
 ```bash
 set -eu
 [ -f "$HOME/.scoutflo/env" ] && . "$HOME/.scoutflo/env"
-HDX_URL="https://your-hyperdx-url:8080"; ALERT_ID="the-id-just-created"
+HDX_URL="https://your-hyperdx-url:8080"    # hyperdx.url
+ALERT_ID="<alert-id>"                      # the "created alert:" id the create block printed
+for v in "$ALERT_ID"; do case "$v" in ''|'<'*) echo "Fill in every <...> value from the change record first" >&2; exit 1 ;; esac; done
 [ -n "${HDX_API_KEY:-}" ] || { echo "HDX_API_KEY not set; run /scoutflo:connect"; exit 1; }
+# What will be deleted; stops here unless this instance lists that id, so a wrong URL or id deletes nothing.
+curl -fsS --max-time 10 -H "Authorization: Bearer ${HDX_API_KEY}" "${HDX_URL}/api/alerts" \
+  | jq -er --arg id "$ALERT_ID" 'first(.[] | select((.id // ._id) == $id)) | "deleting alert: \(.name // $id)"' \
+  || { echo "No alert ${ALERT_ID} on ${HDX_URL}: check the id and URL against the change record" >&2; exit 1; }
 curl -fsS --max-time 10 -X DELETE -H "Authorization: Bearer ${HDX_API_KEY}" "${HDX_URL}/api/alerts/${ALERT_ID}"
 curl -fsS --max-time 10 -H "Authorization: Bearer ${HDX_API_KEY}" "${HDX_URL}/api/alerts" \
   | jq -e --arg id "$ALERT_ID" '[.[] | select((.id // ._id) == $id)] | length == 0'
 ```
 
-Expected: exit 0. Confirm the `DELETE` path against your instance the same way you confirmed the create body.
+Expected: `deleting alert:` with its name, then `true`. Confirm the `DELETE` path against your instance the same way you confirmed the create body.
 
 ## Create read-only user
 
@@ -277,8 +313,14 @@ AUDIT_USER="scoutflo_audit"
 # CH_AUDIT_PASSWORD is set in ~/.scoutflo/env by /scoutflo:connect; never inline it.
 [ -n "${CH_AUDIT_PASSWORD:-}" ] || { echo "CH_AUDIT_PASSWORD not set; run /scoutflo:connect"; exit 1; }
 
+# The rollback drops this user, so never create over (or grant onto) one that already exists.
 curl -fsS --max-time 15 "${CH_URL}/" -H "X-ClickHouse-User: ${CH_USER}" -H "X-ClickHouse-Key: ${CH_PASSWORD}" \
-  --data-binary "CREATE USER IF NOT EXISTS ${AUDIT_USER} IDENTIFIED WITH sha256_password BY '${CH_AUDIT_PASSWORD}'"
+  --data-binary "SELECT count() AS n FROM system.users WHERE name='${AUDIT_USER}' FORMAT JSON" \
+  | jq -e '.data[0].n | tonumber == 0' > /dev/null \
+  || { echo "user ${AUDIT_USER} already exists: pick another name, or announce changes to it" >&2; exit 1; }
+curl -fsS --max-time 15 "${CH_URL}/" -H "X-ClickHouse-User: ${CH_USER}" -H "X-ClickHouse-Key: ${CH_PASSWORD}" \
+  --data-binary "CREATE USER ${AUDIT_USER} IDENTIFIED WITH sha256_password BY '${CH_AUDIT_PASSWORD}'"
+echo "created user: ${AUDIT_USER}"
 curl -fsS --max-time 15 "${CH_URL}/" -H "X-ClickHouse-User: ${CH_USER}" -H "X-ClickHouse-Key: ${CH_PASSWORD}" \
   --data-binary "GRANT SELECT ON ${CH_DB}.* TO ${AUDIT_USER}"
 curl -fsS --max-time 15 "${CH_URL}/" -H "X-ClickHouse-User: ${CH_USER}" -H "X-ClickHouse-Key: ${CH_PASSWORD}" \
@@ -298,20 +340,36 @@ curl -fsS --max-time 15 "${CH_URL}/" -H "X-ClickHouse-User: ${CH_USER}" -H "X-Cl
   --data-binary "SHOW GRANTS FOR ${AUDIT_USER} FORMAT TabSeparatedRaw"
 ```
 
-Expected: the `jq -e` exits 0 and `SHOW GRANTS` lists only `SELECT` grants (no `INSERT`, `ALTER`, or access-management privilege). **Rollback:**
+Expected: the `jq -e` exits 0 and `SHOW GRANTS` lists only `SELECT` grants (no `INSERT`, `ALTER`, or access-management privilege). Then record the new user + its env-var password name in `/scoutflo:connect`'s read-only tier so the next `audit-clickstack` uses it. **Rollback** drops the user this setup created (the create refuses a name that already exists), in its own fresh shell:
 
 ```bash
 set -eu
 [ -f "$HOME/.scoutflo/env" ] && . "$HOME/.scoutflo/env"
-CH_URL="https://your-clickhouse-host:8123"; AUDIT_USER="scoutflo_audit"
-curl -fsS --max-time 15 "${CH_URL}/" -H "X-ClickHouse-User: ${CH_USER}" -H "X-ClickHouse-Key: ${CH_PASSWORD}" \
-  --data-binary "DROP USER IF EXISTS ${AUDIT_USER}"
+CH_URL="https://your-clickhouse-host:8123"   # clickhouse.http_url
+CH_DB="default"                              # clickhouse.database: the database the create block granted
+AUDIT_USER="<audit-user>"                    # the "created user:" name the create block printed
+for v in "$AUDIT_USER"; do case "$v" in ''|'<'*) echo "Fill in every <...> value from the change record first" >&2; exit 1 ;; esac; done
+[ -n "${CH_USER:-}" ] && [ -n "${CH_PASSWORD:-}" ] || { echo "CH_USER/CH_PASSWORD not set; run /scoutflo:connect"; exit 1; }
+case "$AUDIT_USER" in default|"$CH_USER") echo "Refusing to drop ${AUDIT_USER}: it is not the audit user this setup created" >&2; exit 1 ;; esac
+# Drop only the user the create block made: it exists and holds exactly its two SELECT grants.
 curl -fsS --max-time 15 "${CH_URL}/" -H "X-ClickHouse-User: ${CH_USER}" -H "X-ClickHouse-Key: ${CH_PASSWORD}" \
   --data-binary "SELECT count() AS n FROM system.users WHERE name='${AUDIT_USER}' FORMAT JSON" \
-  | jq -e '.data[0].n == 0'
+  | jq -e '.data[0].n | tonumber == 1' > /dev/null \
+  || { echo "No user ${AUDIT_USER} on ${CH_URL}: check the name against the change record" >&2; exit 1; }
+curl -fsS --max-time 15 "${CH_URL}/" -H "X-ClickHouse-User: ${CH_USER}" -H "X-ClickHouse-Key: ${CH_PASSWORD}" \
+  --data-binary "SELECT * FROM system.grants WHERE user_name='${AUDIT_USER}' FORMAT JSON" \
+  | jq -e --arg db "$CH_DB" 'def flag: if . == true or . == 1 or . == "1" then 1 else 0 end;
+      [.data[] | [.access_type, .database, .table, .column, (.is_partial_revoke | flag), (.grant_option | flag)]] | sort
+      == ([["SELECT", $db, null, null, 0, 0], ["SELECT", "system", null, null, 0, 0]] | sort)' > /dev/null \
+  || { echo "${AUDIT_USER} holds grants other than the two SELECT grants the create block made: not the user this setup created; stop and re-announce" >&2; exit 1; }
+curl -fsS --max-time 15 "${CH_URL}/" -H "X-ClickHouse-User: ${CH_USER}" -H "X-ClickHouse-Key: ${CH_PASSWORD}" \
+  --data-binary "DROP USER ${AUDIT_USER}"
+curl -fsS --max-time 15 "${CH_URL}/" -H "X-ClickHouse-User: ${CH_USER}" -H "X-ClickHouse-Key: ${CH_PASSWORD}" \
+  --data-binary "SELECT count() AS n FROM system.users WHERE name='${AUDIT_USER}' FORMAT JSON" \
+  | jq -e '.data[0].n | tonumber == 0'
 ```
 
-Expected: exit 0 (the user is gone). Then record the new user + its env-var password name in `/scoutflo:connect`'s read-only tier so the next `audit-clickstack` uses it.
+Expected: `true` (the user is gone; ClickHouse JSON quotes 64-bit counts, hence `tonumber`). A user with any other grant, including one the create block did not finish granting, stops the block before the drop; re-announce. If you already recorded the user in `/scoutflo:connect`, remove it there too.
 
 ## Harden ClickHouse auth
 
@@ -356,7 +414,27 @@ curl -fsS --max-time 15 "${CH_URL}/" -H "X-ClickHouse-User: ${CH_USER}" -H "X-Cl
   | jq -e '.data[0].auth_type == "sha256_password"'
 ```
 
-Expected: exit 0 (`auth_type` is `sha256_password`, no longer `plaintext_password`). Then confirm with the service owner that the service authenticates successfully with the new secret; the change is not done until that client works again. **Rollback:** `ALTER USER ${TARGET_USER} IDENTIFIED WITH sha256_password BY '<owner-supplied>'` to a value the owner controls, then re-run the verify. TLS on the HTTP/native ports is the other half of CS-050 posture; it is a server-config change out of this skill's write scope, so record it as a plan with a named owner.
+Expected: exit 0 (`auth_type` is `sha256_password`, no longer `plaintext_password`). Then confirm with the service owner that the service authenticates successfully with the new secret; the change is not done until that client works again. **Rollback** cannot restore the unknown old password; it re-sets one the service owner supplies and controls (often the value their clients still use), kept on `sha256_password`, in its own fresh shell:
+
+```bash
+set -eu
+[ -f "$HOME/.scoutflo/env" ] && . "$HOME/.scoutflo/env"
+CH_URL="https://your-clickhouse-host:8123"   # clickhouse.http_url
+TARGET_USER="<target-user>"                  # the user step 2 changed
+for v in "$TARGET_USER"; do case "$v" in ''|'<'*) echo "Fill in every <...> value from the change record first" >&2; exit 1 ;; esac; done
+[ -n "${CH_USER:-}" ] && [ -n "${CH_PASSWORD:-}" ] || { echo "CH_USER/CH_PASSWORD not set; run /scoutflo:connect"; exit 1; }
+[ "$TARGET_USER" != "$CH_USER" ] || { echo "Refusing to reset ${TARGET_USER}: it is the elevated user this block logs in as" >&2; exit 1; }
+# CH_RESTORE_PASSWORD holds the owner-supplied value (exported, or in ~/.scoutflo/env); never inline it.
+[ -n "${CH_RESTORE_PASSWORD:-}" ] || { echo "CH_RESTORE_PASSWORD not set; get the value from the service owner first"; exit 1; }
+curl -fsS --max-time 15 "${CH_URL}/" -H "X-ClickHouse-User: ${CH_USER}" -H "X-ClickHouse-Key: ${CH_PASSWORD}" \
+  --data-binary "ALTER USER ${TARGET_USER} IDENTIFIED WITH sha256_password BY '${CH_RESTORE_PASSWORD}'"
+# Prove the owner's value now authenticates as that user.
+curl -fsS --max-time 15 "${CH_URL}/" -H "X-ClickHouse-User: ${TARGET_USER}" -H "X-ClickHouse-Key: ${CH_RESTORE_PASSWORD}" \
+  --data-binary "SELECT currentUser() AS user FORMAT JSON" \
+  | jq -e --arg u "$TARGET_USER" '.data[0].user == $u'
+```
+
+Expected: `true` (the owner's value logs in as that user). A user allowed only from the service's own hosts fails this login from your machine even after a good reset; then confirm with the owner that the client authenticates instead. TLS on the HTTP/native ports is the other half of CS-050 posture; it is a server-config change out of this skill's write scope, so record it as a plan with a named owner.
 
 ## Manage storage capacity
 

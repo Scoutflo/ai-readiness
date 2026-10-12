@@ -1,6 +1,6 @@
 # setup-sentry API cookbook
 
-Full request and response shapes for the workflow in [../SKILL.md](../SKILL.md). Every block below is stateless: it redeclares `API`, `SENTRY_ORG`, `SENTRY_TOKEN` (presence check), and any object-specific placeholder at its own top, resolved the same way the doctor gate resolves them. Each block runs correctly pasted into a brand-new shell; none depends on a variable set in an earlier block.
+Full request and response shapes for the workflow in [../SKILL.md](../SKILL.md). Every block below is stateless: it redeclares `API`, `SENTRY_ORG`, `SENTRY_TOKEN` (presence check), and any object-specific placeholder at its own top. Fill `SENTRY_HOST` and `SENTRY_ORG` with the values the live-safety gate printed, and bind `SENTRY_TOKEN` from your `token_env`, as [../SKILL.md#live-safety-gate](../SKILL.md#live-safety-gate) explains. Each block runs correctly pasted into a brand-new shell; none depends on a variable set in an earlier block.
 
 ## Platform values
 
@@ -25,7 +25,9 @@ PUBLIC_KEY="$(printf '%s' "$KEY_JSON" | jq -r '.public')"
 PROJECT_ID="$(printf '%s' "$KEY_JSON" | jq -r '.projectId')"
 INGEST_HOST="$(printf '%s' "$KEY_JSON" | jq -r '.dsn.public' | sed -E 's#https://[^@]+@([^/]+)/.*#\1#')"
 
-EVENT_ID="$(uuidgen | tr -d '-' | tr '[:upper:]' '[:lower:]')"
+# 32 lowercase hex characters from 16 random bytes; portable where uuidgen is not installed.
+EVENT_ID="$(od -An -N16 -tx1 /dev/urandom | tr -dc '0-9a-f')"
+[ "${#EVENT_ID}" -eq 32 ] || { echo "could not generate an event id"; exit 1; }
 SENT_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 PAYLOAD="$(jq -nc --arg id "$EVENT_ID" --arg ts "$(date -u +%Y-%m-%dT%H:%M:%S)" \
   --arg env "$ENV_NAME" \
@@ -228,6 +230,7 @@ curl -fsS --max-time 10 "${API}/organizations/${SENTRY_ORG}/integrations/?provid
   "filterMatch": "all",
   "environment": "production",
   "frequency": 5,
+  "owner": "team:<TEAM_ID>",
   "conditions": [
     { "id": "sentry.rules.conditions.every_event.EveryEventCondition" }
   ],
@@ -240,24 +243,7 @@ curl -fsS --max-time 10 "${API}/organizations/${SENTRY_ORG}/integrations/?provid
 }
 ```
 
-```bash
-set -eu
-SENTRY_HOST="us.sentry.io"; SENTRY_ORG="your-org-slug"; API="https://${SENTRY_HOST}/api/0"
-[ -n "${SENTRY_TOKEN:-}" ] || { echo "SENTRY_TOKEN is not set; run /scoutflo:connect"; exit 1; }
-PROJECT="checkout"
-
-NEW_RULE="$(curl -fsS --max-time 10 -X POST "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/" \
-  -H "Authorization: Bearer ${SENTRY_TOKEN}" -H "Content-Type: application/json" \
-  -d @rule-payload.json)"
-RULE_ID="$(printf '%s' "$NEW_RULE" | jq -r '.id')"
-echo "created rule: ${RULE_ID}"
-
-curl -fsS --max-time 10 "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/${RULE_ID}/" \
-  -H "Authorization: Bearer ${SENTRY_TOKEN}" \
-  | jq -e '.conditions != null and .actions != null and (.actions | length) >= 1'
-```
-
-Expect: exit 0. Rollback is the rule rollback block in [../SKILL.md#alert-rule-taxonomy](../SKILL.md#alert-rule-taxonomy), `RULE_ID` set to the printed id.
+`owner` takes `team:<id>` (the numeric team id from `GET /organizations/{org}/teams/`); audit-sentry's SNTRY-110 flags a rule without one. Create a rule with the create block in [../SKILL.md#alert-rule-taxonomy](../SKILL.md#alert-rule-taxonomy): it builds this payload with `jq -n` from declared variables, so no payload file is needed, and verifies the re-fetched rule against it. Rollback is the rule rollback block in the same section, `RULE_ID` set to the printed id.
 
 ### Starting rule set (map to your own severity scheme and event volume)
 
@@ -275,6 +261,8 @@ Expect: exit 0. Rollback is the rule rollback block in [../SKILL.md#alert-rule-t
 | 10 | Frequency spike | `FREQ_SPIKE_THRESHOLD="10"` events in 1h | - | Review | `FREQ_FLOOR_MIN="30"` min minimum |
 
 Add per-runtime rules only for conditions your platform actually emits (for example, an HTTP 5xx spike rule using the `http.status_code` starts-with filter on a backend project). Do not create a rule for a condition your stack cannot produce.
+
+How this set scores on a fresh audit-sentry run: the create block sets the rule-level `environment` and an `owner` on every rule, so none fails SNTRY-102 or SNTRY-110. Rules 3 to 10 carry no `filters` (rule 9's production scope is the rule-level `environment`, not a filter), so audit-sentry reports each as SNTRY-101, a notifying rule with no filter, until you add a gating filter your volume justifies, such as a `LevelFilter` (never an issue-age filter on rule 5, the regression rule). If the condition alone is the gate you want, record SNTRY-101 for those rules as an accepted decision. Every rule's `IssueOwners` email action also fails SNTRY-017 on a project with no ownership rules ([../SKILL.md#receiver-wiring](../SKILL.md#receiver-wiring)).
 
 ### Slack action retrofit
 
@@ -348,27 +336,30 @@ The mandatory pre-mutation snapshot for a bulk alert-rule cleanup, driven from [
 set -eu
 SENTRY_HOST="us.sentry.io"; SENTRY_ORG="your-org-slug"; API="https://${SENTRY_HOST}/api/0"
 [ -n "${SENTRY_TOKEN:-}" ] || { echo "SENTRY_TOKEN is not set; run /scoutflo:connect"; exit 1; }
+export SENTRY_TOKEN   # fetch-all.sh reads the token from its environment
+# Every list below is paginated; fetch-all.sh follows the Link cursor so no page is silently left out.
+FETCH_ALL="${CLAUDE_PLUGIN_ROOT}/skills/setup-sentry/scripts/fetch-all.sh"
 
 # One dated dir for the whole rule-set snapshot, home-anchored like the config store.
 BACKUP_DIR="$HOME/.scoutflo/sentry-rules-backup-$(date -u +%F)"
 mkdir -p "$BACKUP_DIR"
 
+# The project list the loop walks, saved with the snapshot.
+sh "$FETCH_ALL" "${API}/organizations/${SENTRY_ORG}/projects/" > "${BACKUP_DIR}/projects.json"
+
 # One file per project of its issue-alert rules.
-for PROJECT in $(curl -fsS --max-time 10 "${API}/organizations/${SENTRY_ORG}/projects/" \
-  -H "Authorization: Bearer ${SENTRY_TOKEN}" | jq -r '.[].slug'); do
-  curl -fsS --max-time 10 "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/" \
-    -H "Authorization: Bearer ${SENTRY_TOKEN}" > "${BACKUP_DIR}/issue-rules-${PROJECT}.json"
+for PROJECT in $(jq -r '.[].slug' "${BACKUP_DIR}/projects.json"); do
+  sh "$FETCH_ALL" "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/" > "${BACKUP_DIR}/issue-rules-${PROJECT}.json"
   test -s "${BACKUP_DIR}/issue-rules-${PROJECT}.json" && echo "backed up issue rules: ${PROJECT}"
 done
 
 # One file for the org's metric-alert rules.
-curl -fsS --max-time 10 "${API}/organizations/${SENTRY_ORG}/alert-rules/" \
-  -H "Authorization: Bearer ${SENTRY_TOKEN}" > "${BACKUP_DIR}/metric-alert-rules.json"
+sh "$FETCH_ALL" "${API}/organizations/${SENTRY_ORG}/alert-rules/" > "${BACKUP_DIR}/metric-alert-rules.json"
 test -s "${BACKUP_DIR}/metric-alert-rules.json" && echo "backed up metric-alert rules"
 echo "rule-set backup: ${BACKUP_DIR}"
 ```
 
-Expect: one `issue-rules-<project>.json` per project and one `metric-alert-rules.json`, each non-empty. Restore a single issue rule from the per-project file with one of the two blocks below, never both: the first puts back a rule you updated, the second re-creates one you deleted. Running both on an updated rule would restore it and then add a duplicate.
+Expect: `projects.json`, one `issue-rules-<project>.json` per project in it, and one `metric-alert-rules.json`, each non-empty and each holding every page of its list. A failed page stops the block with an error instead of finishing on a silently incomplete snapshot. Restore a single issue rule from the per-project file with one of the two blocks below, never both: the first puts back a rule you updated, the second re-creates one you deleted. Running both on an updated rule would restore it and then add a duplicate.
 
 Restore an **updated** rule, in its own fresh shell:
 
@@ -584,12 +575,17 @@ SENTRY_HOST="us.sentry.io"; SENTRY_ORG="your-org-slug"; API="https://${SENTRY_HO
 PROJECT="checkout"
 CHECK_NAME="API health check"
 CHECK_URL="https://api.example.com/health"   # the exact endpoint this check will watch
+UPTIME_INTERVAL_S="300"     # example; Sentry accepts only 300, 600, 1800, or 3600
+UPTIME_TIMEOUT_MS="5000"    # example, tune to the endpoint's normal response time
+UPTIME_DOWN_AFTER="3"       # example: consecutive failed checks before Sentry opens an issue
+UPTIME_RECOVER_AFTER="1"    # example: consecutive good checks before it resolves
 
 NEW_CHECK="$(curl -fsS --max-time 10 -X POST "${API}/projects/${SENTRY_ORG}/${PROJECT}/uptime/" \
   -H "Authorization: Bearer ${SENTRY_TOKEN}" -H "Content-Type: application/json" \
-  -d "$(jq -n --arg n "$CHECK_NAME" --arg u "$CHECK_URL" '{
-    name: $n, url: $u, intervalSeconds: 300, timeoutMs: 5000, method: "GET",
-    downtimeThreshold: 3, recoveryThreshold: 1, traceSampling: false, responseCaptureEnabled: true
+  -d "$(jq -n --arg n "$CHECK_NAME" --arg u "$CHECK_URL" --argjson interval "$UPTIME_INTERVAL_S" \
+        --argjson timeout "$UPTIME_TIMEOUT_MS" --argjson down "$UPTIME_DOWN_AFTER" --argjson up "$UPTIME_RECOVER_AFTER" '{
+    name: $n, url: $u, intervalSeconds: $interval, timeoutMs: $timeout, method: "GET",
+    downtimeThreshold: $down, recoveryThreshold: $up, traceSampling: false, responseCaptureEnabled: true
   }')")"
 CHECK_ID="$(printf '%s' "$NEW_CHECK" | jq -r '.id')"
 
@@ -624,8 +620,9 @@ Sentry paginates list endpoints with a `Link` response header cursor. Follow it 
 set -eu
 SENTRY_HOST="us.sentry.io"; SENTRY_ORG="your-org-slug"; API="https://${SENTRY_HOST}/api/0"
 [ -n "${SENTRY_TOKEN:-}" ] || { echo "SENTRY_TOKEN is not set; run /scoutflo:connect"; exit 1; }
+export SENTRY_TOKEN   # fetch-all.sh reads the token from its environment
 
-./scripts/fetch-all.sh "${API}/organizations/${SENTRY_ORG}/projects/"
+sh "${CLAUDE_PLUGIN_ROOT}/skills/setup-sentry/scripts/fetch-all.sh" "${API}/organizations/${SENTRY_ORG}/projects/"
 ```
 
 Back off and retry on `429`; read the `Retry-After` header rather than a fixed sleep.
@@ -641,8 +638,8 @@ Back off and retry on `429`; read the `Retry-After` header rather than a fixed s
 | Scope | Needed for |
 | --- | --- |
 | `project:write` | Create and update projects, keys, environments |
-| `project:admin` | Delete rules, delete projects |
-| `alerts:write` | Create and update alert and metric rules |
+| `project:admin` | Delete projects (the project rollback in [../SKILL.md#projects](../SKILL.md#projects)) |
+| `alerts:write` | Create, update, and delete issue alert and metric rules (rule deletes confirmed live with `alerts:write` alone) |
 | `org:read` | List teams, integrations, members, repos |
 | `org:write` | Create code mappings |
 

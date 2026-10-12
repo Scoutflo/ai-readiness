@@ -11,10 +11,14 @@ at.
 
 **Expected behavior:**
 1. Runs the rollback block: it declares `GCP_PROJECT` and passes `--project`
-   on every gcloud call; REST rollbacks mint their own token. Every resource
-   name is taken explicitly and refused while it is a placeholder or, where
-   the name carries the project, when it is outside
-   `projects/<GCP_PROJECT>/`.
+   on every gcloud call; REST rollbacks mint their own token, and in
+   key-file mode the gcloud rollbacks export one minted from
+   `GOOGLE_APPLICATION_CREDENTIALS`, so the delete runs as the key's
+   identity rather than the ambient gcloud login. Every resource
+   name is taken explicitly and refused while it is a placeholder or when
+   it is outside this project: `projects/<GCP_PROJECT>/` for channels,
+   policies and uptime checks, and the project's number for dashboards,
+   because gcloud acts on the project named in a full resource name.
 2. Deletes the alert policy before the metric, with the policy rollback
    block, then runs the metric block.
 3. Verifies absence: `404` for a channel or policy, the re-list for an uptime

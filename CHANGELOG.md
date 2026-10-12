@@ -1,5 +1,58 @@
 # Changelog
 
+## 0.1.217
+
+**Safe undo steps in every setup skill, and the full-review fixes.**
+
+- The Kubernetes, Grafana, New Relic and ClickStack setup skills get the same
+  undo steps as 0.1.216: each is a self-contained block that names its target,
+  takes ids and backup paths explicitly, refuses placeholders, and never
+  removes something that existed before the setup. Grafana deletes only
+  objects this setup recorded as created on that same Grafana, and restores
+  a notification-policy tree only while it still matches what the setup
+  left. New Relic reads every page before deciding something existed, and
+  refuses to delete a policy or condition that was there before. The
+  Kubernetes binding removal refuses the built-in bootstrap bindings and any
+  binding shared with other accounts, and re-checks the access the service
+  account still needs. ClickHouse undos are tied to the exact user, instance
+  and table they changed, and a check that could never pass (ClickHouse
+  returns counts as text) is fixed.
+- Setup skills no longer read their own work folder as the latest audit.
+  After the first setup run, several setup skills picked the `setup-<date>`
+  folder (or a `runs` or label folder) and stopped, and audit-aws, -azure,
+  -gcp, -digitalocean and -grafana picked it as the previous run, so drift and
+  "since last run" deltas were silently skipped. Both now pick only date-named
+  run folders.
+- The LGTM, AWS, Azure, GCP, DigitalOcean and Sentry setup skills fixed what
+  their full reviews found: the safety gates read their target from the config
+  by command and honour `SCOUTFLO_TARGET`, doctors stop on a failed check
+  instead of passing, most verify steps now assert their result, Azure steps take the
+  subscription explicitly instead of falling back to the CLI default, AWS
+  change steps confirm the signed-in account before writing, and every finding the audits
+  send to a setup skill has a route.
+- Step bugs fixed along the way: setup-lgtm's NetworkPolicy allow policy cut
+  the namespace off on apply, its `helm upgrade` was unpinned and its
+  PagerDuty Secret was never created; the AWS ECS, Lambda and Route53
+  health-check alarms (now in us-east-1) and the RDS backup-retention outage
+  wording; an Azure log alert that could never fire and a query check that
+  always passed; GCP creates that hid a failed request; DigitalOcean's
+  app-alert check reading the wrong fields, a policy update that dropped
+  settings, and an uptime down rule doctl rejects as written. The AWS SNS
+  undo backs up topics per region and keeps a subscription your team
+  already had, which SNS hands back when the same endpoint subscribes again. The Azure
+  action-group and alert creates now refuse a name that already exists, so
+  their undo can only remove what the setup made.
+- setup-sentry needs its own config block with a write-capable token
+  (`tier: elevated`) and refuses the read-only audit token.
+  setup-digitalocean needs `digitalocean.team` set (your team UUID, or
+  `personal`).
+- `ci/crossblock-check.sh` also rejects an undo step written as a one-line
+  note in a setup skill.
+- The FAQ explains how undo works, and the connect guide covers the separate
+  Sentry setup token and the DigitalOcean team key.
+
+Audit findings and report formats are unchanged.
+
 ## 0.1.216
 
 **Rollbacks that are safe to run later, in a fresh shell.**

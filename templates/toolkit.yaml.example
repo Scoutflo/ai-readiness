@@ -173,6 +173,7 @@ victoriametrics:
 digitalocean:
   token_env: DIGITALOCEAN_ACCESS_TOKEN      # doctl honors this natively; read-only scope for audits
   tier: read-only
+  # team: personal                         # your team UUID, or personal; required by setup-digitalocean
 
 gcp:
   project: your-project-id                  # GCP project ID the audits target (one project per run)

@@ -22,6 +22,10 @@ plan table was announced for approval, snapshots already taken)
    plan can be re-announced unchanged when the user is ready. If the user
    later approves only some rows, only those execute, and any controlled
    rollout still gets its own per-app re-confirmation.
+4. The next run still loads the latest audit. Loading findings created
+   nothing; only the snapshot blocks created the `setup-<date>/` folder,
+   and the findings lookup reads only date-named run folders under this
+   target's segment, so that folder never stands in for an audit run.
 
 **Must not:** apply any row of the plan, treat the snapshots or earlier
 enthusiasm as consent, downgrade a spec edit to "safe enough to slip in",
