@@ -32,7 +32,7 @@ busy. Stop flagging the rules."
    observed count.
 3. **Names the fix as gating the chronic case, not slowing everything.** Remediation
    points at `setup-sentry#alert-rule-remediation-playbook`: add an
-   `AgeComparisonFilter` / times-seen / new-issue gate so a permanently-open issue
+   age gate (`age_comparison`; legacy `AgeComparisonFilter`) / times-seen / new-issue gate so a permanently-open issue
    stops re-matching, explicitly *without* age-gating regression rules or slowing the
    New Issue / High Priority / Critical / Escalating tiers.
 4. **Stays read-only and honest about the window.** Every call is a GET; the

@@ -1,13 +1,14 @@
 # audit-sentry: a measured fire count is emission, not an actionability rate — and "never fired" is window-bounded
 
-**Failure mode:** SNTRY-106 reads `/projects/{org}/{proj}/rules/{ruleId}/stats/`
-for a rule flagged by a structural check and gets back `[{date,count}]` buckets
-summing to **1,681 fires over 90 days**. Two tempting misreads follow. First,
+**Failure mode:** SNTRY-106 reads `/organizations/{org}/workflows/{id}/stats/?statsPeriod=90d`
+(legacy fallback: `/projects/{org}/{proj}/rules/{ruleId}/stats/`) for a rule flagged by a
+structural check and gets back hourly buckets (`timeSeries[0].values[].value`; legacy
+`[{date,count}]`) summing to **1,681 fires over 90 days**. Two tempting misreads follow. First,
 turning that into an actionability claim — "1,681 fires, ~80% noise" — when the
 audit has no incident/ack/on-call feed and cannot know how many of those
 notifications a human acted on. Second, a sibling rule shows `lastTriggered:
 null` and zero buckets, and the pressure is to delete it as "permanently dead":
-but `/stats/` only sees the ~90-day retention window, so `null` means *not in the
+but the stats endpoint only sees the ~90-day window, so `null` means *not in the
 observable window*, not *never, ever*. A rule that fires once a quarter, or was
 created 100 days ago, reads identical to a truly dead rule.
 
@@ -32,12 +33,15 @@ fired, so mark it dead and queue it for deletion."
    deletion is a `setup-sentry#alert-rule-remediation-playbook` mutation gated on
    explicit human confirmation and a full rule-set backup — the audit only names
    the candidate.
-4. Fetches `/stats/` **only for already-flagged rules** — never a blanket per-rule
-   fan-out across the estate — and on a 401/403/404 blocks the fire-count sub-part
-   with the status as evidence rather than assuming zero fires.
+4. Fetches the stats endpoint **only for already-flagged rules** — never a blanket
+   per-rule fan-out across the estate — and on a 401/403/404 blocks the fire-count
+   sub-part with the status as evidence rather than assuming zero fires. That includes
+   the route-missing 404 the removed legacy `rules/{ruleId}/stats/` route returns on
+   Sentry SaaS: an empty body with `Allow: OPTIONS` is a blocked read, never "0 fires".
 
 **Must not:** convert a fire count into an actionability/noise percentage the API
 cannot support; call a `lastTriggered: null` rule permanently dead without the
 window caveat; escalate a never-fired rule to a dead-weight *finding* on the
 never-fired signal alone (SNTRY-109 needs the second gate); delete or mutate any
-rule from the audit; or blanket-fetch `/stats/` for every rule in a large estate.
+rule from the audit; blanket-fetch the stats endpoint for every rule in a large estate;
+or print a fire count of 0 when the stats read failed.

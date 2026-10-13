@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.1.218
+
+**The Sentry skills move to Sentry's new alert API.**
+
+- Sentry removed its legacy alert API (issue-alert rules, metric alerts,
+  combined rules, rule stats and history) from sentry.io on 24 and 29
+  September 2026. Since then audit-sentry recorded "no metric alerts" and
+  stopped at the first project's rules, and setup-sentry's alert steps
+  failed. Both skills now detect the alert API in their doctor gate
+  (`alert api: workflows` or `legacy`) and use the new alerts and monitors
+  API by default. The legacy commands stay only as a labelled fallback for
+  self-hosted Sentry that still has them.
+- A read the API refuses is recorded as blocked and never scored as "zero
+  alerts". Finding IDs, severities and the report format are unchanged.
+- setup-sentry sends the whole alert, rebuilt from its backup, on every
+  update (an update replaces the whole object, so a partial one re-enables
+  or drops settings), deletes by id only, and counts a delete as proven only
+  by Sentry's "does not exist" response.
+- audit-sentry's previous-run lookup no longer picks setup-sentry's work
+  folder.
+
 ## 0.1.217
 
 **Safe undo steps in every setup skill, and the full-review fixes.**

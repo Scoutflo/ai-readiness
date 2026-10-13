@@ -106,9 +106,32 @@ echo "sentry target: ${SNTRY_LABEL} host=${SENTRY_HOST} org=${SENTRY_ORG} token_
 
 curl -fsS --max-time 10 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
   "${API}/organizations/${SENTRY_ORG}/" | jq -e --arg org "$SENTRY_ORG" '.slug == $org'
+
+# Which alert API this org serves. Sentry SaaS removed the legacy alert routes (rules/,
+# alert-rules/, combined-rules/) in 2026-09: they answer a route-missing 404 (empty body,
+# Allow: OPTIONS), which differs from the JSON 404 a real route gives for a missing object.
+alert_probe() { # $1: path under ${API}/ ; prints "<http_code> <json|route-missing|other>"
+  hdr="$(mktemp)"; body="$(mktemp)"
+  pcode="$(curl -sS -o "$body" -D "$hdr" -w '%{http_code}' --max-time 15 \
+    -H "Authorization: Bearer ${SENTRY_TOKEN}" "${API}/$1" || true)"
+  [ -n "$pcode" ] || pcode=000
+  ctype="$(tr -d '\r' < "$hdr" | awk 'tolower($1)=="content-type:"{print $2}' | tail -1)"
+  allow="$(tr -d '\r' < "$hdr" | awk 'tolower($1)=="allow:"{$1=""; sub(/^ /,""); print}' | tail -1)"
+  kind=other; case "$ctype" in application/json*) kind=json ;; esac
+  if [ "$pcode" = 404 ] && [ "$allow" = "OPTIONS" ] && [ ! -s "$body" ]; then kind=route-missing; fi
+  rm -f "$hdr" "$body"; echo "$pcode $kind"
+}
+NEW_API="$(alert_probe "organizations/${SENTRY_ORG}/workflows/?per_page=1")"
+OLD_API="$(alert_probe "organizations/${SENTRY_ORG}/combined-rules/?per_page=1")"
+echo "alert api probes: workflows=${NEW_API} legacy=${OLD_API}"
+case "${NEW_API}|${OLD_API}" in
+  "200 json|"*) echo "alert api: workflows" ;;
+  *"|200 json") echo "alert api: legacy" ;;
+  *) echo "no readable alert API (workflows ${NEW_API}, legacy ${OLD_API}); a 403 on workflows means the token lacks alerts:read"; exit 1 ;;
+esac
 ```
 
-Expect: the `sentry target:` line names the label, host, org, token variable, and tier you mean, then exit 0 (`true`). A missing key, a tier other than `elevated`, an unmatched `SCOUTFLO_TARGET`, or an unset token variable stops here with the fix. A `401` means the token is wrong for this host; a `404` almost always means the wrong region host, not a missing org (run the region probe in `/scoutflo:connect`, fix `sentry.host`, retry). Write permission is proven only by the first write: if any announced change returns `403`, stop, report the missing scope from the table above, and reconnect with an elevated token. Never proceed past a failed doctor check.
+Expect: the `sentry target:` line names the label, host, org, token variable, and tier you mean, then exit 0 (`true`). Then `alert api probes:` shows both reads and `alert api:` prints `workflows` (Sentry SaaS, for example `workflows=200 json legacy=404 route-missing`, and self-hosted 26.x) or `legacy` (older self-hosted Sentry with no workflows endpoint). Carry that value into every alert block below as `SENTRY_ALERT_API`: each one writes through the alerts API by default and runs its labeled legacy fallback only when this printed `legacy`. No readable alert API stops here. A missing key, a tier other than `elevated`, an unmatched `SCOUTFLO_TARGET`, or an unset token variable stops here with the fix. A `401` means the token is wrong for this host; a `404` almost always means the wrong region host, not a missing org (run the region probe in `/scoutflo:connect`, fix `sentry.host`, retry). Write permission is proven only by the first write: if any announced change returns `403`, stop, report the missing scope from the table above, and reconnect with an elevated token. Never proceed past a failed doctor check.
 
 ## Live-safety gate
 
@@ -220,6 +243,7 @@ API="https://${SENTRY_HOST}/api/0"
 TEAM="your-team-slug"          # a team slug from GET /organizations/${SENTRY_ORG}/teams/
 PROJECT_NAME="checkout"        # the service or app name
 PLATFORM="node"                # see references/api-cookbook.md#platform-values
+SENTRY_ALERT_API="workflows"   # the doctor gate's "alert api:" value; legacy checks the old rules list
 
 # Sentry derives the slug from the name: take it from the response, the rollback needs the exact one.
 PROJECT_SLUG="$(curl -fsS --max-time 10 -X POST "${API}/teams/${SENTRY_ORG}/${TEAM}/projects/" \
@@ -231,11 +255,19 @@ echo "created project: ${PROJECT_SLUG}"
 curl -fsS --max-time 10 "${API}/projects/${SENTRY_ORG}/${PROJECT_SLUG}/" \
   -H "Authorization: Bearer ${SENTRY_TOKEN}" \
   | jq -e --arg p "$PLATFORM" '.platform == $p'
-curl -fsS --max-time 10 "${API}/projects/${SENTRY_ORG}/${PROJECT_SLUG}/rules/" \
-  -H "Authorization: Bearer ${SENTRY_TOKEN}" | jq -e 'length == 0'
+if [ "${SENTRY_ALERT_API}" = workflows ]; then
+  # No default alert: the new project's own issue-stream monitor has no alert attached.
+  curl -fsS --max-time 10 "${API}/organizations/${SENTRY_ORG}/detectors/?project=${PROJECT_SLUG}&type=issue_stream" \
+    -H "Authorization: Bearer ${SENTRY_TOKEN}" \
+    | jq -e 'map(select(.type == "issue_stream" and .projectId != null)) | length == 1 and .[0].workflowIds == []'
+else
+  # Legacy fallback: the project's rules list is empty.
+  curl -fsS --max-time 10 "${API}/projects/${SENTRY_ORG}/${PROJECT_SLUG}/rules/" \
+    -H "Authorization: Bearer ${SENTRY_TOKEN}" | jq -e 'length == 0'
+fi
 ```
 
-Expect: both `jq -e` calls exit 0; the second prints `true` because the rules list is empty, not the auto-created notify rule. **Rollback** (this is a create, so rollback is delete-and-verify-absence, not a restore from backup):
+Expect: both `jq -e` calls exit 0; the second prints `true` because the project's issue-stream monitor has no alert attached (legacy fallback: the rules list is empty), not the auto-created notify alert. Do not count `GET /organizations/${SENTRY_ORG}/workflows/?project=` for this: that list also returns org-wide alerts, so it is not empty on an org that has one. **Rollback** (this is a create, so rollback is delete-and-verify-absence, not a restore from backup):
 
 ```bash
 set -eu
@@ -402,16 +434,16 @@ Expect: exit 0.
 
 ## Alerting model decision
 
-Decide before creating any rule, and record the decision:
+The doctor gate's `alert api:` line decides which API every alert block below writes through; record it in the change record:
 
 | Model | Use when |
 | --- | --- |
-| Project issue rules (legacy) | The default choice: broad compatibility, stable API, email/Slack/PagerDuty actions, works on every org |
-| Workflow-engine alerts | Your org has the newer Monitors and Alerts workflow UI/API enabled and you deliberately want workflow automation across issue state and priority |
+| Alerts API: alerts are workflows (`/organizations/${SENTRY_ORG}/workflows/`), monitors are detectors (`/organizations/${SENTRY_ORG}/detectors/`) | The doctor printed `alert api: workflows`: Sentry SaaS, where it is the only alert API since the legacy routes were removed in 2026-09, and self-hosted 26.x. This is what the rest of this section builds |
+| Legacy issue rules and metric alerts (`/projects/${SENTRY_ORG}/<project>/rules/`, `/organizations/${SENTRY_ORG}/alert-rules/`) | Fallback only: the doctor printed `alert api: legacy`, on older self-hosted Sentry that still serves those routes |
 
-Project issue rules are what the rest of this section builds. If you use workflow-engine alerts instead, resolve every ID against the live `/organizations/${SENTRY_ORG}/workflows/` schema before writing payloads; that endpoint is feature-gated and 404s on many orgs.
+An alert holds its trigger conditions, its filters, and its actions; it fires only for the monitors listed in its `detectorIds`. Every issue alert attaches to its project's issue-stream monitor, which Sentry creates with the project. A metric alert is two objects: a `metric_issue` monitor holds the thresholds, and the alerts connected to it hold the actions. Every block below carries both paths: set `SENTRY_ALERT_API` to the doctor gate's value, and the legacy branch runs the old rules API unchanged.
 
-For SNTRY-015 (a workflow-engine detector connected to no workflow), this skill has no verified workflow write: list the detector as a pending item for its owner to connect to a workflow or delete in Sentry's Monitors and Alerts UI, then re-run `audit-sentry` to confirm it clears.
+For SNTRY-015 (a monitor connected to no alert, or an alert connected to no monitor), this skill has no verified wiring write: list each one as a pending item for its owner to connect or delete in Sentry's Monitors and Alerts UI, then re-run `audit-sentry` to confirm it clears.
 
 ## Alert rule taxonomy
 
@@ -422,7 +454,7 @@ For SNTRY-001, SNTRY-013, SNTRY-014, SNTRY-016, SNTRY-101, SNTRY-102, SNTRY-103,
 | Immediate | Fatal events, new unhandled errors, regressions, escalations, user-impact and error-surge thresholds | `#SENTRY_IMMEDIATE_CHANNEL` | as low as 5 minutes for fatal, 30-60 minutes for threshold rules |
 | Review | First-seen issues, frequency trends, warning-level signals | `#SENTRY_REVIEW_CHANNEL` | 60 minutes or your working-hours cadence |
 
-Every production project needs at least one rule in each tier before it counts as covered. Condition, filter, and action ID tables, the full rule-payload example, and the environment-scoping fix (use the rule-level `environment` field, never `LatestAdoptedReleaseFilter`, which filters by release-adoption stage and silently does not scope by environment) are in [references/api-cookbook.md#alert-rules](references/api-cookbook.md#alert-rules).
+Every production project needs at least one rule in each tier before it counts as covered. Condition, filter, and action ID tables, the full rule-payload example, and the environment-scoping fix (use the rule-level `environment` field, never the `latest_adopted_release` filter, legacy `LatestAdoptedReleaseFilter`, which filters by release-adoption stage and silently does not scope by environment) are in [references/api-cookbook.md#alert-rules](references/api-cookbook.md#alert-rules).
 
 Start every rule with the email action (works with no integration required); add Slack or PagerDuty actions once that integration is live, in Receiver wiring below. Thresholds (`USER_IMPACT_THRESHOLD`, `ERROR_SURGE_THRESHOLD`, `FREQ_FLOOR_MIN`, and the rest) are starting points from the reference table; tune every one to your event volume before treating it as final.
 
@@ -436,93 +468,171 @@ Existing rules that audit-sentry flags:
 set -eu
 SENTRY_HOST="us.sentry.io"; SENTRY_ORG="your-org-slug"; API="https://${SENTRY_HOST}/api/0"
 [ -n "${SENTRY_TOKEN:-}" ] || { echo "SENTRY_TOKEN is not set; run /scoutflo:connect"; exit 1; }
+SENTRY_ALERT_API="workflows"   # the doctor gate's "alert api:" value; legacy runs the old rules API below
 PROJECT="checkout"
 # One rule per run: rule 1 of the starting set in references/api-cookbook.md#alert-rules.
-# For another rule in the set, change only these declarations.
+# For another rule in the set, change only these declarations (the alerts API column for
+# ALERT_*, the legacy column for RULE_*).
 RULE_NAME="Fatal crash, immediate"
 RULE_ENV="production"          # the production environment you seeded; the rule's own scope
 RULE_FREQ_MIN="5"              # IMMEDIATE_FREQ_MIN, re-notify minutes; example, tune to your event volume
 OWNER_TEAM_ID="your-team-id"   # numeric id of the team that maintains the rule, from GET /organizations/${SENTRY_ORG}/teams/
-RULE_CONDITIONS='[{"id": "sentry.rules.conditions.every_event.EveryEventCondition"}]'
-RULE_FILTERS='[{"id": "sentry.rules.filters.level.LevelFilter", "level": "fatal", "match": "eq"}]'
+ALERT_TRIGGERS='[]'            # alerts API: no trigger conditions = evaluate on every event
+ALERT_FILTERS='[{"type": "level", "comparison": {"level": 50, "match": "eq"}, "conditionResult": true}]'   # level 50 = fatal
+RULE_CONDITIONS='[{"id": "sentry.rules.conditions.every_event.EveryEventCondition"}]'                      # legacy fallback only
+RULE_FILTERS='[{"id": "sentry.rules.filters.level.LevelFilter", "level": "fatal", "match": "eq"}]'          # legacy fallback only
 
-# The payload is built here, so no payload file is needed (shape: references/api-cookbook.md#full-rule-payload-example).
-RULE_PAYLOAD="$(jq -n --arg name "$RULE_NAME" --arg env "$RULE_ENV" --argjson freq "$RULE_FREQ_MIN" \
-  --arg owner "team:${OWNER_TEAM_ID}" --argjson cond "$RULE_CONDITIONS" --argjson filt "$RULE_FILTERS" \
-  '{name: $name, actionMatch: "any", filterMatch: "all", environment: $env, frequency: $freq, owner: $owner,
-    conditions: $cond, filters: $filt,
-    actions: [{id: "sentry.mail.actions.NotifyEmailAction", targetType: "IssueOwners", fallthroughType: "AllMembers"}]}')"
+if [ "${SENTRY_ALERT_API}" = workflows ]; then
+  # The alert attaches to this project's issue-stream monitor; there must be exactly one.
+  ISD="$(curl -fsS --max-time 10 "${API}/organizations/${SENTRY_ORG}/detectors/?project=${PROJECT}&type=issue_stream" \
+    -H "Authorization: Bearer ${SENTRY_TOKEN}" \
+    | jq -er 'map(select(.type == "issue_stream" and .projectId != null))
+        | if length == 1 then .[0].id else error("expected exactly one issue-stream monitor") end')"
+  # The payload is built here, so no payload file is needed (shape: references/api-cookbook.md#full-rule-payload-example).
+  ALERT_PAYLOAD="$(jq -n --arg name "$RULE_NAME" --arg env "$RULE_ENV" --argjson freq "$RULE_FREQ_MIN" \
+    --arg owner "team:${OWNER_TEAM_ID}" --arg isd "$ISD" --argjson trig "$ALERT_TRIGGERS" --argjson filt "$ALERT_FILTERS" \
+    '{name: $name, enabled: true, environment: $env, owner: $owner, config: {frequency: $freq}, detectorIds: [$isd],
+      triggers: {logicType: "any-short", conditions: $trig},
+      actionFilters: [{logicType: "all", conditions: $filt,
+        actions: [{type: "email", integrationId: null,
+                   config: {targetType: "issue_owners", targetIdentifier: null}, data: {fallthroughType: "AllMembers"}}]}]}')"
+  RULE_ID="$(curl -fsS --max-time 10 -X POST "${API}/organizations/${SENTRY_ORG}/workflows/" \
+    -H "Authorization: Bearer ${SENTRY_TOKEN}" -H "Content-Type: application/json" -d "$ALERT_PAYLOAD" | jq -r '.id // empty')"
+  [ -n "$RULE_ID" ] || { echo "create returned no alert id; nothing to verify" >&2; exit 1; }
+  echo "created alert: ${RULE_ID}"
+  # Verify the re-fetched alert against the payload it was created from.
+  curl -fsS --max-time 10 "${API}/organizations/${SENTRY_ORG}/workflows/${RULE_ID}/" \
+    -H "Authorization: Bearer ${SENTRY_TOKEN}" \
+    | jq -e --argjson p "$ALERT_PAYLOAD" '.enabled == true and .environment == $p.environment
+        and .config.frequency == $p.config.frequency and .owner == $p.owner
+        and (.detectorIds | map(tostring)) == ($p.detectorIds | map(tostring))
+        and ([(.triggers.conditions // [])[].type] | sort) == ([$p.triggers.conditions[].type] | sort)
+        and ([(.actionFilters // [])[].conditions[].type] | sort) == ([$p.actionFilters[].conditions[].type] | sort)
+        and ([(.actionFilters // [])[].actions[]] | length) == ([$p.actionFilters[].actions[]] | length)'
+else
+  # Legacy fallback (self-hosted Sentry that still serves /rules/).
+  RULE_PAYLOAD="$(jq -n --arg name "$RULE_NAME" --arg env "$RULE_ENV" --argjson freq "$RULE_FREQ_MIN" \
+    --arg owner "team:${OWNER_TEAM_ID}" --argjson cond "$RULE_CONDITIONS" --argjson filt "$RULE_FILTERS" \
+    '{name: $name, actionMatch: "any", filterMatch: "all", environment: $env, frequency: $freq, owner: $owner,
+      conditions: $cond, filters: $filt,
+      actions: [{id: "sentry.mail.actions.NotifyEmailAction", targetType: "IssueOwners", fallthroughType: "AllMembers"}]}')"
 
-NEW_RULE="$(curl -fsS --max-time 10 -X POST "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/" \
-  -H "Authorization: Bearer ${SENTRY_TOKEN}" -H "Content-Type: application/json" -d "$RULE_PAYLOAD")"
-RULE_ID="$(printf '%s' "$NEW_RULE" | jq -r '.id')"
-echo "created rule: ${RULE_ID}"
+  NEW_RULE="$(curl -fsS --max-time 10 -X POST "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/" \
+    -H "Authorization: Bearer ${SENTRY_TOKEN}" -H "Content-Type: application/json" -d "$RULE_PAYLOAD")"
+  RULE_ID="$(printf '%s' "$NEW_RULE" | jq -r '.id')"
+  echo "created rule: ${RULE_ID}"
 
-# Verify the re-fetched rule against the payload it was created from.
-curl -fsS --max-time 10 "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/${RULE_ID}/" \
-  -H "Authorization: Bearer ${SENTRY_TOKEN}" \
-  | jq -e --argjson p "$RULE_PAYLOAD" '.environment == $p.environment and .frequency == $p.frequency
-      and .owner == $p.owner
-      and ([(.conditions // [])[].id] | sort) == ([$p.conditions[].id] | sort)
-      and ([(.filters // [])[].id] | sort) == ([$p.filters[].id] | sort)
-      and (.actions | length) == ($p.actions | length)'
+  # Verify the re-fetched rule against the payload it was created from.
+  curl -fsS --max-time 10 "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/${RULE_ID}/" \
+    -H "Authorization: Bearer ${SENTRY_TOKEN}" \
+    | jq -e --argjson p "$RULE_PAYLOAD" '.environment == $p.environment and .frequency == $p.frequency
+        and .owner == $p.owner
+        and ([(.conditions // [])[].id] | sort) == ([$p.conditions[].id] | sort)
+        and ([(.filters // [])[].id] | sort) == ([$p.filters[].id] | sort)
+        and (.actions | length) == ($p.actions | length)'
+fi
 ```
 
-Expect: exit 0, because the re-fetched rule's `environment`, `frequency`, `owner`, condition and filter ids, and action count all match the payload. A rule created this way sets the rule-level `environment` and an `owner`, so it passes audit-sentry's SNTRY-102 and SNTRY-110; one created with `RULE_FILTERS='[]'` fails SNTRY-101 (a notifying rule with no filter), as the cookbook's starting rule set explains. The `IssueOwners` email action fails SNTRY-017 on a project with no ownership rules; see [Receiver wiring](#receiver-wiring). **Rollback** (this is a create; rollback deletes and verifies absence):
+Expect: `created alert: <id>` (legacy fallback: `created rule: <id>`), then exit 0, because the re-fetched alert is enabled and its `environment`, `config.frequency` (minutes), `owner`, monitor attachment, trigger and filter condition types, and action count all match the payload. A rule created this way sets the rule-level `environment` and an `owner`, so it passes audit-sentry's SNTRY-102 and SNTRY-110; one created with `ALERT_FILTERS='[]'` fails SNTRY-101 (a notifying rule with no filter), as the cookbook's starting rule set explains. The issue-owners email action fails SNTRY-017 on a project with no ownership rules; see [Receiver wiring](#receiver-wiring). **Rollback** (this is a create; rollback deletes and verifies absence):
 
 ```bash
 set -eu
 SENTRY_HOST="us.sentry.io"; SENTRY_ORG="your-org-slug"; API="https://${SENTRY_HOST}/api/0"
 [ -n "${SENTRY_TOKEN:-}" ] || { echo "SENTRY_TOKEN is not set"; exit 1; }
-PROJECT="<project-slug>"; RULE_ID="<rule-id>"   # the "created rule:" id from the create block
+SENTRY_ALERT_API="workflows"   # the doctor gate's "alert api:" value
+PROJECT="<project-slug>"; RULE_ID="<rule-id>"   # the "created alert:" (legacy: "created rule:") id from the create block
 for v in "$PROJECT" "$RULE_ID"; do case "$v" in ''|'<'*) echo "Fill in every <...> value from the change record first" >&2; exit 1 ;; esac; done
 
-curl -fsS --max-time 10 -X DELETE "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/${RULE_ID}/" \
-  -H "Authorization: Bearer ${SENTRY_TOKEN}"
-curl -fsS --max-time 10 "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/" \
-  -H "Authorization: Bearer ${SENTRY_TOKEN}" \
-  | jq -e --arg id "$RULE_ID" '[.[] | select(.id == $id)] | length == 0'
+if [ "${SENTRY_ALERT_API}" = workflows ]; then
+  # Delete this one alert by id: never a bulk or ?project= delete, which removes every alert in the project.
+  curl -sS --max-time 10 -o /dev/null -w 'delete: %{http_code}\n' -X DELETE \
+    "${API}/organizations/${SENTRY_ORG}/workflows/${RULE_ID}/" -H "Authorization: Bearer ${SENTRY_TOKEN}"
+  # Gone means the real route's JSON "does not exist" 404. A route-missing 404 has an empty body and proves nothing.
+  gone="$(mktemp)"; trap 'rm -f "$gone"' EXIT
+  code="$(curl -sS --max-time 10 -o "$gone" -w '%{http_code}' \
+    -H "Authorization: Bearer ${SENTRY_TOKEN}" "${API}/organizations/${SENTRY_ORG}/workflows/${RULE_ID}/")"
+  echo "post-delete: ${code}"
+  [ "$code" = 404 ]
+  jq -e '.detail == "The requested resource does not exist"' "$gone"
+else
+  # Legacy fallback (self-hosted Sentry that still serves /rules/).
+  curl -fsS --max-time 10 -X DELETE "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/${RULE_ID}/" \
+    -H "Authorization: Bearer ${SENTRY_TOKEN}"
+  curl -fsS --max-time 10 "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/" \
+    -H "Authorization: Bearer ${SENTRY_TOKEN}" \
+    | jq -e --arg id "$RULE_ID" '[.[] | select(.id == $id)] | length == 0'
+fi
 ```
 
-Expect: exit 0.
+Expect: `delete: 204`, `post-delete: 404`, then `true` and exit 0 (legacy fallback: exit 0 on the list-absence check). Any other post-delete code, or a 404 without that JSON body, exits nonzero: the alert is not proven gone.
 
 ## Delete the auto-created default rule
 
-For SNTRY-001 on any project that predates `defaultRules: false`, or where it was omitted. New projects get a "Send a notification for high priority issues" rule with `createdBy: null`. Find it, back up its full body, assert the backup still matches that signature, delete it, then verify the list no longer contains it:
+For SNTRY-001 on any project that predates `defaultRules: false`, or where it was omitted. New projects get a "Send a notification for high priority issues" alert with `createdBy: null`, attached to the project's own issue-stream monitor. Find it, back up its full body, assert the backup still matches that signature, delete that one alert by id, then verify it is gone:
 
 ```bash
 set -eu
 SENTRY_HOST="us.sentry.io"; SENTRY_ORG="your-org-slug"; API="https://${SENTRY_HOST}/api/0"
 [ -n "${SENTRY_TOKEN:-}" ] || { echo "SENTRY_TOKEN is not set; run /scoutflo:connect"; exit 1; }
+SENTRY_ALERT_API="workflows"   # the doctor gate's "alert api:" value
 PROJECT="checkout"
+RULE_ID="12345678"   # from the list the block prints first; confirm it before deleting
 BACKUP_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/sentry/setup-$(date -u +%F)/backups"
 mkdir -p "$BACKUP_DIR"
 
-curl -fsS --max-time 10 "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/" \
-  -H "Authorization: Bearer ${SENTRY_TOKEN}" \
-  | jq -r '.[] | select((.createdBy == null) and (.name | ascii_downcase | contains("high priority"))) | "\(.id)\t\(.name)"'
-
-RULE_ID="12345678"   # from the line above; confirm it before deleting
-BACKUP_FILE="${BACKUP_DIR}/default-rule-${RULE_ID}.json"
-# 1. Backup the exact rule body (GET-before-write), so it can be recreated:
-curl -fsS --max-time 10 "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/${RULE_ID}/" \
-  -H "Authorization: Bearer ${SENTRY_TOKEN}" > "$BACKUP_FILE"
-test -s "$BACKUP_FILE" && echo "backup: ${BACKUP_FILE}"
-# Confirm the match by assertion: only an untouched, auto-created high-priority rule is deleted here.
-jq -e '.createdBy == null and (.name | ascii_downcase | contains("high priority"))' "$BACKUP_FILE" > /dev/null \
-  || { echo "rule ${RULE_ID} is not the auto-created default rule; not deleting" >&2; exit 1; }
-
-# 2. The write:
-curl -fsS --max-time 10 -X DELETE "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/${RULE_ID}/" \
-  -H "Authorization: Bearer ${SENTRY_TOKEN}"
-
-# 3. Verify by re-fetch:
-curl -fsS --max-time 10 "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/" \
-  -H "Authorization: Bearer ${SENTRY_TOKEN}" \
-  | jq -e --arg id "$RULE_ID" '[.[] | select(.id == $id)] | length == 0'
+if [ "${SENTRY_ALERT_API}" = workflows ]; then
+  ISD="$(curl -fsS --max-time 10 "${API}/organizations/${SENTRY_ORG}/detectors/?project=${PROJECT}&type=issue_stream" \
+    -H "Authorization: Bearer ${SENTRY_TOKEN}" \
+    | jq -er 'map(select(.type == "issue_stream" and .projectId != null))
+        | if length == 1 then .[0].id else error("expected exactly one issue-stream monitor") end')"
+  # Sentry-created, the default name, and on this project's own monitor (never an org-wide alert):
+  curl -fsS --max-time 10 "${API}/organizations/${SENTRY_ORG}/workflows/?project=${PROJECT}&per_page=100" \
+    -H "Authorization: Bearer ${SENTRY_TOKEN}" \
+    | jq -r --arg isd "$ISD" '.[] | select(.createdBy == null and (.name | ascii_downcase | contains("high priority"))
+        and any((.detectorIds // [])[]; . == $isd)) | "\(.id)\t\(.name)"'
+  BACKUP_FILE="${BACKUP_DIR}/default-alert-${RULE_ID}.json"
+  # 1. Backup the exact alert body (GET-before-write), so it can be recreated:
+  curl -fsS --max-time 10 "${API}/organizations/${SENTRY_ORG}/workflows/${RULE_ID}/" \
+    -H "Authorization: Bearer ${SENTRY_TOKEN}" > "$BACKUP_FILE"
+  test -s "$BACKUP_FILE" && echo "backup: ${BACKUP_FILE}"
+  # Confirm the match by assertion: only an untouched, auto-created high-priority alert on this project is deleted here.
+  jq -e --arg isd "$ISD" '.createdBy == null and (.name | ascii_downcase | contains("high priority"))
+      and any((.detectorIds // [])[]; . == $isd)' "$BACKUP_FILE" > /dev/null \
+    || { echo "alert ${RULE_ID} is not this project's auto-created default alert; not deleting" >&2; exit 1; }
+  # 2. The write: this one alert, by id.
+  curl -sS --max-time 10 -o /dev/null -w 'delete: %{http_code}\n' -X DELETE \
+    "${API}/organizations/${SENTRY_ORG}/workflows/${RULE_ID}/" -H "Authorization: Bearer ${SENTRY_TOKEN}"
+  # 3. Verify by re-fetch: the real route's JSON "does not exist" 404, never a bare 404.
+  gone="$(mktemp)"; trap 'rm -f "$gone"' EXIT
+  code="$(curl -sS --max-time 10 -o "$gone" -w '%{http_code}' \
+    -H "Authorization: Bearer ${SENTRY_TOKEN}" "${API}/organizations/${SENTRY_ORG}/workflows/${RULE_ID}/")"
+  echo "post-delete: ${code}"
+  [ "$code" = 404 ]
+  jq -e '.detail == "The requested resource does not exist"' "$gone"
+else
+  # Legacy fallback (self-hosted Sentry that still serves /rules/).
+  curl -fsS --max-time 10 "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/" \
+    -H "Authorization: Bearer ${SENTRY_TOKEN}" \
+    | jq -r '.[] | select((.createdBy == null) and (.name | ascii_downcase | contains("high priority"))) | "\(.id)\t\(.name)"'
+  BACKUP_FILE="${BACKUP_DIR}/default-rule-${RULE_ID}.json"
+  # 1. Backup the exact rule body (GET-before-write), so it can be recreated:
+  curl -fsS --max-time 10 "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/${RULE_ID}/" \
+    -H "Authorization: Bearer ${SENTRY_TOKEN}" > "$BACKUP_FILE"
+  test -s "$BACKUP_FILE" && echo "backup: ${BACKUP_FILE}"
+  # Confirm the match by assertion: only an untouched, auto-created high-priority rule is deleted here.
+  jq -e '.createdBy == null and (.name | ascii_downcase | contains("high priority"))' "$BACKUP_FILE" > /dev/null \
+    || { echo "rule ${RULE_ID} is not the auto-created default rule; not deleting" >&2; exit 1; }
+  # 2. The write:
+  curl -fsS --max-time 10 -X DELETE "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/${RULE_ID}/" \
+    -H "Authorization: Bearer ${SENTRY_TOKEN}"
+  # 3. Verify by re-fetch:
+  curl -fsS --max-time 10 "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/" \
+    -H "Authorization: Bearer ${SENTRY_TOKEN}" \
+    | jq -e --arg id "$RULE_ID" '[.[] | select(.id == $id)] | length == 0'
+fi
 ```
 
-Expect: exit 0. A rule that fails the signature assertion stops the block before the DELETE. Confirmed live: this delete succeeds with just `alerts:write` and needs no `project:admin` scope; a token that has `alerts:write` but lacks `project:write` can still delete this rule the same as any other issue alert rule.
+Expect: the candidate list, `backup: <path>`, `delete: 204`, `post-delete: 404`, then `true` and exit 0 (legacy fallback: exit 0 on the list-absence check). An alert that fails the signature assertion stops the block before the DELETE. On the alerts API `alerts:write` covers this delete (per Sentry's source; not yet run live), while an org-wide alert would need `org:write`, which is one more reason this block only deletes an alert attached to the project's own monitor. Confirmed live on the legacy API: the rule delete succeeds with just `alerts:write` and needs no `project:admin` scope.
 
 **Restore pair**, run as written if something depended on this rule and it needs to come back:
 
@@ -530,117 +640,195 @@ Expect: exit 0. A rule that fails the signature assertion stops the block before
 set -eu
 SENTRY_HOST="us.sentry.io"; SENTRY_ORG="your-org-slug"; API="https://${SENTRY_HOST}/api/0"
 [ -n "${SENTRY_TOKEN:-}" ] || { echo "SENTRY_TOKEN is not set"; exit 1; }
+SENTRY_ALERT_API="workflows"   # the doctor gate's "alert api:" value
 PROJECT="<project-slug>"        # the project the rule was deleted from
 BACKUP_FILE="<backup-path>"     # the "backup:" path step 1 printed
 for v in "$PROJECT" "$BACKUP_FILE"; do case "$v" in ''|'<'*) echo "Fill in every <...> value from the change record first" >&2; exit 1 ;; esac; done
 [ -s "$BACKUP_FILE" ] || { echo "No backup at ${BACKUP_FILE}" >&2; exit 1; }
 
-NEW_ID="$(jq '{name, actionMatch, filterMatch, environment, frequency, conditions, filters, actions}' "$BACKUP_FILE" \
-  | curl -fsS --max-time 10 -X POST "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/" \
-      -H "Authorization: Bearer ${SENTRY_TOKEN}" -H "Content-Type: application/json" -d @- | jq -r '.id')"
-echo "restored as rule: ${NEW_ID}"
-# Check the recreated rule itself, not any rule that happens to share its name.
-curl -fsS --max-time 10 "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/${NEW_ID}/" \
-  -H "Authorization: Bearer ${SENTRY_TOKEN}" \
-  | jq -e --slurpfile b "$BACKUP_FILE" '.name == $b[0].name and (.actions | length) == ($b[0].actions | length)'
+if [ "${SENTRY_ALERT_API}" = workflows ]; then
+  # Re-create from the backup: drop server-set fields and every nested id, keep the rest, enabled included.
+  BODY="$(jq 'del(.id, .organizationId, .dateCreated, .dateUpdated, .lastTriggered, .createdBy)
+      | if .triggers then .triggers |= (del(.id, .organizationId) | .conditions |= map(del(.id))) else . end
+      | .actionFilters |= map(del(.id, .organizationId) | .conditions |= map(del(.id)) | .actions |= map(del(.id)))
+      | with_entries(select(.value != null))' "$BACKUP_FILE")"
+  NEW_ID="$(printf '%s' "$BODY" | curl -fsS --max-time 10 -X POST "${API}/organizations/${SENTRY_ORG}/workflows/" \
+      -H "Authorization: Bearer ${SENTRY_TOKEN}" -H "Content-Type: application/json" -d @- | jq -r '.id // empty')"
+  [ -n "$NEW_ID" ] || { echo "re-create returned no alert id" >&2; exit 1; }
+  echo "restored as alert: ${NEW_ID}"
+  # Check the recreated alert itself, not any alert that happens to share its name.
+  curl -fsS --max-time 10 "${API}/organizations/${SENTRY_ORG}/workflows/${NEW_ID}/" \
+    -H "Authorization: Bearer ${SENTRY_TOKEN}" \
+    | jq -e --slurpfile b "$BACKUP_FILE" '.name == $b[0].name and .enabled == $b[0].enabled
+        and ((.detectorIds // []) | map(tostring) | sort) == (($b[0].detectorIds // []) | map(tostring) | sort)
+        and ([(.actionFilters // [])[].actions[]] | length) == ([($b[0].actionFilters // [])[].actions[]] | length)'
+else
+  # Legacy fallback (self-hosted Sentry that still serves /rules/).
+  NEW_ID="$(jq '{name, actionMatch, filterMatch, environment, frequency, conditions, filters, actions}' "$BACKUP_FILE" \
+    | curl -fsS --max-time 10 -X POST "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/" \
+        -H "Authorization: Bearer ${SENTRY_TOKEN}" -H "Content-Type: application/json" -d @- | jq -r '.id')"
+  echo "restored as rule: ${NEW_ID}"
+  # Check the recreated rule itself, not any rule that happens to share its name.
+  curl -fsS --max-time 10 "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/${NEW_ID}/" \
+    -H "Authorization: Bearer ${SENTRY_TOKEN}" \
+    | jq -e --slurpfile b "$BACKUP_FILE" '.name == $b[0].name and (.actions | length) == ($b[0].actions | length)'
+fi
 ```
 
-Expect: exit 0. Deleting a rule is a lightweight change, but it is still confirmed individually, never inside a batch.
+Expect: exit 0, the recreated alert carrying the backup's name, `enabled` state, monitor attachment, and action count. The default alert's triggers are the migrated-only `new_high_priority_issue` and `existing_high_priority_issue` types, which the live condition catalog does not offer for new alerts; if the POST is refused with a `400`, the alert cannot come back as it was. Recreate the closest equivalent instead (rule 3 of the starting set in [references/api-cookbook.md#alert-rules](references/api-cookbook.md#alert-rules)) and record the substitution in the change record. Deleting a rule is a lightweight change, but it is still confirmed individually, never inside a batch.
 
-Confirmed live: a restored default rule is not byte-identical to the original. Sentry assigns `createdBy` from the requesting token's identity on every `POST`, so the restored rule's `createdBy` is the setup identity, not the original `null` that marks an untouched, auto-created rule. This means the `createdBy == null` signature this section uses to find the rule in the first place will no longer match a restored copy: a future run treats it as a normal, manually-created rule, not the auto-created default. Note this in the change record so nobody expects a future automated pass to re-detect a restored rule the same way.
+A restored default rule is not byte-identical to the original. Sentry assigns `createdBy` from the requesting token's identity on every create (confirmed live on the legacy API; the alerts API does the same per Sentry's source), so the restored rule's `createdBy` is the setup identity, not the original `null` that marks an untouched, auto-created rule. This means the `createdBy == null` signature this section uses to find the rule in the first place will no longer match a restored copy: a future run treats it as a normal, manually-created rule, not the auto-created default. Note this in the change record so nobody expects a future automated pass to re-detect a restored rule the same way.
 
 ## Receiver wiring
 
 For SNTRY-005 (rules whose only action is email, a temporary path, not a proven route), SNTRY-011 (duplicate alerting paths), and SNTRY-017 (rules routed to issue owners on a project with no ownership rules).
 
-- **Slack.** Once the Slack integration is connected, resolve the integration ID and the channel ID (not just the display name), back up the current rule body, then add a Slack action to it alongside its existing email action with a full-payload `PUT`: Sentry replaces the rule on write, so the request body must include every existing field, not only the new action.
-- **PagerDuty.** Same pattern: resolve the integration and service ID, back up the rule, add the PagerDuty action alongside email, full-payload `PUT`. Payload in [references/api-cookbook.md#alert-rules](references/api-cookbook.md#alert-rules).
+- **Slack.** Once the Slack integration is connected, resolve the integration ID (the `slack` entry's `integrations[].id` in `GET /organizations/${SENTRY_ORG}/available-actions/`; legacy fallback: `GET /organizations/${SENTRY_ORG}/integrations/?provider_key=slack`) and the channel ID (not just the display name), back up the current alert, then add a Slack action to it alongside its existing email action with a full-body `PUT`. An alert `PUT` replaces the whole alert: any action, filter, or condition missing from the body (matched by `id`) is deleted, and an omitted `enabled` turns a disabled alert back on, so the body carries every existing field and id from the backup, `enabled` included.
+- **PagerDuty.** Same pattern: resolve the integration and service ID (on the alerts API, `available-actions` lists PagerDuty services under the `pagerduty` entry's `integrations[].services[]`), back up the alert, add the PagerDuty action alongside email, full-body `PUT`. Payload in [references/api-cookbook.md#alert-rules](references/api-cookbook.md#alert-rules).
 - **Duplicate paths (SNTRY-011).** Pick one primary alerting surface per signal. If Sentry uptime monitors duplicate an external synthetic tool, or if an issue rule duplicates a metric alert on the same condition, disable one side and record which system is the source of truth.
-- **Owner routing (SNTRY-017).** An `IssueOwners` email action on a project with no ownership rules notifies nobody, or every member when it falls through to `AllMembers`. It clears only once the project has ownership rules: list them as a pending item for the owning team, and wire a Slack or PagerDuty action below in the meantime so matched issues reach a channel someone watches.
+- **Owner routing (SNTRY-017).** An email action to issue owners (`config.targetType: issue_owners`; legacy `targetType: IssueOwners`) on a project with no ownership rules notifies nobody, or every member when it falls through to `AllMembers`. It clears only once the project has ownership rules: list them as a pending item for the owning team, and wire a Slack or PagerDuty action below in the meantime so matched issues reach a channel someone watches.
 
 ```bash
 set -eu
 SENTRY_HOST="us.sentry.io"; SENTRY_ORG="your-org-slug"; API="https://${SENTRY_HOST}/api/0"
 [ -n "${SENTRY_TOKEN:-}" ] || { echo "SENTRY_TOKEN is not set; run /scoutflo:connect"; exit 1; }
-PROJECT="checkout"
-RULE_ID="12345678"
-SLACK_INTEGRATION_ID="your-integration-id"   # from GET /organizations/${SENTRY_ORG}/integrations/?provider_key=slack
+SENTRY_ALERT_API="workflows"   # the doctor gate's "alert api:" value
+PROJECT="checkout"             # legacy fallback only: the project that owns the rule
+RULE_ID="12345678"             # the alert (legacy: rule) to wire
+FILTER_INDEX="0"               # alerts API: which actionFilters[] entry gets the action; a migrated metric alert has two
+SLACK_INTEGRATION_ID="your-integration-id"   # alerts API: the slack entry's integrations[].id from GET /organizations/${SENTRY_ORG}/available-actions/
 SLACK_CHANNEL="your-channel-name"
 SLACK_CHANNEL_ID="your-channel-id"
 BACKUP_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/sentry/setup-$(date -u +%F)/backups"
 mkdir -p "$BACKUP_DIR"
 BACKUP_FILE="${BACKUP_DIR}/rule-${RULE_ID}-$(date -u +%H%M%S).json"
 
-# 1. Backup (GET-before-write), run as written:
-curl -fsS --max-time 10 "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/${RULE_ID}/" \
-  -H "Authorization: Bearer ${SENTRY_TOKEN}" > "$BACKUP_FILE"
-test -s "$BACKUP_FILE" && echo "backup: ${BACKUP_FILE}"
+if [ "${SENTRY_ALERT_API}" = workflows ]; then
+  # 1. Backup (GET-before-write), run as written:
+  curl -fsS --max-time 10 "${API}/organizations/${SENTRY_ORG}/workflows/${RULE_ID}/" \
+    -H "Authorization: Bearer ${SENTRY_TOKEN}" > "$BACKUP_FILE"
+  test -s "$BACKUP_FILE" && echo "backup: ${BACKUP_FILE}"
 
-# 2. Patch the actions array from the backup, full-payload PUT:
-UPDATED="$(jq --arg ws "$SLACK_INTEGRATION_ID" --arg ch "$SLACK_CHANNEL" --arg cid "$SLACK_CHANNEL_ID" \
-  '.actions += [{
-    id: "sentry.integrations.slack.notify_action.SlackNotifyServiceAction",
-    workspace: $ws, channel: $ch, channel_id: $cid,
-    tags: "environment,user,release,os,transaction,level"
-  }] | {name, actionMatch, filterMatch, environment, frequency, conditions, filters, actions}' "$BACKUP_FILE")"
+  # 2. Append the Slack action to the chosen filter, then PUT the whole alert back from the backup:
+  #    every id kept, enabled as it was. A null triggers is dropped (the endpoint rejects it);
+  #    environment and owner stay even when null, because null is how they mean "all" and "none".
+  UPDATED="$(jq --argjson i "$FILTER_INDEX" --arg ws "$SLACK_INTEGRATION_ID" --arg ch "$SLACK_CHANNEL" --arg cid "$SLACK_CHANNEL_ID" '
+      if ((.actionFilters // []) | length) <= $i then error("this alert has no actionFilters[\($i)]") else . end
+      | .actionFilters[$i].actions += [{type: "slack", integrationId: $ws,
+          config: {targetType: "specific", targetIdentifier: $cid, targetDisplay: $ch},
+          data: {tags: "environment,user,release,os,transaction,level"}}]
+      | {name, enabled, environment, owner, config, detectorIds, triggers, actionFilters}
+      | with_entries(select(.value != null or .key == "environment" or .key == "owner"))' "$BACKUP_FILE")"
+  curl -fsS --max-time 10 -X PUT "${API}/organizations/${SENTRY_ORG}/workflows/${RULE_ID}/" \
+    -H "Authorization: Bearer ${SENTRY_TOKEN}" -H "Content-Type: application/json" -d "$UPDATED" > /dev/null
 
-curl -fsS --max-time 10 -X PUT "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/${RULE_ID}/" \
-  -H "Authorization: Bearer ${SENTRY_TOKEN}" -H "Content-Type: application/json" -d "$UPDATED"
+  # 3. Verify by re-fetch, machine-checkable: the Slack action carries this channel id, exactly one
+  #    action was added, and enabled, scope, frequency, owner, monitors, and conditions did not move.
+  curl -fsS --max-time 10 "${API}/organizations/${SENTRY_ORG}/workflows/${RULE_ID}/" \
+    -H "Authorization: Bearer ${SENTRY_TOKEN}" \
+    | jq -e --slurpfile b "$BACKUP_FILE" --arg cid "$SLACK_CHANNEL_ID" '
+        def acts: [(.actionFilters // [])[].actions[]];
+        def rest: {enabled, environment, owner, config, detectorIds: ((.detectorIds // []) | map(tostring) | sort),
+          triggers: (.triggers | if . then {logicType, conditions: [.conditions[] | {type, comparison, conditionResult}]} else null end),
+          filters: [(.actionFilters // [])[] | {logicType, conditions: [.conditions[] | {type, comparison, conditionResult}]}]};
+        ([acts[] | select(.type == "slack" and .config.targetIdentifier == $cid)] | length) >= 1
+        and (acts | length) == (($b[0] | acts | length) + 1)
+        and rest == ($b[0] | rest)'
+else
+  # Legacy fallback (self-hosted Sentry that still serves /rules/).
+  # 1. Backup (GET-before-write), run as written:
+  curl -fsS --max-time 10 "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/${RULE_ID}/" \
+    -H "Authorization: Bearer ${SENTRY_TOKEN}" > "$BACKUP_FILE"
+  test -s "$BACKUP_FILE" && echo "backup: ${BACKUP_FILE}"
 
-# 3. Verify by re-fetch, machine-checkable:
-curl -fsS --max-time 10 "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/${RULE_ID}/" \
-  -H "Authorization: Bearer ${SENTRY_TOKEN}" \
-  | jq -e --arg cid "$SLACK_CHANNEL_ID" \
-      '.actions | any(.id == "sentry.integrations.slack.notify_action.SlackNotifyServiceAction" and .channel_id == $cid)'
+  # 2. Patch the actions array from the backup, full-payload PUT:
+  UPDATED="$(jq --arg ws "$SLACK_INTEGRATION_ID" --arg ch "$SLACK_CHANNEL" --arg cid "$SLACK_CHANNEL_ID" \
+    '.actions += [{
+      id: "sentry.integrations.slack.notify_action.SlackNotifyServiceAction",
+      workspace: $ws, channel: $ch, channel_id: $cid,
+      tags: "environment,user,release,os,transaction,level"
+    }] | {name, actionMatch, filterMatch, environment, frequency, conditions, filters, actions}' "$BACKUP_FILE")"
+
+  curl -fsS --max-time 10 -X PUT "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/${RULE_ID}/" \
+    -H "Authorization: Bearer ${SENTRY_TOKEN}" -H "Content-Type: application/json" -d "$UPDATED"
+
+  # 3. Verify by re-fetch, machine-checkable:
+  curl -fsS --max-time 10 "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/${RULE_ID}/" \
+    -H "Authorization: Bearer ${SENTRY_TOKEN}" \
+    | jq -e --arg cid "$SLACK_CHANNEL_ID" \
+        '.actions | any(.id == "sentry.integrations.slack.notify_action.SlackNotifyServiceAction" and .channel_id == $cid)'
+fi
 ```
 
-Expect: the backup file is non-empty, and the final `jq -e` exits 0 confirming `channel_id` resolved to a real ID, not just that a Slack action of some kind is present. **Restore pair**, run as written to undo this wiring change:
+Expect: the backup file is non-empty, and the final `jq -e` exits 0: on the alerts API it confirms the Slack action carries the real channel ID (`config.targetIdentifier`), that exactly one action was added, and that `enabled` and every other field kept their backed-up values; on the legacy fallback it confirms `channel_id` resolved to a real ID, not just that a Slack action of some kind is present. **Restore pair**, run as written to undo this wiring change:
 
 ```bash
 set -eu
 SENTRY_HOST="us.sentry.io"; SENTRY_ORG="your-org-slug"; API="https://${SENTRY_HOST}/api/0"
 [ -n "${SENTRY_TOKEN:-}" ] || { echo "SENTRY_TOKEN is not set"; exit 1; }
-PROJECT="<project-slug>"; RULE_ID="<rule-id>"   # the rule the write changed
+SENTRY_ALERT_API="workflows"   # the doctor gate's "alert api:" value
+PROJECT="<project-slug>"; RULE_ID="<rule-id>"   # the alert (legacy: rule) the write changed and its project
 BACKUP_FILE="<backup-path>"     # the "backup:" path step 1 printed
 for v in "$PROJECT" "$RULE_ID" "$BACKUP_FILE"; do case "$v" in ''|'<'*) echo "Fill in every <...> value from the change record first" >&2; exit 1 ;; esac; done
 [ -s "$BACKUP_FILE" ] || { echo "No backup at ${BACKUP_FILE}" >&2; exit 1; }
 
-jq '{name, actionMatch, filterMatch, environment, frequency, conditions, filters, actions}' "$BACKUP_FILE" \
-  | curl -fsS --max-time 10 -X PUT "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/${RULE_ID}/" \
-      -H "Authorization: Bearer ${SENTRY_TOKEN}" -H "Content-Type: application/json" -d @-
+if [ "${SENTRY_ALERT_API}" = workflows ]; then
+  # PUT the backup back whole: its ids keep the original actions, the added action, absent from
+  # the body, is removed, and a null environment or owner in the backup is set back to null.
+  jq '{name, enabled, environment, owner, config, detectorIds, triggers, actionFilters}
+      | with_entries(select(.value != null or .key == "environment" or .key == "owner"))' \
+    "$BACKUP_FILE" \
+    | curl -fsS --max-time 10 -X PUT "${API}/organizations/${SENTRY_ORG}/workflows/${RULE_ID}/" \
+        -H "Authorization: Bearer ${SENTRY_TOKEN}" -H "Content-Type: application/json" -d @- > /dev/null
+  curl -fsS --max-time 10 "${API}/organizations/${SENTRY_ORG}/workflows/${RULE_ID}/" \
+    -H "Authorization: Bearer ${SENTRY_TOKEN}" \
+    | jq -e --slurpfile b "$BACKUP_FILE" '
+        def norm: {enabled, environment, owner, config, detectorIds: ((.detectorIds // []) | map(tostring) | sort),
+          triggers: (.triggers | if . then {logicType, conditions: [.conditions[] | {type, comparison, conditionResult}]} else null end),
+          actionFilters: [(.actionFilters // [])[] | {logicType, conditions: [.conditions[] | {type, comparison, conditionResult}],
+                                                     actions: [.actions[] | {type, integrationId, config, data}]}]};
+        norm == ($b[0] | norm)'
+else
+  # Legacy fallback (self-hosted Sentry that still serves /rules/).
+  jq '{name, actionMatch, filterMatch, environment, frequency, conditions, filters, actions}' "$BACKUP_FILE" \
+    | curl -fsS --max-time 10 -X PUT "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/${RULE_ID}/" \
+        -H "Authorization: Bearer ${SENTRY_TOKEN}" -H "Content-Type: application/json" -d @-
 
-curl -fsS --max-time 10 "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/${RULE_ID}/" \
-  -H "Authorization: Bearer ${SENTRY_TOKEN}" \
-  | jq -e --slurpfile b "$BACKUP_FILE" '[., $b[0]]
-      | map({actionMatch, filterMatch, environment, frequency, conditions, filters, actions}) | .[0] == .[1]'
+  curl -fsS --max-time 10 "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/${RULE_ID}/" \
+    -H "Authorization: Bearer ${SENTRY_TOKEN}" \
+    | jq -e --slurpfile b "$BACKUP_FILE" '[., $b[0]]
+        | map({actionMatch, filterMatch, environment, frequency, conditions, filters, actions}) | .[0] == .[1]'
+fi
 ```
 
-Expect: exit 0. A rule that lists a Slack action is `configured`; only a delivered test notification proves the receiver is live. Send one low-risk test event once wiring is approved and re-confirmed (`POST /projects/${SENTRY_ORG}/${PROJECT}/rules/${RULE_ID}/tasks/` or the rule's test-fire endpoint on your API version), and record who confirmed receipt in the change log; do not mark SNTRY-005/SNTRY-011 fixed on the `jq -e` above alone.
+Expect: exit 0, the alert equal to its backup in `enabled`, scope, frequency, owner, monitors, conditions, and actions. A rule that lists a Slack action is `configured`; only a delivered test notification proves the receiver is live. Send one low-risk test notification once wiring is approved and re-confirmed (on the alerts API, `POST /organizations/${SENTRY_ORG}/test-fire-actions/` with the alert's `actions` and its `projectSlug`; Sentry marks it experimental, allows 10 a minute per user, and needs a user token on a team in the project; legacy fallback: the rule's test-fire endpoint on your API version), and record who confirmed receipt in the change log; do not mark SNTRY-005/SNTRY-011 fixed on the `jq -e` above alone.
 
 ## Alert-rule remediation playbook
 
 For a bulk cleanup of an org's existing alert rules (slowing noisy tiers, deleting dead rules, rescoping rules by environment) rather than a single new-rule fix. It extends [Alert rule taxonomy](#alert-rule-taxonomy) and [Receiver wiring](#receiver-wiring): the taxonomy decides what each tier should be; this playbook moves a live, historically-grown rule set onto it without going dark. Every step still runs under [The change protocol](#the-change-protocol) (announce, confirm, execute, verify, record) and nothing here auto-mutates. This is a real cleanup shape: dozens of rule updates and a handful of deletions across several projects, every one GET-verified.
 
-It also takes audit-sentry's rule-hygiene findings. SNTRY-106 is evidence only: its fire counts pick which rules to touch, and nothing changes for it. SNTRY-107 is fixed by [Slow noisy tiers, keep fast tiers fast, never age-gate regressions](#slow-noisy-tiers-keep-fast-tiers-fast-never-age-gate-regressions). For SNTRY-108, [Map rules to environments by receiver channel, not by rule name](#map-rules-to-environments-by-receiver-channel-not-by-rule-name) decides the environment; the slow-a-noisy-rule block applies it to a burst or spike rule, and any other rule's rescope is a pending item for its owner. A SNTRY-109 dead-weight rule is deleted only after the rule-set backup below, one confirmed deletion at a time, with the rule rollback block in [Alert rule taxonomy](#alert-rule-taxonomy) (`RULE_ID` set to that rule) and the per-rule `404` verify. For SNTRY-110, rules this skill creates carry an `owner`; list each existing ownerless rule as a pending item naming the team that should own it.
+It also takes audit-sentry's rule-hygiene findings. SNTRY-106 is evidence only: its fire counts pick which rules to touch, and nothing changes for it. SNTRY-107 is fixed by [Slow noisy tiers, keep fast tiers fast, never age-gate regressions](#slow-noisy-tiers-keep-fast-tiers-fast-never-age-gate-regressions). For SNTRY-108, [Map rules to environments by receiver channel, not by rule name](#map-rules-to-environments-by-receiver-channel-not-by-rule-name) decides the environment; the slow-a-noisy-rule block applies it to a burst or spike rule, and any other rule's rescope is a pending item for its owner. A SNTRY-109 dead-weight rule is deleted only after the rule-set backup below, one confirmed deletion at a time, with the rule rollback block in [Alert rule taxonomy](#alert-rule-taxonomy) (`RULE_ID` set to that rule) and its per-rule JSON `404` verify. For SNTRY-110, rules this skill creates carry an `owner`; list each existing ownerless rule as a pending item naming the team that should own it.
 
 ### Back up the whole rule set before the first mutation
 
-Mandatory before the first PUT or DELETE, no exceptions. Dump the full current JSON of every rule you might touch into a dated local directory `~/.scoutflo/sentry-rules-backup-<date>/`: one file per project for its issue-alert rules, plus one file for the org's metric-alert rules. Restore is a PUT of the saved body for a rule you updated, or a POST for one you deleted. A single wrong bulk edit across dozens of rules is unrecoverable without this snapshot, and a sentence claiming a backup exists is not a backup. The runnable backup-all and restore commands are in [references/api-cookbook.md#rule-set-backup-and-restore](references/api-cookbook.md#rule-set-backup-and-restore).
+Mandatory before the first PUT or DELETE, no exceptions. Dump the full current JSON of every rule you might touch into a dated local directory `~/.scoutflo/sentry-rules-backup-<date>/`: on the alerts API, one file of every alert (`workflows.json`) and one of every metric monitor (`detectors.json`), org-wide; on the legacy fallback, one file per project for its issue-alert rules, plus one file for the org's metric-alert rules. Restore is a PUT of the whole saved body for a rule you updated (every id and `enabled` with it), or a POST for one you deleted. A single wrong bulk edit across dozens of rules is unrecoverable without this snapshot, and a sentence claiming a backup exists is not a backup. The runnable backup-all and restore commands are in [references/api-cookbook.md#rule-set-backup-and-restore](references/api-cookbook.md#rule-set-backup-and-restore).
 
 ### GET-verify after every PUT and every DELETE
 
-The change protocol's verify step is per-rule here, and its evidence is reported per rule, never as a batch total. After a PUT, re-fetch the rule and assert the field you changed holds the new value with `jq -e`. After a DELETE, note that Sentry returns `202 Accepted`, not `200`: a 202 means the delete was queued, not that the rule is gone. Confirm removal with a follow-up GET and expect `404`. Report a per-rule verify line (`rule <id>: verified`, or `gone (404)`) for every rule touched. The verify snippets are in [references/api-cookbook.md#bulk-verify-put-and-delete](references/api-cookbook.md#bulk-verify-put-and-delete).
+The change protocol's verify step is per-rule here, and its evidence is reported per rule, never as a batch total. After a PUT, re-fetch the rule and assert the field you changed holds the new value, and that `enabled` still holds its backed-up value, with `jq -e`. A DELETE answers `204` on the alerts API and `202 Accepted` (queued) on the legacy fallback; neither status proves the rule is gone. Confirm removal with a follow-up GET that returns `404` with the JSON body `{"detail": "The requested resource does not exist"}`: a bare `404` proves nothing, because a removed or mistyped route answers `404` with an empty body for every id, deleted or not. Report a per-rule verify line (`rule <id>: verified`, or `gone (404)`) for every rule touched. The verify snippets are in [references/api-cookbook.md#bulk-verify-put-and-delete](references/api-cookbook.md#bulk-verify-put-and-delete).
 
-- ❌ Reported "57 rules updated, 14 deleted" from the write commands' exit codes, treating the 202 on each delete as done.
-- ✅ Re-fetched each of the 57 with a passing `jq -e` on the changed field, and each of the 14 with a follow-up GET returning 404, and reported the 71 per-rule verify lines.
+- ❌ Reported "57 rules updated, 14 deleted" from the write commands' exit codes, treating the 204 or 202 on each delete, or a bare 404 on the re-read, as done.
+- ✅ Re-fetched each of the 57 with a passing `jq -e` on the changed field and its `enabled` state, and each of the 14 with a follow-up GET returning the JSON "does not exist" 404, and reported the 71 per-rule verify lines.
 
-### A metric-alert trigger cannot exist without an action
+### Quiet a metric alert's warning tier
 
-Discovered live, and it changes how you quiet a metric-alert tier. Sentry's metric-alert API (`/organizations/${SENTRY_ORG}/alert-rules/`, distinct from the issue-alert `/projects/.../rules/` endpoint) rejects a PUT that leaves any trigger with an empty `actions` array:
+On the alerts API a metric alert is two objects: its `metric_issue` monitor holds the thresholds as `conditionGroup.conditions` (`conditionResult` 75 is critical, 50 is warning, 0 is resolve), and the alerts connected to it hold the actions. To silence the warning tier, remove the warning condition (`conditionResult` 50) from the monitor and keep the critical and resolve conditions: a metric monitor must keep its resolve condition (unless it uses anomaly detection) and holds at most three conditions. The monitor `PUT` is partial, but the conditions list is replaced by `id`, so send every condition you keep with its `id`. Record the removed condition (its `type` and `comparison`) in the change log so it can be restored. Restoring it is a change like any other: announce, confirm, verify. Payload shape in [references/api-cookbook.md#silence-a-metric-alert-warning-tier](references/api-cookbook.md#silence-a-metric-alert-warning-tier).
+
+Legacy fallback, discovered live: the metric-alert API (`/organizations/${SENTRY_ORG}/alert-rules/`) rejects a PUT that leaves any trigger with an empty `actions` array:
 
 > Each trigger must have an associated action for this alert to fire.
 
-So you cannot silence a warning tier by stripping its action and keeping the trigger. To silence a warning tier, remove the whole trigger from the `triggers` array (keep the critical trigger), and record in the change log the exact trigger you removed (its `label`, `alertThreshold`, and `actions`) so it can be restored by PUTting it back into the array. Restoring a removed trigger is a change like any other: announce, confirm, verify. Payload shape in [references/api-cookbook.md#silence-a-metric-alert-warning-tier](references/api-cookbook.md#silence-a-metric-alert-warning-tier).
+So on the legacy API you cannot silence a warning tier by stripping its action and keeping the trigger: remove the whole trigger from the `triggers` array (keep the critical trigger), and record the exact trigger you removed (its `label`, `alertThreshold`, and `actions`) so it can be restored by PUTting it back into the array.
 
 ### Slow noisy tiers, keep fast tiers fast, never age-gate regressions
 
@@ -650,9 +838,9 @@ For SNTRY-107 (chronic issues that re-page without bound). Slowing every rule is
 | --- | --- | --- |
 | Burst, spike, or high-volume rules | Add the rule-level `environment` filter (production or pre-prod), add an "issue newer than `RULE_AGE_GATE_DAYS`" age gate, and slow re-notify from the fast tier's cadence to `SLOW_RENOTIFY_MIN` | These are the noise source; an env scope plus age gate plus long re-notify cut the repeat pages without dropping the first one |
 | New Issue, High Priority, Critical, and Escalating rules | Leave fast and untouched | These are the pages the team actually needs; slowing them defeats the cleanup |
-| Regression rules (`RegressionEventCondition`) | Slow re-notify if needed, but never add an "issue newer than N days" age gate | A regression is by definition an old, previously-resolved issue coming back; a "newer than 7d" gate suppresses exactly the regressions the rule exists to catch |
+| Regression rules (`regression_event`; legacy `RegressionEventCondition`) | Slow re-notify if needed, but never add an "issue newer than N days" age gate | A regression is by definition an old, previously-resolved issue coming back; a "newer than 7d" gate suppresses exactly the regressions the rule exists to catch |
 
-Named defaults for the block: `RULE_AGE_GATE_DAYS="7"`, `FAST_RENOTIFY_MIN="15"`, `SLOW_RENOTIFY_MIN="1440"` (24 hours), all examples to tune to your volume. The age gate is the `AgeComparisonFilter`; the re-notify cadence is the rule's `frequency` field, in minutes. Payload in [references/api-cookbook.md#slow-a-noisy-issue-alert-rule](references/api-cookbook.md#slow-a-noisy-issue-alert-rule).
+Named defaults for the block: `RULE_AGE_GATE_DAYS="7"`, `FAST_RENOTIFY_MIN="15"`, `SLOW_RENOTIFY_MIN="1440"` (24 hours), all examples to tune to your volume. The age gate is an `age_comparison` action-filter condition (legacy `AgeComparisonFilter`); the re-notify cadence is the alert's `config.frequency` (legacy `frequency`), in minutes. Payload in [references/api-cookbook.md#slow-a-noisy-issue-alert-rule](references/api-cookbook.md#slow-a-noisy-issue-alert-rule).
 
 - ❌ Added a "newer than 7 days" age gate to every rule in the project, the regression rule included, and reported the whole project "de-noised".
 - ✅ Age-gated only the burst and spike rules, left the regression, escalation, and high-priority rules fast, and named which rules changed and which were deliberately left alone.
@@ -904,7 +1092,7 @@ Append one entry per executed change to `${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits
 - Pending: <item> (owner: <team or person>)
 ```
 
-Before calling the run done, check: every touched project re-fetched with a passing `jq -e` on scrubbers and sensitive fields; every touched rule re-fetched with a passing `jq -e` on its conditions, filters, actions, and environment scope; every wired receiver has a confirmed test-notification receipt or is explicitly `pending`; every monitor is `disabled` until real check-ins are observed, or its enablement is backed by a passing check-in assertion; the SDK instrumentation notes have real DSNs and no placeholder values; every change has a passing verification command and a runnable rollback command (not a rollback sentence) in the log; if any row of a batch failed, confirm the batch stopped there and the remainder was re-announced, per the mid-batch failure rule.
+Before calling the run done, check: every touched project re-fetched with a passing `jq -e` on scrubbers and sensitive fields; every touched rule re-fetched with a passing `jq -e` on its conditions, filters, actions, environment scope, and `enabled` state; every deleted rule proven gone by a JSON "does not exist" `404`, never a bare `404`; every wired receiver has a confirmed test-notification receipt or is explicitly `pending`; every monitor is `disabled` until real check-ins are observed, or its enablement is backed by a passing check-in assertion; the SDK instrumentation notes have real DSNs and no placeholder values; every change has a passing verification command and a runnable rollback command (not a rollback sentence) in the log; if any row of a batch failed, confirm the batch stopped there and the remainder was re-announced, per the mid-batch failure rule.
 
 End the run with:
 
@@ -917,13 +1105,15 @@ End the run with:
 | Failure | Prevention |
 | --- | --- |
 | Live-safety gate compares config against itself | Fetch an org-agnostic live list (`GET /organizations/`) that never takes the configured org as input, and assert the configured slug appears in it |
-| New project gets the noisy auto-created default rule | Always create with `defaultRules: false`; verify the rules list is empty right after creation with `jq -e 'length == 0'` |
+| New project gets the noisy auto-created default rule | Always create with `defaultRules: false`; verify right after creation that the project's issue-stream monitor has no alert attached (`workflowIds == []`; legacy fallback: an empty rules list) |
 | `error.unhandled` filter never matches | Use `match: "is"` (is set), not `match: "eq"` with a value |
-| `http.status_code` starts-with filter rejected | `value` must be an integer (`5`), not a string (`"5"`) |
-| Environment scoping silently does nothing | Use the rule-level `environment` field; `LatestAdoptedReleaseFilter` filters by release-adoption stage, not environment |
-| Email action rejected with "user is not part of the project" | Use `targetType: "IssueOwners"` with `fallthroughType: "AllMembers"`, never `targetType: "Member"` with a raw user ID |
+| `http.status_code` starts-with filter rejected | On the alerts API `value` is a string (`"5"`); only the legacy rules API wanted an integer (`5`) |
+| Environment scoping silently does nothing | Use the rule-level `environment` field; the `latest_adopted_release` filter (legacy `LatestAdoptedReleaseFilter`) filters by release-adoption stage, not environment |
+| Email action rejected with "user is not part of the project" | Email issue owners with a fallthrough (`config.targetType: "issue_owners"`, `data.fallthroughType: "AllMembers"`; legacy `targetType: "IssueOwners"`), never a single member's raw user ID |
 | Envelope event rejected with a header/length mismatch | Compute the envelope `length` field as the exact byte count of the payload line; never hardcode it |
-| Slack action PUT silently drops existing conditions or the email action | The rules endpoint replaces the whole object on write; fetch the current rule into a backup file, patch the actions array, PUT the full body back |
+| Slack action PUT silently drops existing conditions or the email action | An alert PUT replaces the whole alert: anything missing by `id` is deleted. Fetch the current alert into a backup file, patch it, and PUT the full body back with every id |
+| A wiring or tuning PUT turns a disabled alert back on | An alert PUT defaults `enabled` to `true` when it is omitted; build every body from the backup so it carries the backed-up `enabled`, and assert it after the write |
+| A project-wide bulk call changes or deletes every alert in the project | Never send PUT or DELETE to `/workflows/?project=`; change one alert by id at `/workflows/{id}/` |
 | Rule declared wired because the action type is present | Re-fetch and assert `channel_id`/`service` resolve to real IDs with `jq -e`, then send one test notification and record who confirmed receipt |
 | Cron monitor left active with zero check-ins | Create monitors `disabled`; enable only after a passing `jq -e` assertion on observed `in_progress`, `ok`, and `error` check-ins |
 | Uptime monitor creation fails | `intervalSeconds` accepts only 300, 600, 1800, or 3600 |
@@ -933,11 +1123,11 @@ End the run with:
 | Replay or AI capture enabled without a privacy decision | Keep masking, PII capture, and prompt/response recording off by default; require an explicit, recorded exception per project |
 | Batch continues past a failed write | Mid-batch failure rule: stop immediately, record what already applied and its backups, re-announce the remainder for a fresh approval |
 | Rollback claimed without a runnable command | Every write section carries its own backup file and a restore/delete command that a reader can paste and run, never a rollback sentence alone |
-| Bulk rule cleanup started with no rule-set backup | Dump every rule's JSON to `~/.scoutflo/sentry-rules-backup-<date>/` (per project, plus org metric rules) before the first PUT or DELETE; restore is a PUT/POST of the saved body |
-| Bulk delete reported done on the 202 | A DELETE returns `202 Accepted` (queued), not proof of removal; confirm each with a follow-up GET expecting `404`, and report a per-rule verify line |
-| Metric-alert PUT rejected: "Each trigger must have an associated action" | Do not strip a trigger's action to quiet it; remove the whole trigger from the `triggers` array and record it for restore |
+| Bulk rule cleanup started with no rule-set backup | Dump every rule's JSON to `~/.scoutflo/sentry-rules-backup-<date>/` (every alert and metric monitor org-wide; legacy fallback: per project, plus org metric rules) before the first PUT or DELETE; restore is a PUT/POST of the saved body |
+| Delete reported done on its 204 or 202, or on a bare 404 | Neither status proves removal, and a removed route answers `404` with an empty body for every id; confirm each with a follow-up GET that returns the JSON "does not exist" `404`, and report a per-rule verify line |
+| Metric monitor PUT rejected when quieting the warning tier | Keep the resolve condition (`conditionResult` 0) and at most three conditions, each kept one with its `id`; on the legacy fallback ("Each trigger must have an associated action") remove the whole trigger instead of its action |
 | Noisy-rule cleanup slows the fast tier too | Slow only burst, spike, and high-volume rules; leave New Issue, High Priority, Critical, and Escalating rules fast |
-| Age gate suppresses the regressions it should catch | Never add an "issue newer than N days" `AgeComparisonFilter` to a `RegressionEventCondition` rule |
+| Age gate suppresses the regressions it should catch | Never add an "issue newer than N days" age gate (`age_comparison`; legacy `AgeComparisonFilter`) to a regression rule (`regression_event`; legacy `RegressionEventCondition`) |
 | Env-scoped rule goes permanently silent | Never env-scope rules on a project that emits no `environment` tag; fix the SDK env config first, then scope the rules |
 | Rule rescoped to the wrong environment from its name | Derive the environment from the receiver channel the rule delivers to, not the rule's name |
 | Temporary query mask becomes permanent | Record a revert condition naming the triggering deploy or PR for every temporary `!transaction` exclusion |

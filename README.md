@@ -97,6 +97,8 @@ Green = read-only (safe, changes nothing) · amber = write, gated behind your co
 
 ## What's new (latest release)
 
+- **Sentry audits work again on sentry.io.** Sentry removed its old alert API in late September, which made the Sentry audit report no metric alerts and stop early. Both Sentry skills now use Sentry's new alerts API, and keep the old one only for self-hosted Sentry that still has it.
+
 - **Safe undo steps in every setup skill.** The Kubernetes, Grafana, New Relic and ClickStack setup skills now have the same undo steps as the others: each names its target, refuses to run on a placeholder, and never removes something that existed before. Setup skills also stop mistaking their own work folder for the latest audit, and the LGTM, AWS, Azure, GCP, DigitalOcean and Sentry setup skills picked up their full-review fixes.
 
 - **Rollbacks are safe to run later, in a new session.** In the LGTM, AWS, Azure, GCP, DigitalOcean and Sentry setup skills, every undo step is now a self-contained block that names its own cluster, account, project, subscription or team, refuses to run on a placeholder, and checks it is signed in to the right place before deleting anything. Kubernetes restores also work after the object was changed, where re-applying the old backup used to fail, and no rollback removes something that existed before the setup.
