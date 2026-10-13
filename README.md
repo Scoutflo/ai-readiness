@@ -97,6 +97,8 @@ Green = read-only (safe, changes nothing) · amber = write, gated behind your co
 
 ## What's new (latest release)
 
+- **The Sentry skills no longer save or print a project's security token or client-key secrets.** Sentry's project details include a security token, and its client keys include a secret. The Sentry audit printed both, and saved the token in its raw files. The Sentry setup saved both in its backups. Both skills now drop them first.
+
 - **Sentry audits work again on sentry.io.** Sentry removed its old alert API in late September, which made the Sentry audit report no metric alerts and stop early. Both Sentry skills now use Sentry's new alerts API, and keep the old one only for self-hosted Sentry that still has it.
 
 - **Safe undo steps in every setup skill.** The Kubernetes, Grafana, New Relic and ClickStack setup skills now have the same undo steps as the others: each names its target, refuses to run on a placeholder, and never removes something that existed before. Setup skills also stop mistaking their own work folder for the latest audit, and the LGTM, AWS, Azure, GCP, DigitalOcean and Sentry setup skills picked up their full-review fixes.

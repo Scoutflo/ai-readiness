@@ -81,11 +81,14 @@ PROJECT="checkout"
 BACKUP_FILE="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/sentry/setup-$(date -u +%F)/backups/project-${PROJECT}-$(date -u +%H%M%S).json"
 mkdir -p "$(dirname "$BACKUP_FILE")"
 
-curl -fsS --max-time 10 "${API}/projects/${SENTRY_ORG}/${PROJECT}/" \
-  -H "Authorization: Bearer ${SENTRY_TOKEN}" > "$BACKUP_FILE"
+# The project's securityToken is dropped before saving; the restore reads only the privacy fields.
+PROJ_JSON="$(curl -fsS --max-time 10 "${API}/projects/${SENTRY_ORG}/${PROJECT}/" \
+  -H "Authorization: Bearer ${SENTRY_TOKEN}")"
+printf '%s\n' "$PROJ_JSON" | jq 'del(.securityToken)' > "$BACKUP_FILE"
 test -s "$BACKUP_FILE" && echo "backup: ${BACKUP_FILE}"
 
-curl -fsS --max-time 10 -X PUT "${API}/projects/${SENTRY_ORG}/${PROJECT}/" \
+# The response is the whole project, securityToken included, so it is not printed.
+curl -fsS --max-time 10 -o /dev/null -X PUT "${API}/projects/${SENTRY_ORG}/${PROJECT}/" \
   -H "Authorization: Bearer ${SENTRY_TOKEN}" -H "Content-Type: application/json" \
   -d '{
     "dataScrubber": true,
@@ -114,17 +117,20 @@ set -eu
 SENTRY_HOST="us.sentry.io"; SENTRY_ORG="your-org-slug"; API="https://${SENTRY_HOST}/api/0"
 [ -n "${SENTRY_TOKEN:-}" ] || { echo "SENTRY_TOKEN is not set; run /scoutflo:connect"; exit 1; }
 PROJECT="checkout"
-KEY_ID="your-key-id"           # from GET /projects/${SENTRY_ORG}/${PROJECT}/keys/
+KEY_ID="your-key-id"           # GET /projects/${SENTRY_ORG}/${PROJECT}/keys/ | jq '.[] | {id, name}'; never print the whole key
 KEY_RATE_LIMIT="1000"          # example, tune to your expected event volume
 KEY_RATE_WINDOW="60"           # seconds; example
 BACKUP_FILE="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/sentry/setup-$(date -u +%F)/backups/key-${KEY_ID}-$(date -u +%H%M%S).json"
 mkdir -p "$(dirname "$BACKUP_FILE")"
 
-curl -fsS --max-time 10 "${API}/projects/${SENTRY_ORG}/${PROJECT}/keys/${KEY_ID}/" \
-  -H "Authorization: Bearer ${SENTRY_TOKEN}" > "$BACKUP_FILE"
+# The key's secret and DSNs are not saved; the backup keeps what the restore reads.
+KEY_JSON="$(curl -fsS --max-time 10 "${API}/projects/${SENTRY_ORG}/${PROJECT}/keys/${KEY_ID}/" \
+  -H "Authorization: Bearer ${SENTRY_TOKEN}")"
+printf '%s\n' "$KEY_JSON" | jq '{id, name, isActive, rateLimit}' > "$BACKUP_FILE"
 test -s "$BACKUP_FILE" && echo "backup: ${BACKUP_FILE}"
 
-curl -fsS --max-time 10 -X PUT "${API}/projects/${SENTRY_ORG}/${PROJECT}/keys/${KEY_ID}/" \
+# The response is the whole key, secret and DSNs included, so it is not printed.
+curl -fsS --max-time 10 -o /dev/null -X PUT "${API}/projects/${SENTRY_ORG}/${PROJECT}/keys/${KEY_ID}/" \
   -H "Authorization: Bearer ${SENTRY_TOKEN}" -H "Content-Type: application/json" \
   -d "$(jq -n --argjson limit "$KEY_RATE_LIMIT" --argjson window "$KEY_RATE_WINDOW" \
     '{rateLimit: {window: $window, count: $limit}}')"

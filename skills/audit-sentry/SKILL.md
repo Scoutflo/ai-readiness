@@ -136,7 +136,7 @@ Load `./scoutflo-audits/topology.md` if it exists; its service list is your crit
 - Conservative posture wins ties: privacy-sensitive telemetry without a recorded decision is a finding, email-only routing is a temporary path, a monitor without observed check-ins is unproven.
   - ❌ `Routing validated-live: the rule has a Slack action configured.`
   - ✅ `Routing configured: the Slack action references integration id 42, which is absent from available-actions.json; unproven until it appears there as a live target (SNTRY-005 partial).`
-- Never print, store, or write a DSN, token, webhook URL, or auth header anywhere: not in terminal output, not in the raw dump, not in evidence. The keys pull strips DSNs at capture, and the Phase 1 redaction pass nulls operator emails (`createdBy.email`, `owner`, commit-author) across the raw dump. A value a customer embedded in free text — a path inside their own commit message — is their data, not a secret of ours; see [report-standard/secret-redaction.md](../../report-standard/secret-redaction.md) on the `raw/` working-dir scope of `ci/leak-scan.sh`.
+- Never print, store, or write a DSN, token, webhook URL, or auth header anywhere: not in terminal output, not in the raw dump, not in evidence. The keys pull strips DSNs at capture, the project-detail pull drops the project's `securityToken` before it is saved, a check that prints a project or its keys shows only the fields it reads, and the Phase 1 redaction pass nulls operator emails (`createdBy.email`, `owner`, commit-author) across the raw dump. A value a customer embedded in free text — a path inside their own commit message — is their data, not a secret of ours; see [report-standard/secret-redaction.md](../../report-standard/secret-redaction.md) on the `raw/` working-dir scope of `ci/leak-scan.sh`.
 
 ## Estate sizing
 
@@ -338,8 +338,9 @@ read_or_block stats-projects \
 # writes the same ${RAW_DIR}/projects/<slug>/ files this loop writes.
 for p in $(jq -r '.[].slug' "${RAW_DIR}/projects.json"); do
   d="${RAW_DIR}/projects/${p}"; mkdir -p "$d"
-  curl -fsS --max-time 30 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
-    "${API}/projects/${SENTRY_ORG}/${p}/" > "${d}/detail.json"
+  # Project detail carries the project's securityToken: drop it before anything is written.
+  detail="$(curl -fsS --max-time 30 -H "Authorization: Bearer ${SENTRY_TOKEN}" "${API}/projects/${SENTRY_ORG}/${p}/")"
+  printf '%s\n' "$detail" | jq 'del(.securityToken)' > "${d}/detail.json"
   fetch_all "${API}/projects/${SENTRY_ORG}/${p}/environments/" > "${d}/environments.json"
   # Keys: keep only name, status, rate limit. Never store DSNs anywhere.
   fetch_all "${API}/projects/${SENTRY_ORG}/${p}/keys/" \

@@ -194,8 +194,9 @@ echo "${BATCH}" | while IFS= read -r p; do
   [ -n "$p" ] || continue
   d="${RUN_DIR}/raw/projects/${p}"; mkdir -p "$d"
   ok=1
-  curl -fsS --max-time 30 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
-    "${API}/projects/${SENTRY_ORG}/${p}/" > "${d}/detail.json" || ok=0
+  # Project detail carries the project's securityToken: drop it before anything is written.
+  detail="$(curl -fsS --max-time 30 -H "Authorization: Bearer ${SENTRY_TOKEN}" "${API}/projects/${SENTRY_ORG}/${p}/")" \
+    && printf '%s\n' "$detail" | jq 'del(.securityToken)' > "${d}/detail.json" || ok=0
   fetch_all "${API}/projects/${SENTRY_ORG}/${p}/environments/" > "${d}/environments.json" || ok=0
   fetch_all "${API}/projects/${SENTRY_ORG}/${p}/keys/" \
     | jq 'map({name, isActive, rateLimit})' > "${d}/keys.json" || ok=0
@@ -270,6 +271,7 @@ API="https://${SENTRY_HOST}/api/0"
 
 curl -fsS --max-time 15 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
   "${API}/projects/${SENTRY_ORG}/${PROJECT}/" \
+  | jq '{ slug, dataScrubber, dataScrubberDefaults, sensitiveFields, scrubIPAddresses, scrapeJavaScript }' \
   | tee /dev/stderr \
   | jq -e '{ dataScrubber, dataScrubberDefaults, sensitiveFields,
              scrubIPAddresses, scrapeJavaScript } as $p
@@ -295,6 +297,7 @@ API="https://${SENTRY_HOST}/api/0"
 
 curl -fsS --max-time 15 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
   "${API}/projects/${SENTRY_ORG}/${PROJECT}/keys/" \
+  | jq 'map({ name, isActive, rateLimit })' \
   | tee /dev/stderr \
   | jq -e '[ .[] | select(.isActive) ] | all(.rateLimit != null)' >/dev/null \
   && echo "SNTRY-003 pass: ${PROJECT}" || echo "SNTRY-003 fail: ${PROJECT}"
@@ -1695,6 +1698,7 @@ API="https://${SENTRY_HOST}/api/0"
 
 curl -fsS --max-time 15 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
   "${API}/projects/${SENTRY_ORG}/${PROJECT}/" \
+  | jq '{ slug, firstEvent }' \
   | tee /dev/stderr \
   | jq -r 'if .firstEvent == null
       then "SNTRY-024: \(.slug) never instrumented (firstEvent is null) — wire the SDK, this is not a drop-off"
