@@ -81,11 +81,14 @@ PROJECT="checkout"
 BACKUP_FILE="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/sentry/setup-$(date -u +%F)/backups/project-${PROJECT}-$(date -u +%H%M%S).json"
 mkdir -p "$(dirname "$BACKUP_FILE")"
 
-curl -fsS --max-time 10 "${API}/projects/${SENTRY_ORG}/${PROJECT}/" \
-  -H "Authorization: Bearer ${SENTRY_TOKEN}" > "$BACKUP_FILE"
+# The project's securityToken is dropped before saving; the restore reads only the privacy fields.
+PROJ_JSON="$(curl -fsS --max-time 10 "${API}/projects/${SENTRY_ORG}/${PROJECT}/" \
+  -H "Authorization: Bearer ${SENTRY_TOKEN}")"
+printf '%s\n' "$PROJ_JSON" | jq 'del(.securityToken)' > "$BACKUP_FILE"
 test -s "$BACKUP_FILE" && echo "backup: ${BACKUP_FILE}"
 
-curl -fsS --max-time 10 -X PUT "${API}/projects/${SENTRY_ORG}/${PROJECT}/" \
+# The response is the whole project, securityToken included, so it is not printed.
+curl -fsS --max-time 10 -o /dev/null -X PUT "${API}/projects/${SENTRY_ORG}/${PROJECT}/" \
   -H "Authorization: Bearer ${SENTRY_TOKEN}" -H "Content-Type: application/json" \
   -d '{
     "dataScrubber": true,

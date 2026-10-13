@@ -327,13 +327,16 @@ BACKUP_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/sentry/setup-$(date -u +%F)
 mkdir -p "$BACKUP_DIR"
 BACKUP_FILE="${BACKUP_DIR}/project-${PROJECT}-$(date -u +%H%M%S).json"
 
-# 1. Backup (GET-before-write), run as written:
-curl -fsS --max-time 10 "${API}/projects/${SENTRY_ORG}/${PROJECT}/" \
-  -H "Authorization: Bearer ${SENTRY_TOKEN}" > "$BACKUP_FILE"
+# 1. Backup (GET-before-write), run as written. The project's securityToken is
+#    dropped before saving; the restore reads only the privacy fields.
+PROJ_JSON="$(curl -fsS --max-time 10 "${API}/projects/${SENTRY_ORG}/${PROJECT}/" \
+  -H "Authorization: Bearer ${SENTRY_TOKEN}")"
+printf '%s\n' "$PROJ_JSON" | jq 'del(.securityToken)' > "$BACKUP_FILE"
 test -s "$BACKUP_FILE" && echo "backup: ${BACKUP_FILE}"
 
-# 2. The write, announced with real values before it runs:
-curl -fsS --max-time 10 -X PUT "${API}/projects/${SENTRY_ORG}/${PROJECT}/" \
+# 2. The write, announced with real values before it runs. Its response is the
+#    whole project, securityToken included, so it is not printed; step 3 verifies.
+curl -fsS --max-time 10 -o /dev/null -X PUT "${API}/projects/${SENTRY_ORG}/${PROJECT}/" \
   -H "Authorization: Bearer ${SENTRY_TOKEN}" -H "Content-Type: application/json" \
   -d '{
     "dataScrubber": true,
@@ -371,7 +374,7 @@ for v in "$PROJECT" "$BACKUP_FILE"; do case "$v" in ''|'<'*) echo "Fill in every
 # Sentry's project PUT accepts a partial body; restore only the fields this
 # section touched, taken byte-for-byte from the backup.
 jq '{dataScrubber, dataScrubberDefaults, scrubIPAddresses, scrapeJavaScript, sensitiveFields}' "$BACKUP_FILE" \
-  | curl -fsS --max-time 10 -X PUT "${API}/projects/${SENTRY_ORG}/${PROJECT}/" \
+  | curl -fsS --max-time 10 -o /dev/null -X PUT "${API}/projects/${SENTRY_ORG}/${PROJECT}/" \
       -H "Authorization: Bearer ${SENTRY_TOKEN}" -H "Content-Type: application/json" -d @-
 
 curl -fsS --max-time 10 "${API}/projects/${SENTRY_ORG}/${PROJECT}/" \

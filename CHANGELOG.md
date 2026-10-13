@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.1.219
+
+**The Sentry skills no longer save or print a project's security token.**
+
+- Sentry's project details include the project's `securityToken`.
+  audit-sentry saved it in each project's raw `detail.json` and printed the
+  whole project in two checks (SNTRY-002, SNTRY-024). setup-sentry saved it
+  in its privacy backup and printed it after each privacy change and
+  restore. The token is now dropped before anything is saved, the two
+  checks print only the fields they read, and the setup writes no longer
+  print Sentry's response. Findings and the report format are unchanged.
+
 ## 0.1.218
 
 **The Sentry skills move to Sentry's new alert API.**
