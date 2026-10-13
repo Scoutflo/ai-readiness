@@ -297,6 +297,7 @@ API="https://${SENTRY_HOST}/api/0"
 
 curl -fsS --max-time 15 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
   "${API}/projects/${SENTRY_ORG}/${PROJECT}/keys/" \
+  | jq 'map({ name, isActive, rateLimit })' \
   | tee /dev/stderr \
   | jq -e '[ .[] | select(.isActive) ] | all(.rateLimit != null)' >/dev/null \
   && echo "SNTRY-003 pass: ${PROJECT}" || echo "SNTRY-003 fail: ${PROJECT}"

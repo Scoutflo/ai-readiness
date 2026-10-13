@@ -24,7 +24,8 @@ matters."
    sizing path. Project detail carries the project's `securityToken`; it is dropped
    with `jq 'del(.securityToken)'` before `detail.json` is written, on both the
    small/medium loop and the large-org worklist, and SNTRY-002 and SNTRY-024 print
-   only the fields they read, never the whole project.
+   only the fields they read, never the whole project. SNTRY-003 likewise prints each
+   key as `{name, isActive, rateLimit}`, never the key's secret or DSNs.
 2. After collection, a redaction pass nulls every `.email` key across the raw dump
    (`jq 'walk(if type=="object" and has("email") then .email=null else . end)'`),
    removing `createdBy.email`, `owner` emails, and commit-author emails on both the
@@ -41,7 +42,7 @@ matters."
 
 **Must not:** write a DSN/token/webhook/auth-header to `raw/` or evidence, including
 an uptime monitor's request header value or a project's `securityToken`; print a
-whole project-detail response to the terminal; drop or
+whole project-detail or client-key response to the terminal; drop or
 blank `createdBy` entirely (that would break SNTRY-001); null `.name`/project/rule
 names or ids that checks and the report need; or claim the deliverables are unclean
 because `raw/` contains customer-inherent free-text values.
