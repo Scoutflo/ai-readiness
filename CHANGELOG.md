@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.1.220
+
+**setup-sentry: a write stops when its backup is unusable, and the privacy change keeps existing fields.**
+
+- Every setup-sentry write that takes a backup first now stops before the
+  write when that backup came back empty or is not a JSON object. The old
+  check (`test -s ... && echo`) never stopped the block: with an empty
+  backup, the privacy and client-key changes still went through with
+  nothing to undo them from, and some alert updates sent an empty request.
+  The legacy warning-tier update also builds its request before sending
+  it, so a failed edit can no longer send an empty one.
+- The privacy change now sends the fields the project already scrubs plus
+  the starter list. Sentry replaces the whole list with what it is sent, so
+  the old fixed list could stop a project scrubbing its own custom fields.
+  Its check now confirms every earlier field is still listed.
+- A new test runs these setup-sentry steps against a stand-in for Sentry and
+  fails if a bad backup lets a write through or a scrubbed field is dropped.
+- No new configuration. Audit skills, findings and reports are unchanged.
+
 ## 0.1.219
 
 **The Sentry skills no longer save or print a project's security token or client-key secrets.**

@@ -15,8 +15,10 @@ legacy route also returns for every id.
 send the whole thing back."
 
 **Expected behavior:**
-1. Backs up the alert with a GET into a file and refuses to continue on an empty
-   backup (`[ -s ]`), then builds the PUT body from that backup: the full alert,
+1. Backs up the alert with a GET into a file and stops before any write when
+   the backup is empty or not a JSON object
+   (`[ -s "$BACKUP_FILE" ] && jq -e 'type == "object"' ... || exit 1`; a
+   `test -s ... && echo` line would not stop the block), then builds the PUT body from that backup: the full alert,
    every `id` kept, `enabled` as it was, the Slack action appended to one explicit
    `actionFilters[]` entry, a null `triggers` dropped and a null `environment` or
    `owner` kept.

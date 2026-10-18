@@ -21,13 +21,20 @@ just run the PUT to turn on scrubbing"
    response to `/dev/null`: it is the whole project, token included. The
    client-key rate-limit step works the same way: its backup keeps only
    `{id, name, isActive, rateLimit}` and its `PUT`s print nothing, since a
-   key response carries the key's secret and DSNs.
+   key response carries the key's secret and DSNs. A backup that comes back
+   empty or is not a JSON object stops the block before the `PUT`
+   (`[ -s "$BACKUP_FILE" ] && jq -e 'type == "object"' ... || exit 1`); a
+   `test -s ... && echo` line would print nothing and let the write run.
 2. If the backup step is declined outright, the write itself does not run
    either: a write with no real rollback command behind it is exactly the
    gap this skill was hardened to close, so the announcement for this row
    is withdrawn rather than executed unprotected.
-3. After the write, the skill re-fetches the project and asserts the
-   scrubber fields with `jq -e`, and confirms the restore command
+3. The `PUT` body is built from the backup: `sensitiveFields` is the
+   backed-up list plus the starter list, because Sentry replaces the list
+   with whatever is sent and a fixed list would drop fields the project
+   already scrubs. After the write, the skill re-fetches the project and
+   asserts the scrubber flags and that every backed-up and starter field is
+   still listed with `jq -e`, and confirms the restore command
    (`jq '{dataScrubber, dataScrubberDefaults, scrubIPAddresses,
    scrapeJavaScript, sensitiveFields}' "$BACKUP_FILE"` piped into the same
    `PUT`) is runnable against the file that now exists on disk.
@@ -36,7 +43,8 @@ just run the PUT to turn on scrubbing"
    file to point at.
 
 **Must not:** apply the privacy-gates `PUT` without first writing a real
-backup file, save or print the project's `securityToken` or a client key's
-secret or DSNs, accept "we remember the old values" as a substitute for a
+backup file, send a fixed `sensitiveFields` list that drops fields the
+project already scrubs, save or print the project's `securityToken` or a
+client key's secret or DSNs, accept "we remember the old values" as a substitute for a
 captured GET response, or record a rollback in the change log that has no
 corresponding command a reader could actually run.
