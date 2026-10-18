@@ -1,9 +1,10 @@
 #!/bin/sh
-# test-backup-and-privacy-blocks.sh — runs setup-sentry's own write blocks, as written, against a
+# test-backup-and-privacy-blocks.sh: runs setup-sentry's own write blocks, as written, against a
 # fake Sentry (a stand-in curl; nothing leaves this machine) and asserts that:
 #   1. no backup check uses the non-stopping `test -s "$BACKUP_FILE" && echo` form;
 #   2. every guarded write block stops, with no write sent, when its backup read comes back
-#      empty, not JSON, or refused, on both alert APIs;
+#      empty, not JSON, JSON null, or refused, on both alert APIs, and the legacy warning-tier
+#      update stops (instead of sending an empty PUT) when its edit of the backup fails;
 #   3. the privacy write keeps the fields a project already scrubs (Sentry replaces the
 #      sensitiveFields list with whatever is sent), and its verify step fails if one is missing.
 set -eu
@@ -21,7 +22,7 @@ if grep -n 'test -s "$BACKUP_FILE" && echo' "$SKILL" "$COOKBOOK"; then
 fi
 
 # Fake curl. The first GET of a single object is the block's backup read and gets FAULT_MODE
-# (empty | html | fail | none); other GETs get fixture JSON. A PUT/POST/DELETE is logged and its
+# (empty | html | null | notriggers | fail | none); other GETs get fixture JSON. A PUT/POST/DELETE is logged and its
 # body kept; a later GET of the project applies that body the way Sentry does (fields replaced),
 # minus STUB_DROP if set, so the verify step can be tested.
 mkdir -p "$WORK/bin"
@@ -51,6 +52,8 @@ if is '/(projects/[^/?]+/[^/?]+|keys/[^/?]+|workflows/[0-9]+|rules/[0-9]+|detect
   case "${FAULT_MODE:-none}" in
     empty) emit '' '200 application/json'; exit 0 ;;
     html)  emit '<html><body>Sign in</body></html>' '200 text/html'; exit 0 ;;
+    null)  emit 'null' '200 application/json'; exit 0 ;;
+    notriggers) emit '{"id":"12345678","name":"x"}' '200 application/json'; exit 0 ;;
     fail)  echo "curl: (22) The requested URL returned error: 403" >&2; exit 22 ;;
   esac
 fi
@@ -87,7 +90,7 @@ nguards=$(cat "$SKILL" "$COOKBOOK" | grep -c 'is empty or not a JSON object; not
 [ "$nblocks" -ge 8 ] || fail "expected at least 8 guarded write blocks, found $nblocks"
 [ "$nguards" -ge 12 ] || fail "expected at least 12 backup guards, found $nguards"
 
-# run_block <block> <alert api> <fault mode> [drop field] — prints the block's exit status
+# run_block <block> <alert api> <fault mode> [drop field]: prints the block's exit status
 run_block() {
   sed -e "s|^SENTRY_ALERT_API=\"workflows\"|SENTRY_ALERT_API=\"$2\"|" \
       -e 's|^ALERT_RULE_ID="your-metric-alert-id"|ALERT_RULE_ID="12345678"|' "$1" > "$WORK/run.sh"
@@ -106,7 +109,7 @@ runs=0
 for b in "$WORK"/blocks/*.sh; do
   apis="workflows"; grep -q '^SENTRY_ALERT_API=' "$b" && apis="workflows legacy"
   for api in $apis; do
-    for mode in empty html fail; do
+    for mode in empty html null fail; do
       rc="$(run_block "$b" "$api" "$mode")"
       [ "$rc" -ne 0 ] || fail "$(basename "$b") ($api, $mode backup) exited 0"
       [ ! -s "$WORK/state/writes.log" ] || fail "$(basename "$b") ($api, $mode backup) sent a write: $(cat "$WORK/state/writes.log")"
@@ -114,6 +117,18 @@ for b in "$WORK"/blocks/*.sh; do
     done
   done
 done
+
+# 2b) the legacy warning-tier update builds its body before the PUT: an object backup its edit
+#     cannot apply to (no triggers) must stop the block, never send an empty PUT
+wt=0
+for b in "$WORK"/blocks/*.sh; do
+  grep -q 'alert-rules/${ALERT_RULE_ID}/' "$b" || continue
+  wt=$((wt + 1))
+  rc="$(run_block "$b" legacy notriggers)"
+  [ "$rc" -ne 0 ] || fail "$(basename "$b"): legacy warning tier exited 0 on a backup without triggers"
+  [ ! -s "$WORK/state/writes.log" ] || fail "$(basename "$b"): legacy warning tier sent a write when its edit failed: $(cat "$WORK/state/writes.log")"
+done
+[ "$wt" -eq 1 ] || fail "expected one legacy warning-tier block, found $wt"
 
 # 3) the privacy write keeps existing fields, and its verify catches a dropped one
 privacy=0

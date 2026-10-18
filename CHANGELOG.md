@@ -10,7 +10,8 @@
   backup, the privacy and client-key changes still went through with
   nothing to undo them from, and some alert updates sent an empty request.
   The legacy warning-tier update also builds its request before sending
-  it, so a failed edit can no longer send an empty one.
+  it, so a failed edit can no longer send an empty one, and the client-key
+  backup is reduced to its four fields only when Sentry returned a key.
 - The privacy change now sends the fields the project already scrubs plus
   the starter list. Sentry replaces the whole list with what it is sent, so
   the old fixed list could stop a project scrubbing its own custom fields.

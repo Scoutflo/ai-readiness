@@ -127,7 +127,7 @@ mkdir -p "$(dirname "$BACKUP_FILE")"
 # The key's secret and DSNs are not saved; the backup keeps what the restore reads.
 KEY_JSON="$(curl -fsS --max-time 10 "${API}/projects/${SENTRY_ORG}/${PROJECT}/keys/${KEY_ID}/" \
   -H "Authorization: Bearer ${SENTRY_TOKEN}")"
-printf '%s\n' "$KEY_JSON" | jq '{id, name, isActive, rateLimit}' > "$BACKUP_FILE"
+printf '%s\n' "$KEY_JSON" | jq 'if type == "object" then {id, name, isActive, rateLimit} else empty end' > "$BACKUP_FILE"
 [ -s "$BACKUP_FILE" ] && jq -e 'type == "object"' "$BACKUP_FILE" > /dev/null \
   || { echo "backup at ${BACKUP_FILE} is empty or not a JSON object; not writing" >&2; exit 1; }
 echo "backup: ${BACKUP_FILE}"
