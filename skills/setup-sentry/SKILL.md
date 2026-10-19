@@ -332,32 +332,34 @@ BACKUP_FILE="${BACKUP_DIR}/project-${PROJECT}-$(date -u +%H%M%S).json"
 PROJ_JSON="$(curl -fsS --max-time 10 "${API}/projects/${SENTRY_ORG}/${PROJECT}/" \
   -H "Authorization: Bearer ${SENTRY_TOKEN}")"
 printf '%s\n' "$PROJ_JSON" | jq 'del(.securityToken)' > "$BACKUP_FILE"
-test -s "$BACKUP_FILE" && echo "backup: ${BACKUP_FILE}"
+[ -s "$BACKUP_FILE" ] && jq -e 'type == "object"' "$BACKUP_FILE" > /dev/null \
+  || { echo "backup at ${BACKUP_FILE} is empty or not a JSON object; not writing" >&2; exit 1; }
+echo "backup: ${BACKUP_FILE}"
 
-# 2. The write, announced with real values before it runs. Its response is the
-#    whole project, securityToken included, so it is not printed; step 3 verifies.
+# 2. The write, announced with real values before it runs. Sentry replaces the
+#    sensitiveFields list with what is sent, so the body sends the backed-up list
+#    plus the starter list: no field the project already scrubs is dropped. Its
+#    response is the whole project, securityToken included, so it is not printed;
+#    step 3 verifies.
+STARTER_FIELDS='["email", "password", "secret", "token", "api_key", "authorization",
+  "cookie", "otp", "pin", "phone", "mobile", "code", "database_url",
+  "dsn", "client_secret", "refresh_token", "access_token", "session"]'
+BODY="$(jq --argjson s "$STARTER_FIELDS" '{dataScrubber: true, dataScrubberDefaults: true,
+  scrubIPAddresses: true, scrapeJavaScript: false,
+  sensitiveFields: (((.sensitiveFields // []) + $s) | unique)}' "$BACKUP_FILE")"
 curl -fsS --max-time 10 -o /dev/null -X PUT "${API}/projects/${SENTRY_ORG}/${PROJECT}/" \
-  -H "Authorization: Bearer ${SENTRY_TOKEN}" -H "Content-Type: application/json" \
-  -d '{
-    "dataScrubber": true,
-    "dataScrubberDefaults": true,
-    "scrubIPAddresses": true,
-    "scrapeJavaScript": false,
-    "sensitiveFields": [
-      "email", "password", "secret", "token", "api_key", "authorization",
-      "cookie", "otp", "pin", "phone", "mobile", "code", "database_url",
-      "dsn", "client_secret", "refresh_token", "access_token", "session"
-    ]
-  }'
+  -H "Authorization: Bearer ${SENTRY_TOKEN}" -H "Content-Type: application/json" -d "$BODY"
 
-# 3. Verify by re-fetch, machine-checkable:
+# 3. Verify by re-fetch: the four flags, and every backed-up and starter field still listed.
 curl -fsS --max-time 10 "${API}/projects/${SENTRY_ORG}/${PROJECT}/" \
   -H "Authorization: Bearer ${SENTRY_TOKEN}" \
-  | jq -e '.dataScrubber == true and .dataScrubberDefaults == true and .scrubIPAddresses == true
-           and .scrapeJavaScript == false and (.sensitiveFields | index("dsn")) != null'
+  | jq -e --slurpfile b "$BACKUP_FILE" --argjson s "$STARTER_FIELDS" \
+      '.dataScrubber == true and .dataScrubberDefaults == true and .scrubIPAddresses == true
+       and .scrapeJavaScript == false
+       and ((($b[0].sensitiveFields // []) + $s) - (.sensitiveFields // []) | length) == 0'
 ```
 
-Expect: the backup file is non-empty, and the final `jq -e` exits 0. Add domain-specific field names your app actually sends to the `sensitiveFields` list; the starting list is in [references/api-cookbook.md#sensitive-fields](references/api-cookbook.md#sensitive-fields).
+Expect: the backup file is a non-empty JSON object (otherwise the block stops before the write), and the final `jq -e` exits 0. Add domain-specific field names your app actually sends to `STARTER_FIELDS`; the fields the project already scrubs are kept either way. The starting list is in [references/api-cookbook.md#sensitive-fields](references/api-cookbook.md#sensitive-fields).
 
 **Restore pair, run as written when this write must be undone:**
 
@@ -402,8 +404,10 @@ BACKUP_FILE="${BACKUP_DIR}/key-${KEY_ID}-$(date -u +%H%M%S).json"
 # The key's secret and DSNs are not saved; the backup keeps what the restore reads.
 KEY_JSON="$(curl -fsS --max-time 10 "${API}/projects/${SENTRY_ORG}/${PROJECT}/keys/${KEY_ID}/" \
   -H "Authorization: Bearer ${SENTRY_TOKEN}")"
-printf '%s\n' "$KEY_JSON" | jq '{id, name, isActive, rateLimit}' > "$BACKUP_FILE"
-test -s "$BACKUP_FILE" && echo "backup: ${BACKUP_FILE}"
+printf '%s\n' "$KEY_JSON" | jq 'if type == "object" then {id, name, isActive, rateLimit} else empty end' > "$BACKUP_FILE"
+[ -s "$BACKUP_FILE" ] && jq -e 'type == "object"' "$BACKUP_FILE" > /dev/null \
+  || { echo "backup at ${BACKUP_FILE} is empty or not a JSON object; not writing" >&2; exit 1; }
+echo "backup: ${BACKUP_FILE}"
 
 # The response is the whole key, secret and DSNs included, so it is not printed.
 curl -fsS --max-time 10 -o /dev/null -X PUT "${API}/projects/${SENTRY_ORG}/${PROJECT}/keys/${KEY_ID}/" \
@@ -600,7 +604,9 @@ if [ "${SENTRY_ALERT_API}" = workflows ]; then
   # 1. Backup the exact alert body (GET-before-write), so it can be recreated:
   curl -fsS --max-time 10 "${API}/organizations/${SENTRY_ORG}/workflows/${RULE_ID}/" \
     -H "Authorization: Bearer ${SENTRY_TOKEN}" > "$BACKUP_FILE"
-  test -s "$BACKUP_FILE" && echo "backup: ${BACKUP_FILE}"
+  [ -s "$BACKUP_FILE" ] && jq -e 'type == "object"' "$BACKUP_FILE" > /dev/null \
+    || { echo "backup at ${BACKUP_FILE} is empty or not a JSON object; not writing" >&2; exit 1; }
+  echo "backup: ${BACKUP_FILE}"
   # Confirm the match by assertion: only an untouched, auto-created high-priority alert on this project is deleted here.
   jq -e --arg isd "$ISD" '.createdBy == null and (.name | ascii_downcase | contains("high priority"))
       and any((.detectorIds // [])[]; . == $isd)' "$BACKUP_FILE" > /dev/null \
@@ -624,7 +630,9 @@ else
   # 1. Backup the exact rule body (GET-before-write), so it can be recreated:
   curl -fsS --max-time 10 "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/${RULE_ID}/" \
     -H "Authorization: Bearer ${SENTRY_TOKEN}" > "$BACKUP_FILE"
-  test -s "$BACKUP_FILE" && echo "backup: ${BACKUP_FILE}"
+  [ -s "$BACKUP_FILE" ] && jq -e 'type == "object"' "$BACKUP_FILE" > /dev/null \
+    || { echo "backup at ${BACKUP_FILE} is empty or not a JSON object; not writing" >&2; exit 1; }
+  echo "backup: ${BACKUP_FILE}"
   # Confirm the match by assertion: only an untouched, auto-created high-priority rule is deleted here.
   jq -e '.createdBy == null and (.name | ascii_downcase | contains("high priority"))' "$BACKUP_FILE" > /dev/null \
     || { echo "rule ${RULE_ID} is not the auto-created default rule; not deleting" >&2; exit 1; }
@@ -713,7 +721,9 @@ if [ "${SENTRY_ALERT_API}" = workflows ]; then
   # 1. Backup (GET-before-write), run as written:
   curl -fsS --max-time 10 "${API}/organizations/${SENTRY_ORG}/workflows/${RULE_ID}/" \
     -H "Authorization: Bearer ${SENTRY_TOKEN}" > "$BACKUP_FILE"
-  test -s "$BACKUP_FILE" && echo "backup: ${BACKUP_FILE}"
+  [ -s "$BACKUP_FILE" ] && jq -e 'type == "object"' "$BACKUP_FILE" > /dev/null \
+    || { echo "backup at ${BACKUP_FILE} is empty or not a JSON object; not writing" >&2; exit 1; }
+  echo "backup: ${BACKUP_FILE}"
 
   # 2. Append the Slack action to the chosen filter, then PUT the whole alert back from the backup:
   #    every id kept, enabled as it was. A null triggers is dropped (the endpoint rejects it);
@@ -745,7 +755,9 @@ else
   # 1. Backup (GET-before-write), run as written:
   curl -fsS --max-time 10 "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/${RULE_ID}/" \
     -H "Authorization: Bearer ${SENTRY_TOKEN}" > "$BACKUP_FILE"
-  test -s "$BACKUP_FILE" && echo "backup: ${BACKUP_FILE}"
+  [ -s "$BACKUP_FILE" ] && jq -e 'type == "object"' "$BACKUP_FILE" > /dev/null \
+    || { echo "backup at ${BACKUP_FILE} is empty or not a JSON object; not writing" >&2; exit 1; }
+  echo "backup: ${BACKUP_FILE}"
 
   # 2. Patch the actions array from the backup, full-payload PUT:
   UPDATED="$(jq --arg ws "$SLACK_INTEGRATION_ID" --arg ch "$SLACK_CHANNEL" --arg cid "$SLACK_CHANNEL_ID" \

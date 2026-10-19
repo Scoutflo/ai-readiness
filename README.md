@@ -97,6 +97,8 @@ Green = read-only (safe, changes nothing) · amber = write, gated behind your co
 
 ## What's new (latest release)
 
+- **Safer Sentry setup.** A Sentry setup step no longer makes a change when its backup came back empty or unreadable, and the privacy step now keeps the fields your projects already scrub instead of replacing them.
+
 - **The Sentry skills no longer save or print a project's security token or client-key secrets.** Sentry's project details include a security token, and its client keys include a secret. The Sentry audit printed both, and saved the token in its raw files. The Sentry setup saved both in its backups. Both skills now drop them first.
 
 - **Sentry audits work again on sentry.io.** Sentry removed its old alert API in late September, which made the Sentry audit report no metric alerts and stop early. Both Sentry skills now use Sentry's new alerts API, and keep the old one only for self-hosted Sentry that still has it.

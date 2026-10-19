@@ -61,7 +61,7 @@ Expect: exit 0. Allow a few seconds for ingestion before the read; retry once be
 
 ### Sensitive fields
 
-Starting list for `sensitiveFields`; add domain-specific field names your app actually sends:
+Starting list for `sensitiveFields`. It is added to the fields the project already scrubs, never in place of them. Add domain-specific field names your app actually sends:
 
 ```
 email, password, secret, token, api_key, authorization, cookie, otp, pin,
@@ -85,30 +85,31 @@ mkdir -p "$(dirname "$BACKUP_FILE")"
 PROJ_JSON="$(curl -fsS --max-time 10 "${API}/projects/${SENTRY_ORG}/${PROJECT}/" \
   -H "Authorization: Bearer ${SENTRY_TOKEN}")"
 printf '%s\n' "$PROJ_JSON" | jq 'del(.securityToken)' > "$BACKUP_FILE"
-test -s "$BACKUP_FILE" && echo "backup: ${BACKUP_FILE}"
+[ -s "$BACKUP_FILE" ] && jq -e 'type == "object"' "$BACKUP_FILE" > /dev/null \
+  || { echo "backup at ${BACKUP_FILE} is empty or not a JSON object; not writing" >&2; exit 1; }
+echo "backup: ${BACKUP_FILE}"
 
-# The response is the whole project, securityToken included, so it is not printed.
+# Sentry replaces sensitiveFields with what is sent, so the body sends the backed-up
+# list plus the starter list. The response is the whole project, securityToken
+# included, so it is not printed.
+STARTER_FIELDS='["email", "password", "secret", "token", "api_key", "authorization",
+  "cookie", "otp", "pin", "phone", "mobile", "code", "database_url",
+  "dsn", "client_secret", "refresh_token", "access_token", "session"]'
+BODY="$(jq --argjson s "$STARTER_FIELDS" '{dataScrubber: true, dataScrubberDefaults: true,
+  scrubIPAddresses: true, scrapeJavaScript: false,
+  sensitiveFields: (((.sensitiveFields // []) + $s) | unique)}' "$BACKUP_FILE")"
 curl -fsS --max-time 10 -o /dev/null -X PUT "${API}/projects/${SENTRY_ORG}/${PROJECT}/" \
-  -H "Authorization: Bearer ${SENTRY_TOKEN}" -H "Content-Type: application/json" \
-  -d '{
-    "dataScrubber": true,
-    "dataScrubberDefaults": true,
-    "scrubIPAddresses": true,
-    "scrapeJavaScript": false,
-    "sensitiveFields": [
-      "email", "password", "secret", "token", "api_key", "authorization",
-      "cookie", "otp", "pin", "phone", "mobile", "code", "database_url",
-      "dsn", "client_secret", "refresh_token", "access_token", "session"
-    ]
-  }'
+  -H "Authorization: Bearer ${SENTRY_TOKEN}" -H "Content-Type: application/json" -d "$BODY"
 
 curl -fsS --max-time 10 "${API}/projects/${SENTRY_ORG}/${PROJECT}/" \
   -H "Authorization: Bearer ${SENTRY_TOKEN}" \
-  | jq -e '.dataScrubber == true and .dataScrubberDefaults == true and .scrubIPAddresses == true
-           and .scrapeJavaScript == false and (.sensitiveFields | index("dsn")) != null'
+  | jq -e --slurpfile b "$BACKUP_FILE" --argjson s "$STARTER_FIELDS" \
+      '.dataScrubber == true and .dataScrubberDefaults == true and .scrubIPAddresses == true
+       and .scrapeJavaScript == false
+       and ((($b[0].sensitiveFields // []) + $s) - (.sensitiveFields // []) | length) == 0'
 ```
 
-Expect: exit 0. Undo it with the privacy restore block in [../SKILL.md#privacy-gates](../SKILL.md#privacy-gates), `BACKUP_FILE` set to the printed backup path.
+Expect: exit 0. The backup must be a non-empty JSON object or the block stops before the write, and every field in the backup and the starter list must still be listed. Undo it with the privacy restore block in [../SKILL.md#privacy-gates](../SKILL.md#privacy-gates), `BACKUP_FILE` set to the printed backup path.
 
 ### Client-key rate limits
 
@@ -126,8 +127,10 @@ mkdir -p "$(dirname "$BACKUP_FILE")"
 # The key's secret and DSNs are not saved; the backup keeps what the restore reads.
 KEY_JSON="$(curl -fsS --max-time 10 "${API}/projects/${SENTRY_ORG}/${PROJECT}/keys/${KEY_ID}/" \
   -H "Authorization: Bearer ${SENTRY_TOKEN}")"
-printf '%s\n' "$KEY_JSON" | jq '{id, name, isActive, rateLimit}' > "$BACKUP_FILE"
-test -s "$BACKUP_FILE" && echo "backup: ${BACKUP_FILE}"
+printf '%s\n' "$KEY_JSON" | jq 'if type == "object" then {id, name, isActive, rateLimit} else empty end' > "$BACKUP_FILE"
+[ -s "$BACKUP_FILE" ] && jq -e 'type == "object"' "$BACKUP_FILE" > /dev/null \
+  || { echo "backup at ${BACKUP_FILE} is empty or not a JSON object; not writing" >&2; exit 1; }
+echo "backup: ${BACKUP_FILE}"
 
 # The response is the whole key, secret and DSNs included, so it is not printed.
 curl -fsS --max-time 10 -o /dev/null -X PUT "${API}/projects/${SENTRY_ORG}/${PROJECT}/keys/${KEY_ID}/" \
@@ -494,7 +497,9 @@ if [ "${SENTRY_ALERT_API}" = workflows ]; then
   # 1. Backup (GET-before-write):
   curl -fsS --max-time 10 "${API}/organizations/${SENTRY_ORG}/workflows/${RULE_ID}/" \
     -H "Authorization: Bearer ${SENTRY_TOKEN}" > "$BACKUP_FILE"
-  test -s "$BACKUP_FILE" && echo "backup: ${BACKUP_FILE}"
+  [ -s "$BACKUP_FILE" ] && jq -e 'type == "object"' "$BACKUP_FILE" > /dev/null \
+    || { echo "backup at ${BACKUP_FILE} is empty or not a JSON object; not writing" >&2; exit 1; }
+  echo "backup: ${BACKUP_FILE}"
   # Refuse a regression alert: an age gate would hide exactly the old issues it exists to catch.
   jq -e 'any((.triggers.conditions // [])[]; .type == "regression_event") | not' "$BACKUP_FILE" > /dev/null \
     || { echo "alert ${RULE_ID} has a regression trigger; slow it with frequency alone, no age gate" >&2; exit 1; }
@@ -522,7 +527,9 @@ else
   # 1. Backup (GET-before-write):
   curl -fsS --max-time 10 "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/${RULE_ID}/" \
     -H "Authorization: Bearer ${SENTRY_TOKEN}" > "$BACKUP_FILE"
-  test -s "$BACKUP_FILE" && echo "backup: ${BACKUP_FILE}"
+  [ -s "$BACKUP_FILE" ] && jq -e 'type == "object"' "$BACKUP_FILE" > /dev/null \
+    || { echo "backup at ${BACKUP_FILE} is empty or not a JSON object; not writing" >&2; exit 1; }
+  echo "backup: ${BACKUP_FILE}"
 
   # 2. Env-scope + age-gate + slow re-notify, full-object PUT:
   UPDATED="$(jq --arg env "$TARGET_ENV" --argjson days "$RULE_AGE_GATE_DAYS" --argjson freq "$SLOW_RENOTIFY_MIN" \
@@ -566,7 +573,9 @@ if [ "${SENTRY_ALERT_API}" = workflows ]; then
   # 1. Backup this metric monitor's full body, and confirm it is one:
   curl -fsS --max-time 10 "${API}/organizations/${SENTRY_ORG}/detectors/${ALERT_RULE_ID}/" \
     -H "Authorization: Bearer ${SENTRY_TOKEN}" > "$BACKUP_FILE"
-  test -s "$BACKUP_FILE" && echo "backup: ${BACKUP_FILE}"
+  [ -s "$BACKUP_FILE" ] && jq -e 'type == "object"' "$BACKUP_FILE" > /dev/null \
+    || { echo "backup at ${BACKUP_FILE} is empty or not a JSON object; not writing" >&2; exit 1; }
+  echo "backup: ${BACKUP_FILE}"
   jq -e '.type == "metric_issue" and any(.conditionGroup.conditions[]; .conditionResult == 50)' "$BACKUP_FILE" > /dev/null \
     || { echo "monitor ${ALERT_RULE_ID} is not a metric monitor with a warning condition; nothing to remove" >&2; exit 1; }
 
@@ -588,12 +597,16 @@ else
   # 1. Backup this metric alert's full body:
   curl -fsS --max-time 10 "${API}/organizations/${SENTRY_ORG}/alert-rules/${ALERT_RULE_ID}/" \
     -H "Authorization: Bearer ${SENTRY_TOKEN}" > "$BACKUP_FILE"
-  test -s "$BACKUP_FILE" && echo "backup: ${BACKUP_FILE}"
+  [ -s "$BACKUP_FILE" ] && jq -e 'type == "object"' "$BACKUP_FILE" > /dev/null \
+    || { echo "backup at ${BACKUP_FILE} is empty or not a JSON object; not writing" >&2; exit 1; }
+  echo "backup: ${BACKUP_FILE}"
 
   # 2. Remove the WARNING trigger entirely (keep critical). Stripping its action
   #    instead is rejected: "Each trigger must have an associated action for this
   #    alert to fire." Record the removed trigger so it can be restored.
-  jq '.triggers |= map(select(.label != "warning"))' "$BACKUP_FILE" \
+  #    The body is built first, so a jq failure stops the block instead of sending an empty PUT.
+  BODY="$(jq '.triggers |= map(select(.label != "warning"))' "$BACKUP_FILE")"
+  printf '%s' "$BODY" \
     | curl -fsS --max-time 10 -X PUT "${API}/organizations/${SENTRY_ORG}/alert-rules/${ALERT_RULE_ID}/" \
         -H "Authorization: Bearer ${SENTRY_TOKEN}" -H "Content-Type: application/json" -d @-
 
