@@ -136,6 +136,15 @@ these two classes existed; these steps are what caught them.
   doctor gate degrades to report-only (C21). A single block ignores
   `SCOUTFLO_TARGET` (it has one target), so `audit-all` can set one audit's label
   without stopping another.
+- **Default-name token steps on a list (v0.1.223):** some check steps read one token
+  per tool by its default name (PagerDuty, Datadog, ELK, Grafana, Groundcover, JSM, Zenduty, Sentry, GitHub, the DigitalOcean cost and map steps, and LGTM stacks that name their own `*_token_env`). On a list whose targets each name their own
+  token variable, those steps stop and ask for one config per target, because they
+  cannot tell whose token the default name holds; a list whose targets name no token
+  variable runs as before (C13).
+- **Enumerator, awk path (v0.1.223):** without yq, the first content line under a key
+  decides list versus single block, and a `- ` line nested deeper (a block-style
+  `teams:` list inside a target) is a value, never a new target. Before this, a single
+  block with a nested list read as a list of targets on machines without yq.
 - **Reference implementation:** `audit-azure` (`AZ_KIND`/`AZ_N`/`AZ_IDX`/
   `AZ_LABEL`/`AZ_SEG`).
 - **Guards:** `ci/multi-target-parity-check.sh`; `tests/test-target-guard.sh` (every
@@ -326,12 +335,33 @@ these two classes existed; these steps are what caught them.
   point the operator at that same writer and name the precise cause when a token
   is present but not loading (missing `export ` prefix / malformed line /
   shell-only).
+- **Every step that needs a secret (v0.1.223):** each block runs in a fresh shell, so the
+  doctor gate's load of the store does not carry over. In the audits, `map-topology`,
+  `map-repos` and `rca`, a step that did not already load the store reads from it only
+  the secret it needs, never the whole file: a read of `printenv "$<name variable>"`
+  reads that variable from the store or the shell (the store wins, as in the doctor); a
+  read by the default name (or `doctl`, which reads `DIGITALOCEAN_ACCESS_TOKEN` itself)
+  takes the value of the variable the single config block's `*_env` key names, is left
+  unset when that variable is unset (`doctl` steps stop instead, so doctl never falls
+  back to its own login), and is left exactly as before when the config names no
+  variable (a note names the configured variable when it is unset). Those reads bring
+  nothing else from the store (`SCOUTFLO_AUDIT_DIR`, `KUBECONFIG`, another environment's
+  secrets); steps that already loaded the whole store (the doctor gates, a few check
+  steps) are unchanged. In `audit-lgtm` a top-level store block is bound only when
+  `lgtm` is not a list, since list stacks carry their own stores. Left out on purpose:
+  `connect`, every setup skill (`setup-digitalocean` and `setup-gcp` compare the shell
+  environment against the store; `setup-sentry` keeps its elevated-token bind),
+  `migration-plan` (its multi-target plan reads every label), the Slack webhook, and
+  identity selectors such as key-file paths.
 - **Guards:** `ci/scope-checkpoint-check.sh`, `ci/redaction-parity-check.sh`,
   `ci/env-load-parity-check.sh` (asserts the layered resolver in every `audit-*`
   **and** in `doctor.sh`), `ci/leak-scan.sh`,
   `tests/test-connect-addsecret.sh` (writer round-trip incl. special chars,
   replace-not-append, no value leak, `chmod 600`, bad-name/empty rejection),
-  `tests/test-doctor-env-hints.sh` (the three env-missing hint branches).
+  `tests/test-doctor-env-hints.sh` (the three env-missing hint branches),
+  `tests/test-store-token-import.sh` (every secret read in an in-scope step takes its
+  value from the configured variable; published preludes run against the store ladder,
+  custom names, unset names, lists, a malformed store, doctl and LGTM stacks).
   Selftest: `layer_parity`.
 
 ## C14 — Cross-tool coverage correlation (a gap in one tool covered by another)

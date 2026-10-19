@@ -29,7 +29,7 @@ run_case() {
   raw="$WORK/aud/sentry/$(date -u +%Y-%m-%d)/raw"
   rm -rf "$WORK/aud"; mkdir -p "$raw"
   printf '%s\n' "$1" > "$raw/stats-projects.json"
-  ( cd "$WORK" && SCOUTFLO_AUDIT_DIR="$WORK/aud" PATH="$WORK/bin:$PATH" SENTRY_TOKEN="example-not-a-secret" \
+  ( cd "$WORK" && HOME="$WORK/home" SCOUTFLO_ENV_FILE= SCOUTFLO_CONFIG= SCOUTFLO_AUDIT_DIR="$WORK/aud" PATH="$WORK/bin:$PATH" SENTRY_TOKEN="example-not-a-secret" \
       sh "$WORK/block.sh" ) < /dev/null
 }
 

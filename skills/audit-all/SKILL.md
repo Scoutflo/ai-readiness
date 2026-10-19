@@ -139,7 +139,7 @@ Show the plan before running anything: every queued audit in order, and every sk
 
 ## Phase 2: Run each audit
 
-Run the queued audits one at a time, in the table's order, each exactly per its own `SKILL.md`: its doctor gate, its checks, its `findings.json` and `report.md`. An own-block audit whose integration is a labeled list iterates **every** target per its own SKILL.md (running its full sequence once per label with `SCOUTFLO_TARGET=<label>` set) — never collapse a labeled list to its first target; each target writes its own `<integration>/<label>/<date>/` directory, which the Phase 3 roll-ups and Phase 3.5 correlation already aggregate. Two overrides apply under orchestration:
+Run the queued audits one at a time, in the table's order, each exactly per its own `SKILL.md`: its doctor gate, its checks, its `findings.json` and `report.md`. An own-block audit whose integration is a labeled list iterates **every** target per its own SKILL.md (running its full sequence once per label with `SCOUTFLO_TARGET=<label>` set) — never collapse a labeled list to its first target; each target writes its own `<integration>/<label>/<date>/` directory, which the Phase 3 roll-ups and Phase 3.5 correlation already aggregate. For an audit whose check steps read one credential per tool (its multi-target note says so), a list whose targets each name their own credential variable stops at those steps: mark that audit `blocked` with that reason, and offer the per-target route (a config file per target, run with its own `SCOUTFLO_CONFIG` and `SCOUTFLO_AUDIT_DIR`). Two overrides apply under orchestration:
 
 1. Individual audits send no Slack brief. The combined brief in Phase 5 is the run's only message.
 2. A failure in one audit never stops the others.

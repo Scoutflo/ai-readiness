@@ -107,6 +107,8 @@ wires a feature rather than just having a section for it:
   store `~/.scoutflo/env` in its doctor gate, exactly as `/scoutflo:doctor` does, so a
   credential added to the store (even mid-session) is picked up in the same run — no
   "doctor is green but the audit says the token isn't set" asymmetry.
+  `tests/test-store-token-import.sh` extends this to every later step: a step reads
+  from the store only the secret it needs, by the variable the config names.
 
 These are *behavioral* gates (does the skill act?), distinct from the structural
 completeness gate (does the section exist?). Correlation readiness is enforced in
