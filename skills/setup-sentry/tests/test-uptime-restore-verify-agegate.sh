@@ -283,8 +283,9 @@ done
 BV="$WORK/blocks/bulk-verify.1.sh"
 if [ -f "$BV" ]; then
   # an unfilled id must never yield a "gone (404)" line for a rule nobody named
-  reset; fixture "$ORG/workflows/12345678/" '{"detail":"The requested resource does not exist"}' 404
-  sed -e 's|^CHANGE="updated"|CHANGE="deleted"|' "$BV" > "$WORK/run.sh"; run
+  # (PROJECT is filled so only the rule-id refusal can stop it; the unfilled id's URL answers the JSON 404)
+  reset; fixture "$ORG/workflows/<rule-id>/" '{"detail":"The requested resource does not exist"}' 404
+  sed -e 's|^CHANGE="updated"|CHANGE="deleted"|' -e 's|"<project-slug>"|"checkout"|' "$BV" > "$WORK/run.sh"; run
   [ "$RC" -ne 0 ] && [ "$(nrequests)" -eq 0 ] || fail "bulk verify: ran with its rule id unfilled"
   for api in workflows legacy; do
     if [ "$api" = workflows ]; then p="$ORG/workflows/12345678/"; ok='{"id":"12345678","enabled":true,"config":{"frequency":1440}}'; bad='{"id":"12345678","enabled":true,"config":{"frequency":60}}'
@@ -365,15 +366,30 @@ if [ -f "$AG" ]; then
   reset
   fixture "$ORG/workflows/12345678/" "$ALERT"; fixture "$ORG/detectors/?project=checkout" "$MONITORS"; fixture "$PROJ/environments/" "$ENVS"
   after_put "$ORG/workflows/12345678/" "$(printf '%s' "$ALERT" | jq -c '.environment = "production" | .config.frequency = 1440
-      | .actionFilters += [{"id":"77","logicType":"any","conditions":[{"id":"78","type":"age_comparison","comparison":{"comparisonType":"newer","time":"day","value":7},"conditionResult":true}],"actions":[]}]')"
+      | .actionFilters += [{"id":"77","logicType":"all","conditions":[{"id":"78","type":"age_comparison","comparison":{"comparisonType":"newer","time":"day","value":7},"conditionResult":true}],"actions":[]}]')"
   prep "$AG" workflows; run
   [ "$RC" -ne 0 ] || fail "age gate (alerts API): verify passed with the age gate in a different filter"
+  # ... and the backed-up filter must still be all-match: the gate in filter 9 under an any filter fails it
+  reset
+  fixture "$ORG/workflows/12345678/" "$ALERT"; fixture "$ORG/detectors/?project=checkout" "$MONITORS"; fixture "$PROJ/environments/" "$ENVS"
+  after_put "$ORG/workflows/12345678/" "$(printf '%s' "$ALERT" | jq -c '.environment = "production" | .config.frequency = 1440
+      | .actionFilters[0].logicType = "any"
+      | .actionFilters[0].conditions += [{"id":"78","type":"age_comparison","comparison":{"comparisonType":"newer","time":"day","value":7},"conditionResult":true}]')"
+  prep "$AG" workflows; run
+  [ "$RC" -ne 0 ] || fail "age gate (alerts API): verify passed with the backed-up filter no longer all-match"
   age_gate legacy "$RULE" "$ENVS"
   applied "age gate (legacy)" "PUT $PROJ/rules/12345678/"
   jq -e '.filterMatch == "all" and .environment == "production" and .frequency == 1440
       and any(.filters[]; .id == "sentry.rules.filters.age_comparison.AgeComparisonFilter"
               and .comparison_type == "newer" and .value == 7)' "$STATE/last-body.json" > /dev/null 2>&1 \
     || fail "age gate (legacy): wrong PUT body: $(tr -d "\n" < "$STATE/last-body.json")"
+  # the legacy verify checks the age filter's values, not its presence: an "older" filter fails it
+  reset
+  fixture "$PROJ/rules/12345678/" "$RULE"; fixture "$PROJ/environments/" "$ENVS"
+  after_put "$PROJ/rules/12345678/" "$(printf '%s' "$RULE" | jq -c '.environment = "production" | .frequency = 1440
+      | .filters += [{"id":"sentry.rules.filters.age_comparison.AgeComparisonFilter","comparison_type":"older","time":"day","value":7}]')"
+  prep "$AG" legacy; run
+  [ "$RC" -ne 0 ] || fail "age gate (legacy): verify passed with an age filter that is not newer than the announced days"
   for match in any none; do
     age_gate legacy "$(printf '%s' "$RULE" | jq -c --arg m "$match" '.filterMatch = $m')" "$ENVS"
     refused "age gate (legacy, filterMatch $match)" "filterMatch other than all"

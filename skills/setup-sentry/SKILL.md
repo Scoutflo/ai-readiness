@@ -1018,7 +1018,7 @@ MONITOR_SLUG="<monitor-slug>"   # the slug of the monitor this setup created
 case "$MONITOR_SLUG" in ''|'<'*) echo "Set MONITOR_SLUG to the monitor this setup created" >&2; exit 1 ;; esac
 MONITOR_API_URL="${API}/organizations/${SENTRY_ORG}/monitors/${MONITOR_SLUG}/"
 
-# The create block sets both the name and the slug to MONITOR_SLUG: refuse any other monitor.
+# The create block sets both the name and the slug to MONITOR_SLUG: refuse a monitor whose slug or name differs.
 curl -fsS --max-time 10 "$MONITOR_API_URL" -H "Authorization: Bearer ${SENTRY_TOKEN}" \
   | jq -e --arg s "$MONITOR_SLUG" '.slug == $s and .name == $s' > /dev/null \
   || { echo "monitor ${MONITOR_SLUG} is not the one this setup created (slug and name must both be ${MONITOR_SLUG}); not deleting" >&2; exit 1; }
