@@ -97,6 +97,8 @@ Green = read-only (safe, changes nothing) · amber = write, gated behind your co
 
 ## What's new (latest release)
 
+- **Saved tokens reach every step.** A token saved with `/scoutflo:connect` is now read by every audit step that needs it, not just the first check, and each step uses the exact variable your config names. With several targets that each have their own token, a step that cannot tell which one to use stops and asks instead of guessing.
+
 - **A mistyped target label stops instead of auditing the wrong target.** With several targets for one tool, a `SCOUTFLO_TARGET` that matches none of them now stops and lists the valid labels, instead of quietly auditing the first one.
 
 - **More accurate Sentry audit, safer Sentry setup.** A read Sentry refuses now shows as blocked rather than a pass or fail, three checks give the right verdict, uptime monitors use Sentry's new alerts API, and every undo step refuses a bad backup.

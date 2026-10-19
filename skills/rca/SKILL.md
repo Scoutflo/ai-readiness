@@ -24,7 +24,7 @@ rca needs `jq` and **either** local reports **or** live cluster access. It sourc
 set -eu
 command -v jq >/dev/null || { echo "missing binary: jq"; exit 1; }
 # Source the secret store the same way doctor/audits do (degrade, never abort).
-SCOUTFLO_ENV="${HOME}/.scoutflo/env"
+SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.scoutflo/env" ]; then SCOUTFLO_ENV="./.scoutflo/env"; else SCOUTFLO_ENV="$HOME/.scoutflo/env"; fi; }
 if [ -f "$SCOUTFLO_ENV" ]; then set +eu; . "$SCOUTFLO_ENV" || echo "rca: warning: could not source $SCOUTFLO_ENV"; set -eu; fi
 # Redaction + live-evidence libraries (read-only; the live path is guarded there).
 . "${CLAUDE_PLUGIN_ROOT}/skills/redaction/lib/redaction.sh" 2>/dev/null || true

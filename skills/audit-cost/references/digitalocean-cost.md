@@ -65,6 +65,12 @@ Inventory every Droplet once, keeping the fields the three Droplet checks need. 
 
 ```bash
 set -eu
+SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.scoutflo/env" ]; then SCOUTFLO_ENV="./.scoutflo/env"; else SCOUTFLO_ENV="$HOME/.scoutflo/env"; fi; }
+_SF_CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$_SF_CFG" ] || for _sf_c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_sf_c" ] && { _SF_CFG="$_sf_c"; break; }; done
+_SF_TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+if [ "$(sh "$_SF_TT" "$_SF_CFG" digitalocean kind 2>/dev/null || true)" = seq ]; then _sf_i=0; while [ "$_sf_i" -lt "$(sh "$_SF_TT" "$_SF_CFG" digitalocean count 2>/dev/null || echo 0)" ]; do [ -z "$(sh "$_SF_TT" "$_SF_CFG" digitalocean get "$_sf_i" token_env 2>/dev/null || true)" ] || { echo "digitalocean in ${_SF_CFG} is a list of targets that each name their own token_env, and this step reads DIGITALOCEAN_ACCESS_TOKEN by its default name, so it cannot tell which target's value to use. It stops instead of guessing: give that target a config of its own where digitalocean is a single block, and run with SCOUTFLO_CONFIG set to that file (and SCOUTFLO_AUDIT_DIR to its own folder)."; exit 1; }; _sf_i=$((_sf_i+1)); done; fi
+_sf_tv="$(sh "$_SF_TT" "$_SF_CFG" digitalocean get 0 token_env 2>/dev/null || true)"; if [ -n "$_sf_tv" ] && [ "$(sh "$_SF_TT" "$_SF_CFG" digitalocean kind 2>/dev/null || true)" != seq ]; then _sf_v="$(sh -c '[ -f "$1" ] && . "$1" >/dev/null 2>&1; printenv -- "$2"' _ "$SCOUTFLO_ENV" "$_sf_tv" 2>/dev/null || true)"; if [ -n "$_sf_v" ]; then DIGITALOCEAN_ACCESS_TOKEN="$_sf_v"; export DIGITALOCEAN_ACCESS_TOKEN; else unset DIGITALOCEAN_ACCESS_TOKEN; fi; fi
+[ -z "${_sf_tv:-}" ] || [ -n "${DIGITALOCEAN_ACCESS_TOKEN:-}" ] || { echo "${_sf_tv} is not set: save it with /scoutflo:connect (the plugin reads the secret store, not your shell); doctl would otherwise act as its own saved login"; exit 1; }
 RUN_DATE="$(date -u +%Y-%m-%d)"
 RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/cost/digitalocean/${RUN_DATE}/raw"
 mkdir -p "$RAW_DIR"
@@ -96,6 +102,11 @@ Expected: no output on a clean estate. Each line is one presence-fact finding, n
 
 ```bash
 set -eu
+SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.scoutflo/env" ]; then SCOUTFLO_ENV="./.scoutflo/env"; else SCOUTFLO_ENV="$HOME/.scoutflo/env"; fi; }
+_SF_CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$_SF_CFG" ] || for _sf_c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_sf_c" ] && { _SF_CFG="$_sf_c"; break; }; done
+_SF_TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+if [ "$(sh "$_SF_TT" "$_SF_CFG" digitalocean kind 2>/dev/null || true)" = seq ]; then _sf_i=0; while [ "$_sf_i" -lt "$(sh "$_SF_TT" "$_SF_CFG" digitalocean count 2>/dev/null || echo 0)" ]; do [ -z "$(sh "$_SF_TT" "$_SF_CFG" digitalocean get "$_sf_i" token_env 2>/dev/null || true)" ] || { echo "digitalocean in ${_SF_CFG} is a list of targets that each name their own token_env, and this step reads DIGITALOCEAN_ACCESS_TOKEN by its default name, so it cannot tell which target's value to use. It stops instead of guessing: give that target a config of its own where digitalocean is a single block, and run with SCOUTFLO_CONFIG set to that file (and SCOUTFLO_AUDIT_DIR to its own folder)."; exit 1; }; _sf_i=$((_sf_i+1)); done; fi
+_sf_tv="$(sh "$_SF_TT" "$_SF_CFG" digitalocean get 0 token_env 2>/dev/null || true)"; if [ -n "$_sf_tv" ] && [ "$(sh "$_SF_TT" "$_SF_CFG" digitalocean kind 2>/dev/null || true)" != seq ]; then _sf_v="$(sh -c '[ -f "$1" ] && . "$1" >/dev/null 2>&1; printenv -- "$2"' _ "$SCOUTFLO_ENV" "$_sf_tv" 2>/dev/null || true)"; if [ -n "$_sf_v" ]; then DIGITALOCEAN_ACCESS_TOKEN="$_sf_v"; export DIGITALOCEAN_ACCESS_TOKEN; else unset DIGITALOCEAN_ACCESS_TOKEN; fi; fi
 RUN_DATE="$(date -u +%Y-%m-%d)"
 RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/cost/digitalocean/${RUN_DATE}/raw"
 IDLE_DAYS="14"          # example, tune to your workload cadence
@@ -143,6 +154,12 @@ A DigitalOcean volume is billed whether or not it is attached; a volume with an 
 
 ```bash
 set -eu
+SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.scoutflo/env" ]; then SCOUTFLO_ENV="./.scoutflo/env"; else SCOUTFLO_ENV="$HOME/.scoutflo/env"; fi; }
+_SF_CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$_SF_CFG" ] || for _sf_c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_sf_c" ] && { _SF_CFG="$_sf_c"; break; }; done
+_SF_TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+if [ "$(sh "$_SF_TT" "$_SF_CFG" digitalocean kind 2>/dev/null || true)" = seq ]; then _sf_i=0; while [ "$_sf_i" -lt "$(sh "$_SF_TT" "$_SF_CFG" digitalocean count 2>/dev/null || echo 0)" ]; do [ -z "$(sh "$_SF_TT" "$_SF_CFG" digitalocean get "$_sf_i" token_env 2>/dev/null || true)" ] || { echo "digitalocean in ${_SF_CFG} is a list of targets that each name their own token_env, and this step reads DIGITALOCEAN_ACCESS_TOKEN by its default name, so it cannot tell which target's value to use. It stops instead of guessing: give that target a config of its own where digitalocean is a single block, and run with SCOUTFLO_CONFIG set to that file (and SCOUTFLO_AUDIT_DIR to its own folder)."; exit 1; }; _sf_i=$((_sf_i+1)); done; fi
+_sf_tv="$(sh "$_SF_TT" "$_SF_CFG" digitalocean get 0 token_env 2>/dev/null || true)"; if [ -n "$_sf_tv" ] && [ "$(sh "$_SF_TT" "$_SF_CFG" digitalocean kind 2>/dev/null || true)" != seq ]; then _sf_v="$(sh -c '[ -f "$1" ] && . "$1" >/dev/null 2>&1; printenv -- "$2"' _ "$SCOUTFLO_ENV" "$_sf_tv" 2>/dev/null || true)"; if [ -n "$_sf_v" ]; then DIGITALOCEAN_ACCESS_TOKEN="$_sf_v"; export DIGITALOCEAN_ACCESS_TOKEN; else unset DIGITALOCEAN_ACCESS_TOKEN; fi; fi
+[ -z "${_sf_tv:-}" ] || [ -n "${DIGITALOCEAN_ACCESS_TOKEN:-}" ] || { echo "${_sf_tv} is not set: save it with /scoutflo:connect (the plugin reads the secret store, not your shell); doctl would otherwise act as its own saved login"; exit 1; }
 doctl compute volume list -o json | jq -r '.[]
   | select((.droplet_ids // []) | length == 0)
   | "\(.id)\t\(.name)\t\(.size_gigabytes)GiB\t\(.region.slug)\tcreated=\(.created_at)"'
@@ -156,6 +173,12 @@ Snapshots (Droplet images and volume snapshots) are billed per GiB stored and ac
 
 ```bash
 set -eu
+SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.scoutflo/env" ]; then SCOUTFLO_ENV="./.scoutflo/env"; else SCOUTFLO_ENV="$HOME/.scoutflo/env"; fi; }
+_SF_CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$_SF_CFG" ] || for _sf_c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_sf_c" ] && { _SF_CFG="$_sf_c"; break; }; done
+_SF_TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+if [ "$(sh "$_SF_TT" "$_SF_CFG" digitalocean kind 2>/dev/null || true)" = seq ]; then _sf_i=0; while [ "$_sf_i" -lt "$(sh "$_SF_TT" "$_SF_CFG" digitalocean count 2>/dev/null || echo 0)" ]; do [ -z "$(sh "$_SF_TT" "$_SF_CFG" digitalocean get "$_sf_i" token_env 2>/dev/null || true)" ] || { echo "digitalocean in ${_SF_CFG} is a list of targets that each name their own token_env, and this step reads DIGITALOCEAN_ACCESS_TOKEN by its default name, so it cannot tell which target's value to use. It stops instead of guessing: give that target a config of its own where digitalocean is a single block, and run with SCOUTFLO_CONFIG set to that file (and SCOUTFLO_AUDIT_DIR to its own folder)."; exit 1; }; _sf_i=$((_sf_i+1)); done; fi
+_sf_tv="$(sh "$_SF_TT" "$_SF_CFG" digitalocean get 0 token_env 2>/dev/null || true)"; if [ -n "$_sf_tv" ] && [ "$(sh "$_SF_TT" "$_SF_CFG" digitalocean kind 2>/dev/null || true)" != seq ]; then _sf_v="$(sh -c '[ -f "$1" ] && . "$1" >/dev/null 2>&1; printenv -- "$2"' _ "$SCOUTFLO_ENV" "$_sf_tv" 2>/dev/null || true)"; if [ -n "$_sf_v" ]; then DIGITALOCEAN_ACCESS_TOKEN="$_sf_v"; export DIGITALOCEAN_ACCESS_TOKEN; else unset DIGITALOCEAN_ACCESS_TOKEN; fi; fi
+[ -z "${_sf_tv:-}" ] || [ -n "${DIGITALOCEAN_ACCESS_TOKEN:-}" ] || { echo "${_sf_tv} is not set: save it with /scoutflo:connect (the plugin reads the secret store, not your shell); doctl would otherwise act as its own saved login"; exit 1; }
 RETENTION_DAYS="30"     # example ONLY — replace with the team's stated retention; if none is stated, say so in the finding
 NOW="$(date -u +%s)"
 doctl compute snapshot list -o json | jq -r --argjson now "$NOW" --argjson keep "$RETENTION_DAYS" '
@@ -174,6 +197,12 @@ Expected: no output when snapshots are within retention. Each line names a snaps
 
 ```bash
 set -eu
+SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.scoutflo/env" ]; then SCOUTFLO_ENV="./.scoutflo/env"; else SCOUTFLO_ENV="$HOME/.scoutflo/env"; fi; }
+_SF_CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$_SF_CFG" ] || for _sf_c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_sf_c" ] && { _SF_CFG="$_sf_c"; break; }; done
+_SF_TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+if [ "$(sh "$_SF_TT" "$_SF_CFG" digitalocean kind 2>/dev/null || true)" = seq ]; then _sf_i=0; while [ "$_sf_i" -lt "$(sh "$_SF_TT" "$_SF_CFG" digitalocean count 2>/dev/null || echo 0)" ]; do [ -z "$(sh "$_SF_TT" "$_SF_CFG" digitalocean get "$_sf_i" token_env 2>/dev/null || true)" ] || { echo "digitalocean in ${_SF_CFG} is a list of targets that each name their own token_env, and this step reads DIGITALOCEAN_ACCESS_TOKEN by its default name, so it cannot tell which target's value to use. It stops instead of guessing: give that target a config of its own where digitalocean is a single block, and run with SCOUTFLO_CONFIG set to that file (and SCOUTFLO_AUDIT_DIR to its own folder)."; exit 1; }; _sf_i=$((_sf_i+1)); done; fi
+_sf_tv="$(sh "$_SF_TT" "$_SF_CFG" digitalocean get 0 token_env 2>/dev/null || true)"; if [ -n "$_sf_tv" ] && [ "$(sh "$_SF_TT" "$_SF_CFG" digitalocean kind 2>/dev/null || true)" != seq ]; then _sf_v="$(sh -c '[ -f "$1" ] && . "$1" >/dev/null 2>&1; printenv -- "$2"' _ "$SCOUTFLO_ENV" "$_sf_tv" 2>/dev/null || true)"; if [ -n "$_sf_v" ]; then DIGITALOCEAN_ACCESS_TOKEN="$_sf_v"; export DIGITALOCEAN_ACCESS_TOKEN; else unset DIGITALOCEAN_ACCESS_TOKEN; fi; fi
+[ -z "${_sf_tv:-}" ] || [ -n "${DIGITALOCEAN_ACCESS_TOKEN:-}" ] || { echo "${_sf_tv} is not set: save it with /scoutflo:connect (the plugin reads the secret store, not your shell); doctl would otherwise act as its own saved login"; exit 1; }
 RUN_DATE="$(date -u +%Y-%m-%d)"
 RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/cost/digitalocean/${RUN_DATE}/raw"
 mkdir -p "$RAW_DIR"
@@ -192,6 +221,12 @@ Expected: one entry per cluster. A `num_nodes` above what the workload needs, or
 
 ```bash
 set -eu
+SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.scoutflo/env" ]; then SCOUTFLO_ENV="./.scoutflo/env"; else SCOUTFLO_ENV="$HOME/.scoutflo/env"; fi; }
+_SF_CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$_SF_CFG" ] || for _sf_c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_sf_c" ] && { _SF_CFG="$_sf_c"; break; }; done
+_SF_TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+if [ "$(sh "$_SF_TT" "$_SF_CFG" digitalocean kind 2>/dev/null || true)" = seq ]; then _sf_i=0; while [ "$_sf_i" -lt "$(sh "$_SF_TT" "$_SF_CFG" digitalocean count 2>/dev/null || echo 0)" ]; do [ -z "$(sh "$_SF_TT" "$_SF_CFG" digitalocean get "$_sf_i" token_env 2>/dev/null || true)" ] || { echo "digitalocean in ${_SF_CFG} is a list of targets that each name their own token_env, and this step reads DIGITALOCEAN_ACCESS_TOKEN by its default name, so it cannot tell which target's value to use. It stops instead of guessing: give that target a config of its own where digitalocean is a single block, and run with SCOUTFLO_CONFIG set to that file (and SCOUTFLO_AUDIT_DIR to its own folder)."; exit 1; }; _sf_i=$((_sf_i+1)); done; fi
+_sf_tv="$(sh "$_SF_TT" "$_SF_CFG" digitalocean get 0 token_env 2>/dev/null || true)"; if [ -n "$_sf_tv" ] && [ "$(sh "$_SF_TT" "$_SF_CFG" digitalocean kind 2>/dev/null || true)" != seq ]; then _sf_v="$(sh -c '[ -f "$1" ] && . "$1" >/dev/null 2>&1; printenv -- "$2"' _ "$SCOUTFLO_ENV" "$_sf_tv" 2>/dev/null || true)"; if [ -n "$_sf_v" ]; then DIGITALOCEAN_ACCESS_TOKEN="$_sf_v"; export DIGITALOCEAN_ACCESS_TOKEN; else unset DIGITALOCEAN_ACCESS_TOKEN; fi; fi
+[ -z "${_sf_tv:-}" ] || [ -n "${DIGITALOCEAN_ACCESS_TOKEN:-}" ] || { echo "${_sf_tv} is not set: save it with /scoutflo:connect (the plugin reads the secret store, not your shell); doctl would otherwise act as its own saved login"; exit 1; }
 doctl compute reserved-ip list -o json | jq -r '.[]
   | select(.droplet == null)
   | "\(.ip)\t\(.region.slug)\tunassigned"'
@@ -205,6 +240,12 @@ Expected: no output on a clean estate. Each line is one presence-fact finding �
 
 ```bash
 set -eu
+SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.scoutflo/env" ]; then SCOUTFLO_ENV="./.scoutflo/env"; else SCOUTFLO_ENV="$HOME/.scoutflo/env"; fi; }
+_SF_CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$_SF_CFG" ] || for _sf_c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_sf_c" ] && { _SF_CFG="$_sf_c"; break; }; done
+_SF_TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+if [ "$(sh "$_SF_TT" "$_SF_CFG" digitalocean kind 2>/dev/null || true)" = seq ]; then _sf_i=0; while [ "$_sf_i" -lt "$(sh "$_SF_TT" "$_SF_CFG" digitalocean count 2>/dev/null || echo 0)" ]; do [ -z "$(sh "$_SF_TT" "$_SF_CFG" digitalocean get "$_sf_i" token_env 2>/dev/null || true)" ] || { echo "digitalocean in ${_SF_CFG} is a list of targets that each name their own token_env, and this step reads DIGITALOCEAN_ACCESS_TOKEN by its default name, so it cannot tell which target's value to use. It stops instead of guessing: give that target a config of its own where digitalocean is a single block, and run with SCOUTFLO_CONFIG set to that file (and SCOUTFLO_AUDIT_DIR to its own folder)."; exit 1; }; _sf_i=$((_sf_i+1)); done; fi
+_sf_tv="$(sh "$_SF_TT" "$_SF_CFG" digitalocean get 0 token_env 2>/dev/null || true)"; if [ -n "$_sf_tv" ] && [ "$(sh "$_SF_TT" "$_SF_CFG" digitalocean kind 2>/dev/null || true)" != seq ]; then _sf_v="$(sh -c '[ -f "$1" ] && . "$1" >/dev/null 2>&1; printenv -- "$2"' _ "$SCOUTFLO_ENV" "$_sf_tv" 2>/dev/null || true)"; if [ -n "$_sf_v" ]; then DIGITALOCEAN_ACCESS_TOKEN="$_sf_v"; export DIGITALOCEAN_ACCESS_TOKEN; else unset DIGITALOCEAN_ACCESS_TOKEN; fi; fi
+[ -z "${_sf_tv:-}" ] || [ -n "${DIGITALOCEAN_ACCESS_TOKEN:-}" ] || { echo "${_sf_tv} is not set: save it with /scoutflo:connect (the plugin reads the secret store, not your shell); doctl would otherwise act as its own saved login"; exit 1; }
 doctl compute load-balancer list -o json | jq -r '.[]
   | { id, name, region: .region.slug, size_unit,
       droplet_count: ((.droplet_ids // []) | length),
@@ -219,6 +260,11 @@ Expected: no output on a clean estate. Each line is an idle load balancer (no di
 
 ```bash
 set -eu
+SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.scoutflo/env" ]; then SCOUTFLO_ENV="./.scoutflo/env"; else SCOUTFLO_ENV="$HOME/.scoutflo/env"; fi; }
+_SF_CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$_SF_CFG" ] || for _sf_c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_sf_c" ] && { _SF_CFG="$_sf_c"; break; }; done
+_SF_TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+if [ "$(sh "$_SF_TT" "$_SF_CFG" digitalocean kind 2>/dev/null || true)" = seq ]; then _sf_i=0; while [ "$_sf_i" -lt "$(sh "$_SF_TT" "$_SF_CFG" digitalocean count 2>/dev/null || echo 0)" ]; do [ -z "$(sh "$_SF_TT" "$_SF_CFG" digitalocean get "$_sf_i" token_env 2>/dev/null || true)" ] || { echo "digitalocean in ${_SF_CFG} is a list of targets that each name their own token_env, and this step reads DIGITALOCEAN_ACCESS_TOKEN by its default name, so it cannot tell which target's value to use. It stops instead of guessing: give that target a config of its own where digitalocean is a single block, and run with SCOUTFLO_CONFIG set to that file (and SCOUTFLO_AUDIT_DIR to its own folder)."; exit 1; }; _sf_i=$((_sf_i+1)); done; fi
+_sf_tv="$(sh "$_SF_TT" "$_SF_CFG" digitalocean get 0 token_env 2>/dev/null || true)"; if [ -n "$_sf_tv" ] && [ "$(sh "$_SF_TT" "$_SF_CFG" digitalocean kind 2>/dev/null || true)" != seq ]; then _sf_v="$(sh -c '[ -f "$1" ] && . "$1" >/dev/null 2>&1; printenv -- "$2"' _ "$SCOUTFLO_ENV" "$_sf_tv" 2>/dev/null || true)"; if [ -n "$_sf_v" ]; then DIGITALOCEAN_ACCESS_TOKEN="$_sf_v"; export DIGITALOCEAN_ACCESS_TOKEN; else unset DIGITALOCEAN_ACCESS_TOKEN; fi; fi
 # Registry storage used vs the tier's included storage.
 curl -fsS --max-time 15 -H "Authorization: Bearer ${DIGITALOCEAN_ACCESS_TOKEN}" \
   "https://api.digitalocean.com/v2/registry" \
@@ -236,6 +282,12 @@ Then confirm whether garbage collection has ever run (the registry name comes fr
 
 ```bash
 set -eu
+SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.scoutflo/env" ]; then SCOUTFLO_ENV="./.scoutflo/env"; else SCOUTFLO_ENV="$HOME/.scoutflo/env"; fi; }
+_SF_CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$_SF_CFG" ] || for _sf_c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_sf_c" ] && { _SF_CFG="$_sf_c"; break; }; done
+_SF_TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+if [ "$(sh "$_SF_TT" "$_SF_CFG" digitalocean kind 2>/dev/null || true)" = seq ]; then _sf_i=0; while [ "$_sf_i" -lt "$(sh "$_SF_TT" "$_SF_CFG" digitalocean count 2>/dev/null || echo 0)" ]; do [ -z "$(sh "$_SF_TT" "$_SF_CFG" digitalocean get "$_sf_i" token_env 2>/dev/null || true)" ] || { echo "digitalocean in ${_SF_CFG} is a list of targets that each name their own token_env, and this step reads DIGITALOCEAN_ACCESS_TOKEN by its default name, so it cannot tell which target's value to use. It stops instead of guessing: give that target a config of its own where digitalocean is a single block, and run with SCOUTFLO_CONFIG set to that file (and SCOUTFLO_AUDIT_DIR to its own folder)."; exit 1; }; _sf_i=$((_sf_i+1)); done; fi
+_sf_tv="$(sh "$_SF_TT" "$_SF_CFG" digitalocean get 0 token_env 2>/dev/null || true)"; if [ -n "$_sf_tv" ] && [ "$(sh "$_SF_TT" "$_SF_CFG" digitalocean kind 2>/dev/null || true)" != seq ]; then _sf_v="$(sh -c '[ -f "$1" ] && . "$1" >/dev/null 2>&1; printenv -- "$2"' _ "$SCOUTFLO_ENV" "$_sf_tv" 2>/dev/null || true)"; if [ -n "$_sf_v" ]; then DIGITALOCEAN_ACCESS_TOKEN="$_sf_v"; export DIGITALOCEAN_ACCESS_TOKEN; else unset DIGITALOCEAN_ACCESS_TOKEN; fi; fi
+[ -z "${_sf_tv:-}" ] || [ -n "${DIGITALOCEAN_ACCESS_TOKEN:-}" ] || { echo "${_sf_tv} is not set: save it with /scoutflo:connect (the plugin reads the secret store, not your shell); doctl would otherwise act as its own saved login"; exit 1; }
 REGISTRY_NAME="your-registry"   # from the /v2/registry call above
 doctl registry garbage-collection list "$REGISTRY_NAME" -o json \
   | jq -r 'if length == 0 then "no garbage collection has ever run — untagged blobs from deleted manifests still bill"
@@ -250,6 +302,12 @@ For the checks that may carry a `list_price_monthly_usd` context field (COST-DO-
 
 ```bash
 set -eu
+SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.scoutflo/env" ]; then SCOUTFLO_ENV="./.scoutflo/env"; else SCOUTFLO_ENV="$HOME/.scoutflo/env"; fi; }
+_SF_CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$_SF_CFG" ] || for _sf_c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_sf_c" ] && { _SF_CFG="$_sf_c"; break; }; done
+_SF_TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+if [ "$(sh "$_SF_TT" "$_SF_CFG" digitalocean kind 2>/dev/null || true)" = seq ]; then _sf_i=0; while [ "$_sf_i" -lt "$(sh "$_SF_TT" "$_SF_CFG" digitalocean count 2>/dev/null || echo 0)" ]; do [ -z "$(sh "$_SF_TT" "$_SF_CFG" digitalocean get "$_sf_i" token_env 2>/dev/null || true)" ] || { echo "digitalocean in ${_SF_CFG} is a list of targets that each name their own token_env, and this step reads DIGITALOCEAN_ACCESS_TOKEN by its default name, so it cannot tell which target's value to use. It stops instead of guessing: give that target a config of its own where digitalocean is a single block, and run with SCOUTFLO_CONFIG set to that file (and SCOUTFLO_AUDIT_DIR to its own folder)."; exit 1; }; _sf_i=$((_sf_i+1)); done; fi
+_sf_tv="$(sh "$_SF_TT" "$_SF_CFG" digitalocean get 0 token_env 2>/dev/null || true)"; if [ -n "$_sf_tv" ] && [ "$(sh "$_SF_TT" "$_SF_CFG" digitalocean kind 2>/dev/null || true)" != seq ]; then _sf_v="$(sh -c '[ -f "$1" ] && . "$1" >/dev/null 2>&1; printenv -- "$2"' _ "$SCOUTFLO_ENV" "$_sf_tv" 2>/dev/null || true)"; if [ -n "$_sf_v" ]; then DIGITALOCEAN_ACCESS_TOKEN="$_sf_v"; export DIGITALOCEAN_ACCESS_TOKEN; else unset DIGITALOCEAN_ACCESS_TOKEN; fi; fi
+[ -z "${_sf_tv:-}" ] || [ -n "${DIGITALOCEAN_ACCESS_TOKEN:-}" ] || { echo "${_sf_tv} is not set: save it with /scoutflo:connect (the plugin reads the secret store, not your shell); doctl would otherwise act as its own saved login"; exit 1; }
 SIZE_SLUG="s-4vcpu-8gb"   # the resource's size_slug from its inventory row
 doctl compute size list --format Slug,PriceMonthly,PriceHourly --no-header \
   | awk -v s="$SIZE_SLUG" '$1==s {printf "list_price_monthly_usd=%s (hourly %s)\n", $2, $3}'

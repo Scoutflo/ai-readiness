@@ -67,6 +67,11 @@ Capture raw state once per run; later sections re-fetch specific objects before 
 
 ```bash
 set -eu
+SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.scoutflo/env" ]; then SCOUTFLO_ENV="./.scoutflo/env"; else SCOUTFLO_ENV="$HOME/.scoutflo/env"; fi; }
+_SF_CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$_SF_CFG" ] || for _sf_c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_sf_c" ] && { _SF_CFG="$_sf_c"; break; }; done
+_SF_TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+if [ "$(sh "$_SF_TT" "$_SF_CFG" pagerduty kind 2>/dev/null || true)" = seq ]; then _sf_i=0; while [ "$_sf_i" -lt "$(sh "$_SF_TT" "$_SF_CFG" pagerduty count 2>/dev/null || echo 0)" ]; do [ -z "$(sh "$_SF_TT" "$_SF_CFG" pagerduty get "$_sf_i" token_env 2>/dev/null || true)" ] || { echo "pagerduty in ${_SF_CFG} is a list of targets that each name their own token_env, and this step reads PAGERDUTY_TOKEN by its default name, so it cannot tell which target's value to use. It stops instead of guessing: give that target a config of its own where pagerduty is a single block, and run with SCOUTFLO_CONFIG set to that file (and SCOUTFLO_AUDIT_DIR to its own folder)."; exit 1; }; _sf_i=$((_sf_i+1)); done; fi
+_sf_tv="$(sh "$_SF_TT" "$_SF_CFG" pagerduty get 0 token_env 2>/dev/null || true)"; if [ -n "$_sf_tv" ] && [ "$(sh "$_SF_TT" "$_SF_CFG" pagerduty kind 2>/dev/null || true)" != seq ]; then _sf_v="$(sh -c '[ -f "$1" ] && . "$1" >/dev/null 2>&1; printenv -- "$2"' _ "$SCOUTFLO_ENV" "$_sf_tv" 2>/dev/null || true)"; if [ -n "$_sf_v" ]; then PAGERDUTY_TOKEN="$_sf_v"; export PAGERDUTY_TOKEN; else unset PAGERDUTY_TOKEN; fi; fi
 PD_API="https://api.pagerduty.com"   # pagerduty.region: us -> api.pagerduty.com, eu -> api.eu.pagerduty.com
 RUN_DATE="$(date -u +%Y-%m-%d)"
 RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/pagerduty/${RUN_DATE}/raw"
@@ -140,6 +145,11 @@ Policy shape checks run on the Phase 2 captures; live on-call and schedule cover
 
 ```bash
 set -eu
+SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.scoutflo/env" ]; then SCOUTFLO_ENV="./.scoutflo/env"; else SCOUTFLO_ENV="$HOME/.scoutflo/env"; fi; }
+_SF_CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$_SF_CFG" ] || for _sf_c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_sf_c" ] && { _SF_CFG="$_sf_c"; break; }; done
+_SF_TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+if [ "$(sh "$_SF_TT" "$_SF_CFG" pagerduty kind 2>/dev/null || true)" = seq ]; then _sf_i=0; while [ "$_sf_i" -lt "$(sh "$_SF_TT" "$_SF_CFG" pagerduty count 2>/dev/null || echo 0)" ]; do [ -z "$(sh "$_SF_TT" "$_SF_CFG" pagerduty get "$_sf_i" token_env 2>/dev/null || true)" ] || { echo "pagerduty in ${_SF_CFG} is a list of targets that each name their own token_env, and this step reads PAGERDUTY_TOKEN by its default name, so it cannot tell which target's value to use. It stops instead of guessing: give that target a config of its own where pagerduty is a single block, and run with SCOUTFLO_CONFIG set to that file (and SCOUTFLO_AUDIT_DIR to its own folder)."; exit 1; }; _sf_i=$((_sf_i+1)); done; fi
+_sf_tv="$(sh "$_SF_TT" "$_SF_CFG" pagerduty get 0 token_env 2>/dev/null || true)"; if [ -n "$_sf_tv" ] && [ "$(sh "$_SF_TT" "$_SF_CFG" pagerduty kind 2>/dev/null || true)" != seq ]; then _sf_v="$(sh -c '[ -f "$1" ] && . "$1" >/dev/null 2>&1; printenv -- "$2"' _ "$SCOUTFLO_ENV" "$_sf_tv" 2>/dev/null || true)"; if [ -n "$_sf_v" ]; then PAGERDUTY_TOKEN="$_sf_v"; export PAGERDUTY_TOKEN; else unset PAGERDUTY_TOKEN; fi; fi
 PD_API="https://api.pagerduty.com"   # pagerduty.region
 RUN_DATE="$(date -u +%Y-%m-%d)"
 RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/pagerduty/${RUN_DATE}/raw"
@@ -208,6 +218,11 @@ Both extend the same escalation-target join PD-006 uses (users/schedules referen
 # PD-008: a high-urgency notification rule with start_delay_in_minutes > 0 delays the FIRST page.
 # users.json was captured with notification_rules included (section 4). For each escalation-target
 # user, the minimum high-urgency start delay is the latency added before they are paged at all.
+SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.scoutflo/env" ]; then SCOUTFLO_ENV="./.scoutflo/env"; else SCOUTFLO_ENV="$HOME/.scoutflo/env"; fi; }
+_SF_CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$_SF_CFG" ] || for _sf_c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_sf_c" ] && { _SF_CFG="$_sf_c"; break; }; done
+_SF_TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+if [ "$(sh "$_SF_TT" "$_SF_CFG" pagerduty kind 2>/dev/null || true)" = seq ]; then _sf_i=0; while [ "$_sf_i" -lt "$(sh "$_SF_TT" "$_SF_CFG" pagerduty count 2>/dev/null || echo 0)" ]; do [ -z "$(sh "$_SF_TT" "$_SF_CFG" pagerduty get "$_sf_i" token_env 2>/dev/null || true)" ] || { echo "pagerduty in ${_SF_CFG} is a list of targets that each name their own token_env, and this step reads PAGERDUTY_TOKEN by its default name, so it cannot tell which target's value to use. It stops instead of guessing: give that target a config of its own where pagerduty is a single block, and run with SCOUTFLO_CONFIG set to that file (and SCOUTFLO_AUDIT_DIR to its own folder)."; exit 1; }; _sf_i=$((_sf_i+1)); done; fi
+_sf_tv="$(sh "$_SF_TT" "$_SF_CFG" pagerduty get 0 token_env 2>/dev/null || true)"; if [ -n "$_sf_tv" ] && [ "$(sh "$_SF_TT" "$_SF_CFG" pagerduty kind 2>/dev/null || true)" != seq ]; then _sf_v="$(sh -c '[ -f "$1" ] && . "$1" >/dev/null 2>&1; printenv -- "$2"' _ "$SCOUTFLO_ENV" "$_sf_tv" 2>/dev/null || true)"; if [ -n "$_sf_v" ]; then PAGERDUTY_TOKEN="$_sf_v"; export PAGERDUTY_TOKEN; else unset PAGERDUTY_TOKEN; fi; fi
 jq -r '.[] | . as $u
   | (([.notification_rules[]? | select(.urgency=="high")] ) as $hr
      | if ($hr|length)==0 then "\($u.name): NO high-urgency rule (never paged high-urgency)"
@@ -282,6 +297,11 @@ jq -s '
 
 ```bash
 set -eu
+SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.scoutflo/env" ]; then SCOUTFLO_ENV="./.scoutflo/env"; else SCOUTFLO_ENV="$HOME/.scoutflo/env"; fi; }
+_SF_CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$_SF_CFG" ] || for _sf_c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_sf_c" ] && { _SF_CFG="$_sf_c"; break; }; done
+_SF_TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+if [ "$(sh "$_SF_TT" "$_SF_CFG" pagerduty kind 2>/dev/null || true)" = seq ]; then _sf_i=0; while [ "$_sf_i" -lt "$(sh "$_SF_TT" "$_SF_CFG" pagerduty count 2>/dev/null || echo 0)" ]; do [ -z "$(sh "$_SF_TT" "$_SF_CFG" pagerduty get "$_sf_i" token_env 2>/dev/null || true)" ] || { echo "pagerduty in ${_SF_CFG} is a list of targets that each name their own token_env, and this step reads PAGERDUTY_TOKEN by its default name, so it cannot tell which target's value to use. It stops instead of guessing: give that target a config of its own where pagerduty is a single block, and run with SCOUTFLO_CONFIG set to that file (and SCOUTFLO_AUDIT_DIR to its own folder)."; exit 1; }; _sf_i=$((_sf_i+1)); done; fi
+_sf_tv="$(sh "$_SF_TT" "$_SF_CFG" pagerduty get 0 token_env 2>/dev/null || true)"; if [ -n "$_sf_tv" ] && [ "$(sh "$_SF_TT" "$_SF_CFG" pagerduty kind 2>/dev/null || true)" != seq ]; then _sf_v="$(sh -c '[ -f "$1" ] && . "$1" >/dev/null 2>&1; printenv -- "$2"' _ "$SCOUTFLO_ENV" "$_sf_tv" 2>/dev/null || true)"; if [ -n "$_sf_v" ]; then PAGERDUTY_TOKEN="$_sf_v"; export PAGERDUTY_TOKEN; else unset PAGERDUTY_TOKEN; fi; fi
 PD_API="https://api.pagerduty.com"   # pagerduty.region
 RUN_DATE="$(date -u +%Y-%m-%d)"
 RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/pagerduty/${RUN_DATE}/raw"
@@ -330,6 +350,11 @@ jq 'length' "${RAW_DIR}/standards-scores.json"
 
 ```bash
 set -eu
+SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.scoutflo/env" ]; then SCOUTFLO_ENV="./.scoutflo/env"; else SCOUTFLO_ENV="$HOME/.scoutflo/env"; fi; }
+_SF_CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$_SF_CFG" ] || for _sf_c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_sf_c" ] && { _SF_CFG="$_sf_c"; break; }; done
+_SF_TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+if [ "$(sh "$_SF_TT" "$_SF_CFG" pagerduty kind 2>/dev/null || true)" = seq ]; then _sf_i=0; while [ "$_sf_i" -lt "$(sh "$_SF_TT" "$_SF_CFG" pagerduty count 2>/dev/null || echo 0)" ]; do [ -z "$(sh "$_SF_TT" "$_SF_CFG" pagerduty get "$_sf_i" token_env 2>/dev/null || true)" ] || { echo "pagerduty in ${_SF_CFG} is a list of targets that each name their own token_env, and this step reads PAGERDUTY_TOKEN by its default name, so it cannot tell which target's value to use. It stops instead of guessing: give that target a config of its own where pagerduty is a single block, and run with SCOUTFLO_CONFIG set to that file (and SCOUTFLO_AUDIT_DIR to its own folder)."; exit 1; }; _sf_i=$((_sf_i+1)); done; fi
+_sf_tv="$(sh "$_SF_TT" "$_SF_CFG" pagerduty get 0 token_env 2>/dev/null || true)"; if [ -n "$_sf_tv" ] && [ "$(sh "$_SF_TT" "$_SF_CFG" pagerduty kind 2>/dev/null || true)" != seq ]; then _sf_v="$(sh -c '[ -f "$1" ] && . "$1" >/dev/null 2>&1; printenv -- "$2"' _ "$SCOUTFLO_ENV" "$_sf_tv" 2>/dev/null || true)"; if [ -n "$_sf_v" ]; then PAGERDUTY_TOKEN="$_sf_v"; export PAGERDUTY_TOKEN; else unset PAGERDUTY_TOKEN; fi; fi
 PD_API="https://api.pagerduty.com"   # pagerduty.region
 RUN_DATE="$(date -u +%Y-%m-%d)"
 RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/pagerduty/${RUN_DATE}/raw"
@@ -426,6 +451,11 @@ jq '[.[] | select(.status == "active" and (.acknowledgement_timeout // null) == 
 
 ```bash
 set -eu
+SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.scoutflo/env" ]; then SCOUTFLO_ENV="./.scoutflo/env"; else SCOUTFLO_ENV="$HOME/.scoutflo/env"; fi; }
+_SF_CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$_SF_CFG" ] || for _sf_c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_sf_c" ] && { _SF_CFG="$_sf_c"; break; }; done
+_SF_TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+if [ "$(sh "$_SF_TT" "$_SF_CFG" pagerduty kind 2>/dev/null || true)" = seq ]; then _sf_i=0; while [ "$_sf_i" -lt "$(sh "$_SF_TT" "$_SF_CFG" pagerduty count 2>/dev/null || echo 0)" ]; do [ -z "$(sh "$_SF_TT" "$_SF_CFG" pagerduty get "$_sf_i" token_env 2>/dev/null || true)" ] || { echo "pagerduty in ${_SF_CFG} is a list of targets that each name their own token_env, and this step reads PAGERDUTY_TOKEN by its default name, so it cannot tell which target's value to use. It stops instead of guessing: give that target a config of its own where pagerduty is a single block, and run with SCOUTFLO_CONFIG set to that file (and SCOUTFLO_AUDIT_DIR to its own folder)."; exit 1; }; _sf_i=$((_sf_i+1)); done; fi
+_sf_tv="$(sh "$_SF_TT" "$_SF_CFG" pagerduty get 0 token_env 2>/dev/null || true)"; if [ -n "$_sf_tv" ] && [ "$(sh "$_SF_TT" "$_SF_CFG" pagerduty kind 2>/dev/null || true)" != seq ]; then _sf_v="$(sh -c '[ -f "$1" ] && . "$1" >/dev/null 2>&1; printenv -- "$2"' _ "$SCOUTFLO_ENV" "$_sf_tv" 2>/dev/null || true)"; if [ -n "$_sf_v" ]; then PAGERDUTY_TOKEN="$_sf_v"; export PAGERDUTY_TOKEN; else unset PAGERDUTY_TOKEN; fi; fi
 PD_API="https://api.pagerduty.com"   # pagerduty.region
 UNACKED_AGING_HOURS="4"   # example, tune to your on-call SLA
 
@@ -467,6 +497,11 @@ Fixed pattern wherever a call may 429; run as written, do not tighten the sleep:
 
 ```bash
 set -eu
+SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.scoutflo/env" ]; then SCOUTFLO_ENV="./.scoutflo/env"; else SCOUTFLO_ENV="$HOME/.scoutflo/env"; fi; }
+_SF_CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$_SF_CFG" ] || for _sf_c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_sf_c" ] && { _SF_CFG="$_sf_c"; break; }; done
+_SF_TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+if [ "$(sh "$_SF_TT" "$_SF_CFG" pagerduty kind 2>/dev/null || true)" = seq ]; then _sf_i=0; while [ "$_sf_i" -lt "$(sh "$_SF_TT" "$_SF_CFG" pagerduty count 2>/dev/null || echo 0)" ]; do [ -z "$(sh "$_SF_TT" "$_SF_CFG" pagerduty get "$_sf_i" token_env 2>/dev/null || true)" ] || { echo "pagerduty in ${_SF_CFG} is a list of targets that each name their own token_env, and this step reads PAGERDUTY_TOKEN by its default name, so it cannot tell which target's value to use. It stops instead of guessing: give that target a config of its own where pagerduty is a single block, and run with SCOUTFLO_CONFIG set to that file (and SCOUTFLO_AUDIT_DIR to its own folder)."; exit 1; }; _sf_i=$((_sf_i+1)); done; fi
+_sf_tv="$(sh "$_SF_TT" "$_SF_CFG" pagerduty get 0 token_env 2>/dev/null || true)"; if [ -n "$_sf_tv" ] && [ "$(sh "$_SF_TT" "$_SF_CFG" pagerduty kind 2>/dev/null || true)" != seq ]; then _sf_v="$(sh -c '[ -f "$1" ] && . "$1" >/dev/null 2>&1; printenv -- "$2"' _ "$SCOUTFLO_ENV" "$_sf_tv" 2>/dev/null || true)"; if [ -n "$_sf_v" ]; then PAGERDUTY_TOKEN="$_sf_v"; export PAGERDUTY_TOKEN; else unset PAGERDUTY_TOKEN; fi; fi
 PD_API="https://api.pagerduty.com"   # pagerduty.region
 PD_PATH="/services?limit=100"        # the call being retried
 RESP_CODE="$(curl -s -o /tmp/pd-body.json -w '%{http_code}' --max-time 30 \
@@ -486,6 +521,11 @@ POST endpoints, read-only by effect (filter body, no mutation). PD-040/041/042 a
 
 ```bash
 set -eu
+SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.scoutflo/env" ]; then SCOUTFLO_ENV="./.scoutflo/env"; else SCOUTFLO_ENV="$HOME/.scoutflo/env"; fi; }
+_SF_CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$_SF_CFG" ] || for _sf_c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_sf_c" ] && { _SF_CFG="$_sf_c"; break; }; done
+_SF_TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+if [ "$(sh "$_SF_TT" "$_SF_CFG" pagerduty kind 2>/dev/null || true)" = seq ]; then _sf_i=0; while [ "$_sf_i" -lt "$(sh "$_SF_TT" "$_SF_CFG" pagerduty count 2>/dev/null || echo 0)" ]; do [ -z "$(sh "$_SF_TT" "$_SF_CFG" pagerduty get "$_sf_i" token_env 2>/dev/null || true)" ] || { echo "pagerduty in ${_SF_CFG} is a list of targets that each name their own token_env, and this step reads PAGERDUTY_TOKEN by its default name, so it cannot tell which target's value to use. It stops instead of guessing: give that target a config of its own where pagerduty is a single block, and run with SCOUTFLO_CONFIG set to that file (and SCOUTFLO_AUDIT_DIR to its own folder)."; exit 1; }; _sf_i=$((_sf_i+1)); done; fi
+_sf_tv="$(sh "$_SF_TT" "$_SF_CFG" pagerduty get 0 token_env 2>/dev/null || true)"; if [ -n "$_sf_tv" ] && [ "$(sh "$_SF_TT" "$_SF_CFG" pagerduty kind 2>/dev/null || true)" != seq ]; then _sf_v="$(sh -c '[ -f "$1" ] && . "$1" >/dev/null 2>&1; printenv -- "$2"' _ "$SCOUTFLO_ENV" "$_sf_tv" 2>/dev/null || true)"; if [ -n "$_sf_v" ]; then PAGERDUTY_TOKEN="$_sf_v"; export PAGERDUTY_TOKEN; else unset PAGERDUTY_TOKEN; fi; fi
 PD_API="https://api.pagerduty.com"   # pagerduty.region
 RUN_DATE="$(date -u +%Y-%m-%d)"
 RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/pagerduty/${RUN_DATE}/raw"
@@ -541,6 +581,11 @@ PD-040/041/042 lose the whole Actionability category when the Analytics endpoint
 
 ```bash
 set -eu
+SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.scoutflo/env" ]; then SCOUTFLO_ENV="./.scoutflo/env"; else SCOUTFLO_ENV="$HOME/.scoutflo/env"; fi; }
+_SF_CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$_SF_CFG" ] || for _sf_c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_sf_c" ] && { _SF_CFG="$_sf_c"; break; }; done
+_SF_TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+if [ "$(sh "$_SF_TT" "$_SF_CFG" pagerduty kind 2>/dev/null || true)" = seq ]; then _sf_i=0; while [ "$_sf_i" -lt "$(sh "$_SF_TT" "$_SF_CFG" pagerduty count 2>/dev/null || echo 0)" ]; do [ -z "$(sh "$_SF_TT" "$_SF_CFG" pagerduty get "$_sf_i" token_env 2>/dev/null || true)" ] || { echo "pagerduty in ${_SF_CFG} is a list of targets that each name their own token_env, and this step reads PAGERDUTY_TOKEN by its default name, so it cannot tell which target's value to use. It stops instead of guessing: give that target a config of its own where pagerduty is a single block, and run with SCOUTFLO_CONFIG set to that file (and SCOUTFLO_AUDIT_DIR to its own folder)."; exit 1; }; _sf_i=$((_sf_i+1)); done; fi
+_sf_tv="$(sh "$_SF_TT" "$_SF_CFG" pagerduty get 0 token_env 2>/dev/null || true)"; if [ -n "$_sf_tv" ] && [ "$(sh "$_SF_TT" "$_SF_CFG" pagerduty kind 2>/dev/null || true)" != seq ]; then _sf_v="$(sh -c '[ -f "$1" ] && . "$1" >/dev/null 2>&1; printenv -- "$2"' _ "$SCOUTFLO_ENV" "$_sf_tv" 2>/dev/null || true)"; if [ -n "$_sf_v" ]; then PAGERDUTY_TOKEN="$_sf_v"; export PAGERDUTY_TOKEN; else unset PAGERDUTY_TOKEN; fi; fi
 PD_API="https://api.pagerduty.com"   # pagerduty.region
 FALLBACK_WINDOW_DAYS="30"   # example, tune to your review cadence
 SINCE="$(date -u -v-${FALLBACK_WINDOW_DAYS}d +%Y-%m-%dT00:00:00Z 2>/dev/null || date -u -d "${FALLBACK_WINDOW_DAYS} days ago" +%Y-%m-%dT00:00:00Z)"

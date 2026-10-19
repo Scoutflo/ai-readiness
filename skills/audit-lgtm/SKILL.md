@@ -64,6 +64,9 @@ fi
 # this a no-op. This mirrors what /scoutflo:doctor does, so doctor and this audit agree.
 SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.scoutflo/env" ]; then SCOUTFLO_ENV="./.scoutflo/env"; else SCOUTFLO_ENV="$HOME/.scoutflo/env"; fi; }
 [ -f "$SCOUTFLO_ENV" ] && . "$SCOUTFLO_ENV" || true
+_SF_CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$_SF_CFG" ] || for _sf_c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_sf_c" ] && { _SF_CFG="$_sf_c"; break; }; done
+_SF_TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+_sf_tv="$(sh "$_SF_TT" "$_SF_CFG" grafana get 0 token_env 2>/dev/null || true)"; if [ -n "$_sf_tv" ] && [ "$(sh "$_SF_TT" "$_SF_CFG" grafana kind 2>/dev/null || true)" != seq ]; then _sf_v="$(sh -c '[ -f "$1" ] && . "$1" >/dev/null 2>&1; printenv -- "$2"' _ "$SCOUTFLO_ENV" "$_sf_tv" 2>/dev/null || true)"; if [ -n "$_sf_v" ]; then GRAFANA_TOKEN="$_sf_v"; export GRAFANA_TOKEN; else unset GRAFANA_TOKEN; fi; fi
 command -v curl >/dev/null || { echo "curl not installed"; exit 1; }
 command -v jq   >/dev/null || { echo "jq not installed"; exit 1; }
 # --- Multi-cluster target resolution (IMP-003) -----------------------------------
@@ -193,6 +196,10 @@ set -euo pipefail   # pipefail matters here: the DASHBOARDS fetch is a `curl | j
                     # the pipe succeed with empty output, DASHBOARDS becomes empty, and
                     # $((SERVICES + )) silently sizes the estate as if there were zero
                     # dashboards (possibly picking small/medium when it is really large).
+SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.scoutflo/env" ]; then SCOUTFLO_ENV="./.scoutflo/env"; else SCOUTFLO_ENV="$HOME/.scoutflo/env"; fi; }
+_SF_CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$_SF_CFG" ] || for _sf_c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_sf_c" ] && { _SF_CFG="$_sf_c"; break; }; done
+_SF_TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+_sf_tv="$(sh "$_SF_TT" "$_SF_CFG" grafana get 0 token_env 2>/dev/null || true)"; if [ -n "$_sf_tv" ] && [ "$(sh "$_SF_TT" "$_SF_CFG" grafana kind 2>/dev/null || true)" != seq ]; then _sf_v="$(sh -c '[ -f "$1" ] && . "$1" >/dev/null 2>&1; printenv -- "$2"' _ "$SCOUTFLO_ENV" "$_sf_tv" 2>/dev/null || true)"; if [ -n "$_sf_v" ]; then GRAFANA_TOKEN="$_sf_v"; export GRAFANA_TOKEN; else unset GRAFANA_TOKEN; fi; fi
 SMALL_MAX_OBJECTS="15"    # example, tune to your environment
 MEDIUM_MAX_OBJECTS="60"   # example, tune to your environment
 BATCH_SIZE="15"           # services per batch on the large path; example, tune it

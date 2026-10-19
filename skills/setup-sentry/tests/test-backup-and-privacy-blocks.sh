@@ -96,7 +96,7 @@ run_block() {
       -e 's|^ALERT_RULE_ID="your-metric-alert-id"|ALERT_RULE_ID="12345678"|' "$1" > "$WORK/run.sh"
   rm -rf "$WORK/state" "$WORK/home" "$WORK/out"; mkdir -p "$WORK/state" "$WORK/home"
   set +e
-  ( cd "$WORK" && HOME="$WORK/home" SCOUTFLO_AUDIT_DIR="$WORK/out" STUB_DIR="$WORK/state" \
+  ( cd "$WORK" && HOME="$WORK/home" SCOUTFLO_ENV_FILE= SCOUTFLO_CONFIG= SCOUTFLO_TARGET= SCOUTFLO_AUDIT_DIR="$WORK/out" STUB_DIR="$WORK/state" \
       FAULT_MODE="$3" STUB_DROP="${4:-}" PATH="$WORK/bin:$PATH" SENTRY_TOKEN="example-not-a-secret" \
       sh "$WORK/run.sh" ) > "$WORK/stdout" 2> "$WORK/stderr"
   rc=$?

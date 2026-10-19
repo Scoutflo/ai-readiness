@@ -8,6 +8,11 @@ Paginates until a page returns fewer than 100 results. Falls back from the org p
 
 ```bash
 set -eu
+SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.scoutflo/env" ]; then SCOUTFLO_ENV="./.scoutflo/env"; else SCOUTFLO_ENV="$HOME/.scoutflo/env"; fi; }
+_SF_CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$_SF_CFG" ] || for _sf_c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_sf_c" ] && { _SF_CFG="$_sf_c"; break; }; done
+_SF_TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+if [ "$(sh "$_SF_TT" "$_SF_CFG" github kind 2>/dev/null || true)" = seq ]; then _sf_i=0; while [ "$_sf_i" -lt "$(sh "$_SF_TT" "$_SF_CFG" github count 2>/dev/null || echo 0)" ]; do [ -z "$(sh "$_SF_TT" "$_SF_CFG" github get "$_sf_i" token_env 2>/dev/null || true)" ] || { echo "github in ${_SF_CFG} is a list of targets that each name their own token_env, and this step reads GITHUB_TOKEN by its default name, so it cannot tell which target's value to use. It stops instead of guessing: give that target a config of its own where github is a single block, and run with SCOUTFLO_CONFIG set to that file (and SCOUTFLO_AUDIT_DIR to its own folder)."; exit 1; }; _sf_i=$((_sf_i+1)); done; fi
+_sf_tv="$(sh "$_SF_TT" "$_SF_CFG" github get 0 token_env 2>/dev/null || true)"; if [ -n "$_sf_tv" ] && [ "$(sh "$_SF_TT" "$_SF_CFG" github kind 2>/dev/null || true)" != seq ]; then _sf_v="$(sh -c '[ -f "$1" ] && . "$1" >/dev/null 2>&1; printenv -- "$2"' _ "$SCOUTFLO_ENV" "$_sf_tv" 2>/dev/null || true)"; if [ -n "$_sf_v" ]; then GITHUB_TOKEN="$_sf_v"; export GITHUB_TOKEN; else unset GITHUB_TOKEN; fi; fi
 GITHUB_ORG="your-org"          # github.org
 GITHUB_TOKEN_PRESENT="${GITHUB_TOKEN:+set}"
 [ -n "${GITHUB_TOKEN_PRESENT:-}" ] || { echo "GITHUB_TOKEN is not set; run /scoutflo:connect"; exit 1; }
@@ -38,6 +43,11 @@ Used by Phase 5's re-run delta to re-check one already-confirmed `repository_id`
 
 ```bash
 set -eu
+SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.scoutflo/env" ]; then SCOUTFLO_ENV="./.scoutflo/env"; else SCOUTFLO_ENV="$HOME/.scoutflo/env"; fi; }
+_SF_CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$_SF_CFG" ] || for _sf_c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_sf_c" ] && { _SF_CFG="$_sf_c"; break; }; done
+_SF_TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+if [ "$(sh "$_SF_TT" "$_SF_CFG" github kind 2>/dev/null || true)" = seq ]; then _sf_i=0; while [ "$_sf_i" -lt "$(sh "$_SF_TT" "$_SF_CFG" github count 2>/dev/null || echo 0)" ]; do [ -z "$(sh "$_SF_TT" "$_SF_CFG" github get "$_sf_i" token_env 2>/dev/null || true)" ] || { echo "github in ${_SF_CFG} is a list of targets that each name their own token_env, and this step reads GITHUB_TOKEN by its default name, so it cannot tell which target's value to use. It stops instead of guessing: give that target a config of its own where github is a single block, and run with SCOUTFLO_CONFIG set to that file (and SCOUTFLO_AUDIT_DIR to its own folder)."; exit 1; }; _sf_i=$((_sf_i+1)); done; fi
+_sf_tv="$(sh "$_SF_TT" "$_SF_CFG" github get 0 token_env 2>/dev/null || true)"; if [ -n "$_sf_tv" ] && [ "$(sh "$_SF_TT" "$_SF_CFG" github kind 2>/dev/null || true)" != seq ]; then _sf_v="$(sh -c '[ -f "$1" ] && . "$1" >/dev/null 2>&1; printenv -- "$2"' _ "$SCOUTFLO_ENV" "$_sf_tv" 2>/dev/null || true)"; if [ -n "$_sf_v" ]; then GITHUB_TOKEN="$_sf_v"; export GITHUB_TOKEN; else unset GITHUB_TOKEN; fi; fi
 REPOSITORY_ID="812345678"      # an already-confirmed repository_id from a prior repo-map.json
 resp=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 -H "Authorization: Bearer ${GITHUB_TOKEN}" "https://api.github.com/repositories/${REPOSITORY_ID}")
 if [ "$resp" = "200" ]; then
@@ -56,6 +66,11 @@ Used by Phase 3's "none of these" path (the user supplies an owner/name or URL) 
 
 ```bash
 set -eu
+SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.scoutflo/env" ]; then SCOUTFLO_ENV="./.scoutflo/env"; else SCOUTFLO_ENV="$HOME/.scoutflo/env"; fi; }
+_SF_CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$_SF_CFG" ] || for _sf_c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_sf_c" ] && { _SF_CFG="$_sf_c"; break; }; done
+_SF_TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+if [ "$(sh "$_SF_TT" "$_SF_CFG" github kind 2>/dev/null || true)" = seq ]; then _sf_i=0; while [ "$_sf_i" -lt "$(sh "$_SF_TT" "$_SF_CFG" github count 2>/dev/null || echo 0)" ]; do [ -z "$(sh "$_SF_TT" "$_SF_CFG" github get "$_sf_i" token_env 2>/dev/null || true)" ] || { echo "github in ${_SF_CFG} is a list of targets that each name their own token_env, and this step reads GITHUB_TOKEN by its default name, so it cannot tell which target's value to use. It stops instead of guessing: give that target a config of its own where github is a single block, and run with SCOUTFLO_CONFIG set to that file (and SCOUTFLO_AUDIT_DIR to its own folder)."; exit 1; }; _sf_i=$((_sf_i+1)); done; fi
+_sf_tv="$(sh "$_SF_TT" "$_SF_CFG" github get 0 token_env 2>/dev/null || true)"; if [ -n "$_sf_tv" ] && [ "$(sh "$_SF_TT" "$_SF_CFG" github kind 2>/dev/null || true)" != seq ]; then _sf_v="$(sh -c '[ -f "$1" ] && . "$1" >/dev/null 2>&1; printenv -- "$2"' _ "$SCOUTFLO_ENV" "$_sf_tv" 2>/dev/null || true)"; if [ -n "$_sf_v" ]; then GITHUB_TOKEN="$_sf_v"; export GITHUB_TOKEN; else unset GITHUB_TOKEN; fi; fi
 OWNER="your-org"                # from the user's answer (strip a URL down to owner/name first)
 NAME="checkout-api"
 resp=$(curl -s -o "${TMPDIR:-/tmp}/map-repos-resolve.json" -w '%{http_code}' --max-time 10 \
@@ -75,6 +90,11 @@ Used by Phase 2's monorepo probe, on at most 5 candidate repos per run. One call
 
 ```bash
 set -eu
+SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.scoutflo/env" ]; then SCOUTFLO_ENV="./.scoutflo/env"; else SCOUTFLO_ENV="$HOME/.scoutflo/env"; fi; }
+_SF_CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$_SF_CFG" ] || for _sf_c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_sf_c" ] && { _SF_CFG="$_sf_c"; break; }; done
+_SF_TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+if [ "$(sh "$_SF_TT" "$_SF_CFG" github kind 2>/dev/null || true)" = seq ]; then _sf_i=0; while [ "$_sf_i" -lt "$(sh "$_SF_TT" "$_SF_CFG" github count 2>/dev/null || echo 0)" ]; do [ -z "$(sh "$_SF_TT" "$_SF_CFG" github get "$_sf_i" token_env 2>/dev/null || true)" ] || { echo "github in ${_SF_CFG} is a list of targets that each name their own token_env, and this step reads GITHUB_TOKEN by its default name, so it cannot tell which target's value to use. It stops instead of guessing: give that target a config of its own where github is a single block, and run with SCOUTFLO_CONFIG set to that file (and SCOUTFLO_AUDIT_DIR to its own folder)."; exit 1; }; _sf_i=$((_sf_i+1)); done; fi
+_sf_tv="$(sh "$_SF_TT" "$_SF_CFG" github get 0 token_env 2>/dev/null || true)"; if [ -n "$_sf_tv" ] && [ "$(sh "$_SF_TT" "$_SF_CFG" github kind 2>/dev/null || true)" != seq ]; then _sf_v="$(sh -c '[ -f "$1" ] && . "$1" >/dev/null 2>&1; printenv -- "$2"' _ "$SCOUTFLO_ENV" "$_sf_tv" 2>/dev/null || true)"; if [ -n "$_sf_v" ]; then GITHUB_TOKEN="$_sf_v"; export GITHUB_TOKEN; else unset GITHUB_TOKEN; fi; fi
 OWNER="your-org"
 NAME="platform-monorepo"
 # Root entries (directories only):
@@ -94,6 +114,11 @@ Expected: the first call prints the root directory names; the second prints each
 
 ```bash
 set -eu
+SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.scoutflo/env" ]; then SCOUTFLO_ENV="./.scoutflo/env"; else SCOUTFLO_ENV="$HOME/.scoutflo/env"; fi; }
+_SF_CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$_SF_CFG" ] || for _sf_c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_sf_c" ] && { _SF_CFG="$_sf_c"; break; }; done
+_SF_TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+if [ "$(sh "$_SF_TT" "$_SF_CFG" github kind 2>/dev/null || true)" = seq ]; then _sf_i=0; while [ "$_sf_i" -lt "$(sh "$_SF_TT" "$_SF_CFG" github count 2>/dev/null || echo 0)" ]; do [ -z "$(sh "$_SF_TT" "$_SF_CFG" github get "$_sf_i" token_env 2>/dev/null || true)" ] || { echo "github in ${_SF_CFG} is a list of targets that each name their own token_env, and this step reads GITHUB_TOKEN by its default name, so it cannot tell which target's value to use. It stops instead of guessing: give that target a config of its own where github is a single block, and run with SCOUTFLO_CONFIG set to that file (and SCOUTFLO_AUDIT_DIR to its own folder)."; exit 1; }; _sf_i=$((_sf_i+1)); done; fi
+_sf_tv="$(sh "$_SF_TT" "$_SF_CFG" github get 0 token_env 2>/dev/null || true)"; if [ -n "$_sf_tv" ] && [ "$(sh "$_SF_TT" "$_SF_CFG" github kind 2>/dev/null || true)" != seq ]; then _sf_v="$(sh -c '[ -f "$1" ] && . "$1" >/dev/null 2>&1; printenv -- "$2"' _ "$SCOUTFLO_ENV" "$_sf_tv" 2>/dev/null || true)"; if [ -n "$_sf_v" ]; then GITHUB_TOKEN="$_sf_v"; export GITHUB_TOKEN; else unset GITHUB_TOKEN; fi; fi
 OWNER="your-org"                # from a candidate row
 NAME="checkout-api"             # from a candidate row
 resp=$(curl -s --max-time 10 -H "Authorization: Bearer ${GITHUB_TOKEN}" "https://api.github.com/repos/${OWNER}/${NAME}/readme")
@@ -111,6 +136,11 @@ Expected: the first ~500 characters of the decoded README, or the "(no README...
 
 ```bash
 set -eu
+SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.scoutflo/env" ]; then SCOUTFLO_ENV="./.scoutflo/env"; else SCOUTFLO_ENV="$HOME/.scoutflo/env"; fi; }
+_SF_CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$_SF_CFG" ] || for _sf_c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_sf_c" ] && { _SF_CFG="$_sf_c"; break; }; done
+_SF_TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+if [ "$(sh "$_SF_TT" "$_SF_CFG" github kind 2>/dev/null || true)" = seq ]; then _sf_i=0; while [ "$_sf_i" -lt "$(sh "$_SF_TT" "$_SF_CFG" github count 2>/dev/null || echo 0)" ]; do [ -z "$(sh "$_SF_TT" "$_SF_CFG" github get "$_sf_i" token_env 2>/dev/null || true)" ] || { echo "github in ${_SF_CFG} is a list of targets that each name their own token_env, and this step reads GITHUB_TOKEN by its default name, so it cannot tell which target's value to use. It stops instead of guessing: give that target a config of its own where github is a single block, and run with SCOUTFLO_CONFIG set to that file (and SCOUTFLO_AUDIT_DIR to its own folder)."; exit 1; }; _sf_i=$((_sf_i+1)); done; fi
+_sf_tv="$(sh "$_SF_TT" "$_SF_CFG" github get 0 token_env 2>/dev/null || true)"; if [ -n "$_sf_tv" ] && [ "$(sh "$_SF_TT" "$_SF_CFG" github kind 2>/dev/null || true)" != seq ]; then _sf_v="$(sh -c '[ -f "$1" ] && . "$1" >/dev/null 2>&1; printenv -- "$2"' _ "$SCOUTFLO_ENV" "$_sf_tv" 2>/dev/null || true)"; if [ -n "$_sf_v" ]; then GITHUB_TOKEN="$_sf_v"; export GITHUB_TOKEN; else unset GITHUB_TOKEN; fi; fi
 OWNER="your-org"                # from a candidate row
 NAME="checkout-api"             # from a candidate row
 for path in package.json go.mod pyproject.toml; do

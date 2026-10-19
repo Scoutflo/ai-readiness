@@ -117,6 +117,7 @@ Print what you are pointed at and compare it to the config before the first real
 
 ```bash
 set -eu
+SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.scoutflo/env" ]; then SCOUTFLO_ENV="./.scoutflo/env"; else SCOUTFLO_ENV="$HOME/.scoutflo/env"; fi; }
 # Resolve the CURRENT groundcover target (single block, or the SCOUTFLO_TARGET-selected item of a
 # labeled list) via the shared enumerator; no yq required. Re-resolved here because each block runs
 # in a fresh shell. $CFG resolved the standard way (override -> project-local -> home).
@@ -131,7 +132,7 @@ GC_API=$(sh "$TT" "$CFG" groundcover get "$GC_IDX" api_url); [ -n "$GC_API" ] ||
 GC_API="${GC_API%/}"
 GC_BACKEND_ID=$(sh "$TT" "$CFG" groundcover get "$GC_IDX" backend_id)   # groundcover.backend_id; X-Backend-Id on multi-backend accounts
 GC_TOKVAR=$(sh "$TT" "$CFG" groundcover get "$GC_IDX" token_env); [ -n "$GC_TOKVAR" ] || GC_TOKVAR=GROUNDCOVER_API_KEY
-GROUNDCOVER_API_KEY=$(printenv "$GC_TOKVAR" 2>/dev/null || true)   # token_env names the variable; never a hardcoded name
+GROUNDCOVER_API_KEY=$(sh -c '[ -f "$1" ] && . "$1" >/dev/null 2>&1; printenv -- "$2"' _ "$SCOUTFLO_ENV" "$GC_TOKVAR" 2>/dev/null || true)   # token_env names the variable; never a hardcoded name
 [ -n "${GROUNDCOVER_API_KEY:-}" ] || { echo "GROUNDCOVER_API_KEY is not set — add it to ~/.scoutflo/env (echo 'export GROUNDCOVER_API_KEY=\"<paste>\"' >> ~/.scoutflo/env; chmod 600 ~/.scoutflo/env), or run /scoutflo:connect. The plugin reads that file, not your interactive shell."; exit 1; }
 # groundcover has no whoami; the account is identified by the monitors the key reads.
 if [ -n "$GC_BACKEND_ID" ]; then
@@ -183,6 +184,7 @@ Count before judging, and declare the path in the terminal output. The unit here
 
 ```bash
 set -eu
+SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.scoutflo/env" ]; then SCOUTFLO_ENV="./.scoutflo/env"; else SCOUTFLO_ENV="$HOME/.scoutflo/env"; fi; }
 # Resolve the CURRENT groundcover target (single block, or the SCOUTFLO_TARGET-selected item of a
 # labeled list) via the shared enumerator; no yq required. $CFG resolved the standard way.
 CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
@@ -196,7 +198,7 @@ GC_API=$(sh "$TT" "$CFG" groundcover get "$GC_IDX" api_url); [ -n "$GC_API" ] ||
 GC_API="${GC_API%/}"
 GC_BACKEND_ID=$(sh "$TT" "$CFG" groundcover get "$GC_IDX" backend_id)   # groundcover.backend_id; X-Backend-Id on multi-backend accounts
 GC_TOKVAR=$(sh "$TT" "$CFG" groundcover get "$GC_IDX" token_env); [ -n "$GC_TOKVAR" ] || GC_TOKVAR=GROUNDCOVER_API_KEY
-GROUNDCOVER_API_KEY=$(printenv "$GC_TOKVAR" 2>/dev/null || true)   # token_env names the variable; never a hardcoded name
+GROUNDCOVER_API_KEY=$(sh -c '[ -f "$1" ] && . "$1" >/dev/null 2>&1; printenv -- "$2"' _ "$SCOUTFLO_ENV" "$GC_TOKVAR" 2>/dev/null || true)   # token_env names the variable; never a hardcoded name
 [ -n "${GROUNDCOVER_API_KEY:-}" ] || { echo "GROUNDCOVER_API_KEY is not set — add it to ~/.scoutflo/env (echo 'export GROUNDCOVER_API_KEY=\"<paste>\"' >> ~/.scoutflo/env; chmod 600 ~/.scoutflo/env), or run /scoutflo:connect. The plugin reads that file, not your interactive shell."; exit 1; }
 SMALL_MAX_OBJECTS="30"    # example, tune to your environment
 MEDIUM_MAX_OBJECTS="150"  # example, tune to your environment

@@ -139,6 +139,7 @@ Print what you are pointed at and compare it to the config before the first real
 
 ```bash
 set -eu
+SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.scoutflo/env" ]; then SCOUTFLO_ENV="./.scoutflo/env"; else SCOUTFLO_ENV="$HOME/.scoutflo/env"; fi; }
 CFG="${SCOUTFLO_CONFIG:-}"
 [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done
 [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
@@ -152,7 +153,7 @@ ELK_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$ELK_
 ELK_LABEL=$(sh "$TT" "$CFG" elk label "$ELK_IDX")
 KIBANA_URL=$(sh "$TT" "$CFG" elk get "$ELK_IDX" kibana_url); KIBANA_URL="${KIBANA_URL%/}"   # elk.kibana_url
 ELK_TOKEN_VAR=$(sh "$TT" "$CFG" elk get "$ELK_IDX" token_env); [ -n "$ELK_TOKEN_VAR" ] || ELK_TOKEN_VAR="KIBANA_API_KEY"
-KIBANA_API_KEY=$(printenv "$ELK_TOKEN_VAR" 2>/dev/null || true)
+KIBANA_API_KEY=$(sh -c '[ -f "$1" ] && . "$1" >/dev/null 2>&1; printenv -- "$2"' _ "$SCOUTFLO_ENV" "$ELK_TOKEN_VAR" 2>/dev/null || true)
 STATUS_BODY="$(mktemp)"; STATUS_RC=0
 STATUS_META="$(curl -sS -o "$STATUS_BODY" -w '%{http_code} %{content_type}' --max-time 15 \
   -H "Authorization: ApiKey ${KIBANA_API_KEY}" "${KIBANA_URL}/api/status")" || STATUS_RC=$?

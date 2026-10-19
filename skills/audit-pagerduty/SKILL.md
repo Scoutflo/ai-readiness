@@ -105,6 +105,7 @@ Print what you are pointed at and compare it to the config before the first real
 
 ```bash
 set -eu
+SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.scoutflo/env" ]; then SCOUTFLO_ENV="./.scoutflo/env"; else SCOUTFLO_ENV="$HOME/.scoutflo/env"; fi; }
 CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
 # Resolve the CURRENT pagerduty target from config via the shared enumerator — a single block, or the
 # SCOUTFLO_TARGET-selected item of a labeled list (no yq required). The token and host are this target's own.
@@ -114,7 +115,7 @@ PD_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$PD_N"
 [ "$(sh "$TT" "$CFG" pagerduty kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" pagerduty label "$PD_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no pagerduty target in $CFG; labels: $(sh "$TT" "$CFG" pagerduty labels | tr '\n' ' ')"; exit 1; }
 PD_LABEL=$(sh "$TT" "$CFG" pagerduty label "$PD_IDX")
 PD_TOKVAR=$(sh "$TT" "$CFG" pagerduty get "$PD_IDX" token_env); PD_TOKVAR="${PD_TOKVAR:-PAGERDUTY_TOKEN}"
-PAGERDUTY_TOKEN="$(printenv "$PD_TOKVAR" 2>/dev/null || true)"; export PAGERDUTY_TOKEN
+PAGERDUTY_TOKEN="$(sh -c '[ -f "$1" ] && . "$1" >/dev/null 2>&1; printenv -- "$2"' _ "$SCOUTFLO_ENV" "$PD_TOKVAR" 2>/dev/null || true)"; export PAGERDUTY_TOKEN
 [ -n "${PAGERDUTY_TOKEN:-}" ] || { echo "pagerduty target '${PD_LABEL}' token variable ${PD_TOKVAR} is not set — add it to ~/.scoutflo/env (echo 'export ${PD_TOKVAR}=\"<paste>\"' >> ~/.scoutflo/env; chmod 600 ~/.scoutflo/env), or run /scoutflo:connect. The plugin reads that file, not your interactive shell."; exit 1; }
 PD_REGION=$(sh "$TT" "$CFG" pagerduty get "$PD_IDX" region); PD_REGION="${PD_REGION:-us}"
 if [ "$PD_REGION" = "eu" ]; then PD_API="https://api.eu.pagerduty.com"; else PD_API="https://api.pagerduty.com"; fi
@@ -162,6 +163,7 @@ Count before judging, and declare the path in the terminal output:
 
 ```bash
 set -eu
+SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.scoutflo/env" ]; then SCOUTFLO_ENV="./.scoutflo/env"; else SCOUTFLO_ENV="$HOME/.scoutflo/env"; fi; }
 CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
 TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 PD_KIND=$(sh "$TT" "$CFG" pagerduty kind); PD_N=$(sh "$TT" "$CFG" pagerduty count)
@@ -170,7 +172,7 @@ PD_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$PD_N"
 PD_LABEL=$(sh "$TT" "$CFG" pagerduty label "$PD_IDX")
 if [ "$PD_KIND" = seq ]; then PD_SEG="pagerduty/${PD_LABEL}"; else PD_SEG="pagerduty"; fi
 PD_TOKVAR=$(sh "$TT" "$CFG" pagerduty get "$PD_IDX" token_env); PD_TOKVAR="${PD_TOKVAR:-PAGERDUTY_TOKEN}"
-PAGERDUTY_TOKEN="$(printenv "$PD_TOKVAR" 2>/dev/null || true)"; export PAGERDUTY_TOKEN
+PAGERDUTY_TOKEN="$(sh -c '[ -f "$1" ] && . "$1" >/dev/null 2>&1; printenv -- "$2"' _ "$SCOUTFLO_ENV" "$PD_TOKVAR" 2>/dev/null || true)"; export PAGERDUTY_TOKEN
 PD_REGION=$(sh "$TT" "$CFG" pagerduty get "$PD_IDX" region); PD_REGION="${PD_REGION:-us}"
 if [ "$PD_REGION" = "eu" ]; then PD_API="https://api.eu.pagerduty.com"; else PD_API="https://api.pagerduty.com"; fi
 SMALL_MAX_OBJECTS="15"    # example, tune to your environment

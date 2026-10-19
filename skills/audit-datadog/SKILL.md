@@ -112,6 +112,7 @@ Print what you are pointed at and compare it to the config before the first real
 
 ```bash
 set -eu
+SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.scoutflo/env" ]; then SCOUTFLO_ENV="./.scoutflo/env"; else SCOUTFLO_ENV="$HOME/.scoutflo/env"; fi; }
 CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
 # Resolve the CURRENT datadog target from config via the shared enumerator — a single block, or the
 # SCOUTFLO_TARGET-selected item of a labeled list (no yq required). Site and keys are this target's own.
@@ -125,8 +126,8 @@ DD_SITE=$(sh "$TT" "$CFG" datadog get "$DD_IDX" site); DD_SITE="${DD_SITE:-datad
 DD_HOST="api.${DD_SITE}"
 DD_API_VAR=$(sh "$TT" "$CFG" datadog get "$DD_IDX" api_key_env); DD_API_VAR="${DD_API_VAR:-DATADOG_API_KEY}"
 DD_APP_VAR=$(sh "$TT" "$CFG" datadog get "$DD_IDX" app_key_env); DD_APP_VAR="${DD_APP_VAR:-DATADOG_APP_KEY}"
-DATADOG_API_KEY="$(printenv "$DD_API_VAR" 2>/dev/null || true)"; export DATADOG_API_KEY
-DATADOG_APP_KEY="$(printenv "$DD_APP_VAR" 2>/dev/null || true)"; export DATADOG_APP_KEY
+DATADOG_API_KEY="$(sh -c '[ -f "$1" ] && . "$1" >/dev/null 2>&1; printenv -- "$2"' _ "$SCOUTFLO_ENV" "$DD_API_VAR" 2>/dev/null || true)"; export DATADOG_API_KEY
+DATADOG_APP_KEY="$(sh -c '[ -f "$1" ] && . "$1" >/dev/null 2>&1; printenv -- "$2"' _ "$SCOUTFLO_ENV" "$DD_APP_VAR" 2>/dev/null || true)"; export DATADOG_APP_KEY
 [ -n "${DATADOG_API_KEY:-}" ] || { echo "datadog target '${DD_LABEL}' key variable ${DD_API_VAR} is not set — add it to ~/.scoutflo/env (echo 'export ${DD_API_VAR}=\"<paste>\"' >> ~/.scoutflo/env; chmod 600 ~/.scoutflo/env), or run /scoutflo:connect. The plugin reads that file, not your interactive shell."; exit 1; }
 [ -n "${DATADOG_APP_KEY:-}" ] || { echo "datadog target '${DD_LABEL}' app-key variable ${DD_APP_VAR} is not set — add it to ~/.scoutflo/env (echo 'export ${DD_APP_VAR}=\"<paste>\"' >> ~/.scoutflo/env; chmod 600 ~/.scoutflo/env), or run /scoutflo:connect. The plugin reads that file, not your interactive shell."; exit 1; }
 # There is no org-name whoami on the key pair; identify the org by what it reads and by
@@ -165,6 +166,7 @@ Count before judging, and declare the path in the terminal output:
 
 ```bash
 set -eu
+SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.scoutflo/env" ]; then SCOUTFLO_ENV="./.scoutflo/env"; else SCOUTFLO_ENV="$HOME/.scoutflo/env"; fi; }
 CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
 TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 DD_KIND=$(sh "$TT" "$CFG" datadog kind); DD_N=$(sh "$TT" "$CFG" datadog count)
@@ -176,8 +178,8 @@ DD_SITE=$(sh "$TT" "$CFG" datadog get "$DD_IDX" site); DD_SITE="${DD_SITE:-datad
 DD_HOST="api.${DD_SITE}"
 DD_API_VAR=$(sh "$TT" "$CFG" datadog get "$DD_IDX" api_key_env); DD_API_VAR="${DD_API_VAR:-DATADOG_API_KEY}"
 DD_APP_VAR=$(sh "$TT" "$CFG" datadog get "$DD_IDX" app_key_env); DD_APP_VAR="${DD_APP_VAR:-DATADOG_APP_KEY}"
-DATADOG_API_KEY="$(printenv "$DD_API_VAR" 2>/dev/null || true)"; export DATADOG_API_KEY
-DATADOG_APP_KEY="$(printenv "$DD_APP_VAR" 2>/dev/null || true)"; export DATADOG_APP_KEY
+DATADOG_API_KEY="$(sh -c '[ -f "$1" ] && . "$1" >/dev/null 2>&1; printenv -- "$2"' _ "$SCOUTFLO_ENV" "$DD_API_VAR" 2>/dev/null || true)"; export DATADOG_API_KEY
+DATADOG_APP_KEY="$(sh -c '[ -f "$1" ] && . "$1" >/dev/null 2>&1; printenv -- "$2"' _ "$SCOUTFLO_ENV" "$DD_APP_VAR" 2>/dev/null || true)"; export DATADOG_APP_KEY
 SMALL_MAX_OBJECTS="25"    # example, tune to your environment
 MEDIUM_MAX_OBJECTS="150"  # example, tune to your environment
 BATCH_SIZE="50"           # monitors per batch on the large path; example, tune it

@@ -16,6 +16,7 @@ ClickHouse helper (declare once per session; every ClickHouse block below calls 
 
 ```bash
 set -eu
+SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.scoutflo/env" ]; then SCOUTFLO_ENV="./.scoutflo/env"; else SCOUTFLO_ENV="$HOME/.scoutflo/env"; fi; }
 # Resolve the CURRENT clickstack target from ~/.scoutflo/toolkit.yaml — a single block, or the
 # SCOUTFLO_TARGET-selected item of a labeled list (the shared enumerator handles both; no yq
 # required). Every ClickHouse read below uses THIS target's own url + user + password; no ambient
@@ -30,7 +31,7 @@ CH_USER=$(sh "$TT" "$CFG" clickstack get "$CS_IDX" clickhouse_user); [ -n "$CH_U
 # clickstack.clickhouse_password_env names the VARIABLE holding the password (e.g. CH_KEY); read it
 # with printenv on that name (default to CH_KEY when the key is absent). NEVER print the value.
 CH_KEY_VAR=$(sh "$TT" "$CFG" clickstack get "$CS_IDX" clickhouse_password_env); [ -n "$CH_KEY_VAR" ] || CH_KEY_VAR="CH_KEY"
-CH_KEY=$(printenv "$CH_KEY_VAR" 2>/dev/null || true)
+CH_KEY=$(sh -c '[ -f "$1" ] && . "$1" >/dev/null 2>&1; printenv -- "$2"' _ "$SCOUTFLO_ENV" "$CH_KEY_VAR" 2>/dev/null || true)
 
 # One read-only SELECT. readonly=1 is defense-in-depth over the user's own read-only grants;
 # -f turns any write attempt, auth failure, or error into a hard non-zero exit. If the server
@@ -66,6 +67,7 @@ HyperDX helper (declare once per session; every HyperDX block below calls `hdx_g
 
 ```bash
 set -eu
+SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.scoutflo/env" ]; then SCOUTFLO_ENV="./.scoutflo/env"; else SCOUTFLO_ENV="$HOME/.scoutflo/env"; fi; }
 # Resolve the CURRENT clickstack target (single block or SCOUTFLO_TARGET-selected list item) via the
 # shared enumerator; HyperDX reads below use THIS target's own url + credential. Re-resolved per block.
 CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
@@ -78,11 +80,11 @@ HDX_URL=$(sh "$TT" "$CFG" clickstack get "$CS_IDX" hyperdx_url); HDX_URL="${HDX_
 # name when the key is absent) and NEVER print the value. The PERSONAL API ACCESS KEY is the per-user
 # accessKey (NOT the team ingestion key); email/password are the optional legacy session-login fallback.
 HDX_API_KEY_VAR=$(sh "$TT" "$CFG" clickstack get "$CS_IDX" hyperdx_api_key_env); [ -n "$HDX_API_KEY_VAR" ] || HDX_API_KEY_VAR="HDX_API_KEY"
-HDX_API_KEY=$(printenv "$HDX_API_KEY_VAR" 2>/dev/null || true)
+HDX_API_KEY=$(sh -c '[ -f "$1" ] && . "$1" >/dev/null 2>&1; printenv -- "$2"' _ "$SCOUTFLO_ENV" "$HDX_API_KEY_VAR" 2>/dev/null || true)
 HDX_EMAIL_VAR=$(sh "$TT" "$CFG" clickstack get "$CS_IDX" hyperdx_email_env); [ -n "$HDX_EMAIL_VAR" ] || HDX_EMAIL_VAR="HDX_EMAIL"
-HDX_EMAIL=$(printenv "$HDX_EMAIL_VAR" 2>/dev/null || true)
+HDX_EMAIL=$(sh -c '[ -f "$1" ] && . "$1" >/dev/null 2>&1; printenv -- "$2"' _ "$SCOUTFLO_ENV" "$HDX_EMAIL_VAR" 2>/dev/null || true)
 HDX_PASSWORD_VAR=$(sh "$TT" "$CFG" clickstack get "$CS_IDX" hyperdx_password_env); [ -n "$HDX_PASSWORD_VAR" ] || HDX_PASSWORD_VAR="HDX_PASSWORD"
-HDX_PASSWORD=$(printenv "$HDX_PASSWORD_VAR" 2>/dev/null || true)
+HDX_PASSWORD=$(sh -c '[ -f "$1" ] && . "$1" >/dev/null 2>&1; printenv -- "$2"' _ "$SCOUTFLO_ENV" "$HDX_PASSWORD_VAR" 2>/dev/null || true)
 [ -n "$HDX_API_KEY" ] || [ -n "$HDX_EMAIL" ] || { echo "no HyperDX credential set (neither a Personal API Access Key nor login email+password); HyperDX checks unavailable — run /scoutflo:connect"; exit 1; }
 
 # HyperDX auth model — confirmed live (v2.x all-in-one) + against the v2.29 source:

@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.1.223
+
+**A token saved in the secret store now reaches every step that needs it, and only that token.**
+
+- Each step runs in a fresh shell, so before this only the doctor step saw a
+  token kept in the secret store (where `/scoutflo:connect` puts it): the
+  doctor passed, then the next step said "token not set". In the audits, the
+  maps, `rca`, `migration-plan` and `setup-sentry`, a step now reads the token
+  it needs from the store, the way `/scoutflo:doctor` finds it.
+- A step reads only that one variable. Nothing else in the store, such as a
+  report folder, a kubeconfig, or another environment's secrets, enters the
+  step.
+- A step that reads a token by its default name (for example
+  `PAGERDUTY_TOKEN`, or `doctl`, which reads its own token) uses the variable
+  your config names for it. If that variable is not set, the step does not
+  pick up another saved token: it fails as before, and a `doctl` step stops
+  rather than fall back to doctl's own login. If your config names no
+  variable, the step works exactly as before.
+- On a list of targets that each name their own token, those default-name
+  steps now stop and ask you to run each target from a config of its own
+  (the tool as a single block, with its own `SCOUTFLO_AUDIT_DIR`), instead of
+  reading one target's token for another target's report. A list whose
+  targets need no token runs as before.
+- Without yq, a single block with a nested list (for example a block-style
+  `teams:` list) was read as a list of targets. The shared target reader now
+  reads it as one block.
+- Unchanged on purpose: `connect`, the setup skills other than
+  `setup-sentry`, and Slack briefs.
+- A new test checks every step that reads a secret and runs the published
+  steps against fixtures.
+
 ## 0.1.222
 
 **Sentry audit and setup fixes, and a mistyped target label now stops instead of auditing the first target.**

@@ -145,6 +145,7 @@ Count before judging, and declare the path in the terminal output. This is one c
 
 ```bash
 set -eu
+SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.scoutflo/env" ]; then SCOUTFLO_ENV="./.scoutflo/env"; else SCOUTFLO_ENV="$HOME/.scoutflo/env"; fi; }
 # Resolve the CURRENT sentry target (single block, or the SCOUTFLO_TARGET-selected item of a
 # labeled list) via the shared enumerator; no yq required. Re-resolved here because each block
 # runs in a fresh shell. $CFG resolved the standard way (override -> project-local -> home).
@@ -159,7 +160,7 @@ SENTRY_HOST=$(sh "$TT" "$CFG" sentry get "$SNTRY_IDX" host)   # sentry.host
 SENTRY_ORG=$(sh "$TT" "$CFG" sentry get "$SNTRY_IDX" org)     # sentry.org
 API="https://${SENTRY_HOST}/api/0"
 SNTRY_TOKVAR=$(sh "$TT" "$CFG" sentry get "$SNTRY_IDX" token_env); [ -n "$SNTRY_TOKVAR" ] || SNTRY_TOKVAR=SENTRY_TOKEN
-SENTRY_TOKEN=$(printenv "$SNTRY_TOKVAR" 2>/dev/null || true)   # token_env names the variable; never a hardcoded name
+SENTRY_TOKEN=$(sh -c '[ -f "$1" ] && . "$1" >/dev/null 2>&1; printenv -- "$2"' _ "$SCOUTFLO_ENV" "$SNTRY_TOKVAR" 2>/dev/null || true)   # token_env names the variable; never a hardcoded name
 [ -n "${SENTRY_TOKEN:-}" ] || { echo "SENTRY_TOKEN is not set — add it to ~/.scoutflo/env (echo 'export SENTRY_TOKEN=\"<paste>\"' >> ~/.scoutflo/env; chmod 600 ~/.scoutflo/env), or run /scoutflo:connect. The plugin reads that file, not your interactive shell."; exit 1; }
 
 SMALL_MAX_PROJECTS="15"    # single-pass ceiling; example, tune to your environment
@@ -254,6 +255,7 @@ On the small and medium paths, run every command below as written: the org-level
 
 ```bash
 set -eu
+SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.scoutflo/env" ]; then SCOUTFLO_ENV="./.scoutflo/env"; else SCOUTFLO_ENV="$HOME/.scoutflo/env"; fi; }
 # Resolve the CURRENT sentry target (single block, or the SCOUTFLO_TARGET-selected item of a
 # labeled list) via the shared enumerator; no yq required. Re-resolved here because each block
 # runs in a fresh shell. $CFG resolved the standard way (override -> project-local -> home).
@@ -268,7 +270,7 @@ SENTRY_HOST=$(sh "$TT" "$CFG" sentry get "$SNTRY_IDX" host)   # sentry.host
 SENTRY_ORG=$(sh "$TT" "$CFG" sentry get "$SNTRY_IDX" org)     # sentry.org
 API="https://${SENTRY_HOST}/api/0"
 SNTRY_TOKVAR=$(sh "$TT" "$CFG" sentry get "$SNTRY_IDX" token_env); [ -n "$SNTRY_TOKVAR" ] || SNTRY_TOKVAR=SENTRY_TOKEN
-SENTRY_TOKEN=$(printenv "$SNTRY_TOKVAR" 2>/dev/null || true)   # token_env names the variable; never a hardcoded name
+SENTRY_TOKEN=$(sh -c '[ -f "$1" ] && . "$1" >/dev/null 2>&1; printenv -- "$2"' _ "$SCOUTFLO_ENV" "$SNTRY_TOKVAR" 2>/dev/null || true)   # token_env names the variable; never a hardcoded name
 [ -n "${SENTRY_TOKEN:-}" ] || { echo "SENTRY_TOKEN is not set — add it to ~/.scoutflo/env (echo 'export SENTRY_TOKEN=\"<paste>\"' >> ~/.scoutflo/env; chmod 600 ~/.scoutflo/env), or run /scoutflo:connect. The plugin reads that file, not your interactive shell."; exit 1; }
 RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${SNTRY_SEG}/$(date -u +%Y-%m-%d)/raw"
 mkdir -p "${RAW_DIR}/projects"

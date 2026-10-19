@@ -78,7 +78,7 @@ awk_dump() {
   awk -v blk="$BLOCK" '
     function strip(v){ sub(/[[:space:]]#.*$/,"",v); sub(/^[[:space:]]+/,"",v); sub(/[[:space:]]+$/,"",v);
                        sub(/^"/,"",v); sub(/"$/,"",v); sub(/^'\''/,"",v); sub(/'\''$/,"",v); return v }
-    BEGIN{ inblk=0; isseq=0; idx=-1 }
+    BEGIN{ inblk=0; isseq=0; idx=-1; mode=""; base=-1 }
     # top-level key line (column 0, not a comment)
     /^[A-Za-z_][A-Za-z0-9_]*:/ {
       if ($0 ~ "^" blk ":[[:space:]]*$" || $0 ~ "^" blk ":") { inblk=1; next }
@@ -87,6 +87,12 @@ awk_dump() {
     inblk {
       line=$0
       if (line ~ /^[[:space:]]*#/ || line ~ /^[[:space:]]*$/) next
+      # The first content line decides the shape: a "- " item makes the block a list, a key
+      # makes it a single block. A "- " line nested deeper (a list value inside a target, such
+      # as a teams: list) is a value, never a new target.
+      match(line, /^[[:space:]]*/); ind=RLENGTH
+      if (mode == "") { mode = (line ~ /^[[:space:]]*-[[:space:]]/) ? "seq" : "map"; base = ind }
+      if (line ~ /^[[:space:]]*-[[:space:]]/ && (mode != "seq" || ind != base)) next
       # a list item begins with (indent)"- "
       if (line ~ /^[[:space:]]*-[[:space:]]/) {
         isseq=1; idx++
@@ -126,14 +132,16 @@ awk_get() {
 }
 awk_kind() {
   awk -v blk="$BLOCK" '
-    BEGIN{ inblk=0; seenitem=0; seenkey=0 }
-    /^[A-Za-z_][A-Za-z0-9_]*:/ { if ($0 ~ "^" blk ":") { inblk=1; next } else if (inblk) inblk=0 }
+    BEGIN{ inblk=0; kind="absent" }
+    /^[A-Za-z_][A-Za-z0-9_]*:/ { if ($0 ~ "^" blk ":") { inblk=1; next } else if (inblk) exit }
     inblk {
+      # The first content line under the key decides: a "- " item is a list, a key is a single
+      # block. A list nested inside a single block (a block-style teams: list) is a value.
       if ($0 ~ /^[[:space:]]*#/ || $0 ~ /^[[:space:]]*$/) next
-      if ($0 ~ /^[[:space:]]*-[[:space:]]/) { seenitem=1 }
-      else if ($0 ~ /^[[:space:]]+[A-Za-z0-9_]+:/) { seenkey=1 }
+      if ($0 ~ /^[[:space:]]*-[[:space:]]/) kind="seq"; else if ($0 ~ /^[[:space:]]+[A-Za-z0-9_]+:/) kind="map"
+      exit
     }
-    END{ if (seenitem) print "seq"; else if (seenkey) print "map"; else print "absent" }
+    END{ print kind }
   ' "$CFG"
 }
 yq_kind_norm() {

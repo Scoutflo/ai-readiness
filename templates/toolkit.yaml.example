@@ -13,6 +13,12 @@
 #   slug: lowercase letters/digits/hyphens, unique within the block). The audit
 #   runs once per target and writes each to <integration>/<label>/<date>/. A plain
 #   single block (no list) is unchanged and writes the flat <integration>/<date>/.
+#   Some check steps read one token per tool by its default name (PagerDuty,
+#   Datadog, ELK, Grafana, Groundcover, JSM, Zenduty, Sentry, GitHub, the
+#   DigitalOcean cost and map steps, LGTM stacks with their own *_token_env): on a
+#   list whose targets each name their own token variable, those steps stop and
+#   ask you to run each target from a config of its own, with the tool as a single
+#   block and SCOUTFLO_CONFIG and SCOUTFLO_AUDIT_DIR set for that target.
 #   Example — three HyperDX instances and two Azure subscriptions in one env:
 #     clickstack:
 #       - label: hdx-eu

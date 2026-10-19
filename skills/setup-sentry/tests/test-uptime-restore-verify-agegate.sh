@@ -148,7 +148,7 @@ prep() {
 # run: run $WORK/run.sh in a fresh sh, stdin closed, against the fake Sentry; sets RC.
 run() {
   set +e
-  ( cd "$WORK" && HOME="$WORK/home" SCOUTFLO_AUDIT_DIR="$WORK/out" STUB_DIR="$STATE" \
+  ( cd "$WORK" && HOME="$WORK/home" SCOUTFLO_ENV_FILE= SCOUTFLO_CONFIG= SCOUTFLO_TARGET= SCOUTFLO_AUDIT_DIR="$WORK/out" STUB_DIR="$STATE" \
       PATH="$WORK/bin:$PATH" SENTRY_TOKEN="example-not-a-secret" sh "$WORK/run.sh" ) \
     > "$WORK/stdout" 2> "$WORK/stderr" <&-
   RC=$?
