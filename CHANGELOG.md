@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.1.221
+
+**audit-sentry: the per-project drop check (SNTRY-018) works.**
+
+- SNTRY-018 never checked anything. Its final step read standard input
+  instead of the stats file it had just fetched. In an agent session
+  standard input is empty, so it printed nothing, which reads as a pass on
+  every estate. Its filter also had a binding mistake that would have failed
+  on real data. The check now reads its stats file and reports each project
+  whose dropped share is over the floor. On a real run it would have caught
+  one project dropping about 11% of its errors behind a healthy org-wide
+  average.
+- A new test runs the check, as written, against a fixture with standard
+  input closed, and fails if a project over the floor is missed.
+- Findings, scoring and the report format are unchanged.
+
 ## 0.1.220
 
 **setup-sentry: a write stops when its backup is unusable, and the privacy change keeps existing fields.**
