@@ -1,5 +1,52 @@
 # Changelog
 
+## 0.1.222
+
+**Sentry audit and setup fixes, and a mistyped target label now stops instead of auditing the first target.**
+
+- **Every skill:** when an integration is a list of labeled targets, a
+  `SCOUTFLO_TARGET` that matches none of the labels now stops the step and
+  lists the valid labels. Before, each audit and `map-topology` silently
+  used the first target in the list, so a typo audited a different target
+  from the one named. `audit-lgtm` used to warn and carry on with the first
+  stack; it now stops too. `rca` lists the labels and answers from reports
+  only, without probing a cluster. A single target is unaffected, and so is
+  `audit-all`, which sets each audit's own label.
+- **audit-sentry: a refused read is reported as blocked.** When Sentry
+  refuses a read (an error status, a page that is not JSON, or no answer),
+  the affected checks now print `blocked` instead of a pass, a fail, or
+  nothing, and the per-project reads in the first phase record the refusal
+  and carry on with the next project instead of stopping or saving an empty
+  list. Blocked checks are reported as not assessed, never as passing.
+- **audit-sentry: three checks give the right verdict.** The check that
+  compares an alert's name with its environment no longer reads "preprod" or
+  "product" as production, and passes a correctly scoped non-production
+  alert. The check for alerts that never fire skips disabled alerts (another
+  check covers those), uses a named, tunable re-notify floor, and no longer
+  treats every legacy rule as snoozed. The code-mapping check now prints
+  each duplicate or over-broad mapping it finds and ends with a pass or fail
+  line.
+- **setup-sentry: uptime monitors use Sentry's new alerts API.** The create
+  step sends the monitor shape Sentry expects (including the environment it
+  requires), prints the new id, and verifies it by reading it back. The
+  rollback checks the monitor's type and name before deleting, and accepts
+  only Sentry's "does not exist" answer as proof it is gone. The accepted
+  check intervals and timeouts are corrected.
+- **setup-sentry: safer undo and verify.** Every restore step now refuses an
+  unusable backup and builds its request before sending, so it can never
+  send an empty one. The bulk verify checks one rule at a time for the
+  change that rule got (updated or deleted) and fails loudly when the check
+  does not hold. The cron-monitor rollback checks the monitor's name first
+  and needs the same proof of deletion.
+- **setup-sentry: the age gate refuses unsafe cases.** Slowing a noisy alert
+  with an issue-age condition now stops before writing when the alert's
+  filter does not require all of its conditions (the new condition would
+  widen or invert it), when the target environment does not exist in the
+  project, or when the alert belongs to another project. The self-hosted
+  path also refuses regression rules.
+- New tests run these Sentry steps and every target guard against stand-ins
+  and fixtures, and fail on the previous version.
+
 ## 0.1.221
 
 **audit-sentry: the per-project drop check (SNTRY-018) works.**
