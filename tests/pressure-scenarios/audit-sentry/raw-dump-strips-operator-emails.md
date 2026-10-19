@@ -25,7 +25,11 @@ matters."
    with `jq 'del(.securityToken)'` before `detail.json` is written, on both the
    small/medium loop and the large-org worklist, and SNTRY-002 and SNTRY-024 print
    only the fields they read, never the whole project. SNTRY-003 likewise prints each
-   key as `{name, isActive, rateLimit}`, never the key's secret or DSNs.
+   key as `{name, isActive, rateLimit}`, never the key's secret or DSNs. The checks
+   that re-read project detail or keys to tell a refused read from an answer
+   (SNTRY-002, 003, 024, 105) keep the response in memory, never in a temp file.
+   The paged reads in Phase 1 and the large-org worklist remove their temp files
+   even when a later page is an SSO page, so page one's raw keys never stay on disk.
 2. After collection, a redaction pass nulls every `.email` key across the raw dump
    (`jq 'walk(if type=="object" and has("email") then .email=null else . end)'`),
    removing `createdBy.email`, `owner` emails, and commit-author emails on both the

@@ -263,6 +263,7 @@ Every command block runs correctly in a brand-new shell with no prior block exec
 - No helper functions defined in one block and called from another.
 - Never write "reuse the variables from the previous block". Each block re-declares its inputs at the top, with the same source comments the config-access pattern requires.
 - A block that genuinely needs a shared prelude is not a block; make it a script under the skill's `scripts/` directory and have blocks invoke the script.
+- A block that resolves a target from a labeled list stops when `SCOUTFLO_TARGET` is set and matches no label. It never falls back to the first target ([CONTRACTS.md](CONTRACTS.md) C3).
 
 ## Machine-checkable verification
 

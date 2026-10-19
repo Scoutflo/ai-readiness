@@ -36,8 +36,8 @@ CFG="${SCOUTFLO_CONFIG:-}"
 # Resolve the kubernetes context for the live probe through the shared enumerator — never `head -1` a
 # scalar. kubernetes may be a single block (one context) OR a labeled list where each item has its own
 # context, and the failing resource lives in exactly ONE cluster. Pick it with SCOUTFLO_TARGET; with a
-# labeled list and no selector, list the labels and leave the live branch off (report-only still runs)
-# rather than guess which cluster the resource is in.
+# labeled list and no selector, or a selector that matches no label, list the labels and leave the live
+# branch off (report-only still runs) rather than guess which cluster the resource is in.
 TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 KUBE_CONTEXT=""
 if [ -f "$CFG" ] && [ -f "$TT" ]; then
@@ -49,7 +49,12 @@ if [ -f "$CFG" ] && [ -f "$TT" ]; then
     else
       K8S_IDX=0
       if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$K8S_N" ]; do [ "$(sh "$TT" "$CFG" kubernetes label "$_i")" = "$SCOUTFLO_TARGET" ] && { K8S_IDX=$_i; break; }; _i=$((_i+1)); done; fi
-      KUBE_CONTEXT=$(sh "$TT" "$CFG" kubernetes get "$K8S_IDX" context)
+      if [ "$K8S_KIND" = seq ] && [ -n "${SCOUTFLO_TARGET:-}" ] && [ "$(sh "$TT" "$CFG" kubernetes label "$K8S_IDX")" != "$SCOUTFLO_TARGET" ]; then
+        echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no kubernetes target in $CFG; live probe off (report-only proceeds). Labels:"
+        sh "$TT" "$CFG" kubernetes labels | sed 's/^/  - /'
+      else
+        KUBE_CONTEXT=$(sh "$TT" "$CFG" kubernetes get "$K8S_IDX" context)
+      fi
     fi
   fi
 fi

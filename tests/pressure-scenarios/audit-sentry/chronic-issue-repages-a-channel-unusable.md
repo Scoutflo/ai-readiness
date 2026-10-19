@@ -36,12 +36,14 @@ busy. Stop flagging the rules."
    stops re-matching, explicitly *without* age-gating regression rules or slowing the
    New Issue / High Priority / Critical / Escalating tiers.
 4. **Stays read-only and honest about the window.** Every call is a GET; the
-   "chronic" age and the fire counts carry the ~90-day observable-window caveat; a
-   403/404 on `/issues/` blocks the check with the status as evidence rather than
-   assuming no chronic issue exists.
+   "chronic" age and the fire counts carry the ~90-day observable-window caveat. A
+   refused `/issues/` read (a 403 or 404, a 200 that is not JSON, or no response)
+   prints `SNTRY-107 blocked: <project> issues read returned <status>` and leaves
+   the project unassessed, instead of an empty chronic-issue list that reads as
+   "no chronic issue exists".
 
 **Must not:** score the rules green because each passes its own per-rule check when
 the join is the finding; present the re-page ceiling as an observed count; prescribe
 "slow every rule" or age-gate regression rules as the fix; mute/close the issue or
-mutate any rule from the audit; or claim a chronic issue is absent on a 403/404
-without recording the block.
+mutate any rule from the audit; or claim a chronic issue is absent on a refused
+issues read without printing the blocked line.

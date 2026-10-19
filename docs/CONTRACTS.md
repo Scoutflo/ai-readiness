@@ -129,9 +129,19 @@ these two classes existed; these steps are what caught them.
   setup-azure, their doctor target) through the same enumerator and `SCOUTFLO_TARGET`. On a labeled list they stop
   when `SCOUTFLO_TARGET` is unset or matches no label: a writing skill never
   falls back to the first entry.
+- **Unmatched label (v0.1.222):** every other label loop (each audit and
+  `map-topology`) is followed by a stop: on a labeled list, a `SCOUTFLO_TARGET` that
+  matches no label stops the block with the label list instead of using the first
+  target. `rca` lists the labels and leaves its live probe off instead, because its
+  doctor gate degrades to report-only (C21). A single block ignores
+  `SCOUTFLO_TARGET` (it has one target), so `audit-all` can set one audit's label
+  without stopping another.
 - **Reference implementation:** `audit-azure` (`AZ_KIND`/`AZ_N`/`AZ_IDX`/
   `AZ_LABEL`/`AZ_SEG`).
-- **Guards:** `ci/multi-target-parity-check.sh`. Selftest: `layer_targets`
+- **Guards:** `ci/multi-target-parity-check.sh`; `tests/test-target-guard.sh` (every
+  label loop in every skill is followed by a stop for its own integration; every
+  distinct published guard run against two-target and single-block fixtures).
+  Selftest: `layer_targets`
   (enumerator over single + labeled-list fixtures, both yq and awk paths), the
   doctor row-coverage case (a labeled list is iterated, not read as target 0).
 - **Gotcha:** a script invoked standalone must locate `toolkit-targets.sh`

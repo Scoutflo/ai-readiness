@@ -103,6 +103,7 @@ TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 NR_KIND=$(sh "$TT" "$CFG" newrelic kind); NR_N=$(sh "$TT" "$CFG" newrelic count)
 [ "${NR_N:-0}" -ge 1 ] || { echo "no newrelic target configured in $CFG; run /scoutflo:connect"; exit 1; }
 NR_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$NR_N" ]; do [ "$(sh "$TT" "$CFG" newrelic label "$_i")" = "$SCOUTFLO_TARGET" ] && { NR_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+[ "$(sh "$TT" "$CFG" newrelic kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" newrelic label "$NR_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no newrelic target in $CFG; labels: $(sh "$TT" "$CFG" newrelic labels | tr '\n' ' ')"; exit 1; }
 NR_LABEL=$(sh "$TT" "$CFG" newrelic label "$NR_IDX")
 if [ "$NR_KIND" = seq ]; then NR_SEG="newrelic/${NR_LABEL}"; else NR_SEG="newrelic"; fi
 NR_ACCT=$(sh "$TT" "$CFG" newrelic get "$NR_IDX" account_id)
@@ -162,6 +163,7 @@ SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.s
 TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 NR_KIND=$(sh "$TT" "$CFG" newrelic kind); NR_N=$(sh "$TT" "$CFG" newrelic count)
 NR_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$NR_N" ]; do [ "$(sh "$TT" "$CFG" newrelic label "$_i")" = "$SCOUTFLO_TARGET" ] && { NR_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+[ "$(sh "$TT" "$CFG" newrelic kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" newrelic label "$NR_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no newrelic target in $CFG; labels: $(sh "$TT" "$CFG" newrelic labels | tr '\n' ' ')"; exit 1; }
 NR_LABEL=$(sh "$TT" "$CFG" newrelic label "$NR_IDX"); NR_ACCT=$(sh "$TT" "$CFG" newrelic get "$NR_IDX" account_id)
 if [ "$NR_KIND" = seq ]; then NR_SEG="newrelic/${NR_LABEL}"; else NR_SEG="newrelic"; fi
 NR_REGION=$(sh "$TT" "$CFG" newrelic get "$NR_IDX" region); NR_REGION="${NR_REGION:-US}"
@@ -239,6 +241,7 @@ CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml
 TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 NR_KIND=$(sh "$TT" "$CFG" newrelic kind); NR_N=$(sh "$TT" "$CFG" newrelic count)
 NR_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$NR_N" ]; do [ "$(sh "$TT" "$CFG" newrelic label "$_i")" = "$SCOUTFLO_TARGET" ] && { NR_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+[ "$(sh "$TT" "$CFG" newrelic kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" newrelic label "$NR_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no newrelic target in $CFG; labels: $(sh "$TT" "$CFG" newrelic labels | tr '\n' ' ')"; exit 1; }
 NR_LABEL=$(sh "$TT" "$CFG" newrelic label "$NR_IDX"); NR_ACCT=$(sh "$TT" "$CFG" newrelic get "$NR_IDX" account_id)
 if [ "$NR_KIND" = seq ]; then NR_SEG="newrelic/${NR_LABEL}"; else NR_SEG="newrelic"; fi
 NR_REGION=$(sh "$TT" "$CFG" newrelic get "$NR_IDX" region); NR_REGION="${NR_REGION:-US}"
@@ -514,6 +517,7 @@ CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml
 TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 NR_KIND=$(sh "$TT" "$CFG" newrelic kind); NR_N=$(sh "$TT" "$CFG" newrelic count)
 NR_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$NR_N" ]; do [ "$(sh "$TT" "$CFG" newrelic label "$_i")" = "$SCOUTFLO_TARGET" ] && { NR_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+[ "$(sh "$TT" "$CFG" newrelic kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" newrelic label "$NR_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no newrelic target in $CFG; labels: $(sh "$TT" "$CFG" newrelic labels | tr '\n' ' ')"; exit 1; }
 NR_LABEL=$(sh "$TT" "$CFG" newrelic label "$NR_IDX")
 if [ "$NR_KIND" = seq ]; then NR_SEG="newrelic/${NR_LABEL}"; else NR_SEG="newrelic"; fi
 TARGET_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${NR_SEG}/$(date +%Y-%m-%d)"

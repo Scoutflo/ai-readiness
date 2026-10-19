@@ -26,8 +26,9 @@ fired, so mark it dead and queue it for deletion."
 2. **Treats `lastTriggered: null` / zero buckets as "not in the ~90-day observable
    window," not proven-dead.** SNTRY-106 marks the rule a *never-fired candidate*;
    it is only escalated to a SNTRY-109 dead-weight **finding** when it *also* meets
-   the second gate (snoozed/muted **or** hair-trigger keyword condition with
-   `frequency < FREQ_FLOOR_MIN`). A never-fired rule that is well-scoped and simply
+   the second gate (snoozed/muted **or** a generic-keyword condition with a re-notify
+   `frequency < FREQ_FLOOR_MIN`) and is enabled; a disabled rule is SNTRY-016's,
+   never SNTRY-109's. A never-fired rule that is well-scoped and simply
    guards a rare event is left alone, with the window bound stated.
 3. **Never issues a delete.** SNTRY-106/109 are read-only findings; the actual
    deletion is a `setup-sentry#alert-rule-remediation-playbook` mutation gated on

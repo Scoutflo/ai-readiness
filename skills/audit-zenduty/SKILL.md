@@ -66,6 +66,7 @@ TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 ZD_KIND=$(sh "$TT" "$CFG" zenduty kind); ZD_N=$(sh "$TT" "$CFG" zenduty count)
 [ "${ZD_N:-0}" -ge 1 ] || { echo "no zenduty target configured in $CFG; run /scoutflo:connect"; exit 1; }
 ZD_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$ZD_N" ]; do [ "$(sh "$TT" "$CFG" zenduty label "$_i")" = "$SCOUTFLO_TARGET" ] && { ZD_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+[ "$(sh "$TT" "$CFG" zenduty kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" zenduty label "$ZD_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no zenduty target in $CFG; labels: $(sh "$TT" "$CFG" zenduty labels | tr '\n' ' ')"; exit 1; }
 ZD_LABEL=$(sh "$TT" "$CFG" zenduty label "$ZD_IDX")
 if [ "$ZD_KIND" = seq ]; then ZD_SEG="zenduty/${ZD_LABEL}"; else ZD_SEG="zenduty"; fi
 # token_env holds a VARIABLE NAME; the secret is that variable's value (defaults to ZENDUTY_TOKEN for a
@@ -120,6 +121,7 @@ CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml
 TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 ZD_KIND=$(sh "$TT" "$CFG" zenduty kind); ZD_N=$(sh "$TT" "$CFG" zenduty count)
 ZD_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$ZD_N" ]; do [ "$(sh "$TT" "$CFG" zenduty label "$_i")" = "$SCOUTFLO_TARGET" ] && { ZD_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+[ "$(sh "$TT" "$CFG" zenduty kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" zenduty label "$ZD_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no zenduty target in $CFG; labels: $(sh "$TT" "$CFG" zenduty labels | tr '\n' ' ')"; exit 1; }
 ZD_LABEL=$(sh "$TT" "$CFG" zenduty label "$ZD_IDX")
 ZD_TOKVAR=$(sh "$TT" "$CFG" zenduty get "$ZD_IDX" token_env); ZD_TOKVAR="${ZD_TOKVAR:-ZENDUTY_TOKEN}"
 ZENDUTY_TOKEN="$(printenv "$ZD_TOKVAR" 2>/dev/null || true)"; export ZENDUTY_TOKEN
@@ -177,6 +179,7 @@ CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml
 TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 ZD_KIND=$(sh "$TT" "$CFG" zenduty kind); ZD_N=$(sh "$TT" "$CFG" zenduty count)
 ZD_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$ZD_N" ]; do [ "$(sh "$TT" "$CFG" zenduty label "$_i")" = "$SCOUTFLO_TARGET" ] && { ZD_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+[ "$(sh "$TT" "$CFG" zenduty kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" zenduty label "$ZD_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no zenduty target in $CFG; labels: $(sh "$TT" "$CFG" zenduty labels | tr '\n' ' ')"; exit 1; }
 ZD_LABEL=$(sh "$TT" "$CFG" zenduty label "$ZD_IDX")
 if [ "$ZD_KIND" = seq ]; then ZD_SEG="zenduty/${ZD_LABEL}"; else ZD_SEG="zenduty"; fi
 ZD_TOKVAR=$(sh "$TT" "$CFG" zenduty get "$ZD_IDX" token_env); ZD_TOKVAR="${ZD_TOKVAR:-ZENDUTY_TOKEN}"
@@ -255,6 +258,7 @@ CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml
 TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 ZD_KIND=$(sh "$TT" "$CFG" zenduty kind); ZD_N=$(sh "$TT" "$CFG" zenduty count)
 ZD_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$ZD_N" ]; do [ "$(sh "$TT" "$CFG" zenduty label "$_i")" = "$SCOUTFLO_TARGET" ] && { ZD_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+[ "$(sh "$TT" "$CFG" zenduty kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" zenduty label "$ZD_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no zenduty target in $CFG; labels: $(sh "$TT" "$CFG" zenduty labels | tr '\n' ' ')"; exit 1; }
 ZD_LABEL=$(sh "$TT" "$CFG" zenduty label "$ZD_IDX")
 if [ "$ZD_KIND" = seq ]; then ZD_SEG="zenduty/${ZD_LABEL}"; else ZD_SEG="zenduty"; fi
 RUN_DATE="$(date -u +%Y-%m-%d)"
@@ -365,6 +369,7 @@ CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml
 TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 ZD_KIND=$(sh "$TT" "$CFG" zenduty kind); ZD_N=$(sh "$TT" "$CFG" zenduty count)
 ZD_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$ZD_N" ]; do [ "$(sh "$TT" "$CFG" zenduty label "$_i")" = "$SCOUTFLO_TARGET" ] && { ZD_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+[ "$(sh "$TT" "$CFG" zenduty kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" zenduty label "$ZD_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no zenduty target in $CFG; labels: $(sh "$TT" "$CFG" zenduty labels | tr '\n' ' ')"; exit 1; }
 ZD_LABEL=$(sh "$TT" "$CFG" zenduty label "$ZD_IDX")
 if [ "$ZD_KIND" = seq ]; then ZD_SEG="zenduty/${ZD_LABEL}"; else ZD_SEG="zenduty"; fi
 RUN_DATE="$(date -u +%Y-%m-%d)"
@@ -401,6 +406,7 @@ CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml
 TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 ZD_KIND=$(sh "$TT" "$CFG" zenduty kind); ZD_N=$(sh "$TT" "$CFG" zenduty count)
 ZD_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$ZD_N" ]; do [ "$(sh "$TT" "$CFG" zenduty label "$_i")" = "$SCOUTFLO_TARGET" ] && { ZD_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+[ "$(sh "$TT" "$CFG" zenduty kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" zenduty label "$ZD_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no zenduty target in $CFG; labels: $(sh "$TT" "$CFG" zenduty labels | tr '\n' ' ')"; exit 1; }
 ZD_LABEL=$(sh "$TT" "$CFG" zenduty label "$ZD_IDX")
 if [ "$ZD_KIND" = seq ]; then ZD_SEG="zenduty/${ZD_LABEL}"; else ZD_SEG="zenduty"; fi
 TARGET_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${ZD_SEG}"

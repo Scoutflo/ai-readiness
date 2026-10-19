@@ -69,6 +69,7 @@ TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 GCP_KIND=$(sh "$TT" "$CFG" gcp kind); GCP_N=$(sh "$TT" "$CFG" gcp count)
 [ "${GCP_N:-0}" -ge 1 ] || { echo "no gcp target configured in $CFG; run /scoutflo:connect"; exit 1; }
 GCP_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$GCP_N" ]; do [ "$(sh "$TT" "$CFG" gcp label "$_i")" = "$SCOUTFLO_TARGET" ] && { GCP_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+[ "$(sh "$TT" "$CFG" gcp kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" gcp label "$GCP_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no gcp target in $CFG; labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
 GCP_LABEL=$(sh "$TT" "$CFG" gcp label "$GCP_IDX"); GCP_PROJECT=$(sh "$TT" "$CFG" gcp get "$GCP_IDX" project)
 [ -n "$GCP_PROJECT" ] || { echo "gcp target '${GCP_LABEL:-?}' has no project in $CFG; run /scoutflo:connect"; exit 1; }
 if [ "$GCP_KIND" = seq ]; then GCP_SEG="gcp/${GCP_LABEL}"; else GCP_SEG="gcp"; fi
@@ -122,6 +123,7 @@ CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml
 TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 GCP_N=$(sh "$TT" "$CFG" gcp count)
 GCP_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$GCP_N" ]; do [ "$(sh "$TT" "$CFG" gcp label "$_i")" = "$SCOUTFLO_TARGET" ] && { GCP_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+[ "$(sh "$TT" "$CFG" gcp kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" gcp label "$GCP_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no gcp target in $CFG; labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
 GCP_LABEL=$(sh "$TT" "$CFG" gcp label "$GCP_IDX"); GCP_PROJECT=$(sh "$TT" "$CFG" gcp get "$GCP_IDX" project)
 [ -n "$GCP_PROJECT" ] || { echo "gcp target '${GCP_LABEL:-?}' has no project in $CFG; run /scoutflo:connect"; exit 1; }
 # Identity comes from gcp.credentials_env (the variable NAME holding the key-file path), not from
@@ -185,6 +187,7 @@ CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml
 TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 GCP_KIND=$(sh "$TT" "$CFG" gcp kind); GCP_N=$(sh "$TT" "$CFG" gcp count)
 GCP_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$GCP_N" ]; do [ "$(sh "$TT" "$CFG" gcp label "$_i")" = "$SCOUTFLO_TARGET" ] && { GCP_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+[ "$(sh "$TT" "$CFG" gcp kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" gcp label "$GCP_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no gcp target in $CFG; labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
 GCP_LABEL=$(sh "$TT" "$CFG" gcp label "$GCP_IDX"); GCP_PROJECT=$(sh "$TT" "$CFG" gcp get "$GCP_IDX" project)
 if [ "$GCP_KIND" = seq ]; then GCP_SEG="gcp/${GCP_LABEL}"; else GCP_SEG="gcp"; fi
 MON_API="https://monitoring.googleapis.com/v3"
@@ -270,6 +273,7 @@ CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml
 TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 GCP_KIND=$(sh "$TT" "$CFG" gcp kind); GCP_N=$(sh "$TT" "$CFG" gcp count)
 GCP_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$GCP_N" ]; do [ "$(sh "$TT" "$CFG" gcp label "$_i")" = "$SCOUTFLO_TARGET" ] && { GCP_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+[ "$(sh "$TT" "$CFG" gcp kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" gcp label "$GCP_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no gcp target in $CFG; labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
 GCP_LABEL=$(sh "$TT" "$CFG" gcp label "$GCP_IDX"); GCP_PROJECT=$(sh "$TT" "$CFG" gcp get "$GCP_IDX" project)
 if [ "$GCP_KIND" = seq ]; then GCP_SEG="gcp/${GCP_LABEL}"; else GCP_SEG="gcp"; fi
 RUN_DATE="$(date -u +%Y-%m-%d)"
@@ -404,6 +408,7 @@ CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml
 TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 GCP_KIND=$(sh "$TT" "$CFG" gcp kind); GCP_N=$(sh "$TT" "$CFG" gcp count)
 GCP_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$GCP_N" ]; do [ "$(sh "$TT" "$CFG" gcp label "$_i")" = "$SCOUTFLO_TARGET" ] && { GCP_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+[ "$(sh "$TT" "$CFG" gcp kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" gcp label "$GCP_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no gcp target in $CFG; labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
 GCP_LABEL=$(sh "$TT" "$CFG" gcp label "$GCP_IDX")
 if [ "$GCP_KIND" = seq ]; then GCP_SEG="gcp/${GCP_LABEL}"; else GCP_SEG="gcp"; fi
 RUN_DATE="$(date -u +%Y-%m-%d)"
@@ -443,6 +448,7 @@ CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml
 TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 GCP_KIND=$(sh "$TT" "$CFG" gcp kind); GCP_N=$(sh "$TT" "$CFG" gcp count)
 GCP_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$GCP_N" ]; do [ "$(sh "$TT" "$CFG" gcp label "$_i")" = "$SCOUTFLO_TARGET" ] && { GCP_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+[ "$(sh "$TT" "$CFG" gcp kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" gcp label "$GCP_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no gcp target in $CFG; labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
 GCP_LABEL=$(sh "$TT" "$CFG" gcp label "$GCP_IDX")
 if [ "$GCP_KIND" = seq ]; then GCP_SEG="gcp/${GCP_LABEL}"; else GCP_SEG="gcp"; fi
 TARGET_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${GCP_SEG}"
@@ -471,6 +477,7 @@ CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml
 TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 GCP_KIND=$(sh "$TT" "$CFG" gcp kind); GCP_N=$(sh "$TT" "$CFG" gcp count)
 GCP_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$GCP_N" ]; do [ "$(sh "$TT" "$CFG" gcp label "$_i")" = "$SCOUTFLO_TARGET" ] && { GCP_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+[ "$(sh "$TT" "$CFG" gcp kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" gcp label "$GCP_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no gcp target in $CFG; labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
 GCP_LABEL=$(sh "$TT" "$CFG" gcp label "$GCP_IDX")
 if [ "$GCP_KIND" = seq ]; then GCP_SEG="gcp/${GCP_LABEL}"; else GCP_SEG="gcp"; fi
 TARGET_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${GCP_SEG}"

@@ -97,6 +97,10 @@ Green = read-only (safe, changes nothing) · amber = write, gated behind your co
 
 ## What's new (latest release)
 
+- **A mistyped target label stops instead of auditing the wrong target.** With several targets for one tool, a `SCOUTFLO_TARGET` that matches none of them now stops and lists the valid labels, instead of quietly auditing the first one.
+
+- **More accurate Sentry audit, safer Sentry setup.** A read Sentry refuses now shows as blocked rather than a pass or fail, three checks give the right verdict, uptime monitors use Sentry's new alerts API, and every undo step refuses a bad backup.
+
 - **Sentry audit catches projects losing events.** The per-project dropped-events check used to read nothing and report nothing; it now flags a project that drops too many of its own errors even when the org-wide average looks healthy.
 
 - **Safer Sentry setup.** A Sentry setup step no longer makes a change when its backup came back empty or unreadable, and the privacy step now keeps the fields your projects already scrub instead of replacing them.

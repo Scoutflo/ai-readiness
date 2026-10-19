@@ -86,6 +86,7 @@ CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml
 TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 DO_KIND=$(sh "$TT" "$CFG" digitalocean kind); DO_N=$(sh "$TT" "$CFG" digitalocean count)
 DO_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$DO_N" ]; do [ "$(sh "$TT" "$CFG" digitalocean label "$_i")" = "$SCOUTFLO_TARGET" ] && { DO_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+[ "$(sh "$TT" "$CFG" digitalocean kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" digitalocean label "$DO_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no digitalocean target in $CFG; labels: $(sh "$TT" "$CFG" digitalocean labels | tr '\n' ' ')"; exit 1; }
 DO_LABEL=$(sh "$TT" "$CFG" digitalocean label "$DO_IDX")
 if [ "$DO_KIND" = seq ]; then DO_SEG="digitalocean/${DO_LABEL}"; else DO_SEG="digitalocean"; fi
 SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.scoutflo/env" ]; then SCOUTFLO_ENV="./.scoutflo/env"; else SCOUTFLO_ENV="$HOME/.scoutflo/env"; fi; }
@@ -133,6 +134,7 @@ CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml
 TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 DO_KIND=$(sh "$TT" "$CFG" digitalocean kind); DO_N=$(sh "$TT" "$CFG" digitalocean count)
 DO_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$DO_N" ]; do [ "$(sh "$TT" "$CFG" digitalocean label "$_i")" = "$SCOUTFLO_TARGET" ] && { DO_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+[ "$(sh "$TT" "$CFG" digitalocean kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" digitalocean label "$DO_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no digitalocean target in $CFG; labels: $(sh "$TT" "$CFG" digitalocean labels | tr '\n' ' ')"; exit 1; }
 DO_LABEL=$(sh "$TT" "$CFG" digitalocean label "$DO_IDX")
 if [ "$DO_KIND" = seq ]; then DO_SEG="digitalocean/${DO_LABEL}"; else DO_SEG="digitalocean"; fi
 SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.scoutflo/env" ]; then SCOUTFLO_ENV="./.scoutflo/env"; else SCOUTFLO_ENV="$HOME/.scoutflo/env"; fi; }
@@ -165,6 +167,7 @@ CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml
 TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 DO_KIND=$(sh "$TT" "$CFG" digitalocean kind); DO_N=$(sh "$TT" "$CFG" digitalocean count)
 DO_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$DO_N" ]; do [ "$(sh "$TT" "$CFG" digitalocean label "$_i")" = "$SCOUTFLO_TARGET" ] && { DO_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+[ "$(sh "$TT" "$CFG" digitalocean kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" digitalocean label "$DO_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no digitalocean target in $CFG; labels: $(sh "$TT" "$CFG" digitalocean labels | tr '\n' ' ')"; exit 1; }
 DO_LABEL=$(sh "$TT" "$CFG" digitalocean label "$DO_IDX")
 if [ "$DO_KIND" = seq ]; then DO_SEG="digitalocean/${DO_LABEL}"; else DO_SEG="digitalocean"; fi
 RUN_DATE="$(date -u +%Y-%m-%d)"
@@ -189,6 +192,7 @@ CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml
 TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 DO_KIND=$(sh "$TT" "$CFG" digitalocean kind); DO_N=$(sh "$TT" "$CFG" digitalocean count)
 DO_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$DO_N" ]; do [ "$(sh "$TT" "$CFG" digitalocean label "$_i")" = "$SCOUTFLO_TARGET" ] && { DO_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+[ "$(sh "$TT" "$CFG" digitalocean kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" digitalocean label "$DO_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no digitalocean target in $CFG; labels: $(sh "$TT" "$CFG" digitalocean labels | tr '\n' ' ')"; exit 1; }
 DO_LABEL=$(sh "$TT" "$CFG" digitalocean label "$DO_IDX")
 if [ "$DO_KIND" = seq ]; then DO_SEG="digitalocean/${DO_LABEL}"; else DO_SEG="digitalocean"; fi
 RUN_DATE="$(date -u +%Y-%m-%d)"
@@ -229,6 +233,7 @@ CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml
 TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 DO_KIND=$(sh "$TT" "$CFG" digitalocean kind); DO_N=$(sh "$TT" "$CFG" digitalocean count)
 DO_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$DO_N" ]; do [ "$(sh "$TT" "$CFG" digitalocean label "$_i")" = "$SCOUTFLO_TARGET" ] && { DO_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+[ "$(sh "$TT" "$CFG" digitalocean kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" digitalocean label "$DO_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no digitalocean target in $CFG; labels: $(sh "$TT" "$CFG" digitalocean labels | tr '\n' ' ')"; exit 1; }
 DO_LABEL=$(sh "$TT" "$CFG" digitalocean label "$DO_IDX")
 if [ "$DO_KIND" = seq ]; then DO_SEG="digitalocean/${DO_LABEL}"; else DO_SEG="digitalocean"; fi
 SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.scoutflo/env" ]; then SCOUTFLO_ENV="./.scoutflo/env"; else SCOUTFLO_ENV="$HOME/.scoutflo/env"; fi; }
@@ -276,6 +281,7 @@ CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml
 TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 DO_KIND=$(sh "$TT" "$CFG" digitalocean kind); DO_N=$(sh "$TT" "$CFG" digitalocean count)
 DO_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$DO_N" ]; do [ "$(sh "$TT" "$CFG" digitalocean label "$_i")" = "$SCOUTFLO_TARGET" ] && { DO_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+[ "$(sh "$TT" "$CFG" digitalocean kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" digitalocean label "$DO_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no digitalocean target in $CFG; labels: $(sh "$TT" "$CFG" digitalocean labels | tr '\n' ' ')"; exit 1; }
 DO_LABEL=$(sh "$TT" "$CFG" digitalocean label "$DO_IDX")
 if [ "$DO_KIND" = seq ]; then DO_SEG="digitalocean/${DO_LABEL}"; else DO_SEG="digitalocean"; fi
 RUN_DATE="$(date -u +%Y-%m-%d)"
@@ -372,6 +378,7 @@ CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml
 TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 DO_N=$(sh "$TT" "$CFG" digitalocean count)
 DO_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$DO_N" ]; do [ "$(sh "$TT" "$CFG" digitalocean label "$_i")" = "$SCOUTFLO_TARGET" ] && { DO_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+[ "$(sh "$TT" "$CFG" digitalocean kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" digitalocean label "$DO_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no digitalocean target in $CFG; labels: $(sh "$TT" "$CFG" digitalocean labels | tr '\n' ' ')"; exit 1; }
 SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.scoutflo/env" ]; then SCOUTFLO_ENV="./.scoutflo/env"; else SCOUTFLO_ENV="$HOME/.scoutflo/env"; fi; }
 [ -f "$SCOUTFLO_ENV" ] && . "$SCOUTFLO_ENV" || true
 DO_TOKEN_VAR=$(sh "$TT" "$CFG" digitalocean get "$DO_IDX" token_env); [ -n "$DO_TOKEN_VAR" ] || DO_TOKEN_VAR="DIGITALOCEAN_ACCESS_TOKEN"
@@ -420,6 +427,7 @@ CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml
 TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 DO_KIND=$(sh "$TT" "$CFG" digitalocean kind); DO_N=$(sh "$TT" "$CFG" digitalocean count)
 DO_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$DO_N" ]; do [ "$(sh "$TT" "$CFG" digitalocean label "$_i")" = "$SCOUTFLO_TARGET" ] && { DO_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+[ "$(sh "$TT" "$CFG" digitalocean kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" digitalocean label "$DO_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no digitalocean target in $CFG; labels: $(sh "$TT" "$CFG" digitalocean labels | tr '\n' ' ')"; exit 1; }
 DO_LABEL=$(sh "$TT" "$CFG" digitalocean label "$DO_IDX")
 if [ "$DO_KIND" = seq ]; then DO_SEG="digitalocean/${DO_LABEL}"; else DO_SEG="digitalocean"; fi
 RUN_DATE="$(date -u +%Y-%m-%d)"
@@ -484,6 +492,7 @@ CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml
 TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 DO_N=$(sh "$TT" "$CFG" digitalocean count)
 DO_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$DO_N" ]; do [ "$(sh "$TT" "$CFG" digitalocean label "$_i")" = "$SCOUTFLO_TARGET" ] && { DO_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+[ "$(sh "$TT" "$CFG" digitalocean kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" digitalocean label "$DO_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no digitalocean target in $CFG; labels: $(sh "$TT" "$CFG" digitalocean labels | tr '\n' ' ')"; exit 1; }
 SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.scoutflo/env" ]; then SCOUTFLO_ENV="./.scoutflo/env"; else SCOUTFLO_ENV="$HOME/.scoutflo/env"; fi; }
 [ -f "$SCOUTFLO_ENV" ] && . "$SCOUTFLO_ENV" || true
 DO_TOKEN_VAR=$(sh "$TT" "$CFG" digitalocean get "$DO_IDX" token_env); [ -n "$DO_TOKEN_VAR" ] || DO_TOKEN_VAR="DIGITALOCEAN_ACCESS_TOKEN"
@@ -511,6 +520,7 @@ CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml
 TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 DO_KIND=$(sh "$TT" "$CFG" digitalocean kind); DO_N=$(sh "$TT" "$CFG" digitalocean count)
 DO_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$DO_N" ]; do [ "$(sh "$TT" "$CFG" digitalocean label "$_i")" = "$SCOUTFLO_TARGET" ] && { DO_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+[ "$(sh "$TT" "$CFG" digitalocean kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" digitalocean label "$DO_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no digitalocean target in $CFG; labels: $(sh "$TT" "$CFG" digitalocean labels | tr '\n' ' ')"; exit 1; }
 DO_LABEL=$(sh "$TT" "$CFG" digitalocean label "$DO_IDX")
 if [ "$DO_KIND" = seq ]; then DO_SEG="digitalocean/${DO_LABEL}"; else DO_SEG="digitalocean"; fi
 RUN_DATE="$(date -u +%Y-%m-%d)"
@@ -562,6 +572,7 @@ CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml
 TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 DO_KIND=$(sh "$TT" "$CFG" digitalocean kind); DO_N=$(sh "$TT" "$CFG" digitalocean count)
 DO_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$DO_N" ]; do [ "$(sh "$TT" "$CFG" digitalocean label "$_i")" = "$SCOUTFLO_TARGET" ] && { DO_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+[ "$(sh "$TT" "$CFG" digitalocean kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" digitalocean label "$DO_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no digitalocean target in $CFG; labels: $(sh "$TT" "$CFG" digitalocean labels | tr '\n' ' ')"; exit 1; }
 DO_LABEL=$(sh "$TT" "$CFG" digitalocean label "$DO_IDX")
 if [ "$DO_KIND" = seq ]; then DO_SEG="digitalocean/${DO_LABEL}"; else DO_SEG="digitalocean"; fi
 RUN_DATE="$(date -u +%Y-%m-%d)"
@@ -614,6 +625,7 @@ CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml
 TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 DO_KIND=$(sh "$TT" "$CFG" digitalocean kind); DO_N=$(sh "$TT" "$CFG" digitalocean count)
 DO_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$DO_N" ]; do [ "$(sh "$TT" "$CFG" digitalocean label "$_i")" = "$SCOUTFLO_TARGET" ] && { DO_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+[ "$(sh "$TT" "$CFG" digitalocean kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" digitalocean label "$DO_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no digitalocean target in $CFG; labels: $(sh "$TT" "$CFG" digitalocean labels | tr '\n' ' ')"; exit 1; }
 DO_LABEL=$(sh "$TT" "$CFG" digitalocean label "$DO_IDX")
 if [ "$DO_KIND" = seq ]; then DO_SEG="digitalocean/${DO_LABEL}"; else DO_SEG="digitalocean"; fi
 AUDIT_ROOT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${DO_SEG}"
@@ -647,6 +659,7 @@ CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml
 TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 DO_KIND=$(sh "$TT" "$CFG" digitalocean kind); DO_N=$(sh "$TT" "$CFG" digitalocean count)
 DO_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$DO_N" ]; do [ "$(sh "$TT" "$CFG" digitalocean label "$_i")" = "$SCOUTFLO_TARGET" ] && { DO_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+[ "$(sh "$TT" "$CFG" digitalocean kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" digitalocean label "$DO_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no digitalocean target in $CFG; labels: $(sh "$TT" "$CFG" digitalocean labels | tr '\n' ' ')"; exit 1; }
 DO_LABEL=$(sh "$TT" "$CFG" digitalocean label "$DO_IDX")
 if [ "$DO_KIND" = seq ]; then DO_SEG="digitalocean/${DO_LABEL}"; else DO_SEG="digitalocean"; fi
 AUDIT_ROOT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${DO_SEG}"
@@ -668,6 +681,7 @@ CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml
 TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 DO_KIND=$(sh "$TT" "$CFG" digitalocean kind); DO_N=$(sh "$TT" "$CFG" digitalocean count)
 DO_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$DO_N" ]; do [ "$(sh "$TT" "$CFG" digitalocean label "$_i")" = "$SCOUTFLO_TARGET" ] && { DO_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+[ "$(sh "$TT" "$CFG" digitalocean kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" digitalocean label "$DO_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no digitalocean target in $CFG; labels: $(sh "$TT" "$CFG" digitalocean labels | tr '\n' ' ')"; exit 1; }
 DO_LABEL=$(sh "$TT" "$CFG" digitalocean label "$DO_IDX")
 if [ "$DO_KIND" = seq ]; then DO_SEG="digitalocean/${DO_LABEL}"; else DO_SEG="digitalocean"; fi
 SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.scoutflo/env" ]; then SCOUTFLO_ENV="./.scoutflo/env"; else SCOUTFLO_ENV="$HOME/.scoutflo/env"; fi; }
@@ -701,6 +715,7 @@ CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml
 TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 DO_KIND=$(sh "$TT" "$CFG" digitalocean kind); DO_N=$(sh "$TT" "$CFG" digitalocean count)
 DO_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$DO_N" ]; do [ "$(sh "$TT" "$CFG" digitalocean label "$_i")" = "$SCOUTFLO_TARGET" ] && { DO_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+[ "$(sh "$TT" "$CFG" digitalocean kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" digitalocean label "$DO_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no digitalocean target in $CFG; labels: $(sh "$TT" "$CFG" digitalocean labels | tr '\n' ' ')"; exit 1; }
 DO_LABEL=$(sh "$TT" "$CFG" digitalocean label "$DO_IDX")
 if [ "$DO_KIND" = seq ]; then DO_SEG="digitalocean/${DO_LABEL}"; else DO_SEG="digitalocean"; fi
 RUN_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${DO_SEG}/runs/20260717T140500Z"   # example; resolved run directory
@@ -734,6 +749,7 @@ CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml
 TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 DO_KIND=$(sh "$TT" "$CFG" digitalocean kind); DO_N=$(sh "$TT" "$CFG" digitalocean count)
 DO_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$DO_N" ]; do [ "$(sh "$TT" "$CFG" digitalocean label "$_i")" = "$SCOUTFLO_TARGET" ] && { DO_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+[ "$(sh "$TT" "$CFG" digitalocean kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" digitalocean label "$DO_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no digitalocean target in $CFG; labels: $(sh "$TT" "$CFG" digitalocean labels | tr '\n' ' ')"; exit 1; }
 DO_LABEL=$(sh "$TT" "$CFG" digitalocean label "$DO_IDX")
 if [ "$DO_KIND" = seq ]; then DO_SEG="digitalocean/${DO_LABEL}"; else DO_SEG="digitalocean"; fi
 SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.scoutflo/env" ]; then SCOUTFLO_ENV="./.scoutflo/env"; else SCOUTFLO_ENV="$HOME/.scoutflo/env"; fi; }
@@ -779,6 +795,7 @@ CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml
 TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 DO_KIND=$(sh "$TT" "$CFG" digitalocean kind); DO_N=$(sh "$TT" "$CFG" digitalocean count)
 DO_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$DO_N" ]; do [ "$(sh "$TT" "$CFG" digitalocean label "$_i")" = "$SCOUTFLO_TARGET" ] && { DO_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+[ "$(sh "$TT" "$CFG" digitalocean kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" digitalocean label "$DO_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no digitalocean target in $CFG; labels: $(sh "$TT" "$CFG" digitalocean labels | tr '\n' ' ')"; exit 1; }
 DO_LABEL=$(sh "$TT" "$CFG" digitalocean label "$DO_IDX")
 if [ "$DO_KIND" = seq ]; then DO_SEG="digitalocean/${DO_LABEL}"; else DO_SEG="digitalocean"; fi
 RUN_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${DO_SEG}/runs/20260717T140500Z"   # example; resolved run directory
@@ -823,6 +840,7 @@ CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml
 TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 DO_KIND=$(sh "$TT" "$CFG" digitalocean kind); DO_N=$(sh "$TT" "$CFG" digitalocean count)
 DO_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$DO_N" ]; do [ "$(sh "$TT" "$CFG" digitalocean label "$_i")" = "$SCOUTFLO_TARGET" ] && { DO_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+[ "$(sh "$TT" "$CFG" digitalocean kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" digitalocean label "$DO_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no digitalocean target in $CFG; labels: $(sh "$TT" "$CFG" digitalocean labels | tr '\n' ' ')"; exit 1; }
 DO_LABEL=$(sh "$TT" "$CFG" digitalocean label "$DO_IDX")
 if [ "$DO_KIND" = seq ]; then DO_SEG="digitalocean/${DO_LABEL}"; else DO_SEG="digitalocean"; fi
 RUN_DATE="$(date -u +%Y-%m-%d)"
@@ -847,6 +865,7 @@ CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml
 TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 DO_KIND=$(sh "$TT" "$CFG" digitalocean kind); DO_N=$(sh "$TT" "$CFG" digitalocean count)
 DO_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$DO_N" ]; do [ "$(sh "$TT" "$CFG" digitalocean label "$_i")" = "$SCOUTFLO_TARGET" ] && { DO_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+[ "$(sh "$TT" "$CFG" digitalocean kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" digitalocean label "$DO_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no digitalocean target in $CFG; labels: $(sh "$TT" "$CFG" digitalocean labels | tr '\n' ' ')"; exit 1; }
 DO_LABEL=$(sh "$TT" "$CFG" digitalocean label "$DO_IDX")
 if [ "$DO_KIND" = seq ]; then DO_SEG="digitalocean/${DO_LABEL}"; else DO_SEG="digitalocean"; fi
 RUN_DATE="$(date -u +%Y-%m-%d)"
@@ -872,6 +891,7 @@ CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml
 TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 DO_KIND=$(sh "$TT" "$CFG" digitalocean kind); DO_N=$(sh "$TT" "$CFG" digitalocean count)
 DO_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$DO_N" ]; do [ "$(sh "$TT" "$CFG" digitalocean label "$_i")" = "$SCOUTFLO_TARGET" ] && { DO_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+[ "$(sh "$TT" "$CFG" digitalocean kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" digitalocean label "$DO_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no digitalocean target in $CFG; labels: $(sh "$TT" "$CFG" digitalocean labels | tr '\n' ' ')"; exit 1; }
 DO_LABEL=$(sh "$TT" "$CFG" digitalocean label "$DO_IDX")
 if [ "$DO_KIND" = seq ]; then DO_SEG="digitalocean/${DO_LABEL}"; else DO_SEG="digitalocean"; fi
 RUN_DATE="$(date -u +%Y-%m-%d)"
@@ -913,6 +933,7 @@ CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml
 TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 DO_KIND=$(sh "$TT" "$CFG" digitalocean kind); DO_N=$(sh "$TT" "$CFG" digitalocean count)
 DO_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$DO_N" ]; do [ "$(sh "$TT" "$CFG" digitalocean label "$_i")" = "$SCOUTFLO_TARGET" ] && { DO_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+[ "$(sh "$TT" "$CFG" digitalocean kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" digitalocean label "$DO_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no digitalocean target in $CFG; labels: $(sh "$TT" "$CFG" digitalocean labels | tr '\n' ' ')"; exit 1; }
 DO_LABEL=$(sh "$TT" "$CFG" digitalocean label "$DO_IDX")
 if [ "$DO_KIND" = seq ]; then DO_SEG="digitalocean/${DO_LABEL}"; else DO_SEG="digitalocean"; fi
 RUN_DATE="$(date -u +%Y-%m-%d)"
@@ -964,6 +985,7 @@ CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml
 TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 DO_N=$(sh "$TT" "$CFG" digitalocean count)
 DO_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$DO_N" ]; do [ "$(sh "$TT" "$CFG" digitalocean label "$_i")" = "$SCOUTFLO_TARGET" ] && { DO_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+[ "$(sh "$TT" "$CFG" digitalocean kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" digitalocean label "$DO_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no digitalocean target in $CFG; labels: $(sh "$TT" "$CFG" digitalocean labels | tr '\n' ' ')"; exit 1; }
 SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.scoutflo/env" ]; then SCOUTFLO_ENV="./.scoutflo/env"; else SCOUTFLO_ENV="$HOME/.scoutflo/env"; fi; }
 [ -f "$SCOUTFLO_ENV" ] && . "$SCOUTFLO_ENV" || true
 DO_TOKEN_VAR=$(sh "$TT" "$CFG" digitalocean get "$DO_IDX" token_env); [ -n "$DO_TOKEN_VAR" ] || DO_TOKEN_VAR="DIGITALOCEAN_ACCESS_TOKEN"

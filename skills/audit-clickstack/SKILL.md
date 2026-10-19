@@ -74,6 +74,7 @@ command -v jq   >/dev/null || { echo "jq not installed"; exit 1; }
 TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 CS_KIND=$(sh "$TT" "$CFG" clickstack kind); CS_N=$(sh "$TT" "$CFG" clickstack count)
 CS_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "${CS_N:-0}" ]; do [ "$(sh "$TT" "$CFG" clickstack label "$_i")" = "$SCOUTFLO_TARGET" ] && { CS_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+[ "$(sh "$TT" "$CFG" clickstack kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" clickstack label "$CS_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no clickstack target in $CFG; labels: $(sh "$TT" "$CFG" clickstack labels | tr '\n' ' ')"; exit 1; }
 CS_LABEL=$(sh "$TT" "$CFG" clickstack label "$CS_IDX")
 if [ "$CS_KIND" = seq ]; then CS_SEG="clickstack/${CS_LABEL}"; else CS_SEG="clickstack"; fi
 # For every configured *_env key: read the secret with printenv on the VARIABLE NAME the key holds
@@ -160,6 +161,7 @@ CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml
 TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 CS_KIND=$(sh "$TT" "$CFG" clickstack kind); CS_N=$(sh "$TT" "$CFG" clickstack count)
 CS_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "${CS_N:-0}" ]; do [ "$(sh "$TT" "$CFG" clickstack label "$_i")" = "$SCOUTFLO_TARGET" ] && { CS_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+[ "$(sh "$TT" "$CFG" clickstack kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" clickstack label "$CS_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no clickstack target in $CFG; labels: $(sh "$TT" "$CFG" clickstack labels | tr '\n' ' ')"; exit 1; }
 CS_LABEL=$(sh "$TT" "$CFG" clickstack label "$CS_IDX")
 if [ "$CS_KIND" = seq ]; then CS_SEG="clickstack/${CS_LABEL}"; else CS_SEG="clickstack"; fi
 CH_URL=$(sh "$TT" "$CFG" clickstack get "$CS_IDX" clickhouse_url)     # clickstack.clickhouse_url
@@ -246,6 +248,7 @@ CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml
 TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 CS_KIND=$(sh "$TT" "$CFG" clickstack kind); CS_N=$(sh "$TT" "$CFG" clickstack count)
 CS_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "${CS_N:-0}" ]; do [ "$(sh "$TT" "$CFG" clickstack label "$_i")" = "$SCOUTFLO_TARGET" ] && { CS_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+[ "$(sh "$TT" "$CFG" clickstack kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" clickstack label "$CS_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no clickstack target in $CFG; labels: $(sh "$TT" "$CFG" clickstack labels | tr '\n' ' ')"; exit 1; }
 CS_LABEL=$(sh "$TT" "$CFG" clickstack label "$CS_IDX")
 if [ "$CS_KIND" = seq ]; then CS_SEG="clickstack/${CS_LABEL}"; else CS_SEG="clickstack"; fi
 echo "clickstack target: ${CS_LABEL} -> ${CS_SEG}/"
@@ -431,6 +434,7 @@ CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml
 TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 CS_KIND=$(sh "$TT" "$CFG" clickstack kind); CS_N=$(sh "$TT" "$CFG" clickstack count)
 CS_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "${CS_N:-0}" ]; do [ "$(sh "$TT" "$CFG" clickstack label "$_i")" = "$SCOUTFLO_TARGET" ] && { CS_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+[ "$(sh "$TT" "$CFG" clickstack kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" clickstack label "$CS_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no clickstack target in $CFG; labels: $(sh "$TT" "$CFG" clickstack labels | tr '\n' ' ')"; exit 1; }
 CS_LABEL=$(sh "$TT" "$CFG" clickstack label "$CS_IDX")
 if [ "$CS_KIND" = seq ]; then CS_SEG="clickstack/${CS_LABEL}"; else CS_SEG="clickstack"; fi
 RUN_DATE="$(date -u +%Y-%m-%d)"
@@ -485,6 +489,7 @@ CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml
 TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 CS_KIND=$(sh "$TT" "$CFG" clickstack kind); CS_N=$(sh "$TT" "$CFG" clickstack count)
 CS_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "${CS_N:-0}" ]; do [ "$(sh "$TT" "$CFG" clickstack label "$_i")" = "$SCOUTFLO_TARGET" ] && { CS_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+[ "$(sh "$TT" "$CFG" clickstack kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" clickstack label "$CS_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no clickstack target in $CFG; labels: $(sh "$TT" "$CFG" clickstack labels | tr '\n' ' ')"; exit 1; }
 CS_LABEL=$(sh "$TT" "$CFG" clickstack label "$CS_IDX")
 if [ "$CS_KIND" = seq ]; then CS_SEG="clickstack/${CS_LABEL}"; else CS_SEG="clickstack"; fi
 TARGET_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${CS_SEG}"

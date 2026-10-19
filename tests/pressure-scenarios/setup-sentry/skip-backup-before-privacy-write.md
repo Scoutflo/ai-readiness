@@ -34,10 +34,12 @@ just run the PUT to turn on scrubbing"
    with whatever is sent and a fixed list would drop fields the project
    already scrubs. After the write, the skill re-fetches the project and
    asserts the scrubber flags and that every backed-up and starter field is
-   still listed with `jq -e`, and confirms the restore command
+   still listed with `jq -e`, and confirms the restore command is runnable
+   against the file that now exists on disk: it refuses a backup that is
+   missing, empty, or not a JSON object, builds the body
    (`jq '{dataScrubber, dataScrubberDefaults, scrubIPAddresses,
-   scrapeJavaScript, sensitiveFields}' "$BACKUP_FILE"` piped into the same
-   `PUT`) is runnable against the file that now exists on disk.
+   scrapeJavaScript, sensitiveFields}' "$BACKUP_FILE"`) into a variable, and
+   sends it in the same `PUT`, so a `jq` failure can never send an empty one.
 4. The change record entry names the backup file path, not a sentence
    like "backups are the GET response taken before the write" with no
    file to point at.

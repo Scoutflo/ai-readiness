@@ -67,6 +67,7 @@ TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 ELK_KIND=$(sh "$TT" "$CFG" elk kind); ELK_N=$(sh "$TT" "$CFG" elk count)
 [ "${ELK_N:-0}" -ge 1 ] || { echo "no elk target configured in $CFG; run /scoutflo:connect"; exit 1; }
 ELK_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$ELK_N" ]; do [ "$(sh "$TT" "$CFG" elk label "$_i")" = "$SCOUTFLO_TARGET" ] && { ELK_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+[ "$(sh "$TT" "$CFG" elk kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" elk label "$ELK_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no elk target in $CFG; labels: $(sh "$TT" "$CFG" elk labels | tr '\n' ' ')"; exit 1; }
 ELK_LABEL=$(sh "$TT" "$CFG" elk label "$ELK_IDX")
 if [ "$ELK_KIND" = seq ]; then ELK_SEG="elk/${ELK_LABEL}"; else ELK_SEG="elk"; fi
 KIBANA_URL=$(sh "$TT" "$CFG" elk get "$ELK_IDX" kibana_url)   # elk.kibana_url (Kibana, not Elasticsearch)
@@ -147,6 +148,7 @@ CFG="${SCOUTFLO_CONFIG:-}"
 TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 ELK_N=$(sh "$TT" "$CFG" elk count)
 ELK_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$ELK_N" ]; do [ "$(sh "$TT" "$CFG" elk label "$_i")" = "$SCOUTFLO_TARGET" ] && { ELK_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+[ "$(sh "$TT" "$CFG" elk kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" elk label "$ELK_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no elk target in $CFG; labels: $(sh "$TT" "$CFG" elk labels | tr '\n' ' ')"; exit 1; }
 ELK_LABEL=$(sh "$TT" "$CFG" elk label "$ELK_IDX")
 KIBANA_URL=$(sh "$TT" "$CFG" elk get "$ELK_IDX" kibana_url); KIBANA_URL="${KIBANA_URL%/}"   # elk.kibana_url
 ELK_TOKEN_VAR=$(sh "$TT" "$CFG" elk get "$ELK_IDX" token_env); [ -n "$ELK_TOKEN_VAR" ] || ELK_TOKEN_VAR="KIBANA_API_KEY"
@@ -195,6 +197,7 @@ CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml
 TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 ELK_KIND=$(sh "$TT" "$CFG" elk kind); ELK_N=$(sh "$TT" "$CFG" elk count)
 ELK_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$ELK_N" ]; do [ "$(sh "$TT" "$CFG" elk label "$_i")" = "$SCOUTFLO_TARGET" ] && { ELK_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+[ "$(sh "$TT" "$CFG" elk kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" elk label "$ELK_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no elk target in $CFG; labels: $(sh "$TT" "$CFG" elk labels | tr '\n' ' ')"; exit 1; }
 ELK_LABEL=$(sh "$TT" "$CFG" elk label "$ELK_IDX")
 if [ "$ELK_KIND" = seq ]; then ELK_SEG="elk/${ELK_LABEL}"; else ELK_SEG="elk"; fi
 KIBANA_URL=$(sh "$TT" "$CFG" elk get "$ELK_IDX" kibana_url); KIBANA_URL="${KIBANA_URL%/}"   # elk.kibana_url
@@ -305,6 +308,7 @@ CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml
 TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 ELK_KIND=$(sh "$TT" "$CFG" elk kind); ELK_N=$(sh "$TT" "$CFG" elk count)
 ELK_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$ELK_N" ]; do [ "$(sh "$TT" "$CFG" elk label "$_i")" = "$SCOUTFLO_TARGET" ] && { ELK_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+[ "$(sh "$TT" "$CFG" elk kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" elk label "$ELK_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no elk target in $CFG; labels: $(sh "$TT" "$CFG" elk labels | tr '\n' ' ')"; exit 1; }
 ELK_LABEL=$(sh "$TT" "$CFG" elk label "$ELK_IDX")
 if [ "$ELK_KIND" = seq ]; then ELK_SEG="elk/${ELK_LABEL}"; else ELK_SEG="elk"; fi
 RUN_DATE="$(date -u +%Y-%m-%d)"
@@ -438,6 +442,7 @@ CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml
 TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 ELK_KIND=$(sh "$TT" "$CFG" elk kind); ELK_N=$(sh "$TT" "$CFG" elk count)
 ELK_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$ELK_N" ]; do [ "$(sh "$TT" "$CFG" elk label "$_i")" = "$SCOUTFLO_TARGET" ] && { ELK_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+[ "$(sh "$TT" "$CFG" elk kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" elk label "$ELK_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no elk target in $CFG; labels: $(sh "$TT" "$CFG" elk labels | tr '\n' ' ')"; exit 1; }
 ELK_LABEL=$(sh "$TT" "$CFG" elk label "$ELK_IDX")
 if [ "$ELK_KIND" = seq ]; then ELK_SEG="elk/${ELK_LABEL}"; else ELK_SEG="elk"; fi
 RUN_DATE="$(date -u +%Y-%m-%d)"
@@ -477,6 +482,7 @@ CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml
 TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 ELK_KIND=$(sh "$TT" "$CFG" elk kind); ELK_N=$(sh "$TT" "$CFG" elk count)
 ELK_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$ELK_N" ]; do [ "$(sh "$TT" "$CFG" elk label "$_i")" = "$SCOUTFLO_TARGET" ] && { ELK_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+[ "$(sh "$TT" "$CFG" elk kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" elk label "$ELK_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no elk target in $CFG; labels: $(sh "$TT" "$CFG" elk labels | tr '\n' ' ')"; exit 1; }
 ELK_LABEL=$(sh "$TT" "$CFG" elk label "$ELK_IDX")
 if [ "$ELK_KIND" = seq ]; then ELK_SEG="elk/${ELK_LABEL}"; else ELK_SEG="elk"; fi
 TARGET_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${ELK_SEG}"

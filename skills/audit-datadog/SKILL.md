@@ -66,6 +66,7 @@ TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 DD_KIND=$(sh "$TT" "$CFG" datadog kind); DD_N=$(sh "$TT" "$CFG" datadog count)
 [ "${DD_N:-0}" -ge 1 ] || { echo "no datadog target configured in $CFG; run /scoutflo:connect"; exit 1; }
 DD_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$DD_N" ]; do [ "$(sh "$TT" "$CFG" datadog label "$_i")" = "$SCOUTFLO_TARGET" ] && { DD_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+[ "$(sh "$TT" "$CFG" datadog kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" datadog label "$DD_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no datadog target in $CFG; labels: $(sh "$TT" "$CFG" datadog labels | tr '\n' ' ')"; exit 1; }
 DD_LABEL=$(sh "$TT" "$CFG" datadog label "$DD_IDX")
 if [ "$DD_KIND" = seq ]; then DD_SEG="datadog/${DD_LABEL}"; else DD_SEG="datadog"; fi
 DD_SITE=$(sh "$TT" "$CFG" datadog get "$DD_IDX" site); DD_SITE="${DD_SITE:-datadoghq.com}"   # datadog.site: e.g. datadoghq.com, us5.datadoghq.com, datadoghq.eu
@@ -117,6 +118,7 @@ CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml
 TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 DD_KIND=$(sh "$TT" "$CFG" datadog kind); DD_N=$(sh "$TT" "$CFG" datadog count)
 DD_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$DD_N" ]; do [ "$(sh "$TT" "$CFG" datadog label "$_i")" = "$SCOUTFLO_TARGET" ] && { DD_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+[ "$(sh "$TT" "$CFG" datadog kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" datadog label "$DD_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no datadog target in $CFG; labels: $(sh "$TT" "$CFG" datadog labels | tr '\n' ' ')"; exit 1; }
 DD_LABEL=$(sh "$TT" "$CFG" datadog label "$DD_IDX")
 if [ "$DD_KIND" = seq ]; then DD_SEG="datadog/${DD_LABEL}"; else DD_SEG="datadog"; fi
 DD_SITE=$(sh "$TT" "$CFG" datadog get "$DD_IDX" site); DD_SITE="${DD_SITE:-datadoghq.com}"   # datadog.site
@@ -167,6 +169,7 @@ CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml
 TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 DD_KIND=$(sh "$TT" "$CFG" datadog kind); DD_N=$(sh "$TT" "$CFG" datadog count)
 DD_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$DD_N" ]; do [ "$(sh "$TT" "$CFG" datadog label "$_i")" = "$SCOUTFLO_TARGET" ] && { DD_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+[ "$(sh "$TT" "$CFG" datadog kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" datadog label "$DD_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no datadog target in $CFG; labels: $(sh "$TT" "$CFG" datadog labels | tr '\n' ' ')"; exit 1; }
 DD_LABEL=$(sh "$TT" "$CFG" datadog label "$DD_IDX")
 if [ "$DD_KIND" = seq ]; then DD_SEG="datadog/${DD_LABEL}"; else DD_SEG="datadog"; fi
 DD_SITE=$(sh "$TT" "$CFG" datadog get "$DD_IDX" site); DD_SITE="${DD_SITE:-datadoghq.com}"   # datadog.site
@@ -333,6 +336,7 @@ CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml
 TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 DD_KIND=$(sh "$TT" "$CFG" datadog kind); DD_N=$(sh "$TT" "$CFG" datadog count)
 DD_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$DD_N" ]; do [ "$(sh "$TT" "$CFG" datadog label "$_i")" = "$SCOUTFLO_TARGET" ] && { DD_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+[ "$(sh "$TT" "$CFG" datadog kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" datadog label "$DD_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no datadog target in $CFG; labels: $(sh "$TT" "$CFG" datadog labels | tr '\n' ' ')"; exit 1; }
 DD_LABEL=$(sh "$TT" "$CFG" datadog label "$DD_IDX")
 if [ "$DD_KIND" = seq ]; then DD_SEG="datadog/${DD_LABEL}"; else DD_SEG="datadog"; fi
 RUN_DATE="$(date -u +%Y-%m-%d)"
@@ -372,6 +376,7 @@ CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml
 TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 DD_KIND=$(sh "$TT" "$CFG" datadog kind); DD_N=$(sh "$TT" "$CFG" datadog count)
 DD_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$DD_N" ]; do [ "$(sh "$TT" "$CFG" datadog label "$_i")" = "$SCOUTFLO_TARGET" ] && { DD_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+[ "$(sh "$TT" "$CFG" datadog kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" datadog label "$DD_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no datadog target in $CFG; labels: $(sh "$TT" "$CFG" datadog labels | tr '\n' ' ')"; exit 1; }
 DD_LABEL=$(sh "$TT" "$CFG" datadog label "$DD_IDX")
 if [ "$DD_KIND" = seq ]; then DD_SEG="datadog/${DD_LABEL}"; else DD_SEG="datadog"; fi
 TARGET_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${DD_SEG}"
