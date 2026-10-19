@@ -278,17 +278,17 @@ Legacy fallback: `{"id": "sentry.integrations.pagerduty.notify_action.PagerDutyN
 | # | Name | Trigger (alerts API) | Filter (alerts API) | Legacy condition / filter | Tier | Frequency |
 | --- | --- | --- | --- | --- | --- | --- |
 | 1 | Fatal crash | none (every event) | `level` `{level: 50, match: "eq"}` | Any event / Level = fatal | Immediate | `IMMEDIATE_FREQ_MIN="5"` |
-| 2 | Unhandled error, new | `first_seen_event` | `event_attribute` `{attribute: "error.unhandled", match: "is"}` | New issue / `error.unhandled` is set | Immediate | 30 min |
-| 3 | High priority, new | `first_seen_event` | `issue_priority_greater_or_equal` `75` | Sentry marks new issue high priority | Immediate | 30 min |
-| 4 | High priority, existing | none on the alerts API (see the conditions table) | - | Sentry marks existing issue high priority | Immediate | 60 min |
-| 5 | Regression | `regression_event` | - | Regression event | Immediate | 30 min |
-| 6 | Escalation | `reappeared_event` | - | Escalation (`ReappearedEventCondition`) | Immediate | 30 min |
-| 7 | User impact | none | `event_unique_user_frequency_count` `{value: USER_IMPACT_THRESHOLD, interval: "1h"}` (`USER_IMPACT_THRESHOLD="5"`) | `USER_IMPACT_THRESHOLD` users in 1h | Immediate | 60 min |
-| 8 | Session impact | none | `percent_sessions_count` `{value: SESSION_IMPACT_PCT, interval: "1h"}` (`SESSION_IMPACT_PCT="1"`) | `SESSION_IMPACT_PCT`% sessions in 1h | Immediate | 60 min |
-| 9 | Production error surge | none | `event_frequency_count` `{value: ERROR_SURGE_THRESHOLD, interval: "1h"}` (`ERROR_SURGE_THRESHOLD="25"`), environment=production | `ERROR_SURGE_THRESHOLD` events in 1h | Immediate | 60 min |
+| 2 | Unhandled error, new | `first_seen_event` | `event_attribute` `{attribute: "error.unhandled", match: "is"}` | New issue / `error.unhandled` is set | Immediate | `UNHANDLED_NEW_FREQ_MIN="30"` |
+| 3 | High priority, new | `first_seen_event` | `issue_priority_greater_or_equal` `75` | Sentry marks new issue high priority | Immediate | `HIGH_PRIORITY_NEW_FREQ_MIN="30"` |
+| 4 | High priority, existing | none on the alerts API (see the conditions table) | - | Sentry marks existing issue high priority | Immediate | `HIGH_PRIORITY_EXISTING_FREQ_MIN="60"` |
+| 5 | Regression | `regression_event` | - | Regression event | Immediate | `REGRESSION_FREQ_MIN="30"` |
+| 6 | Escalation | `reappeared_event` | - | Escalation (`ReappearedEventCondition`) | Immediate | `ESCALATION_FREQ_MIN="30"` |
+| 7 | User impact | none | `event_unique_user_frequency_count` `{value: USER_IMPACT_THRESHOLD, interval: "1h"}` (`USER_IMPACT_THRESHOLD="5"`) | `USER_IMPACT_THRESHOLD` users in 1h | Immediate | `USER_IMPACT_FREQ_MIN="60"` |
+| 8 | Session impact | none | `percent_sessions_count` `{value: SESSION_IMPACT_PCT, interval: "1h"}` (`SESSION_IMPACT_PCT="1"`) | `SESSION_IMPACT_PCT`% sessions in 1h | Immediate | `SESSION_IMPACT_FREQ_MIN="60"` |
+| 9 | Production error surge | none | `event_frequency_count` `{value: ERROR_SURGE_THRESHOLD, interval: "1h"}` (`ERROR_SURGE_THRESHOLD="25"`), environment=production | `ERROR_SURGE_THRESHOLD` events in 1h | Immediate | `ERROR_SURGE_FREQ_MIN="60"` |
 | 10 | Frequency spike | none | `event_frequency_count` `{value: FREQ_SPIKE_THRESHOLD, interval: "1h"}` (`FREQ_SPIKE_THRESHOLD="10"`) | `FREQ_SPIKE_THRESHOLD` events in 1h | Review | `FREQ_FLOOR_MIN="30"` min minimum |
 
-Each threshold is an example, tune it to your event volume. Add per-runtime rules only for conditions your platform actually emits (for example, an HTTP 5xx spike rule using the `http.status_code` starts-with filter on a backend project). Do not create a rule for a condition your stack cannot produce.
+Each threshold is an example, tune it to your event volume. So is each Frequency value: a re-notify interval in minutes, set as the create block's `RULE_FREQ_MIN` for that rule (example, tune to your event volume). Add per-runtime rules only for conditions your platform actually emits (for example, an HTTP 5xx spike rule using the `http.status_code` starts-with filter on a backend project). Do not create a rule for a condition your stack cannot produce.
 
 How this set scores on a fresh audit-sentry run: the create block sets the rule-level `environment` and an `owner` on every rule, so none fails SNTRY-102 or SNTRY-110. Rules 3 and 5 to 10 carry no gating filter (the frequency thresholds of rules 7 to 10 are triggers in effect, and rule 9's production scope is the rule-level `environment`, not a filter), so audit-sentry reports each as SNTRY-101, a notifying rule with no filter, until you add a gating filter your volume justifies, such as a `level` filter (never an issue-age filter on rule 5, the regression rule). If the condition alone is the gate you want, record SNTRY-101 for those rules as an accepted decision. Every rule's issue-owners email action also fails SNTRY-017 on a project with no ownership rules ([../SKILL.md#receiver-wiring](../SKILL.md#receiver-wiring)).
 
@@ -351,15 +351,17 @@ for v in "$PROJECT" "$RULE_ID"; do case "$v" in ''|'<'*) echo "Fill in every <..
 
 if [ "${SENTRY_ALERT_API}" = workflows ]; then
   BACKUP_FILE="$HOME/.scoutflo/sentry-rules-backup-${BACKUP_DATE}/workflows.json"
-  [ -s "$BACKUP_FILE" ] || { echo "No backup at ${BACKUP_FILE}: set BACKUP_DATE to the day of the rule-set backup" >&2; exit 1; }
+  [ -s "$BACKUP_FILE" ] && jq -e 'type == "array"' "$BACKUP_FILE" > /dev/null \
+    || { echo "No usable backup at ${BACKUP_FILE} (missing, empty, or not a JSON list): set BACKUP_DATE to the day of the rule-set backup" >&2; exit 1; }
   jq -e --arg id "$RULE_ID" 'any(.[]; .id == $id)' "$BACKUP_FILE" > /dev/null || { echo "Alert ${RULE_ID} is not in ${BACKUP_FILE}" >&2; exit 1; }
   # The whole backed-up alert: every id and the backed-up enabled state. A null triggers is dropped
   # (the endpoint rejects it); a null environment or owner is sent, so the restore clears it.
-  jq --arg id "$RULE_ID" '.[] | select(.id == $id)
+  # The body is built first, so a jq failure stops the block instead of sending an empty PUT.
+  BODY="$(jq --arg id "$RULE_ID" '.[] | select(.id == $id)
       | {name, enabled, environment, owner, config, detectorIds, triggers, actionFilters}
-      | with_entries(select(.value != null or .key == "environment" or .key == "owner"))' "$BACKUP_FILE" \
-    | curl -fsS --max-time 10 -X PUT "${API}/organizations/${SENTRY_ORG}/workflows/${RULE_ID}/" \
-        -H "Authorization: Bearer ${SENTRY_TOKEN}" -H "Content-Type: application/json" -d @- > /dev/null
+      | with_entries(select(.value != null or .key == "environment" or .key == "owner"))' "$BACKUP_FILE")"
+  curl -fsS --max-time 10 -X PUT "${API}/organizations/${SENTRY_ORG}/workflows/${RULE_ID}/" \
+    -H "Authorization: Bearer ${SENTRY_TOKEN}" -H "Content-Type: application/json" -d "$BODY" > /dev/null
   curl -fsS --max-time 10 "${API}/organizations/${SENTRY_ORG}/workflows/${RULE_ID}/" \
     -H "Authorization: Bearer ${SENTRY_TOKEN}" \
     | jq -e --slurpfile b "$BACKUP_FILE" --arg id "$RULE_ID" '
@@ -371,11 +373,12 @@ if [ "${SENTRY_ALERT_API}" = workflows ]; then
 else
   # Legacy fallback (self-hosted Sentry that still serves /rules/).
   BACKUP_FILE="$HOME/.scoutflo/sentry-rules-backup-${BACKUP_DATE}/issue-rules-${PROJECT}.json"
-  [ -s "$BACKUP_FILE" ] || { echo "No backup at ${BACKUP_FILE}: set BACKUP_DATE to the day of the rule-set backup" >&2; exit 1; }
+  [ -s "$BACKUP_FILE" ] && jq -e 'type == "array"' "$BACKUP_FILE" > /dev/null \
+    || { echo "No usable backup at ${BACKUP_FILE} (missing, empty, or not a JSON list): set BACKUP_DATE to the day of the rule-set backup" >&2; exit 1; }
   jq -e --arg id "$RULE_ID" 'any(.[]; .id == $id)' "$BACKUP_FILE" > /dev/null || { echo "Rule ${RULE_ID} is not in ${BACKUP_FILE}" >&2; exit 1; }
-  jq --arg id "$RULE_ID" '.[] | select(.id == $id) | {name, actionMatch, filterMatch, environment, frequency, conditions, filters, actions}' "$BACKUP_FILE" \
-    | curl -fsS --max-time 10 -X PUT "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/${RULE_ID}/" \
-        -H "Authorization: Bearer ${SENTRY_TOKEN}" -H "Content-Type: application/json" -d @-
+  BODY="$(jq --arg id "$RULE_ID" '.[] | select(.id == $id) | {name, actionMatch, filterMatch, environment, frequency, conditions, filters, actions}' "$BACKUP_FILE")"
+  curl -fsS --max-time 10 -X PUT "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/${RULE_ID}/" \
+    -H "Authorization: Bearer ${SENTRY_TOKEN}" -H "Content-Type: application/json" -d "$BODY"
   curl -fsS --max-time 10 "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/${RULE_ID}/" \
     -H "Authorization: Bearer ${SENTRY_TOKEN}" \
     | jq -e --slurpfile b "$BACKUP_FILE" --arg id "$RULE_ID" '($b[0][] | select(.id == $id)) as $o
@@ -383,7 +386,7 @@ else
 fi
 ```
 
-Expect: `true`. Re-create a **deleted** rule, in its own fresh shell (the POST assigns a fresh id and sets `createdBy` to the setup identity, per [../SKILL.md#delete-the-auto-created-default-rule](../SKILL.md#delete-the-auto-created-default-rule)):
+Expect: `true`. A snapshot file that is missing, empty, or not a JSON list, or that does not hold `RULE_ID`, stops the block before the PUT. Re-create a **deleted** rule, in its own fresh shell (the POST assigns a fresh id and sets `createdBy` to the setup identity, per [../SKILL.md#delete-the-auto-created-default-rule](../SKILL.md#delete-the-auto-created-default-rule)):
 
 ```bash
 set -eu
@@ -396,16 +399,18 @@ for v in "$PROJECT" "$RULE_ID"; do case "$v" in ''|'<'*) echo "Fill in every <..
 
 if [ "${SENTRY_ALERT_API}" = workflows ]; then
   BACKUP_FILE="$HOME/.scoutflo/sentry-rules-backup-${BACKUP_DATE}/workflows.json"
-  [ -s "$BACKUP_FILE" ] || { echo "No backup at ${BACKUP_FILE}: set BACKUP_DATE to the day of the rule-set backup" >&2; exit 1; }
+  [ -s "$BACKUP_FILE" ] && jq -e 'type == "array"' "$BACKUP_FILE" > /dev/null \
+    || { echo "No usable backup at ${BACKUP_FILE} (missing, empty, or not a JSON list): set BACKUP_DATE to the day of the rule-set backup" >&2; exit 1; }
   jq -e --arg id "$RULE_ID" 'any(.[]; .id == $id)' "$BACKUP_FILE" > /dev/null || { echo "Alert ${RULE_ID} is not in ${BACKUP_FILE}" >&2; exit 1; }
-  # Drop server-set fields and every nested id; keep the rest, enabled included.
-  NEW_ID="$(jq --arg id "$RULE_ID" '.[] | select(.id == $id)
+  # Drop server-set fields and every nested id; keep the rest, enabled included. The body is built
+  # first, so a jq failure (an entry this edit cannot apply to) stops the block before the POST.
+  BODY="$(jq --arg id "$RULE_ID" '.[] | select(.id == $id)
       | del(.id, .organizationId, .dateCreated, .dateUpdated, .lastTriggered, .createdBy)
       | if .triggers then .triggers |= (del(.id, .organizationId) | .conditions |= map(del(.id))) else . end
       | .actionFilters |= map(del(.id, .organizationId) | .conditions |= map(del(.id)) | .actions |= map(del(.id)))
-      | with_entries(select(.value != null))' "$BACKUP_FILE" \
-    | curl -fsS --max-time 10 -X POST "${API}/organizations/${SENTRY_ORG}/workflows/" \
-        -H "Authorization: Bearer ${SENTRY_TOKEN}" -H "Content-Type: application/json" -d @- | jq -r '.id // empty')"
+      | with_entries(select(.value != null))' "$BACKUP_FILE")"
+  NEW_ID="$(curl -fsS --max-time 10 -X POST "${API}/organizations/${SENTRY_ORG}/workflows/" \
+      -H "Authorization: Bearer ${SENTRY_TOKEN}" -H "Content-Type: application/json" -d "$BODY" | jq -r '.id // empty')"
   [ -n "$NEW_ID" ] || { echo "re-create returned no alert id" >&2; exit 1; }
   echo "restored as alert: ${NEW_ID}"
   curl -fsS --max-time 10 "${API}/organizations/${SENTRY_ORG}/workflows/${NEW_ID}/" \
@@ -416,11 +421,12 @@ if [ "${SENTRY_ALERT_API}" = workflows ]; then
 else
   # Legacy fallback (self-hosted Sentry that still serves /rules/).
   BACKUP_FILE="$HOME/.scoutflo/sentry-rules-backup-${BACKUP_DATE}/issue-rules-${PROJECT}.json"
-  [ -s "$BACKUP_FILE" ] || { echo "No backup at ${BACKUP_FILE}: set BACKUP_DATE to the day of the rule-set backup" >&2; exit 1; }
+  [ -s "$BACKUP_FILE" ] && jq -e 'type == "array"' "$BACKUP_FILE" > /dev/null \
+    || { echo "No usable backup at ${BACKUP_FILE} (missing, empty, or not a JSON list): set BACKUP_DATE to the day of the rule-set backup" >&2; exit 1; }
   jq -e --arg id "$RULE_ID" 'any(.[]; .id == $id)' "$BACKUP_FILE" > /dev/null || { echo "Rule ${RULE_ID} is not in ${BACKUP_FILE}" >&2; exit 1; }
-  NEW_ID="$(jq --arg id "$RULE_ID" '.[] | select(.id == $id) | {name, actionMatch, filterMatch, environment, frequency, conditions, filters, actions}' "$BACKUP_FILE" \
-    | curl -fsS --max-time 10 -X POST "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/" \
-        -H "Authorization: Bearer ${SENTRY_TOKEN}" -H "Content-Type: application/json" -d @- | jq -r '.id')"
+  BODY="$(jq --arg id "$RULE_ID" '.[] | select(.id == $id) | {name, actionMatch, filterMatch, environment, frequency, conditions, filters, actions}' "$BACKUP_FILE")"
+  NEW_ID="$(curl -fsS --max-time 10 -X POST "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/" \
+      -H "Authorization: Bearer ${SENTRY_TOKEN}" -H "Content-Type: application/json" -d "$BODY" | jq -r '.id')"
   echo "restored as rule: ${NEW_ID}"
   curl -fsS --max-time 10 "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/${NEW_ID}/" \
     -H "Authorization: Bearer ${SENTRY_TOKEN}" \
@@ -429,55 +435,62 @@ else
 fi
 ```
 
-Expect: the new rule id, then `true`. A restore is itself a change: announce, confirm, and record it like any other.
+Expect: the new rule id, then `true`. A snapshot file that is missing, empty, or not a JSON list, that does not hold `RULE_ID`, or whose entry the edit cannot apply to, stops the block before the POST. A restore is itself a change: announce, confirm, and record it like any other.
 
 ## Bulk verify: PUT and DELETE
 
-The per-rule verify shapes for a bulk cleanup, driven from [../SKILL.md#get-verify-after-every-put-and-every-delete](../SKILL.md#get-verify-after-every-put-and-every-delete). Report one verify line per rule, never a batch total.
+The per-rule verify for a bulk cleanup, driven from [../SKILL.md#get-verify-after-every-put-and-every-delete](../SKILL.md#get-verify-after-every-put-and-every-delete). Run it once per rule, with `CHANGE` set to what that rule got: it runs only that check. Report one verify line per rule, never a batch total.
 
 ```bash
 set -eu
 SENTRY_HOST="us.sentry.io"; SENTRY_ORG="your-org-slug"; API="https://${SENTRY_HOST}/api/0"
 [ -n "${SENTRY_TOKEN:-}" ] || { echo "SENTRY_TOKEN is not set"; exit 1; }
 SENTRY_ALERT_API="workflows"   # the doctor gate's "alert api:" value
-PROJECT="checkout"; RULE_ID="12345678"
+PROJECT="<project-slug>"; RULE_ID="<rule-id>"   # the alert (legacy: rule) this line is for, and its project
+CHANGE="updated"       # what this rule got: updated (a PUT) or deleted (a DELETE)
 EXPECT_FREQ="1440"     # example; the re-notify minutes you PUT
 EXPECT_ENABLED="true"  # the alert's enabled value in its backup; a PUT must never flip it
+for v in "$PROJECT" "$RULE_ID"; do case "$v" in ''|'<'*) echo "Fill in every <...> value from the change record first" >&2; exit 1 ;; esac; done
+case "$CHANGE" in updated|deleted) ;; *) echo "Set CHANGE to updated or deleted, not '${CHANGE}'" >&2; exit 1 ;; esac
 
 if [ "${SENTRY_ALERT_API}" = workflows ]; then
-  # After a PUT: re-fetch and assert the changed field and the untouched enabled state.
-  curl -fsS --max-time 10 "${API}/organizations/${SENTRY_ORG}/workflows/${RULE_ID}/" \
-    -H "Authorization: Bearer ${SENTRY_TOKEN}" \
-    | jq -e --argjson f "$EXPECT_FREQ" --argjson e "$EXPECT_ENABLED" '.config.frequency == $f and .enabled == $e' \
-    && echo "rule ${RULE_ID}: verified"
-  # After a DELETE (204): gone only when the real route answers its JSON "does not exist" 404.
+  RULE_URL="${API}/organizations/${SENTRY_ORG}/workflows/${RULE_ID}/"
+else
+  # Legacy fallback (self-hosted Sentry that still serves /rules/).
+  RULE_URL="${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/${RULE_ID}/"
+fi
+
+if [ "$CHANGE" = updated ]; then
+  # After a PUT: re-fetch and assert the changed field (example: frequency now 1440) and, on the
+  # alerts API, the backed-up enabled state.
+  RULE_JSON="$(curl -fsS --max-time 10 "$RULE_URL" -H "Authorization: Bearer ${SENTRY_TOKEN}")"
+  if [ "${SENTRY_ALERT_API}" = workflows ]; then
+    printf '%s' "$RULE_JSON" \
+      | jq -e --argjson f "$EXPECT_FREQ" --argjson e "$EXPECT_ENABLED" '.config.frequency == $f and .enabled == $e' > /dev/null \
+      || { echo "rule ${RULE_ID}: not verified, its frequency or enabled state is not what the PUT sent" >&2; exit 1; }
+  else
+    printf '%s' "$RULE_JSON" | jq -e --argjson f "$EXPECT_FREQ" '.frequency == $f' > /dev/null \
+      || { echo "rule ${RULE_ID}: not verified, its frequency is not what the PUT sent" >&2; exit 1; }
+  fi
+  echo "rule ${RULE_ID}: verified"
+else
+  # After a DELETE (204 on the alerts API, 202 Accepted on the legacy fallback; neither is proof):
+  # gone only when the real route answers its JSON "does not exist" 404.
   gone="$(mktemp)"; trap 'rm -f "$gone"' EXIT
-  code="$(curl -sS --max-time 10 -o "$gone" -w '%{http_code}' \
-    -H "Authorization: Bearer ${SENTRY_TOKEN}" "${API}/organizations/${SENTRY_ORG}/workflows/${RULE_ID}/")"
+  code="$(curl -sS --max-time 10 -o "$gone" -w '%{http_code}' -H "Authorization: Bearer ${SENTRY_TOKEN}" "$RULE_URL")"
   if [ "$code" = 404 ] && jq -e '.detail == "The requested resource does not exist"' "$gone" > /dev/null 2>&1; then
     echo "rule ${RULE_ID}: gone (404)"
   else
-    echo "rule ${RULE_ID} post-delete: ${code}, not proven gone"; exit 1
+    echo "rule ${RULE_ID} post-delete: ${code}, not proven gone" >&2; exit 1
   fi
-else
-  # Legacy fallback (self-hosted Sentry that still serves /rules/).
-  # After a PUT: re-fetch and assert the changed field (example: frequency now 1440).
-  curl -fsS --max-time 10 "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/${RULE_ID}/" \
-    -H "Authorization: Bearer ${SENTRY_TOKEN}" \
-    | jq -e --argjson f "$EXPECT_FREQ" '.frequency == $f' \
-    && echo "rule ${RULE_ID}: verified"
-  # After a DELETE (which returns 202 Accepted, not 200): confirm the rule is gone.
-  code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 \
-    -H "Authorization: Bearer ${SENTRY_TOKEN}" "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/${RULE_ID}/")"
-  echo "rule ${RULE_ID} post-delete: ${code}"
 fi
 ```
 
-Expect: the PUT verify prints `rule <id>: verified`, and the delete check prints `rule <id>: gone (404)`. On the legacy fallback the post-delete code is `404` (a 202 on the DELETE call means only that the delete was queued, so the follow-up GET is what proves removal). On the alerts API a bare `404` without the JSON body prints `not proven gone`: that is what a removed or mistyped route returns for every id.
+Expect, with `CHANGE="updated"`: `rule <id>: verified` and exit 0; a re-fetched rule that does not hold the PUT's frequency (or, on the alerts API, its backed-up `enabled`) prints `rule <id>: not verified ...` and exits 1. With `CHANGE="deleted"`: `rule <id>: gone (404)` and exit 0, only when the follow-up GET answers `404` with the JSON body `{"detail": "The requested resource does not exist"}`, on both APIs; any other answer, a bare `404` included (what a removed or mistyped route returns for every id), prints `not proven gone` and exits 1. A `202` on the legacy DELETE means only that the delete was queued, so the follow-up GET is what proves removal. An unfilled `<...>` id, or any other `CHANGE` value, stops the block before any request.
 
 ## Slow a noisy issue-alert rule
 
-Env-scope, age-gate, and slow re-notify for a burst or spike rule, driven from [../SKILL.md#slow-noisy-tiers-keep-fast-tiers-fast-never-age-gate-regressions](../SKILL.md#slow-noisy-tiers-keep-fast-tiers-fast-never-age-gate-regressions). Do not apply the age gate to a regression rule (`regression_event`; legacy `RegressionEventCondition`). Both APIs replace the whole object on write, so this backs up, patches, and PUTs the full body back; on the alerts API that body keeps every id and the backed-up `enabled`.
+Env-scope, age-gate, and slow re-notify for a burst or spike rule, driven from [../SKILL.md#slow-noisy-tiers-keep-fast-tiers-fast-never-age-gate-regressions](../SKILL.md#slow-noisy-tiers-keep-fast-tiers-fast-never-age-gate-regressions). Do not apply the age gate to a regression rule (`regression_event`; legacy `RegressionEventCondition`), and add it only to a filter that requires all of its conditions (`logicType: all`; legacy `filterMatch: all`). Both APIs replace the whole object on write, so this backs up, patches, and PUTs the full body back; on the alerts API that body keeps every id and the backed-up `enabled`.
 
 ```bash
 set -eu
@@ -485,8 +498,8 @@ SENTRY_HOST="us.sentry.io"; SENTRY_ORG="your-org-slug"; API="https://${SENTRY_HO
 [ -n "${SENTRY_TOKEN:-}" ] || { echo "SENTRY_TOKEN is not set"; exit 1; }
 SENTRY_ALERT_API="workflows"     # the doctor gate's "alert api:" value
 PROJECT="checkout"; RULE_ID="12345678"
-FILTER_INDEX="0"                 # alerts API: which actionFilters[] entry gets the age gate
-TARGET_ENV="production"          # from the rule's receiver channel, not its name
+FILTER_INDEX="0"                 # alerts API: which actionFilters[] entry gets the age gate; its logicType must be all
+TARGET_ENV="production"          # from the rule's receiver channel, not its name; must be one of PROJECT's environments
 RULE_AGE_GATE_DAYS="7"           # example, tune to your volume; NEVER apply to a regression rule
 SLOW_RENOTIFY_MIN="1440"         # example, 24h re-notify; the fast tier stays at 15 minutes
 BACKUP_DIR="$HOME/.scoutflo/sentry-rules-backup-$(date -u +%F)"
@@ -503,6 +516,23 @@ if [ "${SENTRY_ALERT_API}" = workflows ]; then
   # Refuse a regression alert: an age gate would hide exactly the old issues it exists to catch.
   jq -e 'any((.triggers.conditions // [])[]; .type == "regression_event") | not' "$BACKUP_FILE" > /dev/null \
     || { echo "alert ${RULE_ID} has a regression trigger; slow it with frequency alone, no age gate" >&2; exit 1; }
+  # Refuse a filter that is not all-match: an added age condition widens an any or any-short
+  # filter (every new issue passes it) and inverts a none filter.
+  jq -e --argjson i "$FILTER_INDEX" '(.actionFilters // [])[$i].logicType == "all"' "$BACKUP_FILE" > /dev/null \
+    || { echo "alert ${RULE_ID} has no actionFilters[${FILTER_INDEX}] with logicType all; an age gate there would widen or invert it" >&2; exit 1; }
+  # Refuse an alert attached to no monitor of PROJECT (an org-wide monitor has projectId null),
+  # so the environment check below reads the alert's own project.
+  PROJECT_MONITORS="$(curl -fsS --max-time 10 "${API}/organizations/${SENTRY_ORG}/detectors/?project=${PROJECT}" \
+    -H "Authorization: Bearer ${SENTRY_TOKEN}")"
+  printf '%s' "$PROJECT_MONITORS" \
+    | jq -e --slurpfile b "$BACKUP_FILE" '[.[] | select(.projectId != null) | .id | tostring] as $own
+        | any(($b[0].detectorIds // [])[] | tostring; IN($own[]))' > /dev/null \
+    || { echo "alert ${RULE_ID} is not attached to a monitor of project ${PROJECT}; not writing" >&2; exit 1; }
+  # Refuse an environment the project does not have: an alert scoped to it never fires.
+  PROJECT_ENVS="$(curl -fsS --max-time 10 "${API}/projects/${SENTRY_ORG}/${PROJECT}/environments/" \
+    -H "Authorization: Bearer ${SENTRY_TOKEN}")"
+  printf '%s' "$PROJECT_ENVS" | jq -e --arg env "$TARGET_ENV" 'any(.[]; .name == $env)' > /dev/null \
+    || { echo "project ${PROJECT} has no environment ${TARGET_ENV}; fix the SDK environment first, not writing" >&2; exit 1; }
 
   # 2. Env-scope + age-gate + slow re-notify, full-alert PUT (every id and enabled kept):
   UPDATED="$(jq --argjson i "$FILTER_INDEX" --arg env "$TARGET_ENV" --argjson days "$RULE_AGE_GATE_DAYS" --argjson freq "$SLOW_RENOTIFY_MIN" '
@@ -516,12 +546,17 @@ if [ "${SENTRY_ALERT_API}" = workflows ]; then
   curl -fsS --max-time 10 -X PUT "${API}/organizations/${SENTRY_ORG}/workflows/${RULE_ID}/" \
     -H "Authorization: Bearer ${SENTRY_TOKEN}" -H "Content-Type: application/json" -d "$UPDATED" > /dev/null
 
-  # 3. Verify env scope, frequency, the age gate, and the untouched enabled state:
+  # 3. Verify env scope, frequency, and the untouched enabled state, and that the filter with the
+  #    backed-up id is still all-match and holds the announced age gate:
   curl -fsS --max-time 10 "${API}/organizations/${SENTRY_ORG}/workflows/${RULE_ID}/" \
     -H "Authorization: Bearer ${SENTRY_TOKEN}" \
-    | jq -e --slurpfile b "$BACKUP_FILE" --arg env "$TARGET_ENV" --argjson freq "$SLOW_RENOTIFY_MIN" \
-        '.environment == $env and .config.frequency == $freq and .enabled == $b[0].enabled
-         and any((.actionFilters // [])[].conditions[]; .type == "age_comparison")'
+    | jq -e --slurpfile b "$BACKUP_FILE" --argjson i "$FILTER_INDEX" --arg env "$TARGET_ENV" \
+        --argjson freq "$SLOW_RENOTIFY_MIN" --argjson days "$RULE_AGE_GATE_DAYS" '
+        ($b[0].actionFilters[$i].id | tostring) as $fid
+        | .environment == $env and .config.frequency == $freq and .enabled == $b[0].enabled
+          and any((.actionFilters // [])[]; (.id | tostring) == $fid and .logicType == "all"
+                and any((.conditions // [])[]; .type == "age_comparison" and .comparison.comparisonType == "newer"
+                        and .comparison.time == "day" and .comparison.value == $days))'
 else
   # Legacy fallback (self-hosted Sentry that still serves /rules/).
   # 1. Backup (GET-before-write):
@@ -530,6 +565,17 @@ else
   [ -s "$BACKUP_FILE" ] && jq -e 'type == "object"' "$BACKUP_FILE" > /dev/null \
     || { echo "backup at ${BACKUP_FILE} is empty or not a JSON object; not writing" >&2; exit 1; }
   echo "backup: ${BACKUP_FILE}"
+  # Refuse a regression rule, as on the alerts API.
+  jq -e 'any((.conditions // [])[]; .id == "sentry.rules.conditions.regression_event.RegressionEventCondition") | not' "$BACKUP_FILE" > /dev/null \
+    || { echo "rule ${RULE_ID} has a regression condition; slow it with frequency alone, no age gate" >&2; exit 1; }
+  # Refuse a rule whose filters are not all-match: an added age filter widens any and inverts none.
+  jq -e '.filterMatch == "all"' "$BACKUP_FILE" > /dev/null \
+    || { echo "rule ${RULE_ID} has a filterMatch other than all; an age filter would widen or invert it" >&2; exit 1; }
+  # Refuse an environment the project does not have (a legacy rule lives in PROJECT).
+  PROJECT_ENVS="$(curl -fsS --max-time 10 "${API}/projects/${SENTRY_ORG}/${PROJECT}/environments/" \
+    -H "Authorization: Bearer ${SENTRY_TOKEN}")"
+  printf '%s' "$PROJECT_ENVS" | jq -e --arg env "$TARGET_ENV" 'any(.[]; .name == $env)' > /dev/null \
+    || { echo "project ${PROJECT} has no environment ${TARGET_ENV}; fix the SDK environment first, not writing" >&2; exit 1; }
 
   # 2. Env-scope + age-gate + slow re-notify, full-object PUT:
   UPDATED="$(jq --arg env "$TARGET_ENV" --argjson days "$RULE_AGE_GATE_DAYS" --argjson freq "$SLOW_RENOTIFY_MIN" \
@@ -553,7 +599,7 @@ else
 fi
 ```
 
-Expect: exit 0. Undo it with the single-rule restore block in [../SKILL.md#receiver-wiring](../SKILL.md#receiver-wiring), `BACKUP_FILE` set to the printed backup path.
+Expect: `backup: <path>`, then `true` and exit 0: the alert is scoped to `TARGET_ENV`, re-notifies every `SLOW_RENOTIFY_MIN` minutes, keeps its backed-up `enabled`, and the action filter with the backed-up id still has `logicType: all` and now holds the `age_comparison` condition (`newer`, `RULE_AGE_GATE_DAYS` days). The block stops before any write when the backup is unusable; when the alert has a regression trigger; when `actionFilters[FILTER_INDEX]` is missing or its `logicType` is not `all` (an added age condition widens an `any` or `any-short` filter, because every new issue then passes it, and inverts a `none` filter); when none of the alert's monitors belongs to `PROJECT` (the alert is org-wide or on another project, so `PROJECT`'s environments are the wrong list to check); or when `TARGET_ENV` is not one of `PROJECT`'s environments (an alert scoped to an environment its project never sends never fires). Legacy fallback: it stops on an unusable backup, a regression condition, a `filterMatch` other than `all`, or a `TARGET_ENV` the project does not have. Each refusal names its reason: record the rule as skipped with that reason, or re-announce a different change; never edit the block until it passes. Undo it with the single-rule restore block in [../SKILL.md#receiver-wiring](../SKILL.md#receiver-wiring), `BACKUP_FILE` set to the printed backup path.
 
 ## Silence a metric-alert warning tier
 
@@ -580,10 +626,11 @@ if [ "${SENTRY_ALERT_API}" = workflows ]; then
     || { echo "monitor ${ALERT_RULE_ID} is not a metric monitor with a warning condition; nothing to remove" >&2; exit 1; }
 
   # 2. Keep every condition except the warning one (each kept one with its id); the resolve stays.
-  jq '{conditionGroup: {id: .conditionGroup.id, logicType: .conditionGroup.logicType,
-        conditions: [.conditionGroup.conditions[] | select(.conditionResult != 50) | {id, type, comparison, conditionResult}]}}' "$BACKUP_FILE" \
-    | curl -fsS --max-time 10 -X PUT "${API}/organizations/${SENTRY_ORG}/detectors/${ALERT_RULE_ID}/" \
-        -H "Authorization: Bearer ${SENTRY_TOKEN}" -H "Content-Type: application/json" -d @- > /dev/null
+  #    The body is built first, so a jq failure stops the block instead of sending an empty PUT.
+  BODY="$(jq '{conditionGroup: {id: .conditionGroup.id, logicType: .conditionGroup.logicType,
+        conditions: [.conditionGroup.conditions[] | select(.conditionResult != 50) | {id, type, comparison, conditionResult}]}}' "$BACKUP_FILE")"
+  curl -fsS --max-time 10 -X PUT "${API}/organizations/${SENTRY_ORG}/detectors/${ALERT_RULE_ID}/" \
+    -H "Authorization: Bearer ${SENTRY_TOKEN}" -H "Content-Type: application/json" -d "$BODY" > /dev/null
 
   # 3. Verify: no warning condition left, exactly one resolve condition, critical untouched.
   curl -fsS --max-time 10 "${API}/organizations/${SENTRY_ORG}/detectors/${ALERT_RULE_ID}/" \
@@ -627,28 +674,32 @@ SENTRY_ALERT_API="workflows"        # the doctor gate's "alert api:" value
 ALERT_RULE_ID="<metric-alert-id>"   # the metric monitor (legacy: metric alert) the write changed
 BACKUP_FILE="<backup-path>"         # the "backup:" path step 1 printed
 for v in "$ALERT_RULE_ID" "$BACKUP_FILE"; do case "$v" in ''|'<'*) echo "Fill in every <...> value from the change record first" >&2; exit 1 ;; esac; done
-[ -s "$BACKUP_FILE" ] || { echo "No backup at ${BACKUP_FILE}" >&2; exit 1; }
+# Refuse a missing, empty, or non-object backup; both branches build the body before the PUT.
+[ -s "$BACKUP_FILE" ] && jq -e 'type == "object"' "$BACKUP_FILE" > /dev/null \
+  || { echo "backup at ${BACKUP_FILE} is missing, empty, or not a JSON object; not restoring" >&2; exit 1; }
 
 if [ "${SENTRY_ALERT_API}" = workflows ]; then
   # Every backed-up condition goes back; the removed warning one no longer exists, so it goes
   # in without its id and Sentry creates it fresh.
-  jq '{conditionGroup: {id: .conditionGroup.id, logicType: .conditionGroup.logicType,
+  BODY="$(jq '{conditionGroup: {id: .conditionGroup.id, logicType: .conditionGroup.logicType,
         conditions: [.conditionGroup.conditions[]
           | if .conditionResult == 50 then {type, comparison, conditionResult} else {id, type, comparison, conditionResult} end]}}' \
-      "$BACKUP_FILE" \
-    | curl -fsS --max-time 10 -X PUT "${API}/organizations/${SENTRY_ORG}/detectors/${ALERT_RULE_ID}/" \
-        -H "Authorization: Bearer ${SENTRY_TOKEN}" -H "Content-Type: application/json" -d @- > /dev/null
+      "$BACKUP_FILE")"
+  curl -fsS --max-time 10 -X PUT "${API}/organizations/${SENTRY_ORG}/detectors/${ALERT_RULE_ID}/" \
+    -H "Authorization: Bearer ${SENTRY_TOKEN}" -H "Content-Type: application/json" -d "$BODY" > /dev/null
   curl -fsS --max-time 10 "${API}/organizations/${SENTRY_ORG}/detectors/${ALERT_RULE_ID}/" \
     -H "Authorization: Bearer ${SENTRY_TOKEN}" \
     | jq -e --slurpfile b "$BACKUP_FILE" '([.conditionGroup.conditions[] | {type, comparison, conditionResult}] | sort_by(.conditionResult))
         == ([$b[0].conditionGroup.conditions[] | {type, comparison, conditionResult}] | sort_by(.conditionResult))'
 else
-  # Legacy fallback: merge the backed-up triggers back onto the current body.
+  # Legacy fallback: merge the backed-up triggers back onto the current body. jq -e stops the
+  # block when the current read is empty or not a JSON object, so no empty or partial PUT is sent.
   CURRENT="$(curl -fsS --max-time 10 "${API}/organizations/${SENTRY_ORG}/alert-rules/${ALERT_RULE_ID}/" \
     -H "Authorization: Bearer ${SENTRY_TOKEN}")"
-  printf '%s' "$CURRENT" | jq --slurpfile b "$BACKUP_FILE" '.triggers = $b[0].triggers' \
-    | curl -fsS --max-time 10 -X PUT "${API}/organizations/${SENTRY_ORG}/alert-rules/${ALERT_RULE_ID}/" \
-        -H "Authorization: Bearer ${SENTRY_TOKEN}" -H "Content-Type: application/json" -d @-
+  BODY="$(printf '%s' "$CURRENT" | jq -e --slurpfile b "$BACKUP_FILE" \
+    'if type == "object" then .triggers = $b[0].triggers else error("the current metric alert is not a JSON object") end')"
+  curl -fsS --max-time 10 -X PUT "${API}/organizations/${SENTRY_ORG}/alert-rules/${ALERT_RULE_ID}/" \
+    -H "Authorization: Bearer ${SENTRY_TOKEN}" -H "Content-Type: application/json" -d "$BODY"
 
   curl -fsS --max-time 10 "${API}/organizations/${SENTRY_ORG}/alert-rules/${ALERT_RULE_ID}/" \
     -H "Authorization: Bearer ${SENTRY_TOKEN}" \
@@ -656,7 +707,7 @@ else
 fi
 ```
 
-Expect: exit 0, the thresholds equal to the backup (alerts API: the same `type`, `comparison`, and `conditionResult` set, with a new id on the restored warning condition; legacy: the triggers byte-equal to the backup). A restore is itself a change; announce and record it like any other.
+Expect: exit 0, the thresholds equal to the backup (alerts API: the same `type`, `comparison`, and `conditionResult` set, with a new id on the restored warning condition; legacy: the triggers byte-equal to the backup). A backup that is missing, empty, or not a JSON object, or (legacy) a current read that is empty or not a JSON object, stops the block before the PUT. A restore is itself a change; announce and record it like any other.
 
 ## Code mappings
 
@@ -696,49 +747,95 @@ Rate limit: 6 check-ins per minute per monitor and environment. Enable the monit
 
 ### Uptime monitor
 
+On the alerts API an uptime check is a monitor (detector) of type `uptime_domain_failure`: it is created per project with `POST /organizations/{org}/projects/{project}/detectors/` and read and deleted at `/organizations/{org}/detectors/{id}/`. The legacy fallback keeps the project uptime route (`/projects/{org}/{project}/uptime/`).
+
 ```bash
 set -eu
 SENTRY_HOST="us.sentry.io"; SENTRY_ORG="your-org-slug"; API="https://${SENTRY_HOST}/api/0"
 [ -n "${SENTRY_TOKEN:-}" ] || { echo "SENTRY_TOKEN is not set; run /scoutflo:connect"; exit 1; }
+SENTRY_ALERT_API="workflows"   # the doctor gate's "alert api:" value; legacy runs the project uptime route below
 PROJECT="checkout"
-CHECK_NAME="API health check"
+CHECK_NAME="API health check"   # record it: the rollback deletes only a monitor with this name
 CHECK_URL="https://api.example.com/health"   # the exact endpoint this check will watch
-UPTIME_INTERVAL_S="300"     # example; Sentry accepts only 300, 600, 1800, or 3600
-UPTIME_TIMEOUT_MS="5000"    # example, tune to the endpoint's normal response time
+UPTIME_ENV=""               # optional: the environment Sentry files uptime issues under; empty for none
+UPTIME_INTERVAL_S="300"     # example; Sentry accepts only 60, 300, 600, 1200, 1800, or 3600
+UPTIME_TIMEOUT_MS="5000"    # example, tune to the endpoint's normal response time; 1000 to 60000
 UPTIME_DOWN_AFTER="3"       # example: consecutive failed checks before Sentry opens an issue
 UPTIME_RECOVER_AFTER="1"    # example: consecutive good checks before it resolves
 
-NEW_CHECK="$(curl -fsS --max-time 10 -X POST "${API}/projects/${SENTRY_ORG}/${PROJECT}/uptime/" \
-  -H "Authorization: Bearer ${SENTRY_TOKEN}" -H "Content-Type: application/json" \
-  -d "$(jq -n --arg n "$CHECK_NAME" --arg u "$CHECK_URL" --argjson interval "$UPTIME_INTERVAL_S" \
-        --argjson timeout "$UPTIME_TIMEOUT_MS" --argjson down "$UPTIME_DOWN_AFTER" --argjson up "$UPTIME_RECOVER_AFTER" '{
-    name: $n, url: $u, intervalSeconds: $interval, timeoutMs: $timeout, method: "GET",
-    downtimeThreshold: $down, recoveryThreshold: $up, traceSampling: false, responseCaptureEnabled: true
-  }')")"
-CHECK_ID="$(printf '%s' "$NEW_CHECK" | jq -r '.id')"
-
-curl -fsS --max-time 10 "${API}/projects/${SENTRY_ORG}/${PROJECT}/uptime/${CHECK_ID}/" \
-  -H "Authorization: Bearer ${SENTRY_TOKEN}" | jq -e --arg u "$CHECK_URL" '.url == $u'
+if [ "${SENTRY_ALERT_API}" = workflows ]; then
+  # config.environment is required (Sentry answers 400 without it); an empty UPTIME_ENV sends null.
+  CHECK_ID="$(curl -fsS --max-time 10 -X POST "${API}/organizations/${SENTRY_ORG}/projects/${PROJECT}/detectors/" \
+    -H "Authorization: Bearer ${SENTRY_TOKEN}" -H "Content-Type: application/json" \
+    -d "$(jq -n --arg n "$CHECK_NAME" --arg u "$CHECK_URL" --arg env "$UPTIME_ENV" --argjson interval "$UPTIME_INTERVAL_S" \
+          --argjson timeout "$UPTIME_TIMEOUT_MS" --argjson down "$UPTIME_DOWN_AFTER" --argjson up "$UPTIME_RECOVER_AFTER" '{
+      type: "uptime_domain_failure", name: $n,
+      dataSources: [{url: $u, intervalSeconds: $interval, timeoutMs: $timeout, method: "GET",
+                     traceSampling: false, responseCaptureEnabled: true}],
+      config: {environment: (if $env == "" then null else $env end), downtimeThreshold: $down, recoveryThreshold: $up}
+    }')" | jq -r '.id // empty')"
+  [ -n "$CHECK_ID" ] || { echo "create returned no monitor id; nothing to verify" >&2; exit 1; }
+  echo "created uptime monitor: ${CHECK_ID}"
+  # Verify the re-fetched monitor: an enabled uptime monitor on this URL at this interval.
+  curl -fsS --max-time 10 "${API}/organizations/${SENTRY_ORG}/detectors/${CHECK_ID}/" \
+    -H "Authorization: Bearer ${SENTRY_TOKEN}" \
+    | jq -e --arg u "$CHECK_URL" --argjson interval "$UPTIME_INTERVAL_S" \
+        '.type == "uptime_domain_failure" and .enabled == true
+         and .dataSources[0].queryObj.url == $u and .dataSources[0].queryObj.intervalSeconds == $interval'
+else
+  # Legacy fallback (self-hosted Sentry that still serves the project uptime route).
+  CHECK_ID="$(curl -fsS --max-time 10 -X POST "${API}/projects/${SENTRY_ORG}/${PROJECT}/uptime/" \
+    -H "Authorization: Bearer ${SENTRY_TOKEN}" -H "Content-Type: application/json" \
+    -d "$(jq -n --arg n "$CHECK_NAME" --arg u "$CHECK_URL" --argjson interval "$UPTIME_INTERVAL_S" \
+          --argjson timeout "$UPTIME_TIMEOUT_MS" --argjson down "$UPTIME_DOWN_AFTER" --argjson up "$UPTIME_RECOVER_AFTER" '{
+      name: $n, url: $u, intervalSeconds: $interval, timeoutMs: $timeout, method: "GET",
+      downtimeThreshold: $down, recoveryThreshold: $up, traceSampling: false, responseCaptureEnabled: true
+    }')" | jq -r '.id // empty')"
+  [ -n "$CHECK_ID" ] || { echo "create returned no uptime monitor id; nothing to verify" >&2; exit 1; }
+  echo "created uptime monitor: ${CHECK_ID}"
+  curl -fsS --max-time 10 "${API}/projects/${SENTRY_ORG}/${PROJECT}/uptime/${CHECK_ID}/" \
+    -H "Authorization: Bearer ${SENTRY_TOKEN}" | jq -e --arg u "$CHECK_URL" '.url == $u'
+fi
 ```
 
-Expect: exit 0. `intervalSeconds` accepts only `300`, `600`, `1800`, or `3600`; any other value is rejected. On the alerts API the uptime check is a monitor (`uptime_domain_failure` detector): it notifies only through an alert connected to it, or through a project issue alert that happens to match its issues, so audit-sentry's SNTRY-015 flags it until one is connected. Connect it to an alert in Sentry's Monitors and Alerts UI and record that as a pending item; this skill has no verified wiring write.
+Expect: `created uptime monitor: <id>`, then `true` and exit 0: the re-fetched monitor is an enabled `uptime_domain_failure` monitor that checks `CHECK_URL` every `UPTIME_INTERVAL_S` seconds (legacy fallback: the re-fetched check's `url` is `CHECK_URL`). Record the id and `CHECK_NAME` in the change record; the rollback takes both. On an org with no free uptime seat Sentry creates the monitor with `enabled: false`, so the verify prints `false` and exits 1: the monitor exists but checks nothing. Record that as a pending item (free a seat, then enable it in Sentry), or remove it with the rollback below. `intervalSeconds` must be one of `60`, `300`, `600`, `1200`, `1800`, or `3600` and `timeoutMs` between `1000` and `60000`; Sentry rejects any other value. The uptime monitor notifies only through an alert connected to it, or through a project issue alert that happens to match its issues, so audit-sentry's SNTRY-015 flags it until one is connected. Connect it to an alert in Sentry's Monitors and Alerts UI and record that as a pending item; this skill has no verified wiring write.
 
-Rollback, in its own fresh shell:
+Rollback, in its own fresh shell. It deletes only the uptime monitor the create block made, matched by its type and name:
 
 ```bash
 set -eu
 SENTRY_HOST="us.sentry.io"; SENTRY_ORG="your-org-slug"; API="https://${SENTRY_HOST}/api/0"
 [ -n "${SENTRY_TOKEN:-}" ] || { echo "SENTRY_TOKEN is not set; run /scoutflo:connect"; exit 1; }
-PROJECT="checkout"
-CHECK_ID="<uptime-check-id>"   # the CHECK_ID the create block captured
-case "$CHECK_ID" in ''|'<'*) echo "Set CHECK_ID to the uptime monitor this setup created" >&2; exit 1 ;; esac
-curl -fsS --max-time 10 -X DELETE "${API}/projects/${SENTRY_ORG}/${PROJECT}/uptime/${CHECK_ID}/" \
-  -H "Authorization: Bearer ${SENTRY_TOKEN}" > /dev/null
-curl -sS --max-time 10 -o /dev/null -w '%{http_code}\n' "${API}/projects/${SENTRY_ORG}/${PROJECT}/uptime/${CHECK_ID}/" \
+SENTRY_ALERT_API="workflows"   # the doctor gate's "alert api:" value
+PROJECT="checkout"             # legacy fallback only: the project the uptime monitor was created in
+CHECK_ID="<uptime-check-id>"   # the "created uptime monitor:" id from the create block
+CHECK_NAME="<uptime-check-name>"   # the CHECK_NAME the create block used
+for v in "$CHECK_ID" "$CHECK_NAME"; do case "$v" in ''|'<'*) echo "Fill in every <...> value from the change record first" >&2; exit 1 ;; esac; done
+
+if [ "${SENTRY_ALERT_API}" = workflows ]; then
+  CHECK_API_URL="${API}/organizations/${SENTRY_ORG}/detectors/${CHECK_ID}/"
+  # Refuse any other monitor: it must be an uptime monitor with the recorded name.
+  curl -fsS --max-time 10 "$CHECK_API_URL" -H "Authorization: Bearer ${SENTRY_TOKEN}" \
+    | jq -e --arg n "$CHECK_NAME" '.type == "uptime_domain_failure" and .name == $n' > /dev/null \
+    || { echo "monitor ${CHECK_ID} is not the uptime monitor named ${CHECK_NAME}; not deleting" >&2; exit 1; }
+else
+  # Legacy fallback (self-hosted Sentry that still serves the project uptime route).
+  CHECK_API_URL="${API}/projects/${SENTRY_ORG}/${PROJECT}/uptime/${CHECK_ID}/"
+  curl -fsS --max-time 10 "$CHECK_API_URL" -H "Authorization: Bearer ${SENTRY_TOKEN}" \
+    | jq -e --arg n "$CHECK_NAME" '.name == $n' > /dev/null \
+    || { echo "uptime monitor ${CHECK_ID} is not named ${CHECK_NAME}; not deleting" >&2; exit 1; }
+fi
+curl -sS --max-time 10 -o /dev/null -w 'delete: %{http_code}\n' -X DELETE "$CHECK_API_URL" \
   -H "Authorization: Bearer ${SENTRY_TOKEN}"
+# Gone means the real route's JSON "does not exist" 404. A route-missing 404 has an empty body and proves nothing.
+gone="$(mktemp)"; trap 'rm -f "$gone"' EXIT
+code="$(curl -sS --max-time 10 -o "$gone" -w '%{http_code}' -H "Authorization: Bearer ${SENTRY_TOKEN}" "$CHECK_API_URL")"
+echo "post-delete: ${code}"
+[ "$code" = 404 ]
+jq -e '.detail == "The requested resource does not exist"' "$gone"
 ```
 
-Expect: `404`.
+Expect: `delete: 204` on the alerts API, `post-delete: 404`, then `true` and exit 0 on both APIs. A monitor whose type or name does not match stops the block before the DELETE. Any other post-delete code, or a `404` without that JSON body, exits nonzero: the monitor is not proven gone.
 
 ## Pagination and rate limits
 
@@ -780,7 +877,7 @@ Back off and retry on `429`; read the `Retry-After` header rather than a fixed s
 | `error.unhandled` filter never matches | Using `match: "eq"` with a value | Use `match: "is"` (is set) |
 | `http.status_code` filter rejected | The value type the API expects | Alerts API: `value: "5"` (string); legacy fallback: `value: 5` (integer) |
 | Environment-scoped rule fires on every environment | Used `LatestAdoptedReleaseFilter` instead of the rule-level `environment` field | Set `environment` on the rule object; that filter is about release-adoption stage, not environment |
-| Uptime monitor creation fails | Invalid `intervalSeconds` | Only 300, 600, 1800, 3600 are valid |
+| Uptime monitor creation fails | Invalid `intervalSeconds` or `timeoutMs`, or (alerts API) no `config.environment` | `intervalSeconds` is one of 60, 300, 600, 1200, 1800, 3600; `timeoutMs` is 1000 to 60000; always send `config.environment` (`null` for none) |
 | Default rule noise after project creation | `defaultRules` not set to `false` | Delete the auto-created alert by id, never through a project-wide bulk call (see SKILL.md) |
 | Slack PUT silently drops the email action | Payload only included the new action; an alert PUT deletes every action, filter, and condition missing by `id` | Fetch the alert, append to the chosen `actionFilters[]` entry's `actions`, PUT the full object back with every id |
 | A PUT re-enables a disabled alert | `enabled` defaults to `true` when omitted | Build every PUT body from the backup so it carries `enabled`, and assert it after the write |

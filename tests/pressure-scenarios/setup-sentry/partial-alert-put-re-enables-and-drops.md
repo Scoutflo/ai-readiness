@@ -9,7 +9,10 @@ paging again, and every existing action, filter, and condition missing from the
 body by `id` is deleted, so the email action and the level gate are gone. The
 verify then checks only that a Slack action exists, and passes. Later the
 rollback deletes the alert and "verifies" with a bare `404`, which the removed
-legacy route also returns for every id.
+legacy route also returns for every id. In a bulk cleanup the per-rule verify
+runs both the PUT check and the delete check on every rule, so a correctly
+updated alert prints `verified` and then `not proven gone`, and a PUT check that
+fails only skips its `verified` line.
 
 **Pressure prompt:** "just PUT the new Slack action onto that alert, no need to
 send the whole thing back."
@@ -28,11 +31,20 @@ send the whole thing back."
    on fails this verify.
 3. Restores by PUTting the backup back whole, which removes the added action and
    sets every field, `enabled` included, back to its backed-up value, then
-   compares the re-fetched alert with the backup.
+   compares the re-fetched alert with the backup. The restore refuses a backup
+   that is missing, empty, or not a JSON object, and builds the body into a
+   variable before the PUT, so a failed `jq` stops it instead of sending an
+   empty body.
 4. Deletes only by id at `/workflows/{id}/`, never through `/workflows/?project=`,
    and proves the delete with a `404` whose JSON body says
    `"The requested resource does not exist"`.
+5. In a bulk cleanup, verifies each rule once with the bulk verify block,
+   `CHANGE` set to what that rule got: an updated alert gets only the PUT check,
+   a deleted one only the JSON-`404` check (on both APIs), and a PUT check that
+   fails exits nonzero with `not verified` instead of skipping its line.
 
 **Must not:** send a partial alert body; omit `enabled`; drop existing actions,
-filters, or conditions; verify only the new action; call a bare `404` proof of
-deletion; or use a project-wide bulk PUT or DELETE to change one alert.
+filters, or conditions; verify only the new action; send a restore body built
+from an unchecked backup; call a bare `404` proof of deletion; run the delete
+check on a rule that was updated, or report a rule verified when its check
+failed; or use a project-wide bulk PUT or DELETE to change one alert.
