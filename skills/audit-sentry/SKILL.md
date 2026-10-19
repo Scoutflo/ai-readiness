@@ -285,13 +285,16 @@ fetch_all() { # $1: full API URL. Follows cursor pagination, prints one merged J
 
 # A failed read writes no file. Its status goes to blocked-reads.tsv and every check that
 # needs it records `blocked`; a read that failed is never stored as an empty list.
-read_or_block() { # $1: surface label, $2: full API URL, $3: output file
-  if fetch_all "$2" > "$3"; then return 0; fi
-  rm -f "$3"
+block_read() { # $1: surface label, $2: full API URL
   bcode="$(curl -sS -o /dev/null -w '%{http_code} %{content_type}' --max-time 15 \
     -H "Authorization: Bearer ${SENTRY_TOKEN}" "$2" || true)"
   printf '%s\t%s\n' "$1" "${bcode:-000}" >> "${RAW_DIR}/blocked-reads.tsv"
   echo "BLOCKED: $1 read returned ${bcode:-no response}; record it as blocked evidence, not an empty list"
+}
+read_or_block() { # $1: surface label, $2: full API URL, $3: output file
+  if fetch_all "$2" > "$3" && [ -s "$3" ]; then return 0; fi
+  rm -f "$3"
+  block_read "$1" "$2"
 }
 
 fetch_all "${API}/organizations/${SENTRY_ORG}/projects/"      > "${RAW_DIR}/projects.json"
@@ -335,20 +338,24 @@ read_or_block stats-projects \
 # Small and medium paths only: one pass over every project. On the large path,
 # skip this loop and run the batched worklist procedure in
 # references/api-checks.md#large-orgs-worklist-batches-and-resume instead; it
-# writes the same ${RAW_DIR}/projects/<slug>/ files this loop writes.
+# writes the same ${RAW_DIR}/projects/<slug>/ files this loop writes, and its
+# per-project blocked reads to worklist-blocked-reads.tsv.
+rm -f "${RAW_DIR}/worklist-blocked-reads.tsv"   # small and medium paths: this loop records its own
 for p in $(jq -r '.[].slug' "${RAW_DIR}/projects.json"); do
   d="${RAW_DIR}/projects/${p}"; mkdir -p "$d"
+  # A refused read for one project is recorded and the loop moves on to the next project.
   # Project detail carries the project's securityToken: drop it before anything is written.
-  detail="$(curl -fsS --max-time 30 -H "Authorization: Bearer ${SENTRY_TOKEN}" "${API}/projects/${SENTRY_ORG}/${p}/")"
-  printf '%s\n' "$detail" | jq 'del(.securityToken)' > "${d}/detail.json"
-  fetch_all "${API}/projects/${SENTRY_ORG}/${p}/environments/" > "${d}/environments.json"
-  # Keys: keep only name, status, rate limit. Never store DSNs anywhere.
-  fetch_all "${API}/projects/${SENTRY_ORG}/${p}/keys/" \
-    | jq 'map({name, isActive, rateLimit})' > "${d}/keys.json"
-  [ -s "${d}/keys.json" ] || echo '[]' > "${d}/keys.json"
+  detail="$(curl -fsS --max-time 30 -H "Authorization: Bearer ${SENTRY_TOKEN}" "${API}/projects/${SENTRY_ORG}/${p}/")" \
+    && printf '%s\n' "$detail" | jq 'del(.securityToken)' > "${d}/detail.json" \
+    || { rm -f "${d}/detail.json"; block_read "detail:${p}" "${API}/projects/${SENTRY_ORG}/${p}/"; }
+  read_or_block "environments:${p}" "${API}/projects/${SENTRY_ORG}/${p}/environments/" "${d}/environments.json"
+  # Keys: keep only name, status, rate limit. Never store DSNs, and never store a failed read as [].
+  keys="$(fetch_all "${API}/projects/${SENTRY_ORG}/${p}/keys/")" && [ -n "$keys" ] \
+    && printf '%s\n' "$keys" | jq 'map({name, isActive, rateLimit})' > "${d}/keys.json" \
+    || { rm -f "${d}/keys.json"; block_read "keys:${p}" "${API}/projects/${SENTRY_ORG}/${p}/keys/"; }
   if [ "${SENTRY_ALERT_API}" = legacy ]; then
     # Legacy fallback: this project's issue rules and uptime monitors.
-    fetch_all "${API}/projects/${SENTRY_ORG}/${p}/rules/" > "${d}/rules.json"
+    read_or_block "rules:${p}" "${API}/projects/${SENTRY_ORG}/${p}/rules/" "${d}/rules.json"
     read_or_block "uptime:${p}" "${API}/projects/${SENTRY_ORG}/${p}/uptime/" "${d}/uptime.json"
   fi
 done
@@ -382,13 +389,16 @@ find "${RAW_DIR}" -name '*.json' -type f | while read -r rf; do
     && mv "${rf}.red" "$rf" || rm -f "${rf}.red"
 done
 
+# Large path: add the per-project blocked reads the worklist recorded (merged by its step 4).
+if [ -f "${RAW_DIR}/worklist-blocked-reads.tsv" ]; then cat "${RAW_DIR}/worklist-blocked-reads.tsv" >> "${RAW_DIR}/blocked-reads.tsv"; fi
+
 for f in projects teams integrations releases monitors workflows detectors metric-alerts; do
   if [ -f "${RAW_DIR}/${f}.json" ]; then jq -r --arg f "$f" '"\($f): \(length)"' "${RAW_DIR}/${f}.json"; fi
 done
 if [ -s "${RAW_DIR}/blocked-reads.tsv" ]; then echo "blocked reads:"; cat "${RAW_DIR}/blocked-reads.tsv"; fi
 ```
 
-Expected: counts print and the raw dir holds one JSON file per surface plus one directory per project. A read that failed writes no file: it prints a `BLOCKED:` line and lands in `blocked-reads.tsv` with its status, and every check that needs it records `blocked` with that status as evidence, never an empty result. On the alerts API each project directory also holds `workflows.json` (the project's alerts plus the org-wide ones, exactly what `?project=` returns) and `detectors.json` (its monitors), derived from the org-wide reads; the legacy fallback writes `rules.json` and `uptime.json` there instead. Counts are inventory, not results.
+Expected: counts print and the raw dir holds one JSON file per surface plus one directory per project. A read that failed writes no file: it prints a `BLOCKED:` line and lands in `blocked-reads.tsv` with its status, and every check that needs it records `blocked` with that status as evidence, never an empty result. That includes each project's detail, environments, and keys reads (and the legacy rules and uptime reads): one refused project read is recorded as `<surface>:<slug>` and the loop carries on with the next project, and a failed keys read leaves no `keys.json`, never `[]`. On the large path the worklist records its project reads the same way, and this block adds them from `worklist-blocked-reads.tsv`. On the alerts API each project directory also holds `workflows.json` (the project's alerts plus the org-wide ones, exactly what `?project=` returns) and `detectors.json` (its monitors), derived from the org-wide reads; the legacy fallback writes `rules.json` and `uptime.json` there instead. Counts are inventory, not results.
 
 ## Phase 2: Project configuration
 
@@ -479,8 +489,8 @@ Checks (payload details in [references/api-checks.md](references/api-checks.md#a
 5. **Inbound Data Filters (SNTRY-105).** From `/projects/{org}/{project}/filters/`: with no inbound filter active, a project ingests known-junk events (web crawlers, browser-extension errors, localhost, legacy browsers) that create issues and feed alert streams. A production project with zero active filters is the finding; filtered events do not consume quota, so this also relieves SNTRY-008 pressure. Some filters carry `active` as a boolean, others (legacy browsers) as a non-empty subfilter array — treat either as active.
 6. **Rule fire-history (SNTRY-106).** The shared data source for the checks below. `lastTriggered` on each alert gives never-fired for free; `/organizations/{org}/workflows/{id}/stats/?statsPeriod=90d` returns hourly buckets over the 90-day window (`timeSeries[0].values[].value`; legacy fallback `/projects/{org}/{project}/rules/{ruleId}/stats/`, `[{date,count}]`) for a measured fire count on any alert a structural check already flagged. Rank the noisiest rules by *measured* fires (a "1,681 fires/90d" number outweighs any structural argument in a customer report) and mark never-fired rules as dead-weight candidates for SNTRY-109. Never scored on its own — it supplies blast-radius evidence that SNTRY-011/014/101/102/107/109 quote.
 7. **Chronic-issue re-page join (SNTRY-107).** The flagship noise correlation, joining two surfaces the earlier phases touch separately: top unresolved issues per production project (`/projects/{org}/{proj}/issues/` sorted by events, `substatus: ongoing`, `firstSeen` older than `AGE_FLOOR_DAYS`) × notifying rules whose conditions the issue still matches (frequency/every-event with no age/times-seen/new-issue gate). Emit the re-page ceiling as evidence — `matching_rules × (1440 / frequency_minutes)` pages/day that one permanently-open issue can legally generate (the session's "one 117-day-old issue can page ~96×/day/channel"). This answers *why a channel is unusable*, not *which field is null*.
-8. **Name/scope/receiver coherence (SNTRY-108).** Regex the environment claim out of both the rule name (`- Prod`, `- Dev`, `-PP`, `staging`…) and the receiver channel name (`*-pp-*`, `*-prod*`), and require agreement with the rule's actual `environment`. A "Dev"-named, env-null rule posting production events to a PP channel is silent mis-scoping that name-trusting humans never question. SNTRY-102 catches env-null alone; this catches the *lie in the name* and also fires when `environment` is set but contradicts the claim.
-9. **Dead-weight rules (SNTRY-109).** Never-fired (per SNTRY-106) **and** (snoozed/muted **or** hair-trigger keyword conditions — `message contains <generic keyword>` with `frequency < FREQ_FLOOR_MIN`). These inflate review surface and coverage counts and delete with zero loss. Distinct from SNTRY-016 (switched off *while crediting coverage*); these are on, dead, and pointless. Read the disabled state explicitly: `enabled` on the alerts API, `snooze` alongside `status` on the legacy fallback.
+8. **Name/scope/receiver coherence (SNTRY-108).** Read the environment claim, as whole words, out of both the rule name (`- Prod`, `- Dev`, `-PP`, `staging`…) and the receiver channel name (`*-pp-*`, `*-prod*`), and require agreement with the rule's actual `environment`. Only a whole-word `prod` or `production` claims production (`preprod`, `pre-prod`, and `product` do not); `dev`, `development`, `staging`, `stage`, `qa`, `test`, `pp`, and `preprod` claim non-prod. A "Dev"-named, env-null rule posting production events to a PP channel is silent mis-scoping that name-trusting humans never question. SNTRY-102 catches env-null alone; this catches the *lie in the name* and also fires when `environment` is set but contradicts the claim: a production claim on a non-production environment, or a non-prod claim on a production one. A non-prod claim on any non-production environment passes.
+9. **Dead-weight rules (SNTRY-109).** An enabled rule that never fired (per SNTRY-106) **and** is snoozed/muted **or** carries a generic-keyword condition (an attribute or tag value naming `error`, `exception`, `timeout`, or `memory`) with a re-notify frequency below `FREQ_FLOOR_MIN="30"` minutes (example, tune to your volume), the same floor SNTRY-014 uses. These inflate review surface and coverage counts and delete with zero loss. Distinct from SNTRY-016 (switched off *while crediting coverage*); these are on, dead, and pointless, so disabled rules are excluded: `enabled: false` on the alerts API and a legacy `status` other than `active` belong to SNTRY-016. Snoozed is read from `snooze` on the legacy fallback; the alerts API has no snooze flag, and a snoozed rule reads `enabled: false` there.
 10. **Ownerless rules (SNTRY-110).** `owner == null` across the issue + metric rule estate (issue alerts, and `metric_issue` monitors on the alerts API). Not SNTRY-017 (delivery routing); this is maintenance accountability — an org where zero rules have owners has no one accountable for tuning, which is *how* an estate rots. Low severity, free read (the field is on the alerts and monitors lists), high explanatory value.
 
 Per-project hygiene (SNTRY-101, 102, 105, 107, 108) batches with the same worklist as Phase 1 on the large path; the org-level metric-monitor and stats reads (SNTRY-103, 104) are single cheap calls done once per run. Fire-history (SNTRY-106) adds one GET per *already-flagged* alert — never a blanket per-alert fan-out — and SNTRY-109/110 read fields the alerts list already returned. A 401, 403, or 404 on any read here blocks its check with the status as evidence; it is never a clean or passing result. Findings point at `setup-sentry` (`setup-sentry#alert-rule-taxonomy` for SNTRY-101, 102, 103; `setup-sentry#privacy-gates` is unrelated — SNTRY-104 and 105 point at `setup-sentry#quota-spike-protection-and-privacy-sensitive-ingestion`). SNTRY-107, 108, 109, and 110 point at `setup-sentry#alert-rule-remediation-playbook` — the mutation section that tunes noisy tiers, maps rules to environments by receiver channel, deletes dead-weight rules, and sets rule ownership; SNTRY-106 is evidence-only and carries the same playbook pointer for context.
@@ -729,6 +739,7 @@ When context is available, apply it per [BUSINESS-CONTEXT-INTEGRATION-v0168.md](
 | --- | --- |
 | Region host copied from a docs example, every command 404s | Resolve the host from `sentry.host`; a 404 on the org read means wrong region, run the connect region probe |
 | A legacy alert route's 404 read as "no alert rules" or "no metric alerts" | Sentry SaaS removed `rules/`, `alert-rules/`, and `combined-rules/`; run the doctor's alert API probe, read `/workflows/` and `/detectors/`, and record a route-missing 404 (empty body, `Allow: OPTIONS`) as a blocked read, never an empty list |
+| A refused read (a 403, an SSO page served as a 200, no response) printed as a pass, a fail, `n/a`, or nothing | Capture each read's `%{http_code} %{content_type}`; anything but `200 application/json` prints `SNTRY-NNN blocked: <object> <what> read returned <status>` and ends that check for that object |
 | A migrated rule's frequency condition missed, or a metric alert's alert flagged as an every-event rule | Read conditions from both `triggers` and `actionFilters` (migrated rules keep frequency conditions in `triggers`), and judge issue-alert checks only on alerts attached to an issue-stream detector; a metric monitor's alerts have empty triggers by design |
 | A metric monitor's `timeWindow` compared with a minute floor as if it were minutes | `timeWindow` and `comparisonDelta` are seconds on the alerts API; divide by 60 before comparing with `TIMEWINDOW_FLOOR_MIN` |
 | A monitor with no alert of its own called silent while its project's issue alerts still catch its issues | Join the project's enabled issue alerts before filing SNTRY-015 as silent; with one present, the monitor is unproven, not silent |
@@ -756,4 +767,5 @@ When context is available, apply it per [BUSINESS-CONTEXT-INTEGRATION-v0168.md](
 | Zero cron/uptime monitors treated as nothing to report | When a backend project carries real accepted volume in the same window, record it as an explicit `info` finding (SNTRY-023) — never a silent, uncommented pass |
 | A mapped project with zero recent events written up as one "dead project" sentence | Split by `firstEvent`: `null` means never instrumented (wire the SDK); a real timestamp with zero recent volume means a drop-off (investigate the change) — SNTRY-024 |
 | An environment-scoped rule read as covering "production" when the project also ingests under a synonym like `prod` | Check the project's environment list for synonym collisions (SNTRY-025) before trusting SNTRY-102/SNTRY-013's environment match; a collision means the rule sees only half the traffic |
+| A `preprod`, `pre-prod`, or `product` rule read as claiming production (SNTRY-108) | Match environment claims as whole words: only `prod` or `production` claims production, and a non-prod claim passes on any non-production environment |
 | `code-mappings.json`'s `repoId` read via the wrong field name (`repositoryId`, which this API does not return) | Confirm field names against a live response before writing a `jq` selector; a nonexistent field silently returns `null` instead of erroring |
