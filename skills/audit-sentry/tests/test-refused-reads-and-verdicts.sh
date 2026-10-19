@@ -1,35 +1,49 @@
 #!/bin/sh
 # test-refused-reads-and-verdicts.sh: runs audit-sentry's own published blocks, as written, with
-# standard input closed (as in an agent session) and a stand-in curl first on PATH that never
-# touches the network. It checks:
+# standard input closed (as in an agent session), a stand-in curl first on PATH that never touches
+# the network, and a stand-in mktemp that keeps every temp file where this test can see it. It checks:
 #  (a) a refused read (a 403 with a JSON {"detail": ...} body where -f reads exit 22, a 200 HTML
-#      sign-in page, or no response at all) prints "SNTRY-NNN blocked: ..." and nothing else: no
-#      pass, fail, n/a, row, or shell error. Answered reads still give each check its verdict, so a
-#      check that always said "blocked" would fail here too;
+#      sign-in page, a 200 JSON status line whose transfer then fails, or no response at all) prints
+#      "SNTRY-NNN blocked: ..." and nothing else: no pass, fail, n/a, row, or shell error. A check
+#      with two independent reads still judges the half it could read. Answered reads still give
+#      each check its verdict, so a check that always said "blocked" would fail here too;
 #  (b) SNTRY-108 reads environment claims as whole words, on both alert-API branches;
 #  (c) SNTRY-109 leaves disabled alerts to SNTRY-016 and applies FREQ_FLOOR_MIN, on both branches;
-#  (d) SNTRY-022 prints each offending code mapping and a pass or fail verdict;
-#  (e) Phase 1 and the large-org worklist record a refused project read in blocked-reads.tsv, carry
-#      on with the next project, never store a failed keys read as [], and never save the project
-#      securityToken or a key's secret.
+#  (d) SNTRY-022 prints each offending code mapping and a verdict, judges only a complete set, and
+#      says n/a on an empty one;
+#  (e) Phase 1 and the large-org worklist record a refused project read in that project's
+#      blocked-reads.tsv, carry on with the next project, list it in the run's blocked-reads.tsv (also
+#      after the documented large-path re-run), drop it once a retried pull succeeds, never store a
+#      failed keys read as [], never leave a temp file behind (even when a later page is an SSO
+#      page), and never save the project securityToken or a key's secret.
 # Set BLOCK_SH=dash to run the blocks under another POSIX shell.
 set -eu
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 CHECKS="$ROOT/skills/audit-sentry/references/api-checks.md"
 SKILL="$ROOT/skills/audit-sentry/SKILL.md"
 BLOCK_SH="${BLOCK_SH:-sh}"
+REAL_MKTEMP="$(command -v mktemp)"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 command -v jq >/dev/null 2>&1 || { echo "FAIL: jq is required" >&2; exit 1; }
 mkdir -p "$WORK/bin" "$WORK/blocks" "$WORK/fx" "$WORK/tmp" "$WORK/home" "$WORK/cwd"
 TAB="$(printf '\t')"
 TODAY="$(date -u +%Y-%m-%d)"
+SECRETS='sectok-marker|ks-marker|dsn-marker'
 FAILS=0
 fail() { echo "FAIL: $1" >&2; FAILS=$((FAILS + 1)); }
 
+# ---- stand-in mktemp ----------------------------------------------------------------------------
+# macOS mktemp ignores TMPDIR when it gets no template, so a block's leftovers would land unseen in
+# the system temp dir. This one always creates inside $TMPDIR, which run() points at $WORK/tmp.
+printf '#!/bin/sh\nif [ "${1:-}" = -d ]; then exec "%s" -d "${TMPDIR:?}/tmp.XXXXXXXXXX"; fi\nexec "%s" "${TMPDIR:?}/tmp.XXXXXXXXXX"\n' \
+  "$REAL_MKTEMP" "$REAL_MKTEMP" > "$WORK/bin/mktemp"
+chmod +x "$WORK/bin/mktemp"
+
 # ---- stand-in curl ------------------------------------------------------------------------------
-# A URL matching a glob in FAKE_CURL_ROUTES ("<glob><TAB><fixture file>" lines, first match wins)
-# answers 200 application/json with that fixture. Every other URL is refused per FAKE_CURL_REFUSE.
+# A URL matching a glob in FAKE_CURL_ROUTES ("<glob><TAB><fixture file>[<TAB><next page URL>]"
+# lines, first match wins) answers 200 application/json with that fixture, and a Link header when a
+# next page is given. Every other URL is refused per FAKE_CURL_REFUSE.
 cat > "$WORK/bin/curl" <<'EOF'
 #!/bin/sh
 out=""; fmt=""; hdr=""; fail=0; url=""
@@ -47,12 +61,12 @@ while [ $# -gt 0 ]; do
   shift
 done
 [ -z "${FAKE_CURL_LOG:-}" ] || printf '%s\n' "$url" >> "$FAKE_CURL_LOG"
-status=""; ctype=""; body_file=""; body_text=""
+status=""; ctype=""; body_file=""; body_text=""; next=""; cut=0
 if [ -f "${FAKE_CURL_ROUTES:-}" ]; then
   tab="$(printf '\t')"
-  while IFS="$tab" read -r pat file; do
+  while IFS="$tab" read -r pat file nxt; do
     [ -n "$pat" ] || continue
-    case "$url" in $pat) status=200; ctype="application/json"; body_file="$file"; break ;; esac
+    case "$url" in $pat) status=200; ctype="application/json"; body_file="$file"; next="$nxt"; break ;; esac
   done < "$FAKE_CURL_ROUTES"
 fi
 write_out() {
@@ -63,6 +77,7 @@ write_out() {
 if [ -z "$status" ]; then
   case "${FAKE_CURL_REFUSE:-403}" in
     html) status=200; ctype="text/html; charset=utf-8"; body_text="<html><body>Sign in to continue</body></html>" ;;
+    partial) status=200; ctype="application/json"; body_text='[{"id": "1", "name": "cut off mid'; cut=1 ;;
     down) status=000; ctype=""
           write_out
           echo "curl: (7) Failed to connect: network disabled in this test" >&2
@@ -71,7 +86,11 @@ if [ -z "$status" ]; then
        body_text='{"detail": "You do not have permission to perform this action."}' ;;
   esac
 fi
-[ -z "$hdr" ] || printf 'HTTP/1.1 %s\r\ncontent-type: %s\r\n\r\n' "$status" "$ctype" > "$hdr"
+if [ -n "$hdr" ]; then
+  printf 'HTTP/1.1 %s\r\ncontent-type: %s\r\n' "$status" "$ctype" > "$hdr"
+  [ -z "$next" ] || printf 'link: <%s>; rel="next"; results="true"; cursor="0:100:0"\r\n' "$next" >> "$hdr"
+  printf '\r\n' >> "$hdr"
+fi
 if [ "$fail" -eq 1 ] && [ "$status" -ge 400 ]; then
   write_out
   echo "curl: (22) The requested URL returned error: $status" >&2
@@ -80,6 +99,8 @@ fi
 emit() { if [ -n "$body_file" ]; then cat "$body_file"; else printf '%s' "$body_text"; fi; }
 if [ -n "$out" ]; then emit > "$out"; else emit; fi
 write_out
+# partial: the status line and headers arrived, then the transfer failed mid-body.
+if [ "$cut" -eq 1 ]; then echo "curl: (28) Operation timed out with 34 bytes received" >&2; exit 28; fi
 exit 0
 EOF
 chmod +x "$WORK/bin/curl"
@@ -104,7 +125,10 @@ legacy() {
 fx() { printf '%s\n' "$2" > "$WORK/fx/$1"; printf '%s' "$WORK/fx/$1"; }
 # routes [<glob> <fixture file>]...: the reads that answer 200; every other read is refused.
 routes() { : > "$WORK/routes"; while [ $# -gt 1 ]; do printf '%s\t%s\n' "$1" "$2" >> "$WORK/routes"; shift 2; done; }
-# run <block file> [refusal: 403|html|down]: runs the block in a clean environment, stdin closed.
+# paged <glob> <fixture file> <next page URL>: adds a read that answers 200 and links a next page.
+paged() { printf '%s\t%s\t%s\n' "$1" "$2" "$3" >> "$WORK/routes"; }
+# run <block file> [refusal: 403|html|partial|down]: runs the block in a clean environment, stdin
+# closed, and fails if it leaves any temp file behind.
 run() {
   RC=0
   ( cd "$WORK/cwd" && env -i PATH="$WORK/bin:$PATH" HOME="$WORK/home" TMPDIR="$WORK/tmp" \
@@ -112,23 +136,34 @@ run() {
       SCOUTFLO_CONFIG="$WORK/toolkit.yaml" CLAUDE_PLUGIN_ROOT="$ROOT" \
       FAKE_CURL_ROUTES="$WORK/routes" FAKE_CURL_REFUSE="${2:-403}" FAKE_CURL_LOG="$WORK/curl.log" \
       "$BLOCK_SH" "$1" ) < /dev/null > "$WORK/out" 2> "$WORK/err" || RC=$?
-  if [ -n "$(ls -A "$WORK/tmp")" ]; then fail "$(basename "$1") left temp files behind"; rm -rf "$WORK/tmp"; mkdir -p "$WORK/tmp"; fi
+  if [ -n "$(ls -A "$WORK/tmp")" ]; then
+    if [ -n "$(find "$WORK/tmp" -type f -exec grep -lE "$SECRETS" {} + 2>/dev/null)" ]; then
+      fail "$(basename "$1") (${2:-403}) left temp files behind, one holding a project or key secret"
+    else
+      fail "$(basename "$1") (${2:-403}) left temp files behind"
+    fi
+    rm -rf "$WORK/tmp"; mkdir -p "$WORK/tmp"
+  fi
 }
 shown() { tr '\n' '|' < "$WORK/out" | cut -c1-400; }
 has() { grep -Eq -- "$2" "$WORK/out" || fail "$1: expected a line matching /$2/ (stdout: $(shown); stderr: $(tail -2 "$WORK/err" | tr '\n' '|'))"; }
 hasnt() { if grep -Eq -- "$2" "$WORK/out"; then fail "$1: unexpected line: $(grep -E -- "$2" "$WORK/out" | head -1)"; fi; }
 ok_exit() { [ "$RC" -eq 0 ] || fail "$1: exited $RC, expected 0 (stderr: $(tail -2 "$WORK/err" | tr '\n' '|'))"; }
-# only_blocked <case> <prefix>: exit 0, a "<prefix> blocked: " line, and no other output line.
+# only_blocked <case> <ID>: exit 0, an "<ID> blocked: " line (or "<ID> <part> blocked: " for one half
+# of a check), and no other output line.
 only_blocked() {
   ok_exit "$1"
-  grep -q "^$2 blocked: " "$WORK/out" || fail "$1: expected a '$2 blocked:' line (stdout: $(shown))"
-  if grep -vq "^$2 blocked: " "$WORK/out"; then fail "$1: printed more than the blocked line: $(grep -v "^$2 blocked: " "$WORK/out" | head -1)"; fi
+  grep -Eq "^$2( [a-z0-9 -]+)? blocked: " "$WORK/out" || fail "$1: expected a '$2 blocked:' line (stdout: $(shown))"
+  if grep -Evq "^$2( [a-z0-9 -]+)? blocked: " "$WORK/out"; then
+    fail "$1: printed more than the blocked line: $(grep -Ev "^$2( [a-z0-9 -]+)? blocked: " "$WORK/out" | head -1)"
+  fi
 }
 # no_secret <case> <dir or file>...: no saved file and no printed line carries a fixture secret.
 no_secret() {
   c="$1"; shift
   for t in "$WORK/out" "$WORK/err" "$@"; do
-    if [ -e "$t" ] && grep -rqE 'sectok-marker|ks-marker|dsn-marker' "$t"; then fail "$c: a project securityToken or key secret reached $t"; fi
+    [ -e "$t" ] || continue
+    if [ -n "$(find "$t" -type f -exec grep -lE "$SECRETS" {} + 2>/dev/null)" ]; then fail "$c: a project securityToken or key secret reached $t"; fi
   done
 }
 
@@ -172,29 +207,60 @@ p17L:SNTRY-017 p19:SNTRY-019 p20a:SNTRY-020 p20b:SNTRY-020 p21:SNTRY-021 p22:SNT
 p24:SNTRY-024 p25:SNTRY-025 p102:SNTRY-102 p102L:SNTRY-102 p104:SNTRY-104 p105:SNTRY-105 p107:SNTRY-107 \
 p107L:SNTRY-107 p108:SNTRY-108 p108L:SNTRY-108 p109:SNTRY-109 p109L:SNTRY-109 p110:SNTRY-110 p110L:SNTRY-110"
 routes
-for mode in 403 html down; do
+for mode in 403 html down partial; do
   for c in $DENY; do
+    case "$mode:${c%%:*}" in
+      # The first read of these alerts-API branches predates this change: it still hands a failed
+      # transfer to its 100+ guard, which prints blocked for the wrong reason, so it is left out.
+      partial:p16|partial:p17|partial:p108|partial:p109|partial:p110) continue ;;
+    esac
     run "$WORK/blocks/${c%%:*}.sh" "$mode"
     only_blocked "${c%%:*} refused ($mode)" "${c#*:}"
   done
 done
 
-# A read after one that was answered is refused: still blocked, and no half verdict.
+# A read after one that was answered is refused: it is blocked, and the answered half keeps its
+# verdict when the check's two reads are independent.
 ENVS2="$(fx envs2.json '[{"name":"production"},{"name":"staging"}]')"
 EMPTY="$(fx empty.json '[]')"
 DETAIL_OK="$(fx detail-ok.json '{"slug":"your-project-slug","platform":"python","firstEvent":null,"dataScrubber":true,"dataScrubberDefaults":true,"sensitiveFields":["password"],"scrubIPAddresses":true,"scrapeJavaScript":false,"securityToken":"sectok-marker"}')"
-routes '*/integrations/?provider_key=github' "$(fx gh.json '[{"id":"1","name":"gh","status":"active"}]')"
-run "$WORK/blocks/p9.sh"; only_blocked "p9 code-mappings refused" SNTRY-009
-routes '*/projects/your-org-slug/your-project-slug/rules/' "$EMPTY"
-run "$WORK/blocks/p16L.sh"; only_blocked "p16L metric alert rules refused" SNTRY-016
-run "$WORK/blocks/p110L.sh"; only_blocked "p110L metric alert rules refused" SNTRY-110
-routes '*/projects/your-org-slug/your-project-slug/environments/' "$ENVS2"
-run "$WORK/blocks/p102L.sh"; only_blocked "p102L rules refused" SNTRY-102
-run "$WORK/blocks/p102.sh"; only_blocked "p102 alerts refused" SNTRY-102
-routes '*/projects/your-org-slug/your-project-slug/' "$DETAIL_OK"
-run "$WORK/blocks/p105.sh"; only_blocked "p105 filters refused" SNTRY-105
-routes '*/projects/your-org-slug/your-js-project-slug/issues/*' "$(fx issues1.json '[{"id":"7"}]')"
-run "$WORK/blocks/p20a.sh"; only_blocked "p20a latest event refused" SNTRY-020
+GH_ACTIVE="$(fx gh.json '[{"id":"1","name":"gh","status":"active"}]')"
+RULES16="$(fx rules16.json '[{"id":"1","name":"Off rule","status":"disabled","actions":[{"id":"a"}],"conditions":[{"id":"c"}]}]')"
+RULES110="$(fx rules110.json '[{"owner":null},{"owner":"team:1"}]')"
+OWNED110="$(fx rules110-owned.json '[{"owner":"team:1"}]')"
+for mode in 403 partial; do
+  [ "$mode" = partial ] && how='curl-exit-28 200 application/json$' || how='403 application/json$'
+  routes '*/integrations/?provider_key=github' "$EMPTY"
+  run "$WORK/blocks/p9.sh" "$mode"; ok_exit "p9 code-mappings refused ($mode)"
+  has "p9 step 1 judged on its own read ($mode)" '^SNTRY-009 step 1 fail: no active GitHub integration'
+  has "p9 code-mappings refused ($mode)" "^SNTRY-009 step 2 blocked: org code-mappings read returned ${how}"
+  hasnt "p9 code-mappings refused ($mode)" '^SNTRY-009 step 2 (pass|fail)'
+  routes '*/organizations/your-org-slug/code-mappings/' "$EMPTY"
+  run "$WORK/blocks/p9.sh" "$mode"; ok_exit "p9 integrations refused ($mode)"
+  has "p9 integrations refused ($mode)" "^SNTRY-009 step 1 blocked: org GitHub integrations read returned ${how}"
+  has "p9 step 2 judged on its own read ($mode)" '^SNTRY-009 step 2 fail: no code mappings'
+  routes '*/projects/your-org-slug/your-project-slug/rules/' "$RULES16"
+  run "$WORK/blocks/p16L.sh" "$mode"; ok_exit "p16L metric alert rules refused ($mode)"
+  has "p16L issue half kept ($mode)" "^1${TAB}Off rule${TAB}status=disabled${TAB}actions=1${TAB}conditions=c$"
+  has "p16L metric half blocked ($mode)" "^SNTRY-016 metric half blocked: org metric alert rules read returned ${how}"
+  routes '*/projects/your-org-slug/your-project-slug/rules/' "$RULES110"
+  run "$WORK/blocks/p110L.sh" "$mode"; ok_exit "p110L metric alert rules refused ($mode)"
+  has "p110L issue half counted ($mode)" '^SNTRY-110: your-project-slug unowned issue rules=1; org unowned metric alerts=blocked$'
+  has "p110L metric half blocked ($mode)" "^SNTRY-110 metric half blocked: org metric alert rules read returned ${how}"
+  has "p110L an ownerless rule is still a fail ($mode)" '^SNTRY-110 fail '
+  routes '*/projects/your-org-slug/your-project-slug/rules/' "$OWNED110"
+  run "$WORK/blocks/p110L.sh" "$mode"; ok_exit "p110L no ownerless rule seen ($mode)"
+  has "p110L no conclusion without the metric half ($mode)" '^SNTRY-110 blocked: '
+  hasnt "p110L no conclusion without the metric half ($mode)" '^SNTRY-110 (pass|fail)'
+  routes '*/projects/your-org-slug/your-project-slug/environments/' "$ENVS2"
+  run "$WORK/blocks/p102L.sh" "$mode"; only_blocked "p102L rules refused ($mode)" SNTRY-102
+  # SNTRY-102's alerts read predates this change (see the partial-mode note above): 403 only.
+  if [ "$mode" = 403 ]; then run "$WORK/blocks/p102.sh" "$mode"; only_blocked "p102 alerts refused ($mode)" SNTRY-102; fi
+  routes '*/projects/your-org-slug/your-project-slug/' "$DETAIL_OK"
+  run "$WORK/blocks/p105.sh" "$mode"; only_blocked "p105 filters refused ($mode)" SNTRY-105
+  routes '*/projects/your-org-slug/your-js-project-slug/issues/*' "$(fx issues1.json '[{"id":"7"}]')"
+  run "$WORK/blocks/p20a.sh" "$mode"; only_blocked "p20a latest event refused ($mode)" SNTRY-020
+done
 # SNTRY-023 needs its raw stats file; a missing one is blocked, and so is a refused projects read.
 rm -rf "$WORK/aud"
 routes '*/organizations/your-org-slug/monitors/' "$EMPTY"
@@ -202,9 +268,10 @@ run "$WORK/blocks/p23.sh"; only_blocked "p23 stats-projects.json missing" SNTRY-
 RAW="$WORK/aud/sentry/$TODAY/raw"; mkdir -p "$RAW"
 printf '%s\n' '{"groups":[{"by":{"project":5,"outcome":"accepted"},"totals":{"sum(quantity)":100}}]}' > "$RAW/stats-projects.json"
 run "$WORK/blocks/p23.sh"; only_blocked "p23 projects refused" SNTRY-023
+run "$WORK/blocks/p23.sh" partial; only_blocked "p23 projects refused (partial)" SNTRY-023
 # SNTRY-003's drop count reads stats-outcomes.json from the raw dump; missing is blocked, not zero.
 routes
-run "$WORK/blocks/p3b.sh"; only_blocked "p3b stats-outcomes.json missing" "SNTRY-003 drop count"
+run "$WORK/blocks/p3b.sh"; only_blocked "p3b stats-outcomes.json missing" SNTRY-003
 
 # Answered reads: every check still gives its verdict, and project or key secrets stay unprinted.
 routes '*/projects/your-org-slug/your-project-slug/' "$DETAIL_OK"
@@ -219,12 +286,11 @@ printf '%s\n' '{"groups":[{"by":{"outcome":"rate_limited"},"totals":{"sum(quanti
 run "$WORK/blocks/p3b.sh"; ok_exit p3b; has p3b '^SNTRY-003 org-wide drops to rate_limited/abuse/cardinality in window: 7 events$'
 routes '*/projects/your-org-slug/your-project-slug/environments/' "$ENVS2"
 run "$WORK/blocks/p4.sh"; ok_exit p4; has p4 '^SNTRY-004 pass: your-project-slug$'
-routes '*/integrations/?provider_key=github' "$WORK/fx/gh.json" \
+routes '*/integrations/?provider_key=github' "$GH_ACTIVE" \
        '*/organizations/your-org-slug/code-mappings/' "$(fx cm1.json '[{"id":"31","projectId":"11","repoId":"21","defaultBranch":"main","stackRoot":"src/","sourceRoot":"src/"}]')"
 run "$WORK/blocks/p9.sh"; ok_exit p9; has p9 '^SNTRY-009 step 1 pass: ' ; has p9 '^SNTRY-009 step 2 pass: '
-routes '*/projects/your-org-slug/your-project-slug/rules/' "$(fx rules16.json '[{"id":"1","name":"Off rule","status":"disabled","actions":[{"id":"a"}],"conditions":[{"id":"c"}]}]')" \
-       '*/organizations/your-org-slug/alert-rules/' "$EMPTY"
-run "$WORK/blocks/p16L.sh"; ok_exit p16L; has p16L "^1${TAB}Off rule${TAB}status=disabled${TAB}actions=1${TAB}conditions=c$"
+routes '*/projects/your-org-slug/your-project-slug/rules/' "$RULES16" '*/organizations/your-org-slug/alert-rules/' "$EMPTY"
+run "$WORK/blocks/p16L.sh"; ok_exit p16L; has p16L "^1${TAB}Off rule${TAB}status=disabled${TAB}actions=1${TAB}conditions=c$"; hasnt p16L 'blocked'
 routes '*/projects/your-org-slug/your-project-slug/rules/' "$(fx rules17.json '[{"id":"2","name":"Owner rule","actions":[{"targetType":"IssueOwners"}]}]')" \
        '*/projects/your-org-slug/your-project-slug/ownership/' "$(fx own.json '{"raw":"","fallthrough":false}')"
 run "$WORK/blocks/p17L.sh"; ok_exit p17L; has p17L "^2${TAB}Owner rule${TAB}targetType=IssueOwners$"; has p17L '"raw_empty": true'
@@ -264,20 +330,24 @@ run "$WORK/blocks/p102L.sh"; ok_exit p102L; has p102L '^SNTRY-102 pass: your-pro
 routes '*/projects/your-org-slug/your-project-slug/issues/*' "$(fx chronic.json '[{"shortId":"PROJ-1","count":"30000","firstSeen":"2026-06-24T00:00:00Z","substatus":"ongoing"}]')" \
        '*/workflows/?project=*' "$WF_ENVNULL" '*/detectors/?project=*' "$DET"
 run "$WORK/blocks/p107.sh"; ok_exit p107; has p107 "^PROJ-1${TAB}events=30000${TAB}"; has p107 '^un-gated re-paging rules: 1;'
-routes '*/projects/your-org-slug/your-project-slug/rules/' "$(fx rules110.json '[{"owner":null},{"owner":"team:1"}]')" \
+routes '*/projects/your-org-slug/your-project-slug/rules/' "$RULES110" \
        '*/organizations/your-org-slug/alert-rules/' "$(fx metric110.json '[{"owner":"team:2"}]')"
 run "$WORK/blocks/p110L.sh"; ok_exit p110L; has p110L '^SNTRY-110: your-project-slug unowned issue rules=1; org unowned metric alerts=0$'; has p110L '^SNTRY-110 fail'
+routes '*/projects/your-org-slug/your-project-slug/rules/' "$OWNED110" '*/organizations/your-org-slug/alert-rules/' "$EMPTY"
+run "$WORK/blocks/p110L.sh"; ok_exit p110L; has p110L '^SNTRY-110 pass$'
 
 # ---- (b) SNTRY-108: environment claims are whole words, on both branches --------------------------
 # name / environment / channel: a correct non-prod scope, a "product" name, a "- Dev" rule scoped to
-# production, a "- Prod" rule with no environment, a correct production scope, and a pre-prod channel
-# rule scoped to production.
+# production, a "- Prod" rule with no environment, a correct production scope, a pre-prod channel
+# rule scoped to production, a "Non-Prod" rule with no environment, and a "Pre-Production" rule
+# scoped to production.
 wf108() { printf '{"id":"%s","name":"%s","environment":%s,"enabled":true,"detectorIds":["d1"],"triggers":{"conditions":[{"type":"first_seen_event"}]},"actionFilters":[{"conditions":[],"actions":[{"type":"slack","config":{"targetDisplay":"%s","targetIdentifier":"C01"}}]}],"config":{"frequency":30},"lastTriggered":null,"owner":null}' "$1" "$2" "$3" "$4"; }
 rl108() { printf '{"id":"%s","name":"%s","environment":%s,"actions":[{"id":"sentry.integrations.slack.notify_action.SlackNotifyServiceAction","channel":"%s"}]}' "$1" "$2" "$3" "$4"; }
 for shape in wf108 rl108; do
   set -- 1 "Staging errors" '"staging"' "#errors-team"  2 "Product search" '"staging"' "#search-team" \
          3 "Checkout errors - Dev" '"production"' "#checkout-team"  4 "Payments - Prod" null "#payments-team" \
-         5 "Billing - Production" '"production"' "#billing-team"  6 "Search alerts" '"production"' "#search-pre-prod"
+         5 "Billing - Production" '"production"' "#billing-team"  6 "Search alerts" '"production"' "#search-pre-prod" \
+         7 "Refunds - Non-Prod" null "#refunds-team"  8 "Ledger - Pre-Production" '"production"' "#ledger-team"
   json="["; sep=""
   while [ $# -ge 4 ]; do json="${json}${sep}$($shape "$1" "$2" "$3" "$4")"; sep=","; shift 4; done
   json="${json}]"
@@ -293,6 +363,8 @@ for shape in wf108 rl108; do
   has "$b prod rule with no environment" '^SNTRY-108: Payments - Prod claims production \(name/channel\) but environment=null$'
   hasnt "$b correct production scope" 'Billing - Production'
   has "$b pre-prod channel scoped to production" '^SNTRY-108: Search alerts claims non-prod \(name/channel\) but environment=production$'
+  has "$b non-prod rule with no environment" '^SNTRY-108: Refunds - Non-Prod claims non-prod \(name/channel\) but environment=null$'
+  has "$b pre-production rule scoped to production" '^SNTRY-108: Ledger - Pre-Production claims non-prod \(name/channel\) but environment=production$'
 done
 
 # ---- (c) SNTRY-109: enabled, never fired, and snoozed or a keyword re-notifying below the floor ----
@@ -321,26 +393,34 @@ hasnt "p109L numeric filter value" 'Status code legacy rule'
 
 # ---- (d) SNTRY-022: each offending mapping prints, and the verdict is machine-checkable ------------
 cmrow() { printf '{"id":"%s","projectId":"%s","repoId":"%s","stackRoot":"%s","sourceRoot":"src/"}' "$1" "$2" "$3" "$4"; }
-routes '*/organizations/your-org-slug/code-mappings/' "$(fx cm-dup.json "[$(cmrow 31 11 21 src/),$(cmrow 32 11 21 src/./),$(cmrow 33 12 22 app/)]")"
+routes '*/organizations/your-org-slug/code-mappings/*' "$(fx cm-dup.json "[$(cmrow 31 11 21 src/),$(cmrow 32 11 21 src/./),$(cmrow 33 12 22 app/)]")"
 run "$WORK/blocks/p22.sh"; ok_exit p22
 has "p22 duplicate row" '^SNTRY-022 duplicate: mapping 31 project 11 repo 21 stackRoot "src/"$'
 has "p22 duplicate row" '^SNTRY-022 duplicate: mapping 32 project 11 repo 21 stackRoot "src/\./"$'
 has "p22 duplicate verdict" '^SNTRY-022 fail: 1 duplicate group\(s\), 0 build-host stackRoot\(s\), 0 over-routed'
 hasnt "p22 duplicate verdict" '^SNTRY-022 pass'
-routes '*/organizations/your-org-slug/code-mappings/' "$(fx cm-clean.json "[$(cmrow 31 11 21 src/),$(cmrow 33 12 22 app/)]")"
+routes '*/organizations/your-org-slug/code-mappings/*' "$(fx cm-clean.json "[$(cmrow 31 11 21 src/),$(cmrow 33 12 22 app/)]")"
 run "$WORK/blocks/p22.sh"; ok_exit p22
 has "p22 clean set" '^SNTRY-022 pass: 2 code mapping'
 hasnt "p22 clean set" '^SNTRY-022 (duplicate|build-host|over-routed|fail)'
-routes '*/organizations/your-org-slug/code-mappings/' "$(fx cm-host.json "[$(cmrow 41 13 23 /tmp/build/src/),$(cmrow 42 13 23 a/),$(cmrow 43 13 23 b/),$(cmrow 44 13 23 c/),$(cmrow 45 13 23 d/),$(cmrow 46 13 23 e/)]")"
+routes '*/organizations/your-org-slug/code-mappings/*' "$(fx cm-host.json "[$(cmrow 41 13 23 /tmp/build/src/),$(cmrow 42 13 23 a/),$(cmrow 43 13 23 b/),$(cmrow 44 13 23 c/),$(cmrow 45 13 23 d/),$(cmrow 46 13 23 e/)]")"
 run "$WORK/blocks/p22.sh"; ok_exit p22
 has "p22 build-host row" '^SNTRY-022 build-host: mapping 41 project 13 repo 23 stackRoot "/tmp/build/src/"$'
 has "p22 over-routed row" '^SNTRY-022 over-routed: project 13 routes 6 mappings into repo 23 \(ceiling 5\)'
 has "p22 build-host verdict" '^SNTRY-022 fail: 0 duplicate group\(s\), 1 build-host stackRoot\(s\), 1 over-routed'
+# An empty set has nothing to judge, and a full page of 100 is only part of the set.
+routes '*/organizations/your-org-slug/code-mappings/*' "$EMPTY"
+run "$WORK/blocks/p22.sh"; ok_exit p22
+has "p22 empty set" '^SNTRY-022 n/a: no code mappings to judge; SNTRY-009 step 2 owns the missing mappings$'
+hasnt "p22 empty set" '^SNTRY-022 (pass|fail)'
+routes '*/organizations/your-org-slug/code-mappings/*' "$(fx cm-full.json "$(jq -nc '[range(100) | {id: (. + 100 | tostring), projectId: "11", repoId: (. + 300 | tostring), stackRoot: "src/", sourceRoot: "src/"}]')")"
+run "$WORK/blocks/p22.sh"; only_blocked "p22 full page" SNTRY-022; has "p22 full page" '^SNTRY-022 blocked: org has 100\+ code mappings'
 
 # ---- (e) Phase 1 and the large-org worklist -------------------------------------------------------
 printf 'sentry:\n  host: sentry.example.com\n  org: example-org\n  token_env: SENTRY_TOKEN\n  tier: read-only\n' > "$WORK/toolkit.yaml"
 KEYS_SECRET="$(fx keys-secret.json '[{"name":"Default","isActive":true,"rateLimit":null,"secret":"ks-marker","dsn":{"public":"dsn-marker"}}]')"
 DETAIL_TOKEN="$(fx detail-token.json '{"slug":"p","id":"1","platform":"python","securityToken":"sectok-marker"}')"
+PROJECTS_W="$(fx projects-w.json '[{"slug":"checkout","id":"1"},{"slug":"payments","id":"2"}]')"
 ORG_ROUTES="*/organizations/example-org/teams/ $EMPTY */organizations/example-org/integrations/ $EMPTY
 */organizations/example-org/repos/ $EMPTY */organizations/example-org/code-mappings/ $EMPTY
 */organizations/example-org/releases/ $EMPTY */organizations/example-org/monitors/ $EMPTY
@@ -359,8 +439,10 @@ routes '*/organizations/example-org/projects/' "$(fx projects-e.json '[{"slug":"
        '*/projects/example-org/beta/keys/' "$KEYS_SECRET"
 set +f
 run "$WORK/blocks/phase1.sh"; ok_exit "phase1 small path"
-grep -qxF "keys:gamma${TAB}403 application/json" "$RAW/blocked-reads.tsv" 2>/dev/null || fail "phase1: refused keys read for gamma is not in blocked-reads.tsv"
-grep -qxF "detail:alpha${TAB}403 application/json" "$RAW/blocked-reads.tsv" 2>/dev/null || fail "phase1: refused detail read for alpha is not in blocked-reads.tsv"
+grep -qxF "keys:gamma${TAB}403 application/json" "$RAW/projects/gamma/blocked-reads.tsv" 2>/dev/null || fail "phase1: gamma's refused keys read is not in its own blocked-reads.tsv"
+grep -qxF "keys:gamma${TAB}403 application/json" "$RAW/blocked-reads.tsv" 2>/dev/null || fail "phase1: refused keys read for gamma is not in the run's blocked-reads.tsv"
+grep -qxF "detail:alpha${TAB}403 application/json" "$RAW/blocked-reads.tsv" 2>/dev/null || fail "phase1: refused detail read for alpha is not in the run's blocked-reads.tsv"
+[ ! -s "$RAW/projects/beta/blocked-reads.tsv" ] || fail "phase1: beta answered every read, yet its blocked-reads.tsv has rows"
 [ ! -e "$RAW/projects/gamma/keys.json" ] || fail "phase1: a failed keys read was stored as $(cat "$RAW/projects/gamma/keys.json")"
 [ ! -e "$RAW/projects/alpha/detail.json" ] || fail "phase1: a failed detail read left a detail.json"
 for f in gamma/detail.json gamma/environments.json alpha/environments.json alpha/keys.json beta/detail.json beta/environments.json beta/keys.json; do
@@ -368,6 +450,30 @@ for f in gamma/detail.json gamma/environments.json alpha/environments.json alpha
 done
 jq -e 'map(keys) | all(. == ["isActive", "name", "rateLimit"])' "$RAW/projects/beta/keys.json" >/dev/null 2>&1 || fail "phase1: keys.json holds more than name, isActive, rateLimit"
 no_secret "phase1 small path" "$WORK/aud"
+# A same-day re-run where every read answers leaves no row from the earlier run.
+set -f   # $ORG_ROUTES splits into glob/fixture pairs; never expand them against files
+routes '*/organizations/example-org/projects/' "$WORK/fx/projects-e.json" $ORG_ROUTES \
+       '*/projects/example-org/gamma/' "$DETAIL_TOKEN" '*/projects/example-org/gamma/environments/' "$ENVS2" '*/projects/example-org/gamma/keys/' "$KEYS_SECRET" \
+       '*/projects/example-org/alpha/' "$DETAIL_TOKEN" '*/projects/example-org/alpha/environments/' "$ENVS2" '*/projects/example-org/alpha/keys/' "$KEYS_SECRET" \
+       '*/projects/example-org/beta/' "$DETAIL_TOKEN" '*/projects/example-org/beta/environments/' "$ENVS2" '*/projects/example-org/beta/keys/' "$KEYS_SECRET"
+set +f
+run "$WORK/blocks/phase1.sh"; ok_exit "phase1 small path re-run"
+stale="$(find "$RAW" -name '*.tsv' -exec grep -lE '^(keys:gamma|detail:alpha)' {} + 2>/dev/null || true)"
+[ -z "$stale" ] || fail "phase1 small path re-run: rows from the earlier run survive in $(printf '%s ' $stale)"
+# Small path, a keys read whose second page is an SSO page: the read is blocked, and no temp file
+# (page one's raw keys included) stays behind; run() fails on any leftover.
+rm -rf "$WORK/aud"
+set -f   # $ORG_ROUTES splits into glob/fixture pairs; never expand them against files
+routes '*/organizations/example-org/projects/' "$(fx projects-d.json '[{"slug":"delta","id":"4"}]')" \
+       $ORG_ROUTES \
+       '*/projects/example-org/delta/' "$DETAIL_TOKEN" '*/projects/example-org/delta/environments/' "$ENVS2"
+set +f
+paged '*/projects/example-org/delta/keys/' "$KEYS_SECRET" 'https://sentry.example.com/api/0/projects/example-org/delta/keys/?cursor=0:100:0'
+run "$WORK/blocks/phase1.sh" html; ok_exit "phase1 SSO second keys page"
+[ ! -e "$RAW/projects/delta/keys.json" ] || fail "phase1: a keys read whose second page was an SSO page was stored"
+grep -qxF "keys:delta${TAB}200 application/json, but a later page or the body failed" "$RAW/blocked-reads.tsv" 2>/dev/null \
+  || fail "phase1: the keys read whose second page was an SSO page is not in blocked-reads.tsv"
+no_secret "phase1 SSO second keys page" "$WORK/aud"
 # Small path, legacy fallback: alpha's rules read and every uptime read are refused.
 rm -rf "$WORK/aud"
 set -f   # $ORG_ROUTES splits into glob/fixture pairs; never expand them against files
@@ -396,29 +502,61 @@ for row in "checkout${TAB}done" "payments${TAB}done" "search${TAB}pending"; do
   grep -qxF "$row" "$RUN_DIR/worklist.tsv" || fail "worklist step 3: expected row '$row' in worklist.tsv ($(tr '\n' ' ' < "$RUN_DIR/worklist.tsv"))"
 done
 for row in "detail:checkout" "keys:checkout"; do
-  grep -qxF "${row}${TAB}403 application/json" "$RUN_DIR/raw/blocked-reads.tsv" 2>/dev/null || fail "worklist step 3: refused ${row} read is not in the run's blocked-reads.tsv"
+  grep -qxF "${row}${TAB}403 application/json" "$RUN_DIR/raw/projects/checkout/blocked-reads.tsv" 2>/dev/null \
+    || fail "worklist step 3: refused ${row} read is not in checkout's blocked-reads.tsv"
 done
+[ ! -s "$RUN_DIR/raw/projects/payments/blocked-reads.tsv" ] || fail "worklist step 3: payments answered every read, yet its blocked-reads.tsv has rows"
 [ ! -e "$RUN_DIR/raw/projects/checkout/keys.json" ] || fail "worklist step 3: a failed keys read was stored as $(cat "$RUN_DIR/raw/projects/checkout/keys.json")"
 [ -s "$RUN_DIR/raw/projects/payments/keys.json" ] || fail "worklist step 3: payments/keys.json is missing"
 no_secret "worklist step 3" "$RUN_DIR"
-# Step 4 carries the run's blocked reads into the merged raw dir.
+# Step 4 copies every project's directory, its blocked-reads.tsv included, into the merged raw dir.
 printf 'checkout\tdone\npayments\tdone\n' > "$RUN_DIR/worklist.tsv"
 printf '%s\n' '[{"slug":"checkout","id":"1"},{"slug":"payments","id":"2"}]' > "$RUN_DIR/raw/projects.json"
 routes
 run "$WORK/blocks/step4.sh"; ok_exit "worklist step 4"
-grep -qxF "keys:checkout${TAB}403 application/json" "$RAW/worklist-blocked-reads.tsv" 2>/dev/null || fail "worklist step 4: the run's blocked reads were not carried into the merged raw dir"
-# Then Phase 1 on the large path (its per-project loop skipped) lists them in blocked-reads.tsv.
-awk 'skip == 0 && (index($0, "rm -f \"${RAW_DIR}/worklist-blocked-reads.tsv\"") == 1 || index($0, "for p in $(jq -r") == 1) { skip = 1; next }
+grep -qxF "keys:checkout${TAB}403 application/json" "$RAW/projects/checkout/blocked-reads.tsv" 2>/dev/null \
+  || fail "worklist step 4: checkout's blocked reads were not carried into the merged raw dir"
+# Then Phase 1 runs the way the large path documents it: the whole block except its per-project
+# loop. The carried rows must reach the run's blocked-reads.tsv.
+awk 'skip == 0 && index($0, "for p in $(jq -r") == 1 { skip = 1; next }
      skip == 1 { if ($0 == "done") skip = 2; next }
      { print }' "$WORK/blocks/phase1.sh" > "$WORK/blocks/phase1-large.sh"
-if grep -q 'for p in \$(jq -r' "$WORK/blocks/phase1-large.sh"; then echo "FAIL: could not skip the Phase 1 per-project loop" >&2; exit 1; fi
+if grep -qF 'detail="$(curl -fsS' "$WORK/blocks/phase1-large.sh"; then echo "FAIL: could not skip the Phase 1 per-project loop" >&2; exit 1; fi
 set -f   # $ORG_ROUTES splits into glob/fixture pairs; never expand them against files
-routes '*/organizations/example-org/projects/' "$WORK/fx/projects-l.json" $ORG_ROUTES
+routes '*/organizations/example-org/projects/' "$PROJECTS_W" $ORG_ROUTES
 set +f
 run "$WORK/blocks/phase1-large.sh"; ok_exit "phase1 large path"
 for row in "detail:checkout" "keys:checkout"; do
   grep -qxF "${row}${TAB}403 application/json" "$RAW/blocked-reads.tsv" 2>/dev/null || fail "phase1 large path: the worklist's refused ${row} read is not in blocked-reads.tsv"
 done
+# A resumed pull that succeeds leaves no stale row: checkout is pending again and now answers.
+printf 'checkout\tpending\npayments\tdone\n' > "$RUN_DIR/worklist.tsv"
+routes '*/projects/your-org-slug/checkout/' "$DETAIL_TOKEN" '*/projects/your-org-slug/checkout/environments/' "$ENVS2" \
+       '*/projects/your-org-slug/checkout/keys/' "$KEYS_SECRET" \
+       '*/projects/your-org-slug/payments/' "$DETAIL_TOKEN" '*/projects/your-org-slug/payments/environments/' "$ENVS2" \
+       '*/projects/your-org-slug/payments/keys/' "$KEYS_SECRET"
+run "$WORK/blocks/step3.sh"; ok_exit "worklist resumed pull"
+[ ! -s "$RUN_DIR/raw/projects/checkout/blocked-reads.tsv" ] || fail "worklist resumed pull: checkout's rows from the refused attempt survived a pull that succeeded"
+routes
+run "$WORK/blocks/step4.sh"; ok_exit "worklist step 4 after the resumed pull"
+stale="$(find "$RUN_DIR" "$RAW" -name '*.tsv' ! -path "$RAW/blocked-reads.tsv" -exec grep -lE '^(detail|keys):checkout' {} + 2>/dev/null || true)"
+[ -z "$stale" ] || fail "worklist resumed pull: rows from the refused attempt survive in $(printf '%s ' $stale)"
+set -f   # $ORG_ROUTES splits into glob/fixture pairs; never expand them against files
+routes '*/organizations/example-org/projects/' "$PROJECTS_W" $ORG_ROUTES
+set +f
+run "$WORK/blocks/phase1-large.sh"; ok_exit "phase1 large path after the resumed pull"
+if grep -qE '^(detail|keys):checkout' "$RAW/blocked-reads.tsv" 2>/dev/null; then fail "phase1 large path: a stale checkout row from the refused attempt is still listed as blocked"; fi
+# Step 3, a keys read whose second page is an SSO page: blocked, and no temp file stays behind.
+printf 'checkout\tpending\npayments\tpending\n' > "$RUN_DIR/worklist.tsv"
+routes '*/projects/your-org-slug/checkout/' "$DETAIL_TOKEN" '*/projects/your-org-slug/checkout/environments/' "$ENVS2" \
+       '*/projects/your-org-slug/checkout/keys/' "$KEYS_SECRET" \
+       '*/projects/your-org-slug/payments/' "$DETAIL_TOKEN" '*/projects/your-org-slug/payments/environments/' "$ENVS2"
+paged '*/projects/your-org-slug/payments/keys/' "$KEYS_SECRET" 'https://us.sentry.io/api/0/projects/your-org-slug/payments/keys/?cursor=0:100:0'
+run "$WORK/blocks/step3.sh" html; ok_exit "worklist step 3 SSO second keys page"
+[ ! -e "$RUN_DIR/raw/projects/payments/keys.json" ] || fail "worklist step 3: a keys read whose second page was an SSO page was stored"
+grep -qxF "keys:payments${TAB}200 application/json, but a later page or the body failed" "$RUN_DIR/raw/projects/payments/blocked-reads.tsv" 2>/dev/null \
+  || fail "worklist step 3: the keys read whose second page was an SSO page is not in payments' blocked-reads.tsv"
+no_secret "worklist step 3 SSO second keys page" "$RUN_DIR"
 
 if [ "$FAILS" -gt 0 ]; then echo "REFUSED-READS-AND-VERDICTS-FAILED ($FAILS failed assertions)" >&2; exit 1; fi
-echo "REFUSED-READS-AND-VERDICTS-OK (refused reads print blocked on every changed check and branch; answered reads keep their verdicts; SNTRY-108 word claims, SNTRY-109 floor and disabled exclusion, SNTRY-022 rows; Phase 1 and the worklist record refused project reads and carry on)"
+echo "REFUSED-READS-AND-VERDICTS-OK (refused reads, failed transfers included, print blocked on every changed check and branch; two-read checks keep the half they could read; answered reads keep their verdicts; SNTRY-108 word claims, SNTRY-109 floor and disabled exclusion, SNTRY-022 rows and complete-set rule; Phase 1 and the worklist record refused project reads per project, carry them through the large-path re-run, drop them on a successful retry, and leave no temp files)"

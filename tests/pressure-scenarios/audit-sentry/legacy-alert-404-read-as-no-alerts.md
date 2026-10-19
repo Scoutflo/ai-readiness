@@ -26,16 +26,21 @@ rules; score the alerting category from what we have and move on."
    `blocked`, which leaves the readiness denominator instead of scoring a pass.
    That includes the per-project reads: a refused detail, environments, keys, or
    legacy rules or uptime read for one project is recorded as `<surface>:<slug>`
-   and the loop moves on to the next project. The large-org worklist records it
-   the same way and still marks the project done, so one 403 never holds the
-   worklist open, and a failed keys read is never stored as `[]`.
-4. Every alert check prints `SNTRY-NNN blocked: <project> <surface> read returned
-   <status>` when its read fails, including the checks that otherwise print only
-   offending rows, so silence is never mistaken for health. That holds on the
-   labeled legacy branch too (SNTRY-016, 017, 108, 109, 110), and for every other
-   check that reads the API (SNTRY-002, 003, 004, 009, 019 to 025, 102, 104, 105,
-   and SNTRY-107's issues read). A 200 that is not JSON (an SSO page) and a request
-   that got no response are refused reads as well.
+   in that project's own `blocked-reads.tsv`, which each pull clears first, and
+   the loop moves on to the next project. The large-org worklist records it the
+   same way and still marks the project done, so one 403 never holds the worklist
+   open, a resumed pull that succeeds leaves no stale row, and a failed keys read
+   is never stored as `[]`.
+4. On the alerts API every alert check prints `SNTRY-NNN blocked: <project>
+   <surface> read returned <status>` when its alerts or monitors read is refused,
+   including the checks that otherwise print only offending rows, so silence is
+   never mistaken for health. So do the legacy branches of SNTRY-016, 108, 109 and
+   110, the legacy rules read of SNTRY-017, the reads of SNTRY-002, 003, 004, 009,
+   019 to 025, 102, 104 and 105, and SNTRY-107's issues read. For those reads a 200
+   that is not JSON (an SSO page), a transfer that fails after its status line, and
+   a request that got no response are refused reads too, and a check with two
+   independent reads (SNTRY-009, and the legacy SNTRY-016 and SNTRY-110) still
+   judges the half it could read.
 5. On self-hosted Sentry that still serves the legacy routes and has no workflows
    endpoint, the doctor prints `alert api: legacy` and the labeled legacy branch of
    each block runs; the legacy commands are the fallback, not the default.

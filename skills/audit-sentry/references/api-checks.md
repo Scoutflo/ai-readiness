@@ -164,7 +164,7 @@ echo "batch claimed:"; printf '%s\n' "${BATCH}"
 rm -f "${LOCK}"   # release once this batch's rows are marked in step 3, not before
 ```
 
-**Step 3: pull the batch's raw data, then mark rows done.** A project is marked `done` once each of its pulls has either written its file or been recorded in the run's `blocked-reads.tsv`, so an interrupted batch resumes at the project it was pulling, not the start of the batch. A refused read (a 403 on one project) is blocked evidence: it is never stored as an empty list and never holds the worklist open.
+**Step 3: pull the batch's raw data, then mark rows done.** A project is marked `done` once each of its pulls has either written its file or been recorded in that project's own `blocked-reads.tsv`, so an interrupted batch resumes at the project it was pulling, not the start of the batch. A refused read (a 403 on one project) is blocked evidence: it is never stored as an empty list and never holds the worklist open. The project's `blocked-reads.tsv` is cleared at the start of each pull, so a resumed pull that succeeds leaves no stale row.
 
 ```bash
 set -eu
@@ -187,39 +187,42 @@ fetch_all() {
     printf '\n' >> "$acc"
     url="$(tr -d '\r' < "$hdr" | sed -n 's/.*<\([^>]*\)>; rel="next"; results="true".*/\1/p')"
   done
-  jq -s 'add // []' "$acc"; rm -f "$hdr" "$acc"
+  # A page that is not JSON (an SSO page) fails the merge: the raw pages are still removed.
+  rc=0; jq -s 'add // []' "$acc" || rc=$?; rm -f "$hdr" "$acc"; return "$rc"
 }
-# A failed read writes no file. Its status goes to the run's blocked-reads.tsv (step 4 carries it
+# A failed read writes no file. Its status goes to the project's blocked-reads.tsv (step 4 copies it
 # into the merged raw dir) and the loop moves on; a read that failed is never stored as an empty list.
-block_read() { # $1: surface label, $2: full API URL
+block_read() { # $1: surface label, $2: full API URL, $3: blocked-reads file
   bcode="$(curl -sS -o /dev/null -w '%{http_code} %{content_type}' --max-time 15 \
-    -H "Authorization: Bearer ${SENTRY_TOKEN}" "$2" || true)"
-  printf '%s\t%s\n' "$1" "${bcode:-000}" >> "${RUN_DIR}/raw/blocked-reads.tsv"
+    -H "Authorization: Bearer ${SENTRY_TOKEN}" "$2")" || bcode="curl-exit-$? ${bcode:-}"
+  case "$bcode" in "200 application/json"*) bcode="${bcode}, but a later page or the body failed" ;; esac
+  printf '%s\t%s\n' "$1" "${bcode:-000}" >> "$3"
   echo "BLOCKED: $1 read returned ${bcode:-no response}; record it as blocked evidence, not an empty list"
 }
-read_or_block() { # $1: surface label, $2: full API URL, $3: output file
+read_or_block() { # $1: surface label, $2: full API URL, $3: output file, $4: blocked-reads file
   if fetch_all "$2" > "$3" && [ -s "$3" ]; then return 0; fi
   rm -f "$3"
-  block_read "$1" "$2"
+  block_read "$1" "$2" "$4"
 }
 
 echo "${BATCH}" | while IFS= read -r p; do
   [ -n "$p" ] || continue
   d="${RUN_DIR}/raw/projects/${p}"; mkdir -p "$d"
+  bl="${d}/blocked-reads.tsv"; : > "$bl"   # each pull starts clean: a resumed pull that succeeds leaves no stale row
   # Project detail carries the project's securityToken: drop it before anything is written.
   detail="$(curl -fsS --max-time 30 -H "Authorization: Bearer ${SENTRY_TOKEN}" "${API}/projects/${SENTRY_ORG}/${p}/")" \
     && printf '%s\n' "$detail" | jq 'del(.securityToken)' > "${d}/detail.json" \
-    || { rm -f "${d}/detail.json"; block_read "detail:${p}" "${API}/projects/${SENTRY_ORG}/${p}/"; }
-  read_or_block "environments:${p}" "${API}/projects/${SENTRY_ORG}/${p}/environments/" "${d}/environments.json"
+    || { rm -f "${d}/detail.json"; block_read "detail:${p}" "${API}/projects/${SENTRY_ORG}/${p}/" "$bl"; }
+  read_or_block "environments:${p}" "${API}/projects/${SENTRY_ORG}/${p}/environments/" "${d}/environments.json" "$bl"
   # Keys: keep only name, status, rate limit. Never store DSNs, and never store a failed read as [].
   keys="$(fetch_all "${API}/projects/${SENTRY_ORG}/${p}/keys/")" && [ -n "$keys" ] \
     && printf '%s\n' "$keys" | jq 'map({name, isActive, rateLimit})' > "${d}/keys.json" \
-    || { rm -f "${d}/keys.json"; block_read "keys:${p}" "${API}/projects/${SENTRY_ORG}/${p}/keys/"; }
+    || { rm -f "${d}/keys.json"; block_read "keys:${p}" "${API}/projects/${SENTRY_ORG}/${p}/keys/" "$bl"; }
   if [ "${SENTRY_ALERT_API}" = legacy ]; then
     # Legacy fallback: this project's issue rules and uptime monitors. On the alerts API the
     # project's alerts and monitors come from the org-wide reads in Phase 1, with no call here.
-    read_or_block "rules:${p}" "${API}/projects/${SENTRY_ORG}/${p}/rules/" "${d}/rules.json"
-    read_or_block "uptime:${p}" "${API}/projects/${SENTRY_ORG}/${p}/uptime/" "${d}/uptime.json"
+    read_or_block "rules:${p}" "${API}/projects/${SENTRY_ORG}/${p}/rules/" "${d}/rules.json" "$bl"
+    read_or_block "uptime:${p}" "${API}/projects/${SENTRY_ORG}/${p}/uptime/" "${d}/uptime.json" "$bl"
   fi
   awk -F'\t' -v s="$p" 'BEGIN{OFS="\t"} $1==s{$2="done"} 1' "${WORKLIST}" > "${WORKLIST}.tmp" && mv "${WORKLIST}.tmp" "${WORKLIST}"
   echo "done: ${p}"
@@ -242,13 +245,7 @@ pending=$(awk -F'\t' '$2 == "pending"' "${WORKLIST}" | wc -l | tr -d ' ')
 
 mkdir -p "${RAW_DIR}/projects"
 cp "${RUN_DIR}/raw/projects.json" "${RAW_DIR}/projects.json"
-cp -R "${RUN_DIR}/raw/projects/." "${RAW_DIR}/projects/"
-# Carry the per-project blocked reads step 3 recorded; the Phase 1 block adds them to blocked-reads.tsv.
-if [ -f "${RUN_DIR}/raw/blocked-reads.tsv" ]; then
-  sort -u "${RUN_DIR}/raw/blocked-reads.tsv" > "${RAW_DIR}/worklist-blocked-reads.tsv"
-else
-  rm -f "${RAW_DIR}/worklist-blocked-reads.tsv"
-fi
+cp -R "${RUN_DIR}/raw/projects/." "${RAW_DIR}/projects/"   # each project's blocked-reads.tsv comes along
 # Apply the same operator-PII redaction the small/medium path runs (SKILL.md Phase 1):
 # null every `.email` key across the merged raw dump so a leak-scan of the audit dir
 # stays clean. No check reads an email, so nothing a check needs is touched.
@@ -259,7 +256,7 @@ done
 echo "merged $(find "${RAW_DIR}/projects" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ') project directories into ${RAW_DIR}"
 ```
 
-Expect: `worklist incomplete` and a nonzero exit on a partial run; the merge only happens once `pending=0`. After merging, run the org-level fetches (`teams.json`, `integrations.json`, `releases.json`, `monitors.json`, `org.json`, the stats calls, and the alert reads: `workflows.json`, `detectors.json`, and `available-actions.json` on the alerts API, `metric-alerts.json` on the legacy fallback) from the Phase 1 block in [SKILL.md](../SKILL.md#phase-1-inventory) exactly as written, then everything after its per-project loop (the per-project alert views, the blocked-read carry-over from `worklist-blocked-reads.tsv`, the redaction pass, the counts); they are cheap, make no per-project call, and were never batched.
+Expect: `worklist incomplete` and a nonzero exit on a partial run; the merge only happens once `pending=0`. After merging, run the org-level fetches (`teams.json`, `integrations.json`, `releases.json`, `monitors.json`, `org.json`, the stats calls, and the alert reads: `workflows.json`, `detectors.json`, and `available-actions.json` on the alerts API, `metric-alerts.json` on the legacy fallback) from the Phase 1 block in [SKILL.md](../SKILL.md#phase-1-inventory) exactly as written, then everything after its per-project loop (the per-project alert views, the redaction pass, the step that adds each project's `blocked-reads.tsv` to this run's list, the counts); they are cheap, make no per-project call, and were never batched. Running the block that way keeps the merged per-project rows: nothing before the loop touches a project's directory.
 
 Rules, same as the large-path map for clusters:
 
@@ -285,7 +282,7 @@ API="https://${SENTRY_HOST}/api/0"
 
 # Project detail carries the project's securityToken: keep the response in memory, never in a file.
 resp="$(curl -sS -w '\n%{http_code} %{content_type}' --max-time 15 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
-  "${API}/projects/${SENTRY_ORG}/${PROJECT}/" || true)"
+  "${API}/projects/${SENTRY_ORG}/${PROJECT}/")" || resp="curl-exit-$? $(printf '%s\n' "${resp:-}" | tail -n 1)"
 code="$(printf '%s\n' "$resp" | tail -n 1)"
 case "$code" in "200 application/json"*) ;; *) echo "SNTRY-002 blocked: ${PROJECT} project detail read returned ${code:-no response}"; exit 0 ;; esac
 printf '%s\n' "$resp" | sed '$d' \
@@ -315,7 +312,7 @@ API="https://${SENTRY_HOST}/api/0"
 
 # Keys carry each key's secret and DSNs: keep the response in memory, never in a file.
 resp="$(curl -sS -w '\n%{http_code} %{content_type}' --max-time 15 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
-  "${API}/projects/${SENTRY_ORG}/${PROJECT}/keys/" || true)"
+  "${API}/projects/${SENTRY_ORG}/${PROJECT}/keys/")" || resp="curl-exit-$? $(printf '%s\n' "${resp:-}" | tail -n 1)"
 code="$(printf '%s\n' "$resp" | tail -n 1)"
 case "$code" in "200 application/json"*) ;; *) echo "SNTRY-003 blocked: ${PROJECT} client keys read returned ${code:-no response}"; exit 0 ;; esac
 printf '%s\n' "$resp" | sed '$d' \
@@ -355,7 +352,7 @@ ENV_REQUIRED="production"   # example baseline; tune to your promotion flow
 
 envs="$(mktemp)"; trap 'rm -f "$envs"' EXIT
 code="$(curl -sS -o "$envs" -w '%{http_code} %{content_type}' --max-time 15 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
-  "${API}/projects/${SENTRY_ORG}/${PROJECT}/environments/" || true)"
+  "${API}/projects/${SENTRY_ORG}/${PROJECT}/environments/")" || code="curl-exit-$? ${code:-}"
 case "$code" in "200 application/json"*) ;; *) echo "SNTRY-004 blocked: ${PROJECT} environments read returned ${code:-no response}"; exit 0 ;; esac
 tee /dev/stderr < "$envs" \
   | jq -e --arg env "$ENV_REQUIRED" '[ .[] | .name ] | index($env) != null' >/dev/null \
@@ -783,31 +780,38 @@ if [ "${SENTRY_ALERT_API}" = workflows ]; then
   jq -r '.[] | select(.type == "metric_issue" and .enabled == false) | "\(.id)\t\(.name)\tmetric monitor enabled=false"' \
     "${TMPD}/detectors.json"
 else
-  # Legacy fallback (self-hosted Sentry that still serves the legacy routes).
+  # Legacy fallback (self-hosted Sentry that still serves the legacy routes). Each half is judged
+  # right after its own read; a refused read blocks only its own half.
   TMPD="$(mktemp -d)"; trap 'rm -rf "$TMPD"' EXIT
   code="$(curl -sS -o "${TMPD}/rules.json" -w '%{http_code} %{content_type}' --max-time 15 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
-    "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/" || true)"
-  case "$code" in "200 application/json"*) ;; *) echo "SNTRY-016 blocked: ${PROJECT} rules read returned ${code:-no response}"; exit 0 ;; esac
+    "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/")" || code="curl-exit-$? ${code:-}"
+  case "$code" in
+    "200 application/json"*)
+      # Command 1 (load-bearing): issue rules whose status is not active. `status` on an issue
+      # rule is the string "active"/"disabled"; default to active when the key is absent.
+      tee /dev/stderr < "${TMPD}/rules.json" \
+        | jq -r '.[] | select((.status // "active") != "active")
+            | "\(.id)\t\(.name)\tstatus=\(.status)\tactions=\((.actions|length))\tconditions=\([.conditions[]?.id]|join(","))"' ;;
+    *) echo "SNTRY-016 blocked: ${PROJECT} rules read returned ${code:-no response}" ;;
+  esac
   code="$(curl -sS -o "${TMPD}/metric-alerts.json" -w '%{http_code} %{content_type}' --max-time 30 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
-    "${API}/organizations/${SENTRY_ORG}/alert-rules/" || true)"
-  case "$code" in "200 application/json"*) ;; *) echo "SNTRY-016 blocked: org metric alert rules read returned ${code:-no response}"; exit 0 ;; esac
-  # Command 1 (load-bearing): issue rules whose status is not active. `status` on an issue
-  # rule is the string "active"/"disabled"; default to active when the key is absent.
-  tee /dev/stderr < "${TMPD}/rules.json" \
-    | jq -r '.[] | select((.status // "active") != "active")
-        | "\(.id)\t\(.name)\tstatus=\(.status)\tactions=\((.actions|length))\tconditions=\([.conditions[]?.id]|join(","))"'
-  # Command 2 (metric-alert half): the legacy metric-alert `status` is a numeric enum (observed
-  # `0` on active rules), so this guard only compares a string `status` and reports nothing on
-  # numeric data rather than a wrong result; the disabled-enum value stays verify-pending.
-  jq -r '.[] | select((.status | type) == "string" and (.status | ascii_downcase) != "active")
-      | "\(.name)\tstatus=\(.status)"' "${TMPD}/metric-alerts.json"
+    "${API}/organizations/${SENTRY_ORG}/alert-rules/")" || code="curl-exit-$? ${code:-}"
+  case "$code" in
+    "200 application/json"*)
+      # Command 2 (metric-alert half): the legacy metric-alert `status` is a numeric enum (observed
+      # `0` on active rules), so this guard only compares a string `status` and reports nothing on
+      # numeric data rather than a wrong result; the disabled-enum value stays verify-pending.
+      jq -r '.[] | select((.status | type) == "string" and (.status | ascii_downcase) != "active")
+          | "\(.name)\tstatus=\(.status)"' "${TMPD}/metric-alerts.json" ;;
+    *) echo "SNTRY-016 metric half blocked: org metric alert rules read returned ${code:-no response}" ;;
+  esac
 fi
 # Any row is an alert that is present but switched off: it fires nothing. Cross-check the
 # row's conditions against the SNTRY-013 immediate/review tiers; a disabled immediate-tier
 # alert on a production project is the finding.
 ```
 
-Healthy: both commands print no rows (every alert and metric monitor is enabled). Fail (SNTRY-016, high): a disabled alert whose conditions match an immediate or review tier — quantify with the SNTRY-001 accepted-error volume snippet for the project (*"checkout's only regression rule is disabled, so a fatal regression matches a switched-off rule and pages nobody; this project accepted E errors in the window and the coverage matrix currently scores it green"*). `SNTRY-016 blocked` means a read failed on either branch (a non-200 or non-JSON response, or no response), never "nothing is disabled". **Correlate:** SNTRY-016 directly gates SNTRY-013 (tier presence excludes disabled alerts) and SNTRY-012 (a disabled immediate rule is functionally no coverage); it chains with SNTRY-005 into the silent-incident flagship. Remediation `setup-sentry#alert-rule-taxonomy`; verification: re-GET `/organizations/{org}/workflows/{id}/` → the alert crediting the tier has `enabled == true` (legacy fallback: re-GET `/projects/{org}/{project}/rules/` → `status == "active"`).
+Healthy: both commands print no rows (every alert and metric monitor is enabled). Fail (SNTRY-016, high): a disabled alert whose conditions match an immediate or review tier — quantify with the SNTRY-001 accepted-error volume snippet for the project (*"checkout's only regression rule is disabled, so a fatal regression matches a switched-off rule and pages nobody; this project accepted E errors in the window and the coverage matrix currently scores it green"*). `SNTRY-016 blocked` means the alerts read (legacy fallback: the issue-rules read) failed (a non-200 or non-JSON response, a transfer that failed, or no response), never "nothing is disabled". On the legacy fallback a refused metric-alert read prints `SNTRY-016 metric half blocked` and the issue-rule rows still stand. **Correlate:** SNTRY-016 directly gates SNTRY-013 (tier presence excludes disabled alerts) and SNTRY-012 (a disabled immediate rule is functionally no coverage); it chains with SNTRY-005 into the silent-incident flagship. Remediation `setup-sentry#alert-rule-taxonomy`; verification: re-GET `/organizations/{org}/workflows/{id}/` → the alert crediting the tier has `enabled == true` (legacy fallback: re-GET `/projects/{org}/{project}/rules/` → `status == "active"`).
 
 **SNTRY-017, rules route to issue owners but the project has no ownership rules.** An email action to issue owners (`config.targetType: issue_owners`; legacy `targetType: IssueOwners`) delegates delivery to whoever owns the matching code path; with no ownership rules, delivery falls through per the action's fallthrough setting — to every member (noise, mirrors SNTRY-001) or, with fallthrough off, to nobody (silent):
 
@@ -836,7 +840,7 @@ else
   # Legacy fallback (self-hosted Sentry that still serves /rules/):
   rl="$(mktemp)"; trap 'rm -f "$rl"' EXIT
   code="$(curl -sS -o "$rl" -w '%{http_code} %{content_type}' --max-time 15 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
-    "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/" || true)"
+    "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/")" || code="curl-exit-$? ${code:-}"
   case "$code" in "200 application/json"*) ;; *) echo "SNTRY-017 blocked: ${PROJECT} rules read returned ${code:-no response}"; exit 0 ;; esac
   tee /dev/stderr < "$rl" \
     | jq -r '.[] | . as $r | .actions[]? | select((.targetType // "") == "IssueOwners")
@@ -882,25 +886,31 @@ API="https://${SENTRY_HOST}/api/0"
 [ -n "${SENTRY_TOKEN:-}" ] || { echo "SENTRY_TOKEN is not set; run /scoutflo:connect"; exit 1; }
 
 TMPD="$(mktemp -d)"; trap 'rm -rf "$TMPD"' EXIT
+# Each step is judged right after its own read; a refused read blocks only its own step.
 code="$(curl -sS -o "${TMPD}/github.json" -w '%{http_code} %{content_type}' --max-time 15 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
-  "${API}/organizations/${SENTRY_ORG}/integrations/?provider_key=github" || true)"
-case "$code" in "200 application/json"*) ;; *) echo "SNTRY-009 blocked: org GitHub integrations read returned ${code:-no response}"; exit 0 ;; esac
+  "${API}/organizations/${SENTRY_ORG}/integrations/?provider_key=github")" || code="curl-exit-$? ${code:-}"
+case "$code" in
+  "200 application/json"*)
+    tee /dev/stderr < "${TMPD}/github.json" | jq '[ .[] | {id, name, status} ]' > "${TMPD}/gh.json"
+    jq -e '[ .[] | select(.status == "active") ] | length > 0' "${TMPD}/gh.json" >/dev/null \
+      && echo "SNTRY-009 step 1 pass: an active GitHub integration exists" \
+      || echo "SNTRY-009 step 1 fail: no active GitHub integration (link 1 broken)" ;;
+  *) echo "SNTRY-009 step 1 blocked: org GitHub integrations read returned ${code:-no response}" ;;
+esac
+
 code="$(curl -sS -o "${TMPD}/code-mappings.json" -w '%{http_code} %{content_type}' --max-time 15 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
-  "${API}/organizations/${SENTRY_ORG}/code-mappings/" || true)"
-case "$code" in "200 application/json"*) ;; *) echo "SNTRY-009 blocked: org code-mappings read returned ${code:-no response}"; exit 0 ;; esac
-
-tee /dev/stderr < "${TMPD}/github.json" | jq '[ .[] | {id, name, status} ]' > "${TMPD}/gh.json"
-jq -e '[ .[] | select(.status == "active") ] | length > 0' "${TMPD}/gh.json" >/dev/null \
-  && echo "SNTRY-009 step 1 pass: an active GitHub integration exists" \
-  || echo "SNTRY-009 step 1 fail: no active GitHub integration (link 1 broken)"
-
-tee /dev/stderr < "${TMPD}/code-mappings.json" | jq '[ .[] | {projectId, repoId, defaultBranch, stackRoot, sourceRoot} ]' > "${TMPD}/cm.json"
-jq -e 'length > 0' "${TMPD}/cm.json" >/dev/null \
-  && echo "SNTRY-009 step 2 pass: at least one code mapping exists" \
-  || echo "SNTRY-009 step 2 fail: no code mappings (link 2 broken)"
+  "${API}/organizations/${SENTRY_ORG}/code-mappings/")" || code="curl-exit-$? ${code:-}"
+case "$code" in
+  "200 application/json"*)
+    tee /dev/stderr < "${TMPD}/code-mappings.json" | jq '[ .[] | {projectId, repoId, defaultBranch, stackRoot, sourceRoot} ]' > "${TMPD}/cm.json"
+    jq -e 'length > 0' "${TMPD}/cm.json" >/dev/null \
+      && echo "SNTRY-009 step 2 pass: at least one code mapping exists" \
+      || echo "SNTRY-009 step 2 fail: no code mappings (link 2 broken)" ;;
+  *) echo "SNTRY-009 step 2 blocked: org code-mappings read returned ${code:-no response}" ;;
+esac
 ```
 
-A refused integrations or code-mappings read (a non-200 or non-JSON response, or no response) prints `SNTRY-009 blocked: org ... read returned <status>` and neither step runs: the chain is unassessed, never a broken link.
+A refused integrations or code-mappings read (a non-200 or non-JSON response, a transfer that failed, or no response) prints `SNTRY-009 step 1 blocked:` or `SNTRY-009 step 2 blocked: org ... read returned <status>` for that step only: the other step still gives its verdict, and a blocked step is unassessed, never a broken link.
 
 Reading order, each link the finding:
 
@@ -1063,7 +1073,7 @@ API="https://${SENTRY_HOST}/api/0"
 
 TMPD="$(mktemp -d)"; trap 'rm -rf "$TMPD"' EXIT
 code="$(curl -sS -o "${TMPD}/environments.json" -w '%{http_code} %{content_type}' --max-time 15 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
-  "${API}/projects/${SENTRY_ORG}/${PROJECT}/environments/" || true)"
+  "${API}/projects/${SENTRY_ORG}/${PROJECT}/environments/")" || code="curl-exit-$? ${code:-}"
 case "$code" in "200 application/json"*) ;; *) echo "SNTRY-102 blocked: ${PROJECT} environments read returned ${code:-no response}"; exit 0 ;; esac
 ENV_COUNT="$(jq 'length' "${TMPD}/environments.json")"
 [ "${ENV_COUNT}" -gt 1 ] || { echo "SNTRY-102 n/a: ${PROJECT} has ${ENV_COUNT} environment(s); null scope is not noise here"; exit 0; }
@@ -1088,7 +1098,7 @@ if [ "${SENTRY_ALERT_API}" = workflows ]; then
 else
   # Legacy fallback (self-hosted Sentry that still serves /rules/):
   code="$(curl -sS -o "${TMPD}/rules.json" -w '%{http_code} %{content_type}' --max-time 15 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
-    "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/" || true)"
+    "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/")" || code="curl-exit-$? ${code:-}"
   case "$code" in "200 application/json"*) ;; *) echo "SNTRY-102 blocked: ${PROJECT} rules read returned ${code:-no response}"; exit 0 ;; esac
   tee /dev/stderr < "${TMPD}/rules.json" \
     | jq -e '[ .[]
@@ -1233,7 +1243,7 @@ API="https://${SENTRY_HOST}/api/0"
 # 14d/1d is an example window, tune it. groupBy=reason surfaces the spike_protection drop reason.
 st="$(mktemp)"; trap 'rm -f "$st"' EXIT
 code="$(curl -sS -o "$st" -w '%{http_code} %{content_type}' --max-time 30 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
-  "${API}/organizations/${SENTRY_ORG}/stats_v2/?statsPeriod=14d&interval=1d&field=sum(quantity)&groupBy=reason&groupBy=outcome&category=error" || true)"
+  "${API}/organizations/${SENTRY_ORG}/stats_v2/?statsPeriod=14d&interval=1d&field=sum(quantity)&groupBy=reason&groupBy=outcome&category=error")" || code="curl-exit-$? ${code:-}"
 case "$code" in "200 application/json"*) ;; *) echo "SNTRY-104 blocked: org stats (by reason) read returned ${code:-no response}"; exit 0 ;; esac
 SPIKE_DROPS="$(tee /dev/stderr < "$st" \
   | jq '[ .groups[]? | select(.by.reason == "spike_protection") | .totals["sum(quantity)"] ] | add // 0')"
@@ -1262,14 +1272,14 @@ API="https://${SENTRY_HOST}/api/0"
 # there is not a finding and their presence must not credit a pass on a backend.
 # Project detail carries the project's securityToken: keep the response in memory, never in a file.
 resp="$(curl -sS -w '\n%{http_code} %{content_type}' --max-time 15 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
-  "${API}/projects/${SENTRY_ORG}/${PROJECT}/" || true)"
+  "${API}/projects/${SENTRY_ORG}/${PROJECT}/")" || resp="curl-exit-$? $(printf '%s\n' "${resp:-}" | tail -n 1)"
 code="$(printf '%s\n' "$resp" | tail -n 1)"
 case "$code" in "200 application/json"*) ;; *) echo "SNTRY-105 blocked: ${PROJECT} project detail read returned ${code:-no response}"; exit 0 ;; esac
 PLATFORM="$(printf '%s\n' "$resp" | sed '$d' | jq -r '.platform // "unknown"')"
 
 flt="$(mktemp)"; trap 'rm -f "$flt"' EXIT
 code="$(curl -sS -o "$flt" -w '%{http_code} %{content_type}' --max-time 15 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
-  "${API}/projects/${SENTRY_ORG}/${PROJECT}/filters/" || true)"
+  "${API}/projects/${SENTRY_ORG}/${PROJECT}/filters/")" || code="curl-exit-$? ${code:-}"
 case "$code" in "200 application/json"*) ;; *) echo "SNTRY-105 blocked: ${PROJECT} inbound filters read returned ${code:-no response}"; exit 0 ;; esac
 tee /dev/stderr < "$flt" \
   | jq -e --arg platform "$PLATFORM" '
@@ -1358,7 +1368,7 @@ FREQ_TYPES='["event_frequency_count","event_frequency_percent","event_unique_use
 #    A refused issues read is blocked: never an empty list read as "no chronic issue".
 TMPD="$(mktemp -d)"; trap 'rm -rf "$TMPD"' EXIT
 code="$(curl -sS -o "${TMPD}/issues.json" -w '%{http_code} %{content_type}' --max-time 20 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
-  "${API}/projects/${SENTRY_ORG}/${PROJECT}/issues/?query=is%3Aunresolved+is%3Aongoing+age%3A%2B${AGE_FLOOR_DAYS}d&sort=freq" || true)"
+  "${API}/projects/${SENTRY_ORG}/${PROJECT}/issues/?query=is%3Aunresolved+is%3Aongoing+age%3A%2B${AGE_FLOOR_DAYS}d&sort=freq")" || code="curl-exit-$? ${code:-}"
 case "$code" in "200 application/json"*) ;; *) echo "SNTRY-107 blocked: ${PROJECT} issues read returned ${code:-no response}"; exit 0 ;; esac
 tee /dev/stderr < "${TMPD}/issues.json" \
   | jq -r '.[] | "\(.shortId)\tevents=\(.count)\tfirstSeen=\(.firstSeen)\tsubstatus=\(.substatus // "?")"' | head
@@ -1413,11 +1423,13 @@ API="https://${SENTRY_HOST}/api/0"
 [ -n "${SENTRY_TOKEN:-}" ] || { echo "SENTRY_TOKEN is not set; run /scoutflo:connect"; exit 1; }
 # Claims are whole words of the rule name plus its channel names. Production: prod or production
 # (never preprod, pre-prod, non-prod, or product). Non-prod: dev, development, staging, stage, qa,
-# test, pp, preprod. A rule contradicts its claim when environment is null, or when a production
-# claim sits on a non-production environment, or a non-prod claim on a production one.
+# test, pp, preprod or pre-prod, pre-production, and non-prod or non-production. A rule contradicts
+# its claim when environment is null, or when a production claim sits on a non-production
+# environment, or a non-prod claim on a production one.
 CLAIM_JQ='def words: ascii_downcase | gsub("(?<p>pre|non)[-_ ]?prod"; "\(.p)prod") | [splits("[^a-z0-9]+")];
   def prod_word: any(.[]; IN("prod", "production"));
-  def nonprod_word: any(.[]; IN("dev", "development", "staging", "stage", "qa", "test", "pp", "preprod"));
+  def nonprod_word: any(.[]; IN("dev", "development", "staging", "stage", "qa", "test", "pp",
+    "preprod", "preproduction", "nonprod", "nonproduction"));
   def claim: if prod_word then "production" elif nonprod_word then "non-prod" else null end;
   def contradicts($claim): (.environment == null)
     or ($claim == "production" and ((.environment | tostring | words | prod_word) | not))
@@ -1444,7 +1456,7 @@ else
   # Legacy fallback (self-hosted Sentry that still serves /rules/):
   rl="$(mktemp)"; trap 'rm -f "$rl"' EXIT
   code="$(curl -sS -o "$rl" -w '%{http_code} %{content_type}' --max-time 15 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
-    "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/" || true)"
+    "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/")" || code="curl-exit-$? ${code:-}"
   case "$code" in "200 application/json"*) ;; *) echo "SNTRY-108 blocked: ${PROJECT} rules read returned ${code:-no response}"; exit 0 ;; esac
   tee /dev/stderr < "$rl" \
     | jq -r "${CLAIM_JQ}"'.[]
@@ -1454,7 +1466,7 @@ else
 fi
 ```
 
-Expect: no rows on a coherent estate. A row is a rule whose stated env (from its name or the channel it posts to) disagrees with its `environment` field — the clearest case being a claim with `environment: null` (fires on all envs while looking scoped). Claims are whole words: `prod` or `production` claims production, while `preprod`, `pre-prod`, `non-prod`, and `product` do not; `dev`, `development`, `staging`, `stage`, `qa`, `test`, `pp`, and `preprod` claim non-prod; a name or channel carrying both reads as production. A non-prod claim passes on any non-production environment and fails on a production one (`prod`, `production`); a production claim fails on any environment that is not a production one. This is deliberately conservative: it only fires when there is an explicit claim to contradict. SNTRY-102 owns the plain "env is null" gap; SNTRY-108 owns the *lie in the name* and the set-but-contradicting case. A refused read prints `SNTRY-108 blocked: <project> ... read returned <status>` on either branch, never "no rows". Word matching is heuristic: record the claimed-vs-actual pair as the evidence and let the reader judge non-standard names.
+Expect: no rows on a coherent estate. A row is a rule whose stated env (from its name or the channel it posts to) disagrees with its `environment` field — the clearest case being a claim with `environment: null` (fires on all envs while looking scoped). Claims are whole words: `prod` or `production` claims production, while `preprod`, `pre-prod`, `non-prod`, and `product` do not; `dev`, `development`, `staging`, `stage`, `qa`, `test`, `pp`, `preprod` or `pre-prod`, `pre-production`, and `non-prod` or `non-production` claim non-prod; a name or channel carrying both reads as production. A non-prod claim passes on any non-production environment and fails on a production one (`prod`, `production`); a production claim fails on any environment that is not a production one. This is deliberately conservative: it only fires when there is an explicit claim to contradict. SNTRY-102 owns the plain "env is null" gap; SNTRY-108 owns the *lie in the name* and the set-but-contradicting case. A refused read prints `SNTRY-108 blocked: <project> ... read returned <status>` on either branch, never "no rows". Word matching is heuristic: record the claimed-vs-actual pair as the evidence and let the reader judge non-standard names.
 
 **SNTRY-109, dead-weight rules.** An enabled rule that never fired AND is either snoozed (muted) or carries a generic-keyword condition while re-notifying more often than `FREQ_FLOOR_MIN` minutes: on, dead, and safe to delete. Disabled rules are left out, because SNTRY-016 owns them (switched off *while crediting* coverage):
 
@@ -1494,7 +1506,7 @@ else
   # Legacy fallback (self-hosted Sentry that still serves /rules/):
   rl="$(mktemp)"; trap 'rm -f "$rl"' EXIT
   code="$(curl -sS -o "$rl" -w '%{http_code} %{content_type}' --max-time 15 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
-    "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/" || true)"
+    "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/")" || code="curl-exit-$? ${code:-}"
   case "$code" in "200 application/json"*) ;; *) echo "SNTRY-109 blocked: ${PROJECT} rules read returned ${code:-no response}"; exit 0 ;; esac
   tee /dev/stderr < "$rl" \
     | jq -r --argjson floor "$FREQ_FLOOR_MIN" '.[]
@@ -1537,23 +1549,36 @@ if [ "${SENTRY_ALERT_API}" = workflows ]; then
   METRIC_UNOWNED="$(jq '[ .[] | select(.type == "metric_issue" and .owner == null) ] | length' "${TMPD}/detectors.json")"
   echo "SNTRY-110: ${PROJECT} unowned issue rules=${ISSUE_UNOWNED}; unowned metric monitors=${METRIC_UNOWNED}"
 else
-  # Legacy fallback: issue rules (per project) + metric alerts (org-level) with no owner
+  # Legacy fallback: issue rules (per project) + metric alerts (org-level) with no owner. Each half
+  # is counted right after its own read; a refused half stays "blocked".
   TMPD="$(mktemp -d)"; trap 'rm -rf "$TMPD"' EXIT
+  ISSUE_UNOWNED="blocked"; METRIC_UNOWNED="blocked"
   code="$(curl -sS -o "${TMPD}/rules.json" -w '%{http_code} %{content_type}' --max-time 15 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
-    "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/" || true)"
-  case "$code" in "200 application/json"*) ;; *) echo "SNTRY-110 blocked: ${PROJECT} rules read returned ${code:-no response}"; exit 0 ;; esac
+    "${API}/projects/${SENTRY_ORG}/${PROJECT}/rules/")" || code="curl-exit-$? ${code:-}"
+  case "$code" in
+    "200 application/json"*) ISSUE_UNOWNED="$(jq '[ .[] | select(.owner == null) ] | length' "${TMPD}/rules.json")" ;;
+    *) echo "SNTRY-110 issue half blocked: ${PROJECT} rules read returned ${code:-no response}" ;;
+  esac
   code="$(curl -sS -o "${TMPD}/metric-alerts.json" -w '%{http_code} %{content_type}' --max-time 30 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
-    "${API}/organizations/${SENTRY_ORG}/alert-rules/" || true)"
-  case "$code" in "200 application/json"*) ;; *) echo "SNTRY-110 blocked: org metric alert rules read returned ${code:-no response}"; exit 0 ;; esac
-  ISSUE_UNOWNED="$(jq '[ .[] | select(.owner == null) ] | length' "${TMPD}/rules.json")"
-  METRIC_UNOWNED="$(jq '[ .[] | select(.owner == null) ] | length' "${TMPD}/metric-alerts.json")"
-  echo "SNTRY-110: ${PROJECT} unowned issue rules=${ISSUE_UNOWNED}; org unowned metric alerts=${METRIC_UNOWNED}"
+    "${API}/organizations/${SENTRY_ORG}/alert-rules/")" || code="curl-exit-$? ${code:-}"
+  case "$code" in
+    "200 application/json"*) METRIC_UNOWNED="$(jq '[ .[] | select(.owner == null) ] | length' "${TMPD}/metric-alerts.json")" ;;
+    *) echo "SNTRY-110 metric half blocked: org metric alert rules read returned ${code:-no response}" ;;
+  esac
+  if [ "${ISSUE_UNOWNED}" != blocked ] || [ "${METRIC_UNOWNED}" != blocked ]; then
+    echo "SNTRY-110: ${PROJECT} unowned issue rules=${ISSUE_UNOWNED}; org unowned metric alerts=${METRIC_UNOWNED}"
+  fi
 fi
-[ "${ISSUE_UNOWNED}" -eq 0 ] && [ "${METRIC_UNOWNED}" -eq 0 ] \
-  && echo "SNTRY-110 pass" || echo "SNTRY-110 fail (ownerless rules: no one accountable for tuning)"
+# One ownerless rule in either half is a fail even when the other half was refused; a pass needs
+# both halves read. A count above zero is the only value holding a digit 1-9.
+case "${ISSUE_UNOWNED}:${METRIC_UNOWNED}" in
+  0:0) echo "SNTRY-110 pass" ;;
+  *[1-9]*) echo "SNTRY-110 fail (ownerless rules: no one accountable for tuning)" ;;
+  *) echo "SNTRY-110 blocked: ${PROJECT} rule ownership is unknown (a read was refused, and what was read shows no ownerless rule)" ;;
+esac
 ```
 
-Expect: `SNTRY-110 pass` when every rule carries an owner (an issue alert's `owner` reads `team:<id>` or `user:<id>`; a metric monitor's `owner` is an object with `type` and `id`). A refused read prints `SNTRY-110 blocked: <project> ... read returned <status>` on either branch, never a count or a verdict. Ownerless rules are low severity but high explanatory value — an all-ownerless estate is the root of alert rot. This is distinct from SNTRY-017 (which is about delivery routing to issue owners); SNTRY-110 is about who maintains the rule. The fix (assign owners) is a `setup-sentry` mutation, not this audit's job.
+Expect: `SNTRY-110 pass` when every rule carries an owner (an issue alert's `owner` reads `team:<id>` or `user:<id>`; a metric monitor's `owner` is an object with `type` and `id`). On the alerts API a refused read prints `SNTRY-110 blocked: <project> ... read returned <status>`, never a count or a verdict. On the legacy fallback each half is read and counted on its own: a refused half prints `SNTRY-110 issue half blocked` or `SNTRY-110 metric half blocked`, an ownerless rule in the half that was read is still a fail, and the verdict is `SNTRY-110 blocked` only when a half was refused and no half that was read shows an ownerless rule. Ownerless rules are low severity but high explanatory value — an all-ownerless estate is the root of alert rot. This is distinct from SNTRY-017 (which is about delivery routing to issue owners); SNTRY-110 is about who maintains the rule. The fix (assign owners) is a `setup-sentry` mutation, not this audit's job.
 
 ### Honest ceiling for the fire-history checks (SNTRY-106/107/109)
 
@@ -1613,7 +1638,7 @@ API="https://${SENTRY_HOST}/api/0"
 # used here). category=error narrows to the same window SNTRY-008 already reads.
 st="$(mktemp)"; trap 'rm -f "$st"' EXIT
 code="$(curl -sS -o "$st" -w '%{http_code} %{content_type}' --max-time 30 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
-  "${API}/organizations/${SENTRY_ORG}/stats_v2/?statsPeriod=14d&interval=1d&field=sum(quantity)&groupBy=reason&groupBy=outcome&category=error" || true)"
+  "${API}/organizations/${SENTRY_ORG}/stats_v2/?statsPeriod=14d&interval=1d&field=sum(quantity)&groupBy=reason&groupBy=outcome&category=error")" || code="curl-exit-$? ${code:-}"
 case "$code" in "200 application/json"*) ;; *) echo "SNTRY-019 blocked: org stats (by reason) read returned ${code:-no response}"; exit 0 ;; esac
 tee /dev/stderr < "$st" \
   | jq -r '
@@ -1638,13 +1663,13 @@ API="https://${SENTRY_HOST}/api/0"
 
 TMPD="$(mktemp -d)"; trap 'rm -rf "$TMPD"' EXIT
 code="$(curl -sS -o "${TMPD}/issues.json" -w '%{http_code} %{content_type}' --max-time 15 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
-  "${API}/projects/${SENTRY_ORG}/${PROJECT}/issues/?statsPeriod=14d&query=is:unresolved&limit=1" || true)"
+  "${API}/projects/${SENTRY_ORG}/${PROJECT}/issues/?statsPeriod=14d&query=is:unresolved&limit=1")" || code="curl-exit-$? ${code:-}"
 case "$code" in "200 application/json"*) ;; *) echo "SNTRY-020 blocked: ${PROJECT} issues read returned ${code:-no response}"; exit 0 ;; esac
 ISSUE_ID="$(jq -r '.[0].id // empty' "${TMPD}/issues.json")"
 [ -n "$ISSUE_ID" ] || { echo "SNTRY-020 blocked: no recent issue in ${PROJECT}"; exit 0; }
 
 code="$(curl -sS -o "${TMPD}/event.json" -w '%{http_code} %{content_type}' --max-time 15 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
-  "${API}/organizations/${SENTRY_ORG}/issues/${ISSUE_ID}/events/latest/" || true)"
+  "${API}/organizations/${SENTRY_ORG}/issues/${ISSUE_ID}/events/latest/")" || code="curl-exit-$? ${code:-}"
 case "$code" in "200 application/json"*) ;; *) echo "SNTRY-020 blocked: ${PROJECT} latest event read returned ${code:-no response}"; exit 0 ;; esac
 tee /dev/stderr < "${TMPD}/event.json" \
   | jq -r '
@@ -1669,7 +1694,7 @@ API="https://${SENTRY_HOST}/api/0"
 
 ab="$(mktemp)"; trap 'rm -f "$ab"' EXIT
 code="$(curl -sS -o "$ab" -w '%{http_code} %{content_type}' --max-time 15 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
-  "${API}/projects/${SENTRY_ORG}/${PROJECT}/files/artifact-bundles/" || true)"
+  "${API}/projects/${SENTRY_ORG}/${PROJECT}/files/artifact-bundles/")" || code="curl-exit-$? ${code:-}"
 case "$code" in "200 application/json"*) ;; *) echo "SNTRY-020 blocked: ${PROJECT} artifact bundles read returned ${code:-no response}"; exit 0 ;; esac
 tee /dev/stderr < "$ab" \
   | jq -r 'if length == 0
@@ -1690,7 +1715,7 @@ API="https://${SENTRY_HOST}/api/0"
 
 rp="$(mktemp)"; trap 'rm -f "$rp"' EXIT
 code="$(curl -sS -o "$rp" -w '%{http_code} %{content_type}' --max-time 15 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
-  "${API}/organizations/${SENTRY_ORG}/repos/" || true)"
+  "${API}/organizations/${SENTRY_ORG}/repos/")" || code="curl-exit-$? ${code:-}"
 case "$code" in "200 application/json"*) ;; *) echo "SNTRY-021 blocked: org repos read returned ${code:-no response}"; exit 0 ;; esac
 tee /dev/stderr < "$rp" \
   | jq -r '.[] | select(.provider.id != null and (.provider.id | startswith("integrations:")) | not)
@@ -1711,8 +1736,12 @@ MAX_MAPPINGS_PER_REPO="5"   # example, tune to your monorepo layout
 
 cm="$(mktemp)"; trap 'rm -f "$cm"' EXIT
 code="$(curl -sS -o "$cm" -w '%{http_code} %{content_type}' --max-time 15 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
-  "${API}/organizations/${SENTRY_ORG}/code-mappings/" || true)"
+  "${API}/organizations/${SENTRY_ORG}/code-mappings/?per_page=100")" || code="curl-exit-$? ${code:-}"
 case "$code" in "200 application/json"*) ;; *) echo "SNTRY-022 blocked: org code-mappings read returned ${code:-no response}"; exit 0 ;; esac
+# The verdict needs every mapping: a full page means more pages, so judge Phase 1's paged copy instead.
+CM_COUNT="$(jq 'length' "$cm")"
+[ "${CM_COUNT}" -lt 100 ] || { echo "SNTRY-022 blocked: org has 100+ code mappings; judge raw/code-mappings.json instead"; exit 0; }
+[ "${CM_COUNT}" -gt 0 ] || { echo "SNTRY-022 n/a: no code mappings to judge; SNTRY-009 step 2 owns the missing mappings"; exit 0; }
 # One row per offending mapping or project/repo pair, then the verdict: pass only when none offends.
 tee /dev/stderr < "$cm" \
   | jq -r --argjson maxper "${MAX_MAPPINGS_PER_REPO}" '
@@ -1733,7 +1762,7 @@ tee /dev/stderr < "$cm" \
           else "SNTRY-022 fail: \($dupes | length) duplicate group(s), \($buildhost | length) build-host stackRoot(s), \($overrouted | length) over-routed project/repo pair(s)" end )'
 ```
 
-**Confirmed live** on a real org: this endpoint returned 16 code mappings, and among them two rows shared the *same* `{projectId, repoId}` pair with `stackRoot` values differing only by a trailing `./` segment (the general shape this check normalizes away before grouping) — a real duplicate, not a constructed one. The same read also showed one project routing mappings into a single repo well past the example `MAX_MAPPINGS_PER_REPO` default of 5 (into the high single digits), confirming the over-routed case fires on real data too. Re-run with this command, the same org printed the duplicate pair, the over-routed project and eight build-host `stackRoot`s, then `SNTRY-022 fail`. Also confirmed: `code-mappings.json` field types are `id`/`projectId`/`repoId` as **JSON strings** (observed as numeric-looking string values, e.g. `"921900"`) whereas `stats_v2`'s `by.project` is a JSON **number** — never compare these across endpoints without an explicit `tostring`/`tonumber` normalization; the jq above stays within one endpoint's own string-typed ids and never mixes them with `stats_v2`. A pre-existing display-only snippet earlier in this file (`## Integration and source context checks`, the SNTRY-009 step 2 dump) named this same field `repositoryId`; the real field is `repoId` — fixed there too as part of this live-verification pass, since a display-only `jq` selecting a field that does not exist silently prints `null` instead of the value. Expect: `SNTRY-022 pass: <n> code mapping(s); ...` when there are no duplicate-key groups, no build-host `stackRoot`, and no repo receiving more than `MAX_MAPPINGS_PER_REPO` mappings from one project. Otherwise each offending mapping prints a `SNTRY-022 duplicate:` or `SNTRY-022 build-host:` row and each over-routed project/repo pair a `SNTRY-022 over-routed:` row, then `SNTRY-022 fail:` with the three counts; quote those rows as the evidence. A refused read prints `SNTRY-022 blocked: org code-mappings read returned <status>`, never a pass. A duplicate pair is `low` (redundant, not broken); a build-host `stackRoot` is the finding to escalate (it means the mapping was generated from a local dev machine or an ephemeral CI path, not the checked-out repo root, and will never resolve in production). **Correlate:** SNTRY-009 (a broken or implausible mapping is "link 2" or "link 3" of the same VCS chain), SNTRY-021 (a mapping pointing at a non-integration repo is doubly broken).
+**Confirmed live** on a real org: this endpoint returned 16 code mappings, and among them two rows shared the *same* `{projectId, repoId}` pair with `stackRoot` values differing only by a trailing `./` segment (the general shape this check normalizes away before grouping) — a real duplicate, not a constructed one. The same read also showed one project routing mappings into a single repo well past the example `MAX_MAPPINGS_PER_REPO` default of 5 (into the high single digits), confirming the over-routed case fires on real data too. Re-run with this command, the same org printed the duplicate pair, the over-routed project and eight build-host `stackRoot`s, then `SNTRY-022 fail`. Also confirmed: `code-mappings.json` field types are `id`/`projectId`/`repoId` as **JSON strings** (observed as numeric-looking string values, e.g. `"921900"`) whereas `stats_v2`'s `by.project` is a JSON **number** — never compare these across endpoints without an explicit `tostring`/`tonumber` normalization; the jq above stays within one endpoint's own string-typed ids and never mixes them with `stats_v2`. A pre-existing display-only snippet earlier in this file (`## Integration and source context checks`, the SNTRY-009 step 2 dump) named this same field `repositoryId`; the real field is `repoId` — fixed there too as part of this live-verification pass, since a display-only `jq` selecting a field that does not exist silently prints `null` instead of the value. Expect: `SNTRY-022 pass: <n> code mapping(s); ...` when there are no duplicate-key groups, no build-host `stackRoot`, and no repo receiving more than `MAX_MAPPINGS_PER_REPO` mappings from one project. Otherwise each offending mapping prints a `SNTRY-022 duplicate:` or `SNTRY-022 build-host:` row and each over-routed project/repo pair a `SNTRY-022 over-routed:` row, then `SNTRY-022 fail:` with the three counts; quote those rows as the evidence. A refused read prints `SNTRY-022 blocked: org code-mappings read returned <status>`, never a pass. The read asks for 100 mappings: a full page means more pages exist, so the block prints `SNTRY-022 blocked: org has 100+ code mappings` instead of judging a part of the set (judge Phase 1's paged `raw/code-mappings.json` instead), and an empty list prints `SNTRY-022 n/a`, because SNTRY-009 step 2 owns the missing mappings. A duplicate pair is `low` (redundant, not broken); a build-host `stackRoot` is the finding to escalate (it means the mapping was generated from a local dev machine or an ephemeral CI path, not the checked-out repo root, and will never resolve in production). **Correlate:** SNTRY-009 (a broken or implausible mapping is "link 2" or "link 3" of the same VCS chain), SNTRY-021 (a mapping pointing at a non-integration repo is doubly broken).
 
 **SNTRY-023, zero-monitor posture.** `/organizations/{org}/monitors/` returning an empty list is not itself a finding — many estates genuinely have no scheduled jobs — but on an org with backend projects that carry real accepted-event volume, zero monitors means no cron/uptime coverage exists to be audited at all, and that absence deserves an explicit line in the report rather than silently vanishing from the Monitors category:
 
@@ -1746,7 +1775,7 @@ API="https://${SENTRY_HOST}/api/0"
 
 TMPD="$(mktemp -d)"; trap 'rm -rf "$TMPD"' EXIT
 code="$(curl -sS -o "${TMPD}/monitors.json" -w '%{http_code} %{content_type}' --max-time 30 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
-  "${API}/organizations/${SENTRY_ORG}/monitors/" || true)"
+  "${API}/organizations/${SENTRY_ORG}/monitors/")" || code="curl-exit-$? ${code:-}"
 case "$code" in "200 application/json"*) ;; *) echo "SNTRY-023 blocked: org monitors read returned ${code:-no response}"; exit 0 ;; esac
 MON_COUNT="$(tee /dev/stderr < "${TMPD}/monitors.json" | jq 'length')"
 if [ "${MON_COUNT}" -gt 0 ]; then
@@ -1758,9 +1787,9 @@ fi
 STATS="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/sentry/$(date -u +%Y-%m-%d)/raw/stats-projects.json"
 [ -f "${STATS}" ] || { echo "SNTRY-023 blocked: org stats-projects.json is missing from this run's raw dump (see blocked-reads.tsv)"; exit 0; }
 code="$(curl -sS -o "${TMPD}/projects.json" -w '%{http_code} %{content_type}' --max-time 15 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
-  "${API}/organizations/${SENTRY_ORG}/projects/" || true)"
+  "${API}/organizations/${SENTRY_ORG}/projects/")" || code="curl-exit-$? ${code:-}"
 case "$code" in "200 application/json"*) ;; *) echo "SNTRY-023 blocked: org projects read returned ${code:-no response}"; exit 0 ;; esac
-jq -r '.[] | select((.platform // "") | test("^(javascript|electron|cordova|react-native|unity|flutter)") | not) | "\(.id)\t\(.slug)"' "${TMPD}/projects.json" \
+jq -r '.[] | select(.platform | test("^(javascript|electron|cordova|react-native|unity|flutter)") | not) | "\(.id)\t\(.slug)"' "${TMPD}/projects.json" \
   | while IFS="$(printf '\t')" read -r pid pslug; do
       acc=$(jq -r --arg pid "$pid" '[ .groups[]? | select((.by.project|tostring) == $pid) | select(.by.outcome=="accepted") | .totals["sum(quantity)"] ] | add // 0' "${STATS}")
       if [ "${acc:-0}" -gt 0 ]; then echo "SNTRY-023 info: 0 monitors exist; backend project ${pslug} accepted ${acc} events in the window with no cron/uptime monitor to audit"; fi
@@ -1781,7 +1810,7 @@ API="https://${SENTRY_HOST}/api/0"
 
 # Project detail carries the project's securityToken: keep the response in memory, never in a file.
 resp="$(curl -sS -w '\n%{http_code} %{content_type}' --max-time 15 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
-  "${API}/projects/${SENTRY_ORG}/${PROJECT}/" || true)"
+  "${API}/projects/${SENTRY_ORG}/${PROJECT}/")" || resp="curl-exit-$? $(printf '%s\n' "${resp:-}" | tail -n 1)"
 code="$(printf '%s\n' "$resp" | tail -n 1)"
 case "$code" in "200 application/json"*) ;; *) echo "SNTRY-024 blocked: ${PROJECT} project detail read returned ${code:-no response}"; exit 0 ;; esac
 printf '%s\n' "$resp" | sed '$d' \
@@ -1806,7 +1835,7 @@ API="https://${SENTRY_HOST}/api/0"
 
 envs="$(mktemp)"; trap 'rm -f "$envs"' EXIT
 code="$(curl -sS -o "$envs" -w '%{http_code} %{content_type}' --max-time 15 -H "Authorization: Bearer ${SENTRY_TOKEN}" \
-  "${API}/projects/${SENTRY_ORG}/${PROJECT}/environments/" || true)"
+  "${API}/projects/${SENTRY_ORG}/${PROJECT}/environments/")" || code="curl-exit-$? ${code:-}"
 case "$code" in "200 application/json"*) ;; *) echo "SNTRY-025 blocked: ${PROJECT} environments read returned ${code:-no response}"; exit 0 ;; esac
 tee /dev/stderr < "$envs" \
   | jq -r '

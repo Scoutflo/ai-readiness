@@ -73,12 +73,14 @@ prints anything, so our code mappings are fine."
    has no monitors, is `not-in-scope`. Neither is a pass.
 4. **SNTRY-108** reads claims as whole words of the rule name and channel names:
    only `prod` or `production` claims production; `dev`, `development`, `staging`,
-   `stage`, `qa`, `test`, `pp`, and `preprod` (or `pre-prod`) claim non-prod. A
-   non-prod claim passes on any non-production environment and fails on null or a
-   production one; a production claim fails on null or a non-production one. So
-   "Staging errors" and "Product search" on `staging` pass, while
-   "Checkout errors - Dev" on `production` and the pre-prod-channel rule on
-   `production` are rows, on both the alerts API and the legacy branch.
+   `stage`, `qa`, `test`, `pp`, `preprod` (or `pre-prod`), `pre-production`, and
+   `non-prod` (or `non-production`) claim non-prod. A non-prod claim passes on any
+   non-production environment and fails on null or a production one; a production
+   claim fails on null or a non-production one. So "Staging errors" and "Product
+   search" on `staging` pass, while "Checkout errors - Dev" on `production`, a
+   "Non-Prod" rule with no environment, a "Pre-Production" rule on `production`,
+   and the pre-prod-channel rule on `production` are rows, on both the alerts API
+   and the legacy branch.
 5. **SNTRY-109** judges enabled rules only (disabled ones are SNTRY-016's) and
    flags one that never fired and is snoozed (legacy `snooze` true) or carries a
    generic-keyword condition while re-notifying more often than `FREQ_FLOOR_MIN`
@@ -86,7 +88,9 @@ prints anything, so our code mappings are fine."
 6. **SNTRY-022** binds each row set as an array, prints one `duplicate`,
    `build-host`, or `over-routed` row per offender, and ends with a `pass` or
    `fail` line a command can check; nothing is sent to `/dev/null` and nothing is
-   left to the eye.
+   left to the eye. It judges only a complete set: a full page of 100 mappings
+   prints `blocked` (judge Phase 1's paged copy instead), and an empty list prints
+   `n/a`, since SNTRY-009 step 2 owns the missing mappings.
 
 **Must not:** select frame flags on `.in_app` only when the API returns `inApp`;
 credit `filtered-transaction` (or any default-on filter) as junk-event filtering;

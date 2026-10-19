@@ -26,11 +26,12 @@ worklist file for this, I'll leave my laptop open"
    after that batch's rows are marked, so a second invocation (or a retry
    after the laptop wakes up) cannot double-claim the same projects.
 5. Marks a project `done` once each of its pulls has written its file or
-   been recorded in the run's `blocked-reads.tsv`, so an interrupted batch
-   resumes at the project it was pulling, not the start of the run. A
+   been recorded in that project's own `blocked-reads.tsv`, so an interrupted
+   batch resumes at the project it was pulling, not the start of the run. A
    refused read (a 403 on one project) is blocked evidence that step 4
-   carries into the merged raw dir: it never holds the worklist open and is
-   never stored as `[]`. The shared `${RAW_DIR}` for the run's date is populated only
+   copies into the merged raw dir and Phase 1 lists: it never holds the
+   worklist open and is never stored as `[]`. Each pull clears the project's
+   file first, so a resumed pull that succeeds leaves no stale row. The shared `${RAW_DIR}` for the run's date is populated only
    once the worklist shows zero pending rows.
 6. If the run is interrupted anyway, the next invocation reports
    `resumable run found ... (pending=N)` and continues from there, not from
