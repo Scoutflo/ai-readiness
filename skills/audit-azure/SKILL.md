@@ -71,6 +71,7 @@ TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 AZ_KIND=$(sh "$TT" "$CFG" azure kind); AZ_N=$(sh "$TT" "$CFG" azure count)
 [ "${AZ_N:-0}" -ge 1 ] || { echo "no azure target configured in $CFG; run /scoutflo:connect"; exit 1; }
 AZ_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$AZ_N" ]; do [ "$(sh "$TT" "$CFG" azure label "$_i")" = "$SCOUTFLO_TARGET" ] && { AZ_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+[ "$(sh "$TT" "$CFG" azure kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" azure label "$AZ_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no azure target in $CFG; labels: $(sh "$TT" "$CFG" azure labels | tr '\n' ' ')"; exit 1; }
 AZ_LABEL=$(sh "$TT" "$CFG" azure label "$AZ_IDX"); SUB=$(sh "$TT" "$CFG" azure get "$AZ_IDX" subscription_id)
 [ -n "$SUB" ] || { echo "azure target '${AZ_LABEL:-?}' has no subscription_id in $CFG; run /scoutflo:connect"; exit 1; }
 if [ "$AZ_KIND" = seq ]; then AZ_SEG="azure/${AZ_LABEL}"; else AZ_SEG="azure"; fi
@@ -120,6 +121,7 @@ CONFIG="${SCOUTFLO_CONFIG:-}"
 TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 AZ_N=$(sh "$TT" "$CONFIG" azure count)
 AZ_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$AZ_N" ]; do [ "$(sh "$TT" "$CONFIG" azure label "$_i")" = "$SCOUTFLO_TARGET" ] && { AZ_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+[ "$(sh "$TT" "$CONFIG" azure kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CONFIG" azure label "$AZ_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no azure target in $CONFIG; labels: $(sh "$TT" "$CONFIG" azure labels | tr '\n' ' ')"; exit 1; }
 AZ_LABEL=$(sh "$TT" "$CONFIG" azure label "$AZ_IDX")
 AZ_SUB_CFG=$(sh "$TT" "$CONFIG" azure get "$AZ_IDX" subscription_id)
 [ -n "$AZ_SUB_CFG" ] || { echo "azure target '${AZ_LABEL:-?}' has no subscription_id in $CONFIG; run /scoutflo:connect"; exit 1; }
@@ -190,6 +192,7 @@ CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml
 TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 AZ_KIND=$(sh "$TT" "$CFG" azure kind); AZ_N=$(sh "$TT" "$CFG" azure count)
 AZ_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$AZ_N" ]; do [ "$(sh "$TT" "$CFG" azure label "$_i")" = "$SCOUTFLO_TARGET" ] && { AZ_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+[ "$(sh "$TT" "$CFG" azure kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" azure label "$AZ_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no azure target in $CFG; labels: $(sh "$TT" "$CFG" azure labels | tr '\n' ' ')"; exit 1; }
 AZ_LABEL=$(sh "$TT" "$CFG" azure label "$AZ_IDX"); SUB=$(sh "$TT" "$CFG" azure get "$AZ_IDX" subscription_id)
 if [ "$AZ_KIND" = seq ]; then AZ_SEG="azure/${AZ_LABEL}"; else AZ_SEG="azure"; fi
 SMALL_MAX_OBJECTS="15"    # example, tune to your environment
@@ -255,6 +258,7 @@ CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml
 TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 AZ_KIND=$(sh "$TT" "$CFG" azure kind); AZ_N=$(sh "$TT" "$CFG" azure count)
 AZ_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$AZ_N" ]; do [ "$(sh "$TT" "$CFG" azure label "$_i")" = "$SCOUTFLO_TARGET" ] && { AZ_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+[ "$(sh "$TT" "$CFG" azure kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" azure label "$AZ_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no azure target in $CFG; labels: $(sh "$TT" "$CFG" azure labels | tr '\n' ' ')"; exit 1; }
 AZ_LABEL=$(sh "$TT" "$CFG" azure label "$AZ_IDX"); SUB=$(sh "$TT" "$CFG" azure get "$AZ_IDX" subscription_id)
 if [ "$AZ_KIND" = seq ]; then AZ_SEG="azure/${AZ_LABEL}"; else AZ_SEG="azure"; fi
 RUN_DATE="$(date -u +%Y-%m-%d)"
@@ -376,6 +380,7 @@ CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml
 TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 AZ_KIND=$(sh "$TT" "$CFG" azure kind); AZ_N=$(sh "$TT" "$CFG" azure count)
 AZ_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$AZ_N" ]; do [ "$(sh "$TT" "$CFG" azure label "$_i")" = "$SCOUTFLO_TARGET" ] && { AZ_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+[ "$(sh "$TT" "$CFG" azure kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" azure label "$AZ_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no azure target in $CFG; labels: $(sh "$TT" "$CFG" azure labels | tr '\n' ' ')"; exit 1; }
 AZ_LABEL=$(sh "$TT" "$CFG" azure label "$AZ_IDX")
 if [ "$AZ_KIND" = seq ]; then AZ_SEG="azure/${AZ_LABEL}"; else AZ_SEG="azure"; fi
 RUN_DATE="$(date -u +%Y-%m-%d)"
@@ -412,6 +417,7 @@ CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml
 TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 AZ_KIND=$(sh "$TT" "$CFG" azure kind); AZ_N=$(sh "$TT" "$CFG" azure count)
 AZ_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$AZ_N" ]; do [ "$(sh "$TT" "$CFG" azure label "$_i")" = "$SCOUTFLO_TARGET" ] && { AZ_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+[ "$(sh "$TT" "$CFG" azure kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" azure label "$AZ_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no azure target in $CFG; labels: $(sh "$TT" "$CFG" azure labels | tr '\n' ' ')"; exit 1; }
 AZ_LABEL=$(sh "$TT" "$CFG" azure label "$AZ_IDX")
 if [ "$AZ_KIND" = seq ]; then AZ_SEG="azure/${AZ_LABEL}"; else AZ_SEG="azure"; fi
 TARGET_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${AZ_SEG}"
@@ -440,6 +446,7 @@ CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml
 TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 AZ_KIND=$(sh "$TT" "$CFG" azure kind); AZ_N=$(sh "$TT" "$CFG" azure count)
 AZ_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$AZ_N" ]; do [ "$(sh "$TT" "$CFG" azure label "$_i")" = "$SCOUTFLO_TARGET" ] && { AZ_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+[ "$(sh "$TT" "$CFG" azure kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" azure label "$AZ_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no azure target in $CFG; labels: $(sh "$TT" "$CFG" azure labels | tr '\n' ' ')"; exit 1; }
 AZ_LABEL=$(sh "$TT" "$CFG" azure label "$AZ_IDX")
 if [ "$AZ_KIND" = seq ]; then AZ_SEG="azure/${AZ_LABEL}"; else AZ_SEG="azure"; fi
 TARGET_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${AZ_SEG}"

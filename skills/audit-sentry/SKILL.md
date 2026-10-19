@@ -56,6 +56,7 @@ TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 SNTRY_KIND=$(sh "$TT" "$CFG" sentry kind); SNTRY_N=$(sh "$TT" "$CFG" sentry count)
 [ "${SNTRY_N:-0}" -ge 1 ] || { echo "no sentry target configured in $CFG; run /scoutflo:connect"; exit 1; }
 SNTRY_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$SNTRY_N" ]; do [ "$(sh "$TT" "$CFG" sentry label "$_i")" = "$SCOUTFLO_TARGET" ] && { SNTRY_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+[ "$(sh "$TT" "$CFG" sentry kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" sentry label "$SNTRY_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no sentry target in $CFG; labels: $(sh "$TT" "$CFG" sentry labels | tr '\n' ' ')"; exit 1; }
 SNTRY_LABEL=$(sh "$TT" "$CFG" sentry label "$SNTRY_IDX")
 if [ "$SNTRY_KIND" = seq ]; then SNTRY_SEG="sentry/${SNTRY_LABEL}"; else SNTRY_SEG="sentry"; fi
 SENTRY_HOST=$(sh "$TT" "$CFG" sentry get "$SNTRY_IDX" host)   # sentry.host: us.sentry.io, de.sentry.io, or your self-hosted host
@@ -151,6 +152,7 @@ CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml
 TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 SNTRY_KIND=$(sh "$TT" "$CFG" sentry kind); SNTRY_N=$(sh "$TT" "$CFG" sentry count)
 SNTRY_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$SNTRY_N" ]; do [ "$(sh "$TT" "$CFG" sentry label "$_i")" = "$SCOUTFLO_TARGET" ] && { SNTRY_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+[ "$(sh "$TT" "$CFG" sentry kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" sentry label "$SNTRY_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no sentry target in $CFG; labels: $(sh "$TT" "$CFG" sentry labels | tr '\n' ' ')"; exit 1; }
 SNTRY_LABEL=$(sh "$TT" "$CFG" sentry label "$SNTRY_IDX")
 if [ "$SNTRY_KIND" = seq ]; then SNTRY_SEG="sentry/${SNTRY_LABEL}"; else SNTRY_SEG="sentry"; fi
 SENTRY_HOST=$(sh "$TT" "$CFG" sentry get "$SNTRY_IDX" host)   # sentry.host
@@ -259,6 +261,7 @@ CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml
 TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 SNTRY_KIND=$(sh "$TT" "$CFG" sentry kind); SNTRY_N=$(sh "$TT" "$CFG" sentry count)
 SNTRY_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$SNTRY_N" ]; do [ "$(sh "$TT" "$CFG" sentry label "$_i")" = "$SCOUTFLO_TARGET" ] && { SNTRY_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+[ "$(sh "$TT" "$CFG" sentry kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" sentry label "$SNTRY_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no sentry target in $CFG; labels: $(sh "$TT" "$CFG" sentry labels | tr '\n' ' ')"; exit 1; }
 SNTRY_LABEL=$(sh "$TT" "$CFG" sentry label "$SNTRY_IDX")
 if [ "$SNTRY_KIND" = seq ]; then SNTRY_SEG="sentry/${SNTRY_LABEL}"; else SNTRY_SEG="sentry"; fi
 SENTRY_HOST=$(sh "$TT" "$CFG" sentry get "$SNTRY_IDX" host)   # sentry.host
@@ -540,6 +543,7 @@ CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml
 TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 SNTRY_KIND=$(sh "$TT" "$CFG" sentry kind); SNTRY_N=$(sh "$TT" "$CFG" sentry count)
 SNTRY_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$SNTRY_N" ]; do [ "$(sh "$TT" "$CFG" sentry label "$_i")" = "$SCOUTFLO_TARGET" ] && { SNTRY_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+[ "$(sh "$TT" "$CFG" sentry kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" sentry label "$SNTRY_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no sentry target in $CFG; labels: $(sh "$TT" "$CFG" sentry labels | tr '\n' ' ')"; exit 1; }
 SNTRY_LABEL=$(sh "$TT" "$CFG" sentry label "$SNTRY_IDX")
 if [ "$SNTRY_KIND" = seq ]; then SNTRY_SEG="sentry/${SNTRY_LABEL}"; else SNTRY_SEG="sentry"; fi
 RUN_DATE="$(date -u +%Y-%m-%d)"
@@ -605,6 +609,7 @@ CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml
 TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 SNTRY_KIND=$(sh "$TT" "$CFG" sentry kind); SNTRY_N=$(sh "$TT" "$CFG" sentry count)
 SNTRY_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$SNTRY_N" ]; do [ "$(sh "$TT" "$CFG" sentry label "$_i")" = "$SCOUTFLO_TARGET" ] && { SNTRY_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+[ "$(sh "$TT" "$CFG" sentry kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" sentry label "$SNTRY_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no sentry target in $CFG; labels: $(sh "$TT" "$CFG" sentry labels | tr '\n' ' ')"; exit 1; }
 SNTRY_LABEL=$(sh "$TT" "$CFG" sentry label "$SNTRY_IDX")
 if [ "$SNTRY_KIND" = seq ]; then SNTRY_SEG="sentry/${SNTRY_LABEL}"; else SNTRY_SEG="sentry"; fi
 RUN_DATE="$(date -u +%Y-%m-%d)"

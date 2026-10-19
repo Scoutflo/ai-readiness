@@ -66,6 +66,7 @@ TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 JT_KIND=$(sh "$TT" "$CFG" jsm kind); JT_N=$(sh "$TT" "$CFG" jsm count)
 [ "${JT_N:-0}" -ge 1 ] || { echo "no jsm target configured in $CFG; run /scoutflo:connect"; exit 1; }
 JT_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$JT_N" ]; do [ "$(sh "$TT" "$CFG" jsm label "$_i")" = "$SCOUTFLO_TARGET" ] && { JT_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+[ "$(sh "$TT" "$CFG" jsm kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" jsm label "$JT_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no jsm target in $CFG; labels: $(sh "$TT" "$CFG" jsm labels | tr '\n' ' ')"; exit 1; }
 JT_LABEL=$(sh "$TT" "$CFG" jsm label "$JT_IDX")
 if [ "$JT_KIND" = seq ]; then JT_SEG="jsm/${JT_LABEL}"; else JT_SEG="jsm"; fi
 JSM_SITE=$(sh "$TT" "$CFG" jsm get "$JT_IDX" site)
@@ -123,6 +124,7 @@ SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.s
 TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 JT_N=$(sh "$TT" "$CFG" jsm count)
 JT_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$JT_N" ]; do [ "$(sh "$TT" "$CFG" jsm label "$_i")" = "$SCOUTFLO_TARGET" ] && { JT_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+[ "$(sh "$TT" "$CFG" jsm kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" jsm label "$JT_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no jsm target in $CFG; labels: $(sh "$TT" "$CFG" jsm labels | tr '\n' ' ')"; exit 1; }
 JT_LABEL=$(sh "$TT" "$CFG" jsm label "$JT_IDX")
 JSM_SITE=$(sh "$TT" "$CFG" jsm get "$JT_IDX" site)
 JSM_EMAIL_VAR=$(sh "$TT" "$CFG" jsm get "$JT_IDX" email_env); [ -n "$JSM_EMAIL_VAR" ] || JSM_EMAIL_VAR="JSM_EMAIL"
@@ -183,6 +185,7 @@ SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.s
 TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 JT_KIND=$(sh "$TT" "$CFG" jsm kind); JT_N=$(sh "$TT" "$CFG" jsm count)
 JT_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$JT_N" ]; do [ "$(sh "$TT" "$CFG" jsm label "$_i")" = "$SCOUTFLO_TARGET" ] && { JT_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+[ "$(sh "$TT" "$CFG" jsm kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" jsm label "$JT_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no jsm target in $CFG; labels: $(sh "$TT" "$CFG" jsm labels | tr '\n' ' ')"; exit 1; }
 JT_LABEL=$(sh "$TT" "$CFG" jsm label "$JT_IDX")
 if [ "$JT_KIND" = seq ]; then JT_SEG="jsm/${JT_LABEL}"; else JT_SEG="jsm"; fi
 JSM_SITE=$(sh "$TT" "$CFG" jsm get "$JT_IDX" site)
@@ -264,6 +267,7 @@ CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml
 TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 JT_KIND=$(sh "$TT" "$CFG" jsm kind); JT_N=$(sh "$TT" "$CFG" jsm count)
 JT_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$JT_N" ]; do [ "$(sh "$TT" "$CFG" jsm label "$_i")" = "$SCOUTFLO_TARGET" ] && { JT_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+[ "$(sh "$TT" "$CFG" jsm kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" jsm label "$JT_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no jsm target in $CFG; labels: $(sh "$TT" "$CFG" jsm labels | tr '\n' ' ')"; exit 1; }
 JT_LABEL=$(sh "$TT" "$CFG" jsm label "$JT_IDX")
 if [ "$JT_KIND" = seq ]; then JT_SEG="jsm/${JT_LABEL}"; else JT_SEG="jsm"; fi
 RUN_DATE="$(date -u +%Y-%m-%d)"
@@ -374,6 +378,7 @@ CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml
 TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 JT_KIND=$(sh "$TT" "$CFG" jsm kind); JT_N=$(sh "$TT" "$CFG" jsm count)
 JT_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$JT_N" ]; do [ "$(sh "$TT" "$CFG" jsm label "$_i")" = "$SCOUTFLO_TARGET" ] && { JT_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+[ "$(sh "$TT" "$CFG" jsm kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" jsm label "$JT_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no jsm target in $CFG; labels: $(sh "$TT" "$CFG" jsm labels | tr '\n' ' ')"; exit 1; }
 JT_LABEL=$(sh "$TT" "$CFG" jsm label "$JT_IDX")
 if [ "$JT_KIND" = seq ]; then JT_SEG="jsm/${JT_LABEL}"; else JT_SEG="jsm"; fi
 RUN_DATE="$(date -u +%Y-%m-%d)"
@@ -412,6 +417,7 @@ CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml
 TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 JT_KIND=$(sh "$TT" "$CFG" jsm kind); JT_N=$(sh "$TT" "$CFG" jsm count)
 JT_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$JT_N" ]; do [ "$(sh "$TT" "$CFG" jsm label "$_i")" = "$SCOUTFLO_TARGET" ] && { JT_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+[ "$(sh "$TT" "$CFG" jsm kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" jsm label "$JT_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no jsm target in $CFG; labels: $(sh "$TT" "$CFG" jsm labels | tr '\n' ' ')"; exit 1; }
 JT_LABEL=$(sh "$TT" "$CFG" jsm label "$JT_IDX")
 if [ "$JT_KIND" = seq ]; then JT_SEG="jsm/${JT_LABEL}"; else JT_SEG="jsm"; fi
 TARGET_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${JT_SEG}"

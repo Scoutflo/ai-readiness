@@ -60,6 +60,7 @@ TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 GC_KIND=$(sh "$TT" "$CFG" groundcover kind); GC_N=$(sh "$TT" "$CFG" groundcover count)
 [ "${GC_N:-0}" -ge 1 ] || { echo "no groundcover target configured in $CFG; run /scoutflo:connect"; exit 1; }
 GC_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$GC_N" ]; do [ "$(sh "$TT" "$CFG" groundcover label "$_i")" = "$SCOUTFLO_TARGET" ] && { GC_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+[ "$(sh "$TT" "$CFG" groundcover kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" groundcover label "$GC_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no groundcover target in $CFG; labels: $(sh "$TT" "$CFG" groundcover labels | tr '\n' ' ')"; exit 1; }
 GC_LABEL=$(sh "$TT" "$CFG" groundcover label "$GC_IDX")
 if [ "$GC_KIND" = seq ]; then GC_SEG="groundcover/${GC_LABEL}"; else GC_SEG="groundcover"; fi
 GC_API=$(sh "$TT" "$CFG" groundcover get "$GC_IDX" api_url); [ -n "$GC_API" ] || GC_API="https://api.groundcover.com"   # groundcover.api_url override if set
@@ -123,6 +124,7 @@ CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml
 TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 GC_KIND=$(sh "$TT" "$CFG" groundcover kind); GC_N=$(sh "$TT" "$CFG" groundcover count)
 GC_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$GC_N" ]; do [ "$(sh "$TT" "$CFG" groundcover label "$_i")" = "$SCOUTFLO_TARGET" ] && { GC_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+[ "$(sh "$TT" "$CFG" groundcover kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" groundcover label "$GC_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no groundcover target in $CFG; labels: $(sh "$TT" "$CFG" groundcover labels | tr '\n' ' ')"; exit 1; }
 GC_LABEL=$(sh "$TT" "$CFG" groundcover label "$GC_IDX")
 if [ "$GC_KIND" = seq ]; then GC_SEG="groundcover/${GC_LABEL}"; else GC_SEG="groundcover"; fi
 GC_API=$(sh "$TT" "$CFG" groundcover get "$GC_IDX" api_url); [ -n "$GC_API" ] || GC_API="https://api.groundcover.com"   # groundcover.api_url
@@ -187,6 +189,7 @@ CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml
 TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 GC_KIND=$(sh "$TT" "$CFG" groundcover kind); GC_N=$(sh "$TT" "$CFG" groundcover count)
 GC_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$GC_N" ]; do [ "$(sh "$TT" "$CFG" groundcover label "$_i")" = "$SCOUTFLO_TARGET" ] && { GC_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+[ "$(sh "$TT" "$CFG" groundcover kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" groundcover label "$GC_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no groundcover target in $CFG; labels: $(sh "$TT" "$CFG" groundcover labels | tr '\n' ' ')"; exit 1; }
 GC_LABEL=$(sh "$TT" "$CFG" groundcover label "$GC_IDX")
 if [ "$GC_KIND" = seq ]; then GC_SEG="groundcover/${GC_LABEL}"; else GC_SEG="groundcover"; fi
 GC_API=$(sh "$TT" "$CFG" groundcover get "$GC_IDX" api_url); [ -n "$GC_API" ] || GC_API="https://api.groundcover.com"   # groundcover.api_url
@@ -356,6 +359,7 @@ CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml
 TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 GC_KIND=$(sh "$TT" "$CFG" groundcover kind); GC_N=$(sh "$TT" "$CFG" groundcover count)
 GC_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$GC_N" ]; do [ "$(sh "$TT" "$CFG" groundcover label "$_i")" = "$SCOUTFLO_TARGET" ] && { GC_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+[ "$(sh "$TT" "$CFG" groundcover kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" groundcover label "$GC_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no groundcover target in $CFG; labels: $(sh "$TT" "$CFG" groundcover labels | tr '\n' ' ')"; exit 1; }
 GC_LABEL=$(sh "$TT" "$CFG" groundcover label "$GC_IDX")
 if [ "$GC_KIND" = seq ]; then GC_SEG="groundcover/${GC_LABEL}"; else GC_SEG="groundcover"; fi
 RUN_DATE="$(date -u +%Y-%m-%d)"
@@ -393,6 +397,7 @@ CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml
 TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 GC_KIND=$(sh "$TT" "$CFG" groundcover kind); GC_N=$(sh "$TT" "$CFG" groundcover count)
 GC_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$GC_N" ]; do [ "$(sh "$TT" "$CFG" groundcover label "$_i")" = "$SCOUTFLO_TARGET" ] && { GC_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+[ "$(sh "$TT" "$CFG" groundcover kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" groundcover label "$GC_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no groundcover target in $CFG; labels: $(sh "$TT" "$CFG" groundcover labels | tr '\n' ' ')"; exit 1; }
 GC_LABEL=$(sh "$TT" "$CFG" groundcover label "$GC_IDX")
 if [ "$GC_KIND" = seq ]; then GC_SEG="groundcover/${GC_LABEL}"; else GC_SEG="groundcover"; fi
 TARGET_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${GC_SEG}"

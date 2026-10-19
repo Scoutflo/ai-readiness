@@ -53,6 +53,7 @@ TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 GRAF_KIND=$(sh "$TT" "$CFG" grafana kind); GRAF_N=$(sh "$TT" "$CFG" grafana count)
 [ "${GRAF_N:-0}" -ge 1 ] || { echo "no grafana target configured in $CFG; run /scoutflo:connect"; exit 1; }
 GRAF_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$GRAF_N" ]; do [ "$(sh "$TT" "$CFG" grafana label "$_i")" = "$SCOUTFLO_TARGET" ] && { GRAF_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+[ "$(sh "$TT" "$CFG" grafana kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" grafana label "$GRAF_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no grafana target in $CFG; labels: $(sh "$TT" "$CFG" grafana labels | tr '\n' ' ')"; exit 1; }
 GRAF_LABEL=$(sh "$TT" "$CFG" grafana label "$GRAF_IDX")
 if [ "$GRAF_KIND" = seq ]; then GRAF_SEG="grafana/${GRAF_LABEL}"; else GRAF_SEG="grafana"; fi
 GRAFANA_URL=$(sh "$TT" "$CFG" grafana get "$GRAF_IDX" url)   # grafana.url for THIS target
@@ -113,6 +114,7 @@ fi
 TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 GRAF_N=$(sh "$TT" "$CFG" grafana count)
 GRAF_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$GRAF_N" ]; do [ "$(sh "$TT" "$CFG" grafana label "$_i")" = "$SCOUTFLO_TARGET" ] && { GRAF_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+[ "$(sh "$TT" "$CFG" grafana kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" grafana label "$GRAF_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no grafana target in $CFG; labels: $(sh "$TT" "$CFG" grafana labels | tr '\n' ' ')"; exit 1; }
 GRAF_LABEL=$(sh "$TT" "$CFG" grafana label "$GRAF_IDX")
 GRAFANA_URL=$(sh "$TT" "$CFG" grafana get "$GRAF_IDX" url)
 SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.scoutflo/env" ]; then SCOUTFLO_ENV="./.scoutflo/env"; else SCOUTFLO_ENV="$HOME/.scoutflo/env"; fi; }
@@ -142,6 +144,7 @@ CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml
 TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 GRAF_KIND=$(sh "$TT" "$CFG" grafana kind); GRAF_N=$(sh "$TT" "$CFG" grafana count)
 GRAF_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$GRAF_N" ]; do [ "$(sh "$TT" "$CFG" grafana label "$_i")" = "$SCOUTFLO_TARGET" ] && { GRAF_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+[ "$(sh "$TT" "$CFG" grafana kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" grafana label "$GRAF_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no grafana target in $CFG; labels: $(sh "$TT" "$CFG" grafana labels | tr '\n' ' ')"; exit 1; }
 GRAF_LABEL=$(sh "$TT" "$CFG" grafana label "$GRAF_IDX")
 if [ "$GRAF_KIND" = seq ]; then GRAF_SEG="grafana/${GRAF_LABEL}"; else GRAF_SEG="grafana"; fi
 GRAFANA_URL=$(sh "$TT" "$CFG" grafana get "$GRAF_IDX" url)
@@ -236,6 +239,7 @@ Runs on the large path only. State lives under a run-ID-keyed run directory, `./
    TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
    GRAF_KIND=$(sh "$TT" "$CFG" grafana kind); GRAF_N=$(sh "$TT" "$CFG" grafana count)
    GRAF_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$GRAF_N" ]; do [ "$(sh "$TT" "$CFG" grafana label "$_i")" = "$SCOUTFLO_TARGET" ] && { GRAF_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+   [ "$(sh "$TT" "$CFG" grafana kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" grafana label "$GRAF_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no grafana target in $CFG; labels: $(sh "$TT" "$CFG" grafana labels | tr '\n' ' ')"; exit 1; }
    GRAF_LABEL=$(sh "$TT" "$CFG" grafana label "$GRAF_IDX")
    if [ "$GRAF_KIND" = seq ]; then GRAF_SEG="grafana/${GRAF_LABEL}"; else GRAF_SEG="grafana"; fi
    AUDIT_ROOT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${GRAF_SEG}"
@@ -264,6 +268,7 @@ Runs on the large path only. State lives under a run-ID-keyed run directory, `./
    TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
    GRAF_KIND=$(sh "$TT" "$CFG" grafana kind); GRAF_N=$(sh "$TT" "$CFG" grafana count)
    GRAF_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$GRAF_N" ]; do [ "$(sh "$TT" "$CFG" grafana label "$_i")" = "$SCOUTFLO_TARGET" ] && { GRAF_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+   [ "$(sh "$TT" "$CFG" grafana kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" grafana label "$GRAF_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no grafana target in $CFG; labels: $(sh "$TT" "$CFG" grafana labels | tr '\n' ' ')"; exit 1; }
    GRAF_LABEL=$(sh "$TT" "$CFG" grafana label "$GRAF_IDX")
    if [ "$GRAF_KIND" = seq ]; then GRAF_SEG="grafana/${GRAF_LABEL}"; else GRAF_SEG="grafana"; fi
    AUDIT_ROOT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${GRAF_SEG}"
@@ -283,6 +288,7 @@ Runs on the large path only. State lives under a run-ID-keyed run directory, `./
    TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
    GRAF_KIND=$(sh "$TT" "$CFG" grafana kind); GRAF_N=$(sh "$TT" "$CFG" grafana count)
    GRAF_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$GRAF_N" ]; do [ "$(sh "$TT" "$CFG" grafana label "$_i")" = "$SCOUTFLO_TARGET" ] && { GRAF_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+   [ "$(sh "$TT" "$CFG" grafana kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" grafana label "$GRAF_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no grafana target in $CFG; labels: $(sh "$TT" "$CFG" grafana labels | tr '\n' ' ')"; exit 1; }
    GRAF_LABEL=$(sh "$TT" "$CFG" grafana label "$GRAF_IDX")
    if [ "$GRAF_KIND" = seq ]; then GRAF_SEG="grafana/${GRAF_LABEL}"; else GRAF_SEG="grafana"; fi
    GRAFANA_URL=$(sh "$TT" "$CFG" grafana get "$GRAF_IDX" url)
@@ -327,6 +333,7 @@ Runs on the large path only. State lives under a run-ID-keyed run directory, `./
    TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
    GRAF_KIND=$(sh "$TT" "$CFG" grafana kind); GRAF_N=$(sh "$TT" "$CFG" grafana count)
    GRAF_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$GRAF_N" ]; do [ "$(sh "$TT" "$CFG" grafana label "$_i")" = "$SCOUTFLO_TARGET" ] && { GRAF_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+   [ "$(sh "$TT" "$CFG" grafana kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" grafana label "$GRAF_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no grafana target in $CFG; labels: $(sh "$TT" "$CFG" grafana labels | tr '\n' ' ')"; exit 1; }
    GRAF_LABEL=$(sh "$TT" "$CFG" grafana label "$GRAF_IDX")
    if [ "$GRAF_KIND" = seq ]; then GRAF_SEG="grafana/${GRAF_LABEL}"; else GRAF_SEG="grafana"; fi
    RUN_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${GRAF_SEG}/runs/20260717T140500Z"   # example; this run's resolved RUN_DIR
@@ -356,6 +363,7 @@ Runs on the large path only. State lives under a run-ID-keyed run directory, `./
    TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
    GRAF_KIND=$(sh "$TT" "$CFG" grafana kind); GRAF_N=$(sh "$TT" "$CFG" grafana count)
    GRAF_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$GRAF_N" ]; do [ "$(sh "$TT" "$CFG" grafana label "$_i")" = "$SCOUTFLO_TARGET" ] && { GRAF_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+   [ "$(sh "$TT" "$CFG" grafana kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" grafana label "$GRAF_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no grafana target in $CFG; labels: $(sh "$TT" "$CFG" grafana labels | tr '\n' ' ')"; exit 1; }
    GRAF_LABEL=$(sh "$TT" "$CFG" grafana label "$GRAF_IDX")
    if [ "$GRAF_KIND" = seq ]; then GRAF_SEG="grafana/${GRAF_LABEL}"; else GRAF_SEG="grafana"; fi
    RUN_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${GRAF_SEG}/runs/20260717T140500Z"   # example; this run's resolved RUN_DIR
@@ -406,6 +414,7 @@ CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml
 TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 GRAF_KIND=$(sh "$TT" "$CFG" grafana kind); GRAF_N=$(sh "$TT" "$CFG" grafana count)
 GRAF_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$GRAF_N" ]; do [ "$(sh "$TT" "$CFG" grafana label "$_i")" = "$SCOUTFLO_TARGET" ] && { GRAF_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+[ "$(sh "$TT" "$CFG" grafana kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" grafana label "$GRAF_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no grafana target in $CFG; labels: $(sh "$TT" "$CFG" grafana labels | tr '\n' ' ')"; exit 1; }
 GRAF_LABEL=$(sh "$TT" "$CFG" grafana label "$GRAF_IDX")
 if [ "$GRAF_KIND" = seq ]; then GRAF_SEG="grafana/${GRAF_LABEL}"; else GRAF_SEG="grafana"; fi
 AUDIT_ROOT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${GRAF_SEG}"
@@ -436,6 +445,7 @@ CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml
 TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 GRAF_KIND=$(sh "$TT" "$CFG" grafana kind); GRAF_N=$(sh "$TT" "$CFG" grafana count)
 GRAF_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$GRAF_N" ]; do [ "$(sh "$TT" "$CFG" grafana label "$_i")" = "$SCOUTFLO_TARGET" ] && { GRAF_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+[ "$(sh "$TT" "$CFG" grafana kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" grafana label "$GRAF_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no grafana target in $CFG; labels: $(sh "$TT" "$CFG" grafana labels | tr '\n' ' ')"; exit 1; }
 GRAF_LABEL=$(sh "$TT" "$CFG" grafana label "$GRAF_IDX")
 if [ "$GRAF_KIND" = seq ]; then GRAF_SEG="grafana/${GRAF_LABEL}"; else GRAF_SEG="grafana"; fi
 export GRAFANA_URL="$(sh "$TT" "$CFG" grafana get "$GRAF_IDX" url)"   # grafana.url for THIS target
@@ -512,6 +522,7 @@ The checks:
    TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
    GRAF_KIND=$(sh "$TT" "$CFG" grafana kind); GRAF_N=$(sh "$TT" "$CFG" grafana count)
    GRAF_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$GRAF_N" ]; do [ "$(sh "$TT" "$CFG" grafana label "$_i")" = "$SCOUTFLO_TARGET" ] && { GRAF_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+   [ "$(sh "$TT" "$CFG" grafana kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" grafana label "$GRAF_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no grafana target in $CFG; labels: $(sh "$TT" "$CFG" grafana labels | tr '\n' ' ')"; exit 1; }
    GRAF_LABEL=$(sh "$TT" "$CFG" grafana label "$GRAF_IDX")
    if [ "$GRAF_KIND" = seq ]; then GRAF_SEG="grafana/${GRAF_LABEL}"; else GRAF_SEG="grafana"; fi
    RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${GRAF_SEG}/$(date -u +%Y-%m-%d)/raw"   # this run's raw dir (per resolved target)
@@ -538,6 +549,7 @@ The checks:
    TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
    GRAF_KIND=$(sh "$TT" "$CFG" grafana kind); GRAF_N=$(sh "$TT" "$CFG" grafana count)
    GRAF_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$GRAF_N" ]; do [ "$(sh "$TT" "$CFG" grafana label "$_i")" = "$SCOUTFLO_TARGET" ] && { GRAF_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+   [ "$(sh "$TT" "$CFG" grafana kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" grafana label "$GRAF_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no grafana target in $CFG; labels: $(sh "$TT" "$CFG" grafana labels | tr '\n' ' ')"; exit 1; }
    GRAF_LABEL=$(sh "$TT" "$CFG" grafana label "$GRAF_IDX")
    if [ "$GRAF_KIND" = seq ]; then GRAF_SEG="grafana/${GRAF_LABEL}"; else GRAF_SEG="grafana"; fi
    RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${GRAF_SEG}/$(date -u +%Y-%m-%d)/raw"   # this run's raw dir (per resolved target)
@@ -586,6 +598,7 @@ CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml
 TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 GRAF_KIND=$(sh "$TT" "$CFG" grafana kind); GRAF_N=$(sh "$TT" "$CFG" grafana count)
 GRAF_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$GRAF_N" ]; do [ "$(sh "$TT" "$CFG" grafana label "$_i")" = "$SCOUTFLO_TARGET" ] && { GRAF_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+[ "$(sh "$TT" "$CFG" grafana kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" grafana label "$GRAF_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no grafana target in $CFG; labels: $(sh "$TT" "$CFG" grafana labels | tr '\n' ' ')"; exit 1; }
 GRAF_LABEL=$(sh "$TT" "$CFG" grafana label "$GRAF_IDX")
 if [ "$GRAF_KIND" = seq ]; then GRAF_SEG="grafana/${GRAF_LABEL}"; else GRAF_SEG="grafana"; fi
 RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${GRAF_SEG}/$(date -u +%Y-%m-%d)/raw"   # this run's raw dir (per resolved target)
@@ -613,6 +626,7 @@ CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml
 TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 GRAF_KIND=$(sh "$TT" "$CFG" grafana kind); GRAF_N=$(sh "$TT" "$CFG" grafana count)
 GRAF_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$GRAF_N" ]; do [ "$(sh "$TT" "$CFG" grafana label "$_i")" = "$SCOUTFLO_TARGET" ] && { GRAF_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+[ "$(sh "$TT" "$CFG" grafana kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" grafana label "$GRAF_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no grafana target in $CFG; labels: $(sh "$TT" "$CFG" grafana labels | tr '\n' ' ')"; exit 1; }
 GRAF_LABEL=$(sh "$TT" "$CFG" grafana label "$GRAF_IDX")
 if [ "$GRAF_KIND" = seq ]; then GRAF_SEG="grafana/${GRAF_LABEL}"; else GRAF_SEG="grafana"; fi
 RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${GRAF_SEG}/$(date -u +%Y-%m-%d)/raw"   # this run's raw dir (per resolved target)
@@ -671,6 +685,7 @@ CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml
 TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 GRAF_KIND=$(sh "$TT" "$CFG" grafana kind); GRAF_N=$(sh "$TT" "$CFG" grafana count)
 GRAF_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$GRAF_N" ]; do [ "$(sh "$TT" "$CFG" grafana label "$_i")" = "$SCOUTFLO_TARGET" ] && { GRAF_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+[ "$(sh "$TT" "$CFG" grafana kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" grafana label "$GRAF_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no grafana target in $CFG; labels: $(sh "$TT" "$CFG" grafana labels | tr '\n' ' ')"; exit 1; }
 GRAF_LABEL=$(sh "$TT" "$CFG" grafana label "$GRAF_IDX")
 if [ "$GRAF_KIND" = seq ]; then GRAF_SEG="grafana/${GRAF_LABEL}"; else GRAF_SEG="grafana"; fi
 RUN_DATE="$(date -u +%Y-%m-%d)"

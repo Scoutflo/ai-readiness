@@ -107,6 +107,7 @@ TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 K8S_N=$(sh "$TT" "$CFG" kubernetes count)
 [ "${K8S_N:-0}" -ge 1 ] || { echo "no kubernetes target configured in $CFG — this block is the Kubernetes route; use the Phase-0 source routing (a non-Kubernetes estate maps via Phase 2D, never a dead-end)"; exit 1; }
 K8S_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$K8S_N" ]; do [ "$(sh "$TT" "$CFG" kubernetes label "$_i")" = "$SCOUTFLO_TARGET" ] && { K8S_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+[ "$(sh "$TT" "$CFG" kubernetes kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" kubernetes label "$K8S_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no kubernetes target in $CFG; labels: $(sh "$TT" "$CFG" kubernetes labels | tr '\n' ' ')"; exit 1; }
 K8S_LABEL=$(sh "$TT" "$CFG" kubernetes label "$K8S_IDX"); KUBE_CONTEXT=$(sh "$TT" "$CFG" kubernetes get "$K8S_IDX" context)
 [ -n "$KUBE_CONTEXT" ] || { echo "kubernetes target '${K8S_LABEL:-?}' has no context in $CFG; run /scoutflo:connect"; exit 1; }
 [ "${K8S_N}" -gt 1 ] && echo "note: ${K8S_N} kubernetes targets configured — mapping '${K8S_LABEL}' only; re-run once per label (SCOUTFLO_TARGET=<label>), each with its own SCOUTFLO_AUDIT_DIR" || true

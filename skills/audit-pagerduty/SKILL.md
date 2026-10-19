@@ -67,6 +67,7 @@ TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 PD_KIND=$(sh "$TT" "$CFG" pagerduty kind); PD_N=$(sh "$TT" "$CFG" pagerduty count)
 [ "${PD_N:-0}" -ge 1 ] || { echo "no pagerduty target configured in $CFG; run /scoutflo:connect"; exit 1; }
 PD_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$PD_N" ]; do [ "$(sh "$TT" "$CFG" pagerduty label "$_i")" = "$SCOUTFLO_TARGET" ] && { PD_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+[ "$(sh "$TT" "$CFG" pagerduty kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" pagerduty label "$PD_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no pagerduty target in $CFG; labels: $(sh "$TT" "$CFG" pagerduty labels | tr '\n' ' ')"; exit 1; }
 PD_LABEL=$(sh "$TT" "$CFG" pagerduty label "$PD_IDX")
 if [ "$PD_KIND" = seq ]; then PD_SEG="pagerduty/${PD_LABEL}"; else PD_SEG="pagerduty"; fi
 # token_env holds a VARIABLE NAME; the secret is that variable's value (defaults to PAGERDUTY_TOKEN for a
@@ -110,6 +111,7 @@ CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml
 TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 PD_KIND=$(sh "$TT" "$CFG" pagerduty kind); PD_N=$(sh "$TT" "$CFG" pagerduty count)
 PD_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$PD_N" ]; do [ "$(sh "$TT" "$CFG" pagerduty label "$_i")" = "$SCOUTFLO_TARGET" ] && { PD_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+[ "$(sh "$TT" "$CFG" pagerduty kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" pagerduty label "$PD_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no pagerduty target in $CFG; labels: $(sh "$TT" "$CFG" pagerduty labels | tr '\n' ' ')"; exit 1; }
 PD_LABEL=$(sh "$TT" "$CFG" pagerduty label "$PD_IDX")
 PD_TOKVAR=$(sh "$TT" "$CFG" pagerduty get "$PD_IDX" token_env); PD_TOKVAR="${PD_TOKVAR:-PAGERDUTY_TOKEN}"
 PAGERDUTY_TOKEN="$(printenv "$PD_TOKVAR" 2>/dev/null || true)"; export PAGERDUTY_TOKEN
@@ -164,6 +166,7 @@ CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml
 TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 PD_KIND=$(sh "$TT" "$CFG" pagerduty kind); PD_N=$(sh "$TT" "$CFG" pagerduty count)
 PD_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$PD_N" ]; do [ "$(sh "$TT" "$CFG" pagerduty label "$_i")" = "$SCOUTFLO_TARGET" ] && { PD_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+[ "$(sh "$TT" "$CFG" pagerduty kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" pagerduty label "$PD_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no pagerduty target in $CFG; labels: $(sh "$TT" "$CFG" pagerduty labels | tr '\n' ' ')"; exit 1; }
 PD_LABEL=$(sh "$TT" "$CFG" pagerduty label "$PD_IDX")
 if [ "$PD_KIND" = seq ]; then PD_SEG="pagerduty/${PD_LABEL}"; else PD_SEG="pagerduty"; fi
 PD_TOKVAR=$(sh "$TT" "$CFG" pagerduty get "$PD_IDX" token_env); PD_TOKVAR="${PD_TOKVAR:-PAGERDUTY_TOKEN}"
@@ -317,6 +320,7 @@ CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml
 TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 PD_KIND=$(sh "$TT" "$CFG" pagerduty kind); PD_N=$(sh "$TT" "$CFG" pagerduty count)
 PD_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$PD_N" ]; do [ "$(sh "$TT" "$CFG" pagerduty label "$_i")" = "$SCOUTFLO_TARGET" ] && { PD_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+[ "$(sh "$TT" "$CFG" pagerduty kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" pagerduty label "$PD_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no pagerduty target in $CFG; labels: $(sh "$TT" "$CFG" pagerduty labels | tr '\n' ' ')"; exit 1; }
 PD_LABEL=$(sh "$TT" "$CFG" pagerduty label "$PD_IDX")
 if [ "$PD_KIND" = seq ]; then PD_SEG="pagerduty/${PD_LABEL}"; else PD_SEG="pagerduty"; fi
 RUN_DATE="$(date -u +%Y-%m-%d)"
@@ -355,6 +359,7 @@ CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml
 TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 PD_KIND=$(sh "$TT" "$CFG" pagerduty kind); PD_N=$(sh "$TT" "$CFG" pagerduty count)
 PD_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$PD_N" ]; do [ "$(sh "$TT" "$CFG" pagerduty label "$_i")" = "$SCOUTFLO_TARGET" ] && { PD_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+[ "$(sh "$TT" "$CFG" pagerduty kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" pagerduty label "$PD_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no pagerduty target in $CFG; labels: $(sh "$TT" "$CFG" pagerduty labels | tr '\n' ' ')"; exit 1; }
 PD_LABEL=$(sh "$TT" "$CFG" pagerduty label "$PD_IDX")
 if [ "$PD_KIND" = seq ]; then PD_SEG="pagerduty/${PD_LABEL}"; else PD_SEG="pagerduty"; fi
 TARGET_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${PD_SEG}"

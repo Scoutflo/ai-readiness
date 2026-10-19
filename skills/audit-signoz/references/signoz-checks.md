@@ -33,6 +33,7 @@ CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml
 TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 SIG_N=$(sh "$TT" "$CFG" signoz count)
 SIG_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "${SIG_N:-0}" ]; do [ "$(sh "$TT" "$CFG" signoz label "$_i")" = "$SCOUTFLO_TARGET" ] && { SIG_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+[ "$(sh "$TT" "$CFG" signoz kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" signoz label "$SIG_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no signoz target in $CFG; labels: $(sh "$TT" "$CFG" signoz labels | tr '\n' ' ')"; exit 1; }
 SIG_URL=$(sh "$TT" "$CFG" signoz get "$SIG_IDX" url); SIG_URL="${SIG_URL%/}"     # signoz.url for THIS target
 SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.scoutflo/env" ]; then SCOUTFLO_ENV="./.scoutflo/env"; else SCOUTFLO_ENV="$HOME/.scoutflo/env"; fi; }
 [ -f "$SCOUTFLO_ENV" ] && . "$SCOUTFLO_ENV" || true
@@ -64,6 +65,7 @@ CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml
 TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 SIG_N=$(sh "$TT" "$CFG" signoz count)
 SIG_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "${SIG_N:-0}" ]; do [ "$(sh "$TT" "$CFG" signoz label "$_i")" = "$SCOUTFLO_TARGET" ] && { SIG_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+[ "$(sh "$TT" "$CFG" signoz kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" signoz label "$SIG_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no signoz target in $CFG; labels: $(sh "$TT" "$CFG" signoz labels | tr '\n' ' ')"; exit 1; }
 CH_URL=$(sh "$TT" "$CFG" signoz get "$SIG_IDX" clickhouse_url); CH_URL="${CH_URL%/}"          # signoz.clickhouse_url for THIS target
 CH_USER=$(sh "$TT" "$CFG" signoz get "$SIG_IDX" clickhouse_user); [ -n "$CH_USER" ] || CH_USER="scoutflo_ro"   # read-only audit user (the connect recipe's CREATE USER name)
 SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.scoutflo/env" ]; then SCOUTFLO_ENV="./.scoutflo/env"; else SCOUTFLO_ENV="$HOME/.scoutflo/env"; fi; }
@@ -105,6 +107,7 @@ CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml
 TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 SIG_N=$(sh "$TT" "$CFG" signoz count)
 SIG_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "${SIG_N:-0}" ]; do [ "$(sh "$TT" "$CFG" signoz label "$_i")" = "$SCOUTFLO_TARGET" ] && { SIG_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+[ "$(sh "$TT" "$CFG" signoz kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" signoz label "$SIG_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no signoz target in $CFG; labels: $(sh "$TT" "$CFG" signoz labels | tr '\n' ' ')"; exit 1; }
 SIG_URL=$(sh "$TT" "$CFG" signoz get "$SIG_IDX" url); SIG_URL="${SIG_URL%/}"   # signoz.url for THIS target
 SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.scoutflo/env" ]; then SCOUTFLO_ENV="./.scoutflo/env"; else SCOUTFLO_ENV="$HOME/.scoutflo/env"; fi; }
 [ -f "$SCOUTFLO_ENV" ] && . "$SCOUTFLO_ENV" || true

@@ -24,6 +24,7 @@ CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml
 TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 CS_N=$(sh "$TT" "$CFG" clickstack count)
 CS_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "${CS_N:-0}" ]; do [ "$(sh "$TT" "$CFG" clickstack label "$_i")" = "$SCOUTFLO_TARGET" ] && { CS_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+[ "$(sh "$TT" "$CFG" clickstack kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" clickstack label "$CS_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no clickstack target in $CFG; labels: $(sh "$TT" "$CFG" clickstack labels | tr '\n' ' ')"; exit 1; }
 CH_URL=$(sh "$TT" "$CFG" clickstack get "$CS_IDX" clickhouse_url)     # clickstack.clickhouse_url for THIS target
 CH_USER=$(sh "$TT" "$CFG" clickstack get "$CS_IDX" clickhouse_user); [ -n "$CH_USER" ] || CH_USER="scoutflo_ro"   # clickstack.clickhouse_user (the connect recipe's scoped RO user; never falls through to the server `default`)
 # clickstack.clickhouse_password_env names the VARIABLE holding the password (e.g. CH_KEY); read it
@@ -71,6 +72,7 @@ CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml
 TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 CS_N=$(sh "$TT" "$CFG" clickstack count)
 CS_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "${CS_N:-0}" ]; do [ "$(sh "$TT" "$CFG" clickstack label "$_i")" = "$SCOUTFLO_TARGET" ] && { CS_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+[ "$(sh "$TT" "$CFG" clickstack kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" clickstack label "$CS_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no clickstack target in $CFG; labels: $(sh "$TT" "$CFG" clickstack labels | tr '\n' ' ')"; exit 1; }
 HDX_URL=$(sh "$TT" "$CFG" clickstack get "$CS_IDX" hyperdx_url); HDX_URL="${HDX_URL%/}"   # clickstack.hyperdx_url for THIS target (:8080 in the all-in-one)
 # Each *_env key names the VARIABLE holding a secret; read with printenv (default to the fixed var
 # name when the key is absent) and NEVER print the value. The PERSONAL API ACCESS KEY is the per-user

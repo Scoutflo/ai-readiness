@@ -86,7 +86,7 @@ if [ -n "${SCOUTFLO_TARGET:-}" ]; then
 fi
 LG_LABEL="$(sh "$TT" "$CFG" lgtm label "$LG_IDX")"
 if [ "$LG_KIND" = seq ] && [ -n "${SCOUTFLO_TARGET:-}" ] && [ "$LG_LABEL" != "$SCOUTFLO_TARGET" ]; then
-  echo "warning: SCOUTFLO_TARGET='${SCOUTFLO_TARGET}' matched no lgtm stack label; auditing the first stack '${LG_LABEL}' instead — check the label against 'sh \"\$TT\" \"\$CFG\" lgtm labels'" >&2
+  echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no lgtm target in $CFG; labels: $(sh "$TT" "$CFG" lgtm labels | tr '\n' ' ')"; exit 1
 fi
 if [ "$LG_KIND" = seq ]; then
   # Self-contained stack entry: everything (context + store URLs) comes from THIS target.
@@ -311,6 +311,7 @@ CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml
 TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 LG_KIND="$(sh "$TT" "$CFG" lgtm kind 2>/dev/null || echo absent)"; LG_N="$(sh "$TT" "$CFG" lgtm count)"; [ "$LG_N" -ge 1 ] 2>/dev/null || LG_N=1
 LG_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$LG_N" ]; do [ "$(sh "$TT" "$CFG" lgtm label "$_i")" = "$SCOUTFLO_TARGET" ] && { LG_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+[ "$(sh "$TT" "$CFG" lgtm kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" lgtm label "$LG_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no lgtm target in $CFG; labels: $(sh "$TT" "$CFG" lgtm labels | tr '\n' ' ')"; exit 1; }
 if [ "$LG_KIND" = seq ]; then
   RUNTIME_MODE="$(sh "$TT" "$CFG" lgtm get "$LG_IDX" runtime_mode)"
   KUBE_CONTEXT="$(sh "$TT" "$CFG" lgtm get "$LG_IDX" kubernetes_context)"

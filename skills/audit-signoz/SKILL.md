@@ -74,6 +74,7 @@ TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 SIG_KIND=$(sh "$TT" "$CFG" signoz kind); SIG_N=$(sh "$TT" "$CFG" signoz count)
 [ "${SIG_N:-0}" -ge 1 ] || { echo "signoz block not configured in $CFG; this audit has nothing to read — run /scoutflo:connect or run a different audit"; exit 1; }
 SIG_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "${SIG_N:-0}" ]; do [ "$(sh "$TT" "$CFG" signoz label "$_i")" = "$SCOUTFLO_TARGET" ] && { SIG_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+[ "$(sh "$TT" "$CFG" signoz kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" signoz label "$SIG_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no signoz target in $CFG; labels: $(sh "$TT" "$CFG" signoz labels | tr '\n' ' ')"; exit 1; }
 SIG_LABEL=$(sh "$TT" "$CFG" signoz label "$SIG_IDX")
 SIG_URL=$(sh "$TT" "$CFG" signoz get "$SIG_IDX" url); SIG_URL="${SIG_URL%/}"
 [ -n "$SIG_URL" ] || { echo "signoz target '${SIG_LABEL:-?}' has no url in $CFG; run /scoutflo:connect"; exit 1; }
@@ -110,6 +111,7 @@ CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml
 TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 SIG_KIND=$(sh "$TT" "$CFG" signoz kind); SIG_N=$(sh "$TT" "$CFG" signoz count)
 SIG_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "${SIG_N:-0}" ]; do [ "$(sh "$TT" "$CFG" signoz label "$_i")" = "$SCOUTFLO_TARGET" ] && { SIG_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+[ "$(sh "$TT" "$CFG" signoz kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" signoz label "$SIG_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no signoz target in $CFG; labels: $(sh "$TT" "$CFG" signoz labels | tr '\n' ' ')"; exit 1; }
 SIG_LABEL=$(sh "$TT" "$CFG" signoz label "$SIG_IDX")
 SIG_URL=$(sh "$TT" "$CFG" signoz get "$SIG_IDX" url); SIG_URL="${SIG_URL%/}"     # signoz.url
 SIG_HOST="$(printf '%s' "${SIG_URL:-}" | sed -e 's#^[a-zA-Z][a-zA-Z0-9+.-]*://##' -e 's#[:/].*$##' -e 's#[^A-Za-z0-9._-]#-#g')"; [ -n "$SIG_HOST" ] || SIG_HOST="signoz-host"
@@ -204,6 +206,7 @@ CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml
 TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 SIG_N=$(sh "$TT" "$CFG" signoz count)
 SIG_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "${SIG_N:-0}" ]; do [ "$(sh "$TT" "$CFG" signoz label "$_i")" = "$SCOUTFLO_TARGET" ] && { SIG_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+[ "$(sh "$TT" "$CFG" signoz kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" signoz label "$SIG_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no signoz target in $CFG; labels: $(sh "$TT" "$CFG" signoz labels | tr '\n' ' ')"; exit 1; }
 SIG_URL=$(sh "$TT" "$CFG" signoz get "$SIG_IDX" url); SIG_URL="${SIG_URL%/}"
 SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.scoutflo/env" ]; then SCOUTFLO_ENV="./.scoutflo/env"; else SCOUTFLO_ENV="$HOME/.scoutflo/env"; fi; }
 [ -f "$SCOUTFLO_ENV" ] && . "$SCOUTFLO_ENV" || true
@@ -389,6 +392,7 @@ CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml
 TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 SIG_KIND=$(sh "$TT" "$CFG" signoz kind); SIG_N=$(sh "$TT" "$CFG" signoz count)
 SIG_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "${SIG_N:-0}" ]; do [ "$(sh "$TT" "$CFG" signoz label "$_i")" = "$SCOUTFLO_TARGET" ] && { SIG_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+[ "$(sh "$TT" "$CFG" signoz kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" signoz label "$SIG_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no signoz target in $CFG; labels: $(sh "$TT" "$CFG" signoz labels | tr '\n' ' ')"; exit 1; }
 SIG_LABEL=$(sh "$TT" "$CFG" signoz label "$SIG_IDX")
 SIG_URL=$(sh "$TT" "$CFG" signoz get "$SIG_IDX" url); SIG_URL="${SIG_URL%/}"
 SIG_HOST="$(printf '%s' "${SIG_URL:-}" | sed -e 's#^[a-zA-Z][a-zA-Z0-9+.-]*://##' -e 's#[:/].*$##' -e 's#[^A-Za-z0-9._-]#-#g')"; [ -n "$SIG_HOST" ] || SIG_HOST="signoz-host"
@@ -432,6 +436,7 @@ CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml
 TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 SIG_KIND=$(sh "$TT" "$CFG" signoz kind); SIG_N=$(sh "$TT" "$CFG" signoz count)
 SIG_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "${SIG_N:-0}" ]; do [ "$(sh "$TT" "$CFG" signoz label "$_i")" = "$SCOUTFLO_TARGET" ] && { SIG_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+[ "$(sh "$TT" "$CFG" signoz kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" signoz label "$SIG_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no signoz target in $CFG; labels: $(sh "$TT" "$CFG" signoz labels | tr '\n' ' ')"; exit 1; }
 SIG_LABEL=$(sh "$TT" "$CFG" signoz label "$SIG_IDX")
 SIG_URL=$(sh "$TT" "$CFG" signoz get "$SIG_IDX" url); SIG_URL="${SIG_URL%/}"
 SIG_HOST="$(printf '%s' "${SIG_URL:-}" | sed -e 's#^[a-zA-Z][a-zA-Z0-9+.-]*://##' -e 's#[:/].*$##' -e 's#[^A-Za-z0-9._-]#-#g')"; [ -n "$SIG_HOST" ] || SIG_HOST="signoz-host"
@@ -462,6 +467,7 @@ CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml
 TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 SIG_KIND=$(sh "$TT" "$CFG" signoz kind); SIG_N=$(sh "$TT" "$CFG" signoz count)
 SIG_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "${SIG_N:-0}" ]; do [ "$(sh "$TT" "$CFG" signoz label "$_i")" = "$SCOUTFLO_TARGET" ] && { SIG_IDX=$_i; break; }; _i=$((_i+1)); done; fi
+[ "$(sh "$TT" "$CFG" signoz kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" signoz label "$SIG_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no signoz target in $CFG; labels: $(sh "$TT" "$CFG" signoz labels | tr '\n' ' ')"; exit 1; }
 SIG_LABEL=$(sh "$TT" "$CFG" signoz label "$SIG_IDX")
 SIG_URL=$(sh "$TT" "$CFG" signoz get "$SIG_IDX" url); SIG_URL="${SIG_URL%/}"
 SIG_HOST="$(printf '%s' "${SIG_URL:-}" | sed -e 's#^[a-zA-Z][a-zA-Z0-9+.-]*://##' -e 's#[:/].*$##' -e 's#[^A-Za-z0-9._-]#-#g')"; [ -n "$SIG_HOST" ] || SIG_HOST="signoz-host"
