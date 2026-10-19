@@ -19,7 +19,10 @@ under the 5% floor — that's a pass, no need to look at individual projects."
    org-wide sum SNTRY-008 already computed. It re-derives `stats-projects.json`
    (already pulled in Phase 1; no new API surface) grouped by `by.project`, computes
    each project's own `dropped / (accepted + dropped)` ratio, and applies the same
-   `DROP_RATIO` floor per project instead of once for the whole org.
+   `DROP_RATIO` floor per project instead of once for the whole org. The command
+   reads the stats file it names, never standard input: in an agent session
+   standard input is empty, so a `jq` with no input file prints nothing, and
+   "no rows" would read as a pass on every estate.
 2. **A project over the floor is the finding even when SNTRY-008 passes.** The two
    checks are not redundant: SNTRY-008 can legitimately pass at the org level while
    SNTRY-018 fails for one project, and both facts belong in the report — the
@@ -32,7 +35,8 @@ under the 5% floor — that's a pass, no need to look at individual projects."
    structurally cannot see (the per-project share), and the report states both
    findings side by side rather than treating one as contradicting the other.
 
-**Must not:** skip the per-project re-grouping because SNTRY-008 already passed;
+**Must not:** treat an empty SNTRY-018 result as a pass unless the command read
+the stats file; skip the per-project re-grouping because SNTRY-008 already passed;
 average across all projects and call that "checking each project"; invent a
 per-project ratio from anything other than a live `stats_v2` re-read grouped by
 `by.project`; or attribute the drop to a specific client key (per-key attribution

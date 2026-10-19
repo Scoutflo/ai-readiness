@@ -1521,7 +1521,7 @@ STATS="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/sentry/$(date -u +%Y-%m-%d)/raw/
   > "${STATS}"
 
 jq -r --argjson floor "${DROP_RATIO}" '
-  [ .groups[]? | .by.project ] | unique as $pids
+  ( [ .groups[]? | .by.project ] | unique ) as $pids
   | $pids[] as $pid
   | ( [ .groups[]? | select(.by.project == $pid) ] ) as $rows
   | ( [ $rows[] | select(.by.outcome == "accepted") | .totals["sum(quantity)"] ] | add // 0 ) as $accepted
@@ -1532,7 +1532,7 @@ jq -r --argjson floor "${DROP_RATIO}" '
   | ( $dropped / $total ) as $ratio
   | select($ratio > $floor)
   | "SNTRY-018 fail: project \($pid) drop ratio \(($ratio*100)|floor)% (\($dropped)/\($total)) exceeds floor \(($floor*100)|floor)%"
-'
+' "${STATS}"
 ```
 
 **Confirmed live** on a real org: the org-wide SNTRY-008 read showed a modest aggregate drop share, but re-grouped by project this query surfaced one project whose `rate_limited` share of its own `accepted + rate_limited` total exceeded the 5% example floor while every other project in the same org was comfortably under it — proving the exact masking failure mode this check exists to catch: the org-wide average alone would have scored SNTRY-008 clean while one project was already losing events to quota. Expect: no rows on a healthy org; a row names the numeric project id (resolve it to a slug from `projects.json` before writing the finding) and the exact ratio. `affected` names the project by slug, not the numeric id. **Correlate:** SNTRY-008 (the org-wide reading this check is scoped underneath), SNTRY-003 (an unlimited key on the same project is the mechanism), SNTRY-019 (the reason split below explains *why* it is dropping).
