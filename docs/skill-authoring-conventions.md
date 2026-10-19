@@ -264,7 +264,7 @@ Every command block runs correctly in a brand-new shell with no prior block exec
 - Never write "reuse the variables from the previous block". Each block re-declares its inputs at the top, with the same source comments the config-access pattern requires.
 - A block that genuinely needs a shared prelude is not a block; make it a script under the skill's `scripts/` directory and have blocks invoke the script.
 - A block that resolves a target from a labeled list stops when `SCOUTFLO_TARGET` is set and matches no label. It never falls back to the first target ([CONTRACTS.md](CONTRACTS.md) C3).
-- A block that needs a secret reads only that secret from the store, in the same block: `printenv "$<name variable>"` becomes the store-aware read, and a default-name read takes the value of the variable the config's `*_env` key names, stopping on a list whose targets name their own. Outside the doctor gate, which sources the store the way `/scoutflo:doctor` does, never source the whole store in a step: it would carry the report folder, kubeconfig and other environments' secrets into that step ([CONTRACTS.md](CONTRACTS.md) C13).
+- A block that needs a secret reads only that secret from the store, in the same block: `printenv "$<name variable>"` becomes the store-aware read, and a default-name read takes the value of the variable the config's `*_env` key names, stopping on a list whose targets name their own. Do not add a whole-store load to a step outside the doctor gate (a few existing check steps still have one): it carries the report folder, kubeconfig and other environments' secrets into that step ([CONTRACTS.md](CONTRACTS.md) C13).
 
 ## Machine-checkable verification
 

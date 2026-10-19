@@ -11,7 +11,7 @@ This skill audits the Zenduty paging layer, not the monitoring tools that *send*
 
 Zenduty was acquired by Xurrent and rebranded **Xurrent IMR** (a branding change, not a sunset); the API and product are alive and everything still runs through `https://www.zenduty.com/api/...`. Every command is read-only: GET, plus two documented read-by-POST calls (the incident filter and the analytics endpoints, which aggregate server-side and change nothing). Every mutating verb is forbidden; the full list is in [references/zenduty-checks.md](references/zenduty-checks.md) section 13. There is no `setup-zenduty` yet, so every finding names its manual fix path in the Zenduty UI or API instead of a setup anchor.
 
-**Multiple Zenduty accounts, one run:** `zenduty` may be a single block (one `token_env`) or a **list of labeled targets**, each with its own `token_env`. The audit **iterates every target** — enumerate them with `sh "${CLAUDE_PLUGIN_ROOT}/report-standard/toolkit-targets.sh" <cfg> zenduty labels` and run the full sequence below once per target with `SCOUTFLO_TARGET=<label>` set. Output goes to `zenduty/<label>/<date>/` for a list, or the flat `zenduty/<date>/` for a single block. Every network call uses the target's own resolved token — the API key held by the variable that target's `token_env` names (`Authorization: Token <key>`); there is no ambient default beyond the key in the environment, and a single-block config resolves to exactly one target whose label defaults to the block name (`zenduty`), byte-identical to today's read.
+**Multiple Zenduty accounts, one run:** `zenduty` may be a single block (one `token_env`) or a **list of labeled targets**, each with its own `token_env`. The audit **iterates every target** — enumerate them with `sh "${CLAUDE_PLUGIN_ROOT}/report-standard/toolkit-targets.sh" <cfg> zenduty labels` and run the full sequence below once per target with `SCOUTFLO_TARGET=<label>` set. Output goes to `zenduty/<label>/<date>/` for a list, or the flat `zenduty/<date>/` for a single block. Every network call uses the target's own resolved token — the API key held by the variable that target's `token_env` names (`Authorization: Token <key>`); there is no ambient default beyond the key in the environment, and a single-block config resolves to exactly one target whose label defaults to the block name (`zenduty`), byte-identical to today's read. Some check steps in `references/` read the credential by its default name: when the listed targets each name their own credential variable, those steps stop and ask you to run each target from a config of its own, with `zenduty` as a single block (`SCOUTFLO_CONFIG` set to that file and its own `SCOUTFLO_AUDIT_DIR`), so one target's credential is never used for another target's report.
 
 Run this standalone, from `/scoutflo:audit-all`, or on a schedule via `/scoutflo:schedule-audits`.
 
@@ -125,7 +125,7 @@ ZD_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$ZD_N"
 [ "$(sh "$TT" "$CFG" zenduty kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" zenduty label "$ZD_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no zenduty target in $CFG; labels: $(sh "$TT" "$CFG" zenduty labels | tr '\n' ' ')"; exit 1; }
 ZD_LABEL=$(sh "$TT" "$CFG" zenduty label "$ZD_IDX")
 ZD_TOKVAR=$(sh "$TT" "$CFG" zenduty get "$ZD_IDX" token_env); ZD_TOKVAR="${ZD_TOKVAR:-ZENDUTY_TOKEN}"
-ZENDUTY_TOKEN="$(sh -c '[ -f "$1" ] && . "$1" >/dev/null 2>&1; printenv -- "$2"' _ "$SCOUTFLO_ENV" "$ZD_TOKVAR" 2>/dev/null || true)"; export ZENDUTY_TOKEN
+ZENDUTY_TOKEN="$(sh -c '( [ -f "$1" ] && . "$1" >/dev/null 2>&1; printenv -- "$2" ) 2>/dev/null || printenv -- "$2"' _ "$SCOUTFLO_ENV" "$ZD_TOKVAR" 2>/dev/null || true)"; export ZENDUTY_TOKEN
 [ -n "${ZENDUTY_TOKEN:-}" ] || { echo "zenduty target '${ZD_LABEL}' token variable ${ZD_TOKVAR} is not set — add it to ~/.scoutflo/env (echo 'export ${ZD_TOKVAR}=\"<paste>\"' >> ~/.scoutflo/env; chmod 600 ~/.scoutflo/env), or run /scoutflo:connect. The plugin reads that file, not your interactive shell."; exit 1; }
 # Zenduty has no whoami; the account is identified by the teams the key reads.
 TEAMS_SAMPLE="$(curl -fsS --max-time 15 -H "Authorization: Token ${ZENDUTY_TOKEN}" "${ZD_API}/account/teams/")"
@@ -185,7 +185,7 @@ ZD_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$ZD_N"
 ZD_LABEL=$(sh "$TT" "$CFG" zenduty label "$ZD_IDX")
 if [ "$ZD_KIND" = seq ]; then ZD_SEG="zenduty/${ZD_LABEL}"; else ZD_SEG="zenduty"; fi
 ZD_TOKVAR=$(sh "$TT" "$CFG" zenduty get "$ZD_IDX" token_env); ZD_TOKVAR="${ZD_TOKVAR:-ZENDUTY_TOKEN}"
-ZENDUTY_TOKEN="$(sh -c '[ -f "$1" ] && . "$1" >/dev/null 2>&1; printenv -- "$2"' _ "$SCOUTFLO_ENV" "$ZD_TOKVAR" 2>/dev/null || true)"; export ZENDUTY_TOKEN
+ZENDUTY_TOKEN="$(sh -c '( [ -f "$1" ] && . "$1" >/dev/null 2>&1; printenv -- "$2" ) 2>/dev/null || printenv -- "$2"' _ "$SCOUTFLO_ENV" "$ZD_TOKVAR" 2>/dev/null || true)"; export ZENDUTY_TOKEN
 SMALL_MAX_OBJECTS="15"    # example, tune to your environment
 MEDIUM_MAX_OBJECTS="60"   # example, tune to your environment
 BATCH_SIZE="10"           # teams per batch on the large path; example, tune it

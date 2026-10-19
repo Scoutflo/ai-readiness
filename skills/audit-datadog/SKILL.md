@@ -11,7 +11,7 @@ This skill audits the monitor layer inside Datadog. Whether the page that a moni
 
 Every command is read-only: GET on monitors, downtimes, SLOs, integrations, usage, and dashboards. Unlike the PagerDuty audit, Datadog exposes no read-by-effect POST, so every mutating verb — muting, resolving, creating downtimes, test events — is forbidden; the full list is in [references/datadog-checks.md](references/datadog-checks.md) section 13. There is no `setup-datadog` yet, so every finding names its manual fix path instead of a setup anchor.
 
-**Multiple Datadog targets, one run:** `datadog` may be a single block (one `site`/`api_key_env`/`app_key_env`) or a **list of labeled targets**, each with its own `site`, `api_key_env`, and `app_key_env`. The audit **iterates every target** — enumerate them with `sh "${CLAUDE_PLUGIN_ROOT}/report-standard/toolkit-targets.sh" <cfg> datadog labels` and run the full sequence below once per target with `SCOUTFLO_TARGET=<label>` set. Output goes to `datadog/<label>/<date>/` for a list, or the flat `datadog/<date>/` for a single block. Every API call resolves and uses the target's own `site` and key pair — `api_key_env`/`app_key_env` name the variables holding the secrets, sent as the `DD-API-KEY`/`DD-APPLICATION-KEY` headers; there is no ambient default, and a single-block config resolves to exactly one target whose label defaults to the block name (`datadog`), byte-identical to today's read.
+**Multiple Datadog targets, one run:** `datadog` may be a single block (one `site`/`api_key_env`/`app_key_env`) or a **list of labeled targets**, each with its own `site`, `api_key_env`, and `app_key_env`. The audit **iterates every target** — enumerate them with `sh "${CLAUDE_PLUGIN_ROOT}/report-standard/toolkit-targets.sh" <cfg> datadog labels` and run the full sequence below once per target with `SCOUTFLO_TARGET=<label>` set. Output goes to `datadog/<label>/<date>/` for a list, or the flat `datadog/<date>/` for a single block. Every API call resolves and uses the target's own `site` and key pair — `api_key_env`/`app_key_env` name the variables holding the secrets, sent as the `DD-API-KEY`/`DD-APPLICATION-KEY` headers; there is no ambient default, and a single-block config resolves to exactly one target whose label defaults to the block name (`datadog`), byte-identical to today's read. Some check steps in `references/` read the credential by its default name: when the listed targets each name their own credential variable, those steps stop and ask you to run each target from a config of its own, with `datadog` as a single block (`SCOUTFLO_CONFIG` set to that file and its own `SCOUTFLO_AUDIT_DIR`), so one target's credential is never used for another target's report.
 
 Run this standalone, from `/scoutflo:audit-all`, or on a schedule via `/scoutflo:schedule-audits`.
 
@@ -126,8 +126,8 @@ DD_SITE=$(sh "$TT" "$CFG" datadog get "$DD_IDX" site); DD_SITE="${DD_SITE:-datad
 DD_HOST="api.${DD_SITE}"
 DD_API_VAR=$(sh "$TT" "$CFG" datadog get "$DD_IDX" api_key_env); DD_API_VAR="${DD_API_VAR:-DATADOG_API_KEY}"
 DD_APP_VAR=$(sh "$TT" "$CFG" datadog get "$DD_IDX" app_key_env); DD_APP_VAR="${DD_APP_VAR:-DATADOG_APP_KEY}"
-DATADOG_API_KEY="$(sh -c '[ -f "$1" ] && . "$1" >/dev/null 2>&1; printenv -- "$2"' _ "$SCOUTFLO_ENV" "$DD_API_VAR" 2>/dev/null || true)"; export DATADOG_API_KEY
-DATADOG_APP_KEY="$(sh -c '[ -f "$1" ] && . "$1" >/dev/null 2>&1; printenv -- "$2"' _ "$SCOUTFLO_ENV" "$DD_APP_VAR" 2>/dev/null || true)"; export DATADOG_APP_KEY
+DATADOG_API_KEY="$(sh -c '( [ -f "$1" ] && . "$1" >/dev/null 2>&1; printenv -- "$2" ) 2>/dev/null || printenv -- "$2"' _ "$SCOUTFLO_ENV" "$DD_API_VAR" 2>/dev/null || true)"; export DATADOG_API_KEY
+DATADOG_APP_KEY="$(sh -c '( [ -f "$1" ] && . "$1" >/dev/null 2>&1; printenv -- "$2" ) 2>/dev/null || printenv -- "$2"' _ "$SCOUTFLO_ENV" "$DD_APP_VAR" 2>/dev/null || true)"; export DATADOG_APP_KEY
 [ -n "${DATADOG_API_KEY:-}" ] || { echo "datadog target '${DD_LABEL}' key variable ${DD_API_VAR} is not set — add it to ~/.scoutflo/env (echo 'export ${DD_API_VAR}=\"<paste>\"' >> ~/.scoutflo/env; chmod 600 ~/.scoutflo/env), or run /scoutflo:connect. The plugin reads that file, not your interactive shell."; exit 1; }
 [ -n "${DATADOG_APP_KEY:-}" ] || { echo "datadog target '${DD_LABEL}' app-key variable ${DD_APP_VAR} is not set — add it to ~/.scoutflo/env (echo 'export ${DD_APP_VAR}=\"<paste>\"' >> ~/.scoutflo/env; chmod 600 ~/.scoutflo/env), or run /scoutflo:connect. The plugin reads that file, not your interactive shell."; exit 1; }
 # There is no org-name whoami on the key pair; identify the org by what it reads and by
@@ -178,8 +178,8 @@ DD_SITE=$(sh "$TT" "$CFG" datadog get "$DD_IDX" site); DD_SITE="${DD_SITE:-datad
 DD_HOST="api.${DD_SITE}"
 DD_API_VAR=$(sh "$TT" "$CFG" datadog get "$DD_IDX" api_key_env); DD_API_VAR="${DD_API_VAR:-DATADOG_API_KEY}"
 DD_APP_VAR=$(sh "$TT" "$CFG" datadog get "$DD_IDX" app_key_env); DD_APP_VAR="${DD_APP_VAR:-DATADOG_APP_KEY}"
-DATADOG_API_KEY="$(sh -c '[ -f "$1" ] && . "$1" >/dev/null 2>&1; printenv -- "$2"' _ "$SCOUTFLO_ENV" "$DD_API_VAR" 2>/dev/null || true)"; export DATADOG_API_KEY
-DATADOG_APP_KEY="$(sh -c '[ -f "$1" ] && . "$1" >/dev/null 2>&1; printenv -- "$2"' _ "$SCOUTFLO_ENV" "$DD_APP_VAR" 2>/dev/null || true)"; export DATADOG_APP_KEY
+DATADOG_API_KEY="$(sh -c '( [ -f "$1" ] && . "$1" >/dev/null 2>&1; printenv -- "$2" ) 2>/dev/null || printenv -- "$2"' _ "$SCOUTFLO_ENV" "$DD_API_VAR" 2>/dev/null || true)"; export DATADOG_API_KEY
+DATADOG_APP_KEY="$(sh -c '( [ -f "$1" ] && . "$1" >/dev/null 2>&1; printenv -- "$2" ) 2>/dev/null || printenv -- "$2"' _ "$SCOUTFLO_ENV" "$DD_APP_VAR" 2>/dev/null || true)"; export DATADOG_APP_KEY
 SMALL_MAX_OBJECTS="25"    # example, tune to your environment
 MEDIUM_MAX_OBJECTS="150"  # example, tune to your environment
 BATCH_SIZE="50"           # monitors per batch on the large path; example, tune it

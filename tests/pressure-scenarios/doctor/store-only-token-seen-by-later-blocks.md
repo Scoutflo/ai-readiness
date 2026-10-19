@@ -22,8 +22,9 @@ not set. I don't want to export it in my shell, just make it work."
    key names. When that variable is unset, the default name stays unset (a `doctl` step
    stops), so no other credential is used. When the config names no variable, the
    step behaves exactly as before.
-3. Nothing else in the store enters a step: the report folder, kubeconfig and other
-   environments' secrets the caller did not ask for stay out.
+3. Such a step brings nothing else from the store: the report folder, kubeconfig and
+   other environments' secrets stay out. (Steps that already loaded the whole store,
+   such as the doctor gates, are unchanged.)
 4. A malformed store line prints nothing about its value, and the step carries on.
 
 **Must not:** report a token as missing when the store holds it, ask the operator to

@@ -7,11 +7,14 @@
 - Each step runs in a fresh shell, so before this only the doctor step saw a
   token kept in the secret store (where `/scoutflo:connect` puts it): the
   doctor passed, then the next step said "token not set". In the audits, the
-  maps, `rca`, `migration-plan` and `setup-sentry`, a step now reads the token
-  it needs from the store, the way `/scoutflo:doctor` finds it.
-- A step reads only that one variable. Nothing else in the store, such as a
-  report folder, a kubeconfig, or another environment's secrets, enters the
-  step.
+  maps and `rca`, a step that reads a token now reads it from the store, the
+  way `/scoutflo:doctor` finds it.
+- Such a step reads only that one variable from the store, so a report
+  folder, a kubeconfig or another environment's secrets kept there do not
+  enter it. Steps that already loaded the whole store (the doctor steps and a
+  few check steps) are unchanged.
+- When the variable your config names is not set, the step now says which
+  variable that is, instead of only naming the default.
 - A step that reads a token by its default name (for example
   `PAGERDUTY_TOKEN`, or `doctl`, which reads its own token) uses the variable
   your config names for it. If that variable is not set, the step does not
@@ -21,13 +24,22 @@
 - On a list of targets that each name their own token, those default-name
   steps now stop and ask you to run each target from a config of its own
   (the tool as a single block, with its own `SCOUTFLO_AUDIT_DIR`), instead of
-  reading one target's token for another target's report. A list whose
-  targets need no token runs as before.
+  reading one target's token for another target's report. This affects the
+  check steps of the PagerDuty, Datadog, ELK, Grafana, Groundcover, JSM,
+  Zenduty and Sentry audits, map-repos, the DigitalOcean cost and map steps,
+  and LGTM stacks that name their own `*_token_env`; each audit's
+  multi-target note says so. A list whose targets need no token runs as
+  before, and a top-level store token is never sent to the stacks of an
+  `lgtm` list. The map-topology cross-cloud catalog skips only its
+  DigitalOcean part when that token cannot be resolved.
 - Without yq, a single block with a nested list (for example a block-style
   `teams:` list) was read as a list of targets. The shared target reader now
   reads it as one block.
-- Unchanged on purpose: `connect`, the setup skills other than
-  `setup-sentry`, and Slack briefs.
+- `rca`'s first step now finds the secret store the same way the doctor does
+  (it only looked in the home folder).
+- Unchanged on purpose: `connect`, every setup skill (including
+  `setup-sentry`, which keeps its elevated-token step), `migration-plan`
+  (its multi-target plan reads every label), and Slack briefs.
 - A new test checks every step that reads a secret and runs the published
   steps against fixtures.
 

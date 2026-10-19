@@ -51,7 +51,7 @@ set -eu
 SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.scoutflo/env" ]; then SCOUTFLO_ENV="./.scoutflo/env"; else SCOUTFLO_ENV="$HOME/.scoutflo/env"; fi; }
 _SF_CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$_SF_CFG" ] || for _sf_c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_sf_c" ] && { _SF_CFG="$_sf_c"; break; }; done
 _SF_TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
-_sf_tv="$(sh "$_SF_TT" "$_SF_CFG" grafana get 0 token_env 2>/dev/null || true)"; if [ -n "$_sf_tv" ] && [ "$(sh "$_SF_TT" "$_SF_CFG" grafana kind 2>/dev/null || true)" != seq ]; then _sf_v="$(sh -c '[ -f "$1" ] && . "$1" >/dev/null 2>&1; printenv -- "$2"' _ "$SCOUTFLO_ENV" "$_sf_tv" 2>/dev/null || true)"; if [ -n "$_sf_v" ]; then GRAFANA_TOKEN="$_sf_v"; export GRAFANA_TOKEN; else unset GRAFANA_TOKEN; fi; fi
+_sf_tv="$(sh "$_SF_TT" "$_SF_CFG" grafana get 0 token_env 2>/dev/null || true)"; if [ -n "$_sf_tv" ] && [ "$(sh "$_SF_TT" "$_SF_CFG" grafana kind 2>/dev/null || true)" != seq ]; then _sf_v="$(sh -c '( [ -f "$1" ] && . "$1" >/dev/null 2>&1; printenv -- "$2" ) 2>/dev/null || printenv -- "$2"' _ "$SCOUTFLO_ENV" "$_sf_tv" 2>/dev/null || true)"; if [ -n "$_sf_v" ]; then GRAFANA_TOKEN="$_sf_v"; export GRAFANA_TOKEN; else unset GRAFANA_TOKEN; echo "note: ${_sf_tv} (named by grafana.token_env) is not set in the secret store or the shell" >&2; fi; fi
 RUN_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/lgtm/runs/20260717T140500Z"   # example; the resolved run directory from step 1 or 2
 WORKLIST="${RUN_DIR}/worklist.tsv"
 GRAFANA_URL="https://grafana.example.com"   # grafana.url

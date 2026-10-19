@@ -13,7 +13,7 @@ Run it standalone, from `/scoutflo:audit-all`, or on a schedule via `/scoutflo:s
 
 This audit owns the Sentry account layer: org and team structure, project inventory and configuration (environments, privacy scrubbing, client-key rate limits, default-rule noise), issue alert rules and their routing against the two-tier model, metric alerts, integration state (Slack, PagerDuty, VCS), release and source-map health signals, and cron and uptime monitors.
 
-- **Multiple Sentry targets, one run:** `sentry` may be a single block (one `host`/`org`/`token_env`) or a **list of labeled targets**, each with its own `host`, `org`, and `token_env`. The audit **iterates every target** — enumerate them with `sh "${CLAUDE_PLUGIN_ROOT}/report-standard/toolkit-targets.sh" <cfg> sentry labels` and run the full sequence below once per target with `SCOUTFLO_TARGET=<label>` set. Output goes to `sentry/<label>/<date>/` for a list, or the flat `sentry/<date>/` for a single block. Every API call resolves and uses the target's own `host`, `org`, and token (`token_env` names the variable holding the secret); the ambient values are never assumed.
+- **Multiple Sentry targets, one run:** `sentry` may be a single block (one `host`/`org`/`token_env`) or a **list of labeled targets**, each with its own `host`, `org`, and `token_env`. The audit **iterates every target** — enumerate them with `sh "${CLAUDE_PLUGIN_ROOT}/report-standard/toolkit-targets.sh" <cfg> sentry labels` and run the full sequence below once per target with `SCOUTFLO_TARGET=<label>` set. Output goes to `sentry/<label>/<date>/` for a list, or the flat `sentry/<date>/` for a single block. Every API call resolves and uses the target's own `host`, `org`, and token (`token_env` names the variable holding the secret); the ambient values are never assumed. Some check steps in `references/` read the credential by its default name: when the listed targets each name their own credential variable, those steps stop and ask you to run each target from a config of its own, with `sentry` as a single block (`SCOUTFLO_CONFIG` set to that file and its own `SCOUTFLO_AUDIT_DIR`), so one target's credential is never used for another target's report.
 - Grafana dashboards that display Sentry data belong to `audit-grafana`.
 - Metrics, logs, and traces backends belong to `audit-lgtm`. A backend service absent from Sentry is not automatically a gap when your metrics and logs stack owns backend incidents by decision; record the boundary and score against the owning tool.
 - The Alertmanager paging path belongs to `audit-alertmanager`. Here you judge Sentry's own alert wiring and flag unproven routes.
@@ -160,7 +160,7 @@ SENTRY_HOST=$(sh "$TT" "$CFG" sentry get "$SNTRY_IDX" host)   # sentry.host
 SENTRY_ORG=$(sh "$TT" "$CFG" sentry get "$SNTRY_IDX" org)     # sentry.org
 API="https://${SENTRY_HOST}/api/0"
 SNTRY_TOKVAR=$(sh "$TT" "$CFG" sentry get "$SNTRY_IDX" token_env); [ -n "$SNTRY_TOKVAR" ] || SNTRY_TOKVAR=SENTRY_TOKEN
-SENTRY_TOKEN=$(sh -c '[ -f "$1" ] && . "$1" >/dev/null 2>&1; printenv -- "$2"' _ "$SCOUTFLO_ENV" "$SNTRY_TOKVAR" 2>/dev/null || true)   # token_env names the variable; never a hardcoded name
+SENTRY_TOKEN=$(sh -c '( [ -f "$1" ] && . "$1" >/dev/null 2>&1; printenv -- "$2" ) 2>/dev/null || printenv -- "$2"' _ "$SCOUTFLO_ENV" "$SNTRY_TOKVAR" 2>/dev/null || true)   # token_env names the variable; never a hardcoded name
 [ -n "${SENTRY_TOKEN:-}" ] || { echo "SENTRY_TOKEN is not set — add it to ~/.scoutflo/env (echo 'export SENTRY_TOKEN=\"<paste>\"' >> ~/.scoutflo/env; chmod 600 ~/.scoutflo/env), or run /scoutflo:connect. The plugin reads that file, not your interactive shell."; exit 1; }
 
 SMALL_MAX_PROJECTS="15"    # single-pass ceiling; example, tune to your environment
@@ -270,7 +270,7 @@ SENTRY_HOST=$(sh "$TT" "$CFG" sentry get "$SNTRY_IDX" host)   # sentry.host
 SENTRY_ORG=$(sh "$TT" "$CFG" sentry get "$SNTRY_IDX" org)     # sentry.org
 API="https://${SENTRY_HOST}/api/0"
 SNTRY_TOKVAR=$(sh "$TT" "$CFG" sentry get "$SNTRY_IDX" token_env); [ -n "$SNTRY_TOKVAR" ] || SNTRY_TOKVAR=SENTRY_TOKEN
-SENTRY_TOKEN=$(sh -c '[ -f "$1" ] && . "$1" >/dev/null 2>&1; printenv -- "$2"' _ "$SCOUTFLO_ENV" "$SNTRY_TOKVAR" 2>/dev/null || true)   # token_env names the variable; never a hardcoded name
+SENTRY_TOKEN=$(sh -c '( [ -f "$1" ] && . "$1" >/dev/null 2>&1; printenv -- "$2" ) 2>/dev/null || printenv -- "$2"' _ "$SCOUTFLO_ENV" "$SNTRY_TOKVAR" 2>/dev/null || true)   # token_env names the variable; never a hardcoded name
 [ -n "${SENTRY_TOKEN:-}" ] || { echo "SENTRY_TOKEN is not set — add it to ~/.scoutflo/env (echo 'export SENTRY_TOKEN=\"<paste>\"' >> ~/.scoutflo/env; chmod 600 ~/.scoutflo/env), or run /scoutflo:connect. The plugin reads that file, not your interactive shell."; exit 1; }
 RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${SNTRY_SEG}/$(date -u +%Y-%m-%d)/raw"
 mkdir -p "${RAW_DIR}/projects"

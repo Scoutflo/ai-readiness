@@ -4,14 +4,16 @@
 #
 # Each command block runs in a fresh shell, so the doctor gate's load of the store never carried
 # over: a token kept only in the store passed the doctor and read as "not set" in the next step.
-# Now, in the audits, the maps, rca, migration-plan and setup-sentry:
+# Now, in the audits, the maps and rca:
 #   - a step that reads a secret by its default name (the *_env defaults in the config template,
 #     or doctl, which reads DIGITALOCEAN_ACCESS_TOKEN itself) takes it from the variable the single
 #     config block names, read from the store or the shell, and leaves it unset when that variable
 #     is unset; when the config names no variable, the step behaves exactly as before;
 #   - on a list of targets that each name their own variable, that step stops instead of guessing;
 #   - a step that reads `printenv "$<name variable>"` reads that variable from the store or the shell.
-# Nothing else in the store (report folder, kubeconfig, another environment's secrets) enters a step.
+# Those reads bring nothing else from the store (report folder, kubeconfig, another environment's
+# secrets); steps that already loaded the whole store are unchanged. setup-sentry and migration-plan
+# are out of scope on purpose (an elevated-token bind; a plan that reads every label).
 #
 # Test 1 checks every in-scope block; the others run published preludes against fixtures.
 # Read-only; POSIX sh + awk.
@@ -37,7 +39,7 @@ find "$ROOT/skills" -name '*.md' | sort > "$WORK/files"
 : > "$WORK/bad"; READS=0; IND=0
 while IFS= read -r f; do
   skill="${f#"$ROOT"/skills/}"; skill="${skill%%/*}"
-  case "$skill" in audit-*|map-topology|map-repos|rca|migration-plan|setup-sentry) ;; *) continue ;; esac
+  case "$skill" in audit-*|map-topology|map-repos|rca) ;; *) continue ;; esac
   out="$(awk -v map="$MAP" -v fname="${f#"$ROOT"/}" -v skill="$skill" -v fetch="$FETCH" '
     BEGIN { n = split(map, M, " "); for (i = 1; i <= n; i++) { split(M[i], p, ":"); blk[p[1]] = p[2]; key[p[1]] = p[3] }
             split("loki tempo mimir prometheus victoriametrics", S, " "); for (i in S) lgs[S[i]] = 1
@@ -57,7 +59,7 @@ while IFS= read -r f; do
     function report(msg) { print "U " fname ":" start " " msg }
     /^[ \t]*```(bash|sh)[ \t]*$/ { inb = 1; start = FNR; nl = 0; next }
     inb && /^[ \t]*```[ \t]*$/ {
-      inb = 0; ladder = 0; whole = 0; split("", asg); split("", lst); split("", bnd); doclose = 0
+      inb = 0; ladder = 0; whole = 0; split("", asg); split("", lst); split("", bnd); doclose = 0; skipdo = 0; skipguard = 0
       for (i = 1; i <= nl; i++) {
         l = strip(L[i])
         if (index(l, "SCOUTFLO_ENV=\"${SCOUTFLO_ENV_FILE:-}\"")) ladder = 1
@@ -68,6 +70,9 @@ while IFS= read -r f; do
           if (match(l, /"\$_SF_CFG" [a-z_]+ get 0 [a-z_]+_env/)) { bk = substr(l, RSTART + 10, RLENGTH - 10); split(bk, bb, " "); bnd[v] = bb[1] ":" bb[4] }
         }
         if (index(l, "doctl would otherwise act as its own saved login")) doclose = 1
+        # a block whose DigitalOcean part is optional skips it instead of stopping, and guards its doctl line
+        if (index(l, "_sf_skip_do=1")) { skipdo = 1; doclose = 1; if (l ~ /digitalocean get "\$_sf_i" token_env/) lst["digitalocean:token_env"] = 1 }
+        if (index(l, "if [ -z \"${_sf_skip_do:-}\" ]; then")) skipguard = 1
         # indirect reads of a named variable
         s = l
         while (match(s, /printenv[ \t]+"\$[A-Za-z_][A-Za-z0-9_]*"/)) {
@@ -91,6 +96,7 @@ while IFS= read -r f; do
           if (bnd[v] != b ":" k) report("reads " v " without first taking it from " b "." k " (found: " (bnd[v] == "" ? "none" : bnd[v]) ")")
           if (ki != "" && !((g ":" ki) in lst)) report("reads " v " with no stop for a list of " g " targets that name their own " ki)
           if (isdoctl && v == "DIGITALOCEAN_ACCESS_TOKEN" && !doclose) report("runs doctl with no stop when the configured token is unset")
+          if (isdoctl && skipdo && !skipguard) report("skips its DigitalOcean part on an unresolved token but runs doctl unguarded")
         }
         # a bind line assigns only conditionally, so it is not an assignment here
         s = (l ~ /^[ \t]*_sf_tv=/) ? "" : l
@@ -147,7 +153,7 @@ x "project-local store" "token: from-project dir: /caller/folder" "$(RUN_CWD="$W
 x "home store, last on the ladder" "token: from-home dir: /caller/folder" "$(run "$WORK/pd.sh" "" "$WORK/pd-default.yaml")"
 x "store value wins over the shell, as in the doctor" "token: from-store dir: /caller/folder" "$(run "$WORK/pd.sh" "$WORK/store-a" "$WORK/pd-default.yaml" PAGERDUTY_TOKEN=from-shell)"
 x "the variable token_env names" "token: the-configured-one dir: /caller/folder" "$(run "$WORK/pd.sh" "$WORK/store-b" "$WORK/pd-custom.yaml" PAGERDUTY_TOKEN=from-shell)"
-x "configured variable unset: no other credential" "token: <unset> dir: /caller/folder" "$(run "$WORK/pd.sh" "$WORK/store-c" "$WORK/pd-custom.yaml" PAGERDUTY_TOKEN=from-shell)"
+x "configured variable unset: no other credential" "token: <unset> dir: /caller/folder" "$(run "$WORK/pd.sh" "$WORK/store-c" "$WORK/pd-custom.yaml" PAGERDUTY_TOKEN=from-shell | tail -n 1)"
 x "config names no variable: as before" "token: from-shell dir: /caller/folder" "$(run "$WORK/pd.sh" "$WORK/store-a" "$WORK/pd-nokey.yaml" PAGERDUTY_TOKEN=from-shell)"
 x "no config: as before" "token: <unset> dir: /caller/folder" "$(run "$WORK/pd.sh" "$WORK/store-a" "$WORK/none.yaml")"
 x "a list whose targets name no variable: as before" "token: from-shell dir: /caller/folder" "$(run "$WORK/pd.sh" "$WORK/store-a" "$WORK/pd-list-nokey.yaml" PAGERDUTY_TOKEN=from-shell)"
@@ -155,9 +161,12 @@ if out="$(run "$WORK/pd.sh" "$WORK/store-a" "$WORK/pd-list.yaml")"; then fail "a
 printf '%s\n' "$out" | grep -q 'pagerduty in .* is a list of targets that each name their own token_env' || fail "the stop on a list does not say why: $out"
 out="$(run "$WORK/pd.sh" "$WORK/store-bad" "$WORK/pd-custom.yaml")" || fail "a malformed store line ended the step: $out"
 printf '%s\n' "$out" | grep -q 'SECRETPART' && fail "a malformed store line printed part of its value: $out"
-# sh and bash read past the bad line; dash stops reading the store there, so the token stays unset
-# (the step fails closed and the doctor names the bad line). Either way the step itself carries on.
-case "$out" in "token: the-configured-one dir: /caller/folder"|"token: <unset> dir: /caller/folder") ;; *) fail "a malformed store line broke the step: $out" ;; esac
+# sh and bash read past the bad line. dash abandons the store read there and falls back to the
+# shell's own value, so the token stays unset here (the step fails closed and the doctor names the
+# bad line). Either way nothing of the bad line is printed and the step itself carries on.
+case "$(printf '%s\n' "$out" | tail -n 1)" in "token: the-configured-one dir: /caller/folder"|"token: <unset> dir: /caller/folder") ;; *) fail "a malformed store line broke the step: $out" ;; esac
+out="$(run "$WORK/pd.sh" "$WORK/store-c" "$WORK/pd-custom.yaml")"
+printf '%s\n' "$out" | grep -q 'note: PD_RO (named by pagerduty.token_env) is not set' || fail "an unset configured variable is not named: $out"
 { echo 'set -eu'; cat "$WORK/pd-pre.sh"; echo 'echo "${PAGERDUTY_TOKEN}"'; } > "$WORK/pd-u.sh"
 run "$WORK/pd-u.sh" "$WORK/store-c" "$WORK/pd-custom.yaml" > /dev/null && fail "an unset configured token no longer stops a set -u step"
 echo "PASS"
@@ -192,6 +201,8 @@ printf 'lgtm:\n  - label: prod\n    runtime_mode: external\n    loki_url: https:
 printf 'lgtm:\n  - label: prod\n    runtime_mode: external\n    loki_url: https://a.example.com\n    loki_token_env: LOKI_A\n  - label: preprod\n    runtime_mode: external\n    loki_url: https://b.example.com\n' > "$WORK/lg-tok.yaml"
 x "single stack: loki.token_env" "loki=the-configured-one" "$(run "$WORK/lg.sh" "$WORK/store-l" "$WORK/lg-single.yaml")"
 x "stack list with open stores: as before" "loki=<unset>" "$(run "$WORK/lg.sh" "$WORK/store-l" "$WORK/lg-open.yaml")"
+printf 'lgtm:\n  - label: prod\n    runtime_mode: external\n    loki_url: https://a.example.com\n  - label: preprod\n    runtime_mode: external\n    loki_url: https://b.example.com\nloki:\n  url: https://shared.example.com\n  token_env: LOKI_RO\n' > "$WORK/lg-open-plus-top.yaml"
+x "stack list beside a top-level loki block: the shared token goes to no stack" "loki=<unset>" "$(run "$WORK/lg.sh" "$WORK/store-l" "$WORK/lg-open-plus-top.yaml")"
 if out="$(run "$WORK/lg.sh" "$WORK/store-l" "$WORK/lg-tok.yaml")"; then fail "a stack list with its own loki_token_env did not stop (output: $out)"; fi
 printf '%s\n' "$out" | grep -q 'lgtm in .* is a list of targets that each name their own loki_token_env' || fail "audit-lgtm's stop does not say why: $out"
 echo "PASS"

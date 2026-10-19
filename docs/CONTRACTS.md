@@ -337,17 +337,22 @@ these two classes existed; these steps are what caught them.
   shell-only).
 - **Every step that needs a secret (v0.1.223):** each block runs in a fresh shell, so the
   doctor gate's load of the store does not carry over. In the audits, `map-topology`,
-  `map-repos`, `rca`, `migration-plan` and `setup-sentry`, a step reads from the store
-  only the secret it needs, never the whole file: a read of `printenv "$<name variable>"`
+  `map-repos` and `rca`, a step that did not already load the store reads from it only
+  the secret it needs, never the whole file: a read of `printenv "$<name variable>"`
   reads that variable from the store or the shell (the store wins, as in the doctor); a
   read by the default name (or `doctl`, which reads `DIGITALOCEAN_ACCESS_TOKEN` itself)
   takes the value of the variable the single config block's `*_env` key names, is left
   unset when that variable is unset (`doctl` steps stop instead, so doctl never falls
   back to its own login), and is left exactly as before when the config names no
-  variable. Nothing else in the store (`SCOUTFLO_AUDIT_DIR`, `KUBECONFIG`, another
-  environment's secrets) enters a step. Left out on purpose: `connect`, the other setup
-  skills (`setup-digitalocean` and `setup-gcp` compare the shell environment against the
-  store), the Slack webhook, and identity selectors such as key-file paths.
+  variable (a note names the configured variable when it is unset). Those reads bring
+  nothing else from the store (`SCOUTFLO_AUDIT_DIR`, `KUBECONFIG`, another environment's
+  secrets); steps that already loaded the whole store (the doctor gates, a few check
+  steps) are unchanged. In `audit-lgtm` a top-level store block is bound only when
+  `lgtm` is not a list, since list stacks carry their own stores. Left out on purpose:
+  `connect`, every setup skill (`setup-digitalocean` and `setup-gcp` compare the shell
+  environment against the store; `setup-sentry` keeps its elevated-token bind),
+  `migration-plan` (its multi-target plan reads every label), the Slack webhook, and
+  identity selectors such as key-file paths.
 - **Guards:** `ci/scope-checkpoint-check.sh`, `ci/redaction-parity-check.sh`,
   `ci/env-load-parity-check.sh` (asserts the layered resolver in every `audit-*`
   **and** in `doctor.sh`), `ci/leak-scan.sh`,
