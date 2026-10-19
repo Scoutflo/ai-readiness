@@ -13,11 +13,13 @@
   only, without probing a cluster. A single target is unaffected, and so is
   `audit-all`, which sets each audit's own label.
 - **audit-sentry: a refused read is reported as blocked.** When Sentry
-  refuses a read (an error status, a page that is not JSON, or no answer),
-  the affected checks now print `blocked` instead of a pass, a fail, or
-  nothing, and the per-project reads in the first phase record the refusal
-  and carry on with the next project instead of stopping or saving an empty
-  list. Blocked checks are reported as not assessed, never as passing.
+  refuses a read (an error status, a page that is not JSON, a transfer that
+  breaks off, or no answer), the affected checks now print `blocked` instead
+  of a pass, a fail, or nothing. A check that reads two things still reports
+  what the half it could read shows. The per-project reads in the first
+  phase record the refusal against that project and carry on with the next
+  one instead of stopping or saving an empty list, and a retry that succeeds
+  clears it. Blocked checks are reported as not assessed, never as passing.
 - **audit-sentry: three checks give the right verdict.** The check that
   compares an alert's name with its environment no longer reads "preprod" or
   "product" as production, and passes a correctly scoped non-production
@@ -25,7 +27,7 @@
   check covers those), uses a named, tunable re-notify floor, and no longer
   treats every legacy rule as snoozed. The code-mapping check now prints
   each duplicate or over-broad mapping it finds and ends with a pass or fail
-  line.
+  line, or `blocked` when the list is longer than one page.
 - **setup-sentry: uptime monitors use Sentry's new alerts API.** The create
   step sends the monitor shape Sentry expects (including the environment it
   requires), prints the new id, and verifies it by reading it back. The
