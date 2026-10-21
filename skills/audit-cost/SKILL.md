@@ -157,6 +157,7 @@ For each **configured and in-scope** provider, run its catalog. Each reference i
 | DigitalOcean | [references/digitalocean-cost.md](references/digitalocean-cost.md) | `COST-DO-NNN` |
 | SigNoz | [references/signoz-cost.md](references/signoz-cost.md) | `COST-SIG-NNN` |
 | New Relic | [references/newrelic-cost.md](references/newrelic-cost.md) | `COST-NR-NNN` |
+| **(all providers)** | [references/unit-economics.md](references/unit-economics.md) — **run last**, after every provider lane, because it divides their spend by a business volume | `COST-UNIT-NNN` |
 
 For each opportunity, build a finding: the concrete resource(s) in `affected`; `estimated_monthly_savings_usd` **only** when the provider gave one (with `savings_source` naming the API); `utilization` backing rightsizing/idle calls; evidence = the real command + its trimmed output. A provider whose cost scope was missing is added to `providers_excluded` with the doctor's reason; its presence-fact checks still run if plain list permissions exist.
 
@@ -208,6 +209,14 @@ Close with: the savings headline (`Potential savings ~$X/mo (~$Y/yr) across N pr
 ## Metadata Load (v0.1.68+)
 
 When the business-context SSOT projection `~/.scoutflo/business_context.json` names `critical_dependencies` and `cost_sensitivity`, use them to order the report: on `cost_sensitivity: high`, lead with the highest annual-savings opportunities; mark opportunities on critical-dependency resources so a reader sees the reliability trade-off before acting. Metadata never changes a dollar figure or invents one.
+
+The same projection also carries **`unit_metrics`** — the customer's declared unit of delivered
+value and the query that measures it. When present, run [references/unit-economics.md](references/unit-economics.md)
+**after every provider lane** and render its block **above** the ranked savings, because cost per
+unit frames every number below it: a bill up 12% against volume up 20% is efficiency *improving*,
+and reporting the 12% alone mislabels a win as a problem. A unit of value is a product fact, so it
+is **declared, never inferred** — with none declared, emit `COST-UNIT-004`, report per-namespace and
+per-project spend instead, and ask the one question that enables it next run.
 
 **Deliberate exemption — exclusions are advisory here, not scope-limiting.** Unlike the scored own-block audits (which drop `exclusions`-matched resources as `not-in-scope`), `audit-cost` is a ranked-savings, report-only skill: it still surfaces a savings opportunity on an excluded/vendor-managed resource, but annotates it with the exclusion so the reader knows the resource is out of the operational audit's scope. This keeps a real, large saving from being silently hidden by an exclusion that exists for a different (reliability/compliance) reason. If you want an excluded resource omitted entirely, exclude it at the provider query, not via `business_context.json`.
 

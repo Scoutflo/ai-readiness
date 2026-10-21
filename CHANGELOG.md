@@ -1,5 +1,43 @@
 # Changelog
 
+## 0.1.227
+
+**Unit economics: cost per unit of delivered value, and the false positive it removes.** Every
+other check in the cost skill answers "where is waste". Nobody running a business asks only that —
+they ask what a unit of their product costs to serve, and whether that is getting better or worse.
+A waste list is reducible; a unit cost is *defensible*, because it separates "we are spending more"
+from "we are growing".
+
+It also removes a false positive we were producing. **A bill up 12% while volume is up 20% is
+efficiency improving** — unit cost fell. Reporting the 12% alone mislabels a win as a cost problem,
+and that is exactly what we did.
+
+- **New provider-agnostic family `COST-UNIT-001` to `COST-UNIT-004`** — the only family in the cost
+  skill belonging to no single cloud, because it divides billed spend (any provider's export) by a
+  business volume. `001` unit cost and its trend; `002` the spend-versus-volume divergence verdict
+  across four quadrants, including the one that is **good news**; `003` the non-production overhead
+  ratio and a fully-loaded unit cost, which is what makes a nonprod schedule feel concrete to a
+  budget owner; `004` the enablement finding when no unit is declared.
+- **The unit is declared, never inferred.** A unit of value is a product fact, so it lives in the
+  **business-context SSOT** — reusing the file, capture flow and parity gate that already own
+  customer-declared truth, with nothing added to `toolkit.yaml`. With none declared the audit emits
+  `COST-UNIT-004`, reports per-namespace and per-project spend instead, and asks one question with
+  concrete shapes offered. It does **not** substitute a countable infrastructure metric as a proxy:
+  a wrong denominator is harder to spot than a missing one, because the number looks finished.
+- **Why this is allowed where a list price is not.** Unit cost is a quotient of **two sourced
+  numbers** — billed spend, and a volume from a query the customer wrote or confirmed. Nothing
+  invents a price; the division is arithmetic. It carries no savings and no indicative figure: it is
+  the measure savings are judged against.
+- **An alignment contract that excludes rather than approximates.** A partial billing period against
+  a complete metric window, cluster spend against whole-product volume, a counter reset mid-window, a
+  redefined unit, a near-zero denominator, or mixed currency — each excludes that unit with its
+  reason shown **in place of** the number. Every one of those silently produces a confident wrong
+  answer otherwise.
+- Both raw inputs for both periods are mandatory in the output, so a reader can recompute the
+  quotient by hand. Never annualised, and never compared across customers — there is no benchmark,
+  so the trend is the finding.
+
+
 ## 0.1.226
 
 **Inference cost depth, the two analyses that make every other number interpretable, and the

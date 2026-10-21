@@ -55,6 +55,35 @@ that environment's own SLA. One row per environment; add as many as you run.
 
 ---
 
+## Unit of Delivered Value
+
+**What does your business count?** This is the one input nobody can infer for you, and it is what
+turns a cost report into cost *per unit* — the number that tells you whether spending more is a
+problem or just growth. A bill up 12% while volume is up 20% means your unit cost **fell**.
+
+Name the metric you already graph; if it is on a dashboard your team trusts, it is the right one.
+Leave this out and the audit reports per-namespace and per-project spend instead, which is useful
+but is not unit economics.
+
+```yaml
+unit_metrics:
+  - name: "<what you count, in your words>"   # sessions · minutes · participants · recordings ·
+                                              # requests · conversations · documents · orders
+    query: '<your own metric query>'          # e.g. sum(increase(app_sessions_total[30d]))
+    source: prometheus                        # prometheus | victoriametrics | thanos | cloud-monitoring
+    scope: all                                # all | project:<id> | cluster:<name> | namespace:<ns>
+    per: 1000                                 # report cost per 1000 units; use 1 for expensive units
+```
+
+Declare more than one if your product has more than one — a platform billing both conversations and
+recordings has two, and each is reported on its own. They are never added together.
+
+**Scope must match the spend it will be divided by.** Whole-product volume against one cluster's
+spend understates the unit cost by however much of the product runs elsewhere; the audit excludes a
+unit rather than publish that. See `audit-cost/references/unit-economics.md` §5.
+
+---
+
 ## Critical Services (Never Auto-Fix Without Approval)
 
 List services that MUST have explicit approval before ANY changes:
