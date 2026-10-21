@@ -70,6 +70,14 @@ One permanent ID per check; IDs never change or get reused. "Savings figure" is 
 | COST-GCP-032 | Stopped (TERMINATED) VMs whose disks keep billing | `gcloud compute instances list` + per-disk spend from the export | None (presence fact); the disk's own billed cost is the ceiling |
 | COST-GCP-033 | Premium-tier consumption where a standard tier exists — AI/ML inference and similar tiered services | Export SKU-name analysis (tier markers) + per-caller project split | **Indicative** — published tier price delta; the saving is a routing decision, not a resize |
 | COST-GCP-034 | Billed projects **outside** the audited config: spend no check ran against | Export `project.id` set minus the configured project set | None — a **coverage** finding: unmeasured spend, reported as such |
+| COST-GCP-028 | **Rate versus usage**: when spend moves, whether you used more or paid more per unit | Export `cost` **and** `usage.amount` per SKU across two periods | None — the decomposition *is* the finding; it tells you which lever applies |
+| COST-GCP-029 | Spend that **appeared**: new SKUs, new projects, month-over-month jumps with no usage growth | Export period-over-period SKU/project set difference | None (movement fact) — but it is how a surprise is caught in month one instead of month six |
+| COST-GCP-035 | Inference billed on-demand where **provisioned throughput** would cost less at the observed steady volume | Export inference SKU volume + the published provisioned-capacity rate | **Indicative** — published rate comparison at the observed floor |
+| COST-GCP-036 | **Context caching** not used where prompt prefixes repeat, or cache storage costing more than it saves | Export cached-input vs uncached-input vs cache-storage SKUs | **Indicative** — published cached-vs-uncached input delta |
+| COST-GCP-037 | Latency-tolerant inference running **online** where batch bills materially less | Export online-vs-batch SKU split per project | **Indicative** — published online-minus-batch rate delta |
+| COST-GCP-038 | **Reasoning/thinking output** spend, the line teams rarely budget for | Export thinking/reasoning output SKUs as a share of total inference | None by itself — a budget-visibility finding; capping is a product decision |
+| COST-GCP-039 | A **larger model tier** serving work a smaller tier handles | Export per-model-tier spend + token volume per project | **Indicative** — published per-token delta between tiers, for the one tier step |
+| COST-GCP-040 | **Non-production discipline**: round-the-clock nonprod, premium tiers in nonprod, prod-sized nonprod | Export nonprod project spend + nonprod resource shapes vs their prod twins | **Indicative** for a schedule or tier change; presence fact for sizing parity |
 
 ## 3. Conventions
 
@@ -639,6 +647,229 @@ Marketplace or third-party SaaS subscriptions billed through the account behave 
 first-party project nobody owns — and the action is to add the real ones to the config, not to cut
 them. A project that bills and is audited by nobody is also the single most likely place for the
 next surprise.
+
+## 10k. Rate versus usage: which lever even applies (COST-GCP-028)
+
+"Spend is up 8%" is not actionable, because it has two completely different causes with opposite
+fixes. If **usage** rose, the lever is engineering — fewer resources, smaller requests, less
+traffic. If the **rate** rose, the lever is commercial — a commitment, a tier, a region, a class.
+Teams routinely spend a quarter optimising usage on a bill that moved because a discount expired.
+
+The export carries `cost` **and** `usage.amount` per SKU, so the decomposition is arithmetic, not
+a model. Hold usage at last period's level and reprice it at this period's effective rate; the gap
+is the rate effect, and the remainder is the usage effect.
+
+```bash
+set -eu
+GCP_PROJECT="your-project-id"          # gcp.project
+BILLING_DATASET="your_billing_dataset" # gcp.billing_bq_dataset
+BILLING_TABLE="$(bq ls --project_id="$GCP_PROJECT" --format=json "$BILLING_DATASET" 2>/dev/null \
+  | jq -r '[.[].tableReference.tableId] | (map(select(startswith("gcp_billing_export_resource_v1_"))) + map(select(startswith("gcp_billing_export_v1_")))) | .[0] // empty')"
+[ -n "$BILLING_TABLE" ] || { echo "COST-GCP-028 reports excluded, reason: no billing export table"; exit 0; }
+# Effective unit rate = net cost / usage amount, per SKU, for two consecutive months.
+bq query --project_id="$GCP_PROJECT" --use_legacy_sql=false --format=prettyjson \
+'WITH m AS (
+  SELECT FORMAT_DATE("%Y-%m", DATE(usage_start_time)) AS mon,
+         service.description AS service, sku.description AS sku, usage.unit AS unit,
+         SUM(cost) + SUM(IFNULL((SELECT SUM(c.amount) FROM UNNEST(credits) c), 0)) AS net,
+         SUM(usage.amount) AS qty
+    FROM `'"${GCP_PROJECT}.${BILLING_DATASET}.${BILLING_TABLE}"'`
+   WHERE usage_start_time >= TIMESTAMP(DATE_TRUNC(DATE_SUB(CURRENT_DATE(), INTERVAL 2 MONTH), MONTH))
+     AND usage_start_time <  TIMESTAMP(DATE_TRUNC(CURRENT_DATE(), MONTH))
+   GROUP BY mon, service, sku, unit),
+ p AS (
+  SELECT service, sku, unit,
+         MAX(IF(mon = FORMAT_DATE("%Y-%m", DATE_TRUNC(DATE_SUB(CURRENT_DATE(), INTERVAL 2 MONTH), MONTH)), net, NULL)) AS net_prev,
+         MAX(IF(mon = FORMAT_DATE("%Y-%m", DATE_TRUNC(DATE_SUB(CURRENT_DATE(), INTERVAL 2 MONTH), MONTH)), qty, NULL)) AS qty_prev,
+         MAX(IF(mon = FORMAT_DATE("%Y-%m", DATE_TRUNC(DATE_SUB(CURRENT_DATE(), INTERVAL 1 MONTH), MONTH)), net, NULL)) AS net_now,
+         MAX(IF(mon = FORMAT_DATE("%Y-%m", DATE_TRUNC(DATE_SUB(CURRENT_DATE(), INTERVAL 1 MONTH), MONTH)), qty, NULL)) AS qty_now
+    FROM m GROUP BY service, sku, unit)
+ SELECT service, sku, unit, ROUND(net_prev,2) AS net_prev, ROUND(net_now,2) AS net_now,
+        ROUND(net_now - net_prev, 2) AS delta,
+        ROUND(SAFE_DIVIDE(net_prev, qty_prev), 8) AS rate_prev,
+        ROUND(SAFE_DIVIDE(net_now,  qty_now ), 8) AS rate_now,
+        -- usage effect: last period rate applied to the usage change
+        ROUND((qty_now - qty_prev) * SAFE_DIVIDE(net_prev, qty_prev), 2) AS usage_effect,
+        -- rate effect: this period usage priced at the rate change
+        ROUND(qty_now * (SAFE_DIVIDE(net_now, qty_now) - SAFE_DIVIDE(net_prev, qty_prev)), 2) AS rate_effect
+   FROM p
+  WHERE net_prev IS NOT NULL AND net_now IS NOT NULL AND qty_prev > 0 AND qty_now > 0
+    AND ABS(net_now - net_prev) > 1
+  ORDER BY ABS(net_now - net_prev) DESC
+  LIMIT 30' 2>/dev/null \
+  || echo "COST-GCP-028 reports excluded, reason: bq denied, or the export lacks usage.amount for these SKUs"
+```
+
+Expected: the biggest movers, each split into a usage effect and a rate effect that sum (to rounding)
+to the delta. Report the **top movers by absolute delta** and label each one's dominant cause. State
+the caveats plainly: a SKU whose `usage.unit` changed between periods cannot be decomposed (drop it
+rather than produce nonsense), a new or retired SKU has no prior rate (that is COST-GCP-029's job),
+and tiered-rate SKUs will show a rate effect purely from crossing a volume tier — which is real, but
+it is a *volume* story, not a price change. No savings figure: this check tells you **which** lever
+applies, and the other checks price the lever.
+
+## 10l. Spend that appeared: new SKUs, new projects, unexplained jumps (COST-GCP-029)
+
+The most expensive cost surprises are not inefficiencies — they are things that quietly started.
+Someone enables a managed service, a Marketplace subscription lands on the account, a feature flips
+to a premium tier, a new project starts billing. A static view of this month's spend cannot see any
+of it; a period-over-period **set difference** sees all of it immediately.
+
+```bash
+set -eu
+GCP_PROJECT="your-project-id"          # gcp.project
+BILLING_DATASET="your_billing_dataset" # gcp.billing_bq_dataset
+BILLING_TABLE="$(bq ls --project_id="$GCP_PROJECT" --format=json "$BILLING_DATASET" 2>/dev/null \
+  | jq -r '[.[].tableReference.tableId] | (map(select(startswith("gcp_billing_export_resource_v1_"))) + map(select(startswith("gcp_billing_export_v1_")))) | .[0] // empty')"
+[ -n "$BILLING_TABLE" ] || { echo "COST-GCP-029 reports excluded, reason: no billing export table"; exit 0; }
+# SKUs and projects that bill THIS period and did not bill the previous one, largest first.
+bq query --project_id="$GCP_PROJECT" --use_legacy_sql=false --format=prettyjson \
+'WITH m AS (
+  SELECT FORMAT_DATE("%Y-%m", DATE(usage_start_time)) AS mon, project.id AS project,
+         service.description AS service, sku.description AS sku,
+         SUM(cost) + SUM(IFNULL((SELECT SUM(c.amount) FROM UNNEST(credits) c), 0)) AS net
+    FROM `'"${GCP_PROJECT}.${BILLING_DATASET}.${BILLING_TABLE}"'`
+   WHERE usage_start_time >= TIMESTAMP(DATE_TRUNC(DATE_SUB(CURRENT_DATE(), INTERVAL 2 MONTH), MONTH))
+     AND usage_start_time <  TIMESTAMP(DATE_TRUNC(CURRENT_DATE(), MONTH))
+   GROUP BY mon, project, service, sku)
+ SELECT "new-sku" AS kind, n.project, n.service, n.sku, ROUND(n.net, 2) AS net_now
+   FROM m n
+  WHERE n.mon = FORMAT_DATE("%Y-%m", DATE_TRUNC(DATE_SUB(CURRENT_DATE(), INTERVAL 1 MONTH), MONTH))
+    AND n.net > 0
+    AND NOT EXISTS (SELECT 1 FROM m o
+                     WHERE o.mon = FORMAT_DATE("%Y-%m", DATE_TRUNC(DATE_SUB(CURRENT_DATE(), INTERVAL 2 MONTH), MONTH))
+                       AND o.project = n.project AND o.sku = n.sku)
+  ORDER BY net_now DESC
+  LIMIT 40' 2>/dev/null \
+  || echo "COST-GCP-029 reports excluded, reason: bq denied"
+```
+
+Expected: every SKU/project pair that is new this period, ranked by spend. The finding fires on
+anything above a materiality floor. Classify what you can from the SKU and service name — a
+Marketplace or third-party subscription behaves differently from a first-party service someone
+enabled — and **ask who turned it on** rather than recommending deletion: a new SKU is as likely to
+be a deliberate launch as a mistake, and the value here is *visibility in month one*. Pair this with
+COST-GCP-034: a new SKU inside a project that is also outside the audited config is the highest-risk
+combination in the whole report, because nothing is watching it at all. Do not report ordinary
+month-length variation (28 vs 31 days) as a jump — normalise to a daily rate before comparing.
+
+## 10m. Inference and AI/ML consumption (COST-GCP-035 to COST-GCP-039)
+
+On an AI-heavy estate, inference is frequently the largest line after compute, and almost none of
+it is touched by a cost recommender — so it is usually the biggest unexamined number in the bill.
+Every lever below is visible in the **SKU description** on the export, which means all of it is
+checkable read-only with no application change and no new integration.
+
+Match SKU **name patterns**, never a hardcoded model list: model generations ship constantly, and a
+check pinned to today's names silently stops finding anything. Keep the markers in one place so a
+new generation is a one-line change.
+
+```bash
+set -eu
+GCP_PROJECT="your-project-id"          # gcp.project
+BILLING_DATASET="your_billing_dataset" # gcp.billing_bq_dataset
+BILLING_TABLE="$(bq ls --project_id="$GCP_PROJECT" --format=json "$BILLING_DATASET" 2>/dev/null \
+  | jq -r '[.[].tableReference.tableId] | (map(select(startswith("gcp_billing_export_resource_v1_"))) + map(select(startswith("gcp_billing_export_v1_")))) | .[0] // empty')"
+[ -n "$BILLING_TABLE" ] || { echo "COST-GCP-035..039 report excluded, reason: no billing export table"; exit 0; }
+# One pass, classifying every inference SKU along the five axes the checks need.
+bq query --project_id="$GCP_PROJECT" --use_legacy_sql=false --format=prettyjson \
+'SELECT project.id AS project, sku.description AS sku, usage.unit AS unit,
+        REGEXP_CONTAINS(LOWER(sku.description), r"provisioned throughput|provisioned capacity") AS is_provisioned,
+        REGEXP_CONTAINS(LOWER(sku.description), r"batch")                                        AS is_batch,
+        REGEXP_CONTAINS(LOWER(sku.description), r"cach")                                         AS is_cache,
+        REGEXP_CONTAINS(LOWER(sku.description), r"thinking|reasoning")                           AS is_thinking,
+        REGEXP_CONTAINS(LOWER(sku.description), r"\binput\b")                                    AS is_input,
+        REGEXP_CONTAINS(LOWER(sku.description), r"\boutput\b")                                   AS is_output,
+        ROUND(SUM(cost) + SUM(IFNULL((SELECT SUM(c.amount) FROM UNNEST(credits) c), 0)), 2)      AS net,
+        ROUND(SUM(usage.amount), 0) AS qty
+   FROM `'"${GCP_PROJECT}.${BILLING_DATASET}.${BILLING_TABLE}"'`
+  WHERE usage_start_time >= TIMESTAMP(DATE_TRUNC(DATE_SUB(CURRENT_DATE(), INTERVAL 1 MONTH), MONTH))
+    AND usage_start_time <  TIMESTAMP(DATE_TRUNC(CURRENT_DATE(), MONTH))
+    AND REGEXP_CONTAINS(LOWER(service.description), r"vertex|ai platform|generative|machine learning")
+  GROUP BY project, sku, unit, is_provisioned, is_batch, is_cache, is_thinking, is_input, is_output
+ HAVING net > 0
+  ORDER BY net DESC
+  LIMIT 100' 2>/dev/null \
+  || echo "COST-GCP-035..039 report excluded, reason: bq denied"
+```
+
+Expected: every inference SKU with its spend, its billed quantity, and its classification. Read the
+five findings off that one table:
+
+**COST-GCP-035 — provisioned throughput versus on-demand.** Reserved inference capacity bills a flat
+rate per unit of time; on-demand bills per token. Above a steady-state utilisation the reservation is
+cheaper, below it the reservation wastes money. Compare the observed **floor** of on-demand token
+volume (the quiet-period level, same technique as COST-GCP-031's spend floor) against the published
+provisioned rate for the same model. Report the breakeven and which side of it they sit, and say
+plainly that a reservation **locks a term** and that bursty traffic is the case *against* it.
+
+**COST-GCP-036 — context caching.** Where prompt prefixes repeat — a long system prompt, a document
+re-queried, a conversation replayed — cached input bills materially less than uncached. Two findings
+live here and they point opposite ways: large uncached input spend with repeating prefixes is a
+caching **opportunity**, while cache-storage spend that exceeds the input saving means caching is
+costing more than it returns on low-reuse traffic. Report the cached, uncached and cache-storage
+split, and never recommend caching without evidence of reuse — you can see the SKU, not the prompts,
+so ask whether prefixes repeat rather than assuming it.
+
+**COST-GCP-037 — batch versus online.** Batch inference bills materially less for work that
+tolerates latency. Report online spend per project and name the plausible batch candidates —
+evaluations, backfills, offline scoring, digest generation, anything on a schedule rather than a user
+request. This is a routing change with no model change, so it is among the cheapest levers in the
+file; but **only the caller knows** whether a given path is user-facing, so present it as a question
+with the money attached, not as an instruction.
+
+**COST-GCP-038 — reasoning/thinking output.** Models that emit reasoning tokens bill them as output,
+often at the highest per-token rate on the bill, and the volume is a function of a parameter most
+teams have never tuned. Report thinking-output spend as an absolute figure **and as a share of total
+inference spend**, because the share is what makes it visible: a line nobody budgeted for sitting at
+a large fraction of inference cost is the finding. Capping or lowering a reasoning budget changes
+answer quality, so this carries **no savings figure** — it is budget visibility, and the trade-off is
+the product team's call.
+
+**COST-GCP-039 — model-tier right-sizing.** A premium-tier model serving work a lighter tier handles
+is the largest single inference lever when it is real, and the most dangerous to recommend blind.
+Report spend and token volume per model tier per project, and flag the shape that is almost always
+unintended: **a non-production project on a premium tier** (pair with COST-GCP-033 and
+COST-GCP-040). `indicative_monthly_usd` prices exactly one tier step using the published per-token
+delta on the observed volume. Never recommend a tier change for a production path on cost grounds
+alone — quality is the requirement, cost is the constraint, and only an evaluation can tell you
+whether the lighter tier holds.
+
+## 10n. Non-production discipline (COST-GCP-040)
+
+Non-production is where the cheapest money in any estate sits, because nothing there has a user
+waiting on it. Three shapes, in descending order of value, all checkable by comparing nonprod
+against its own prod twin:
+
+```bash
+set -eu
+GCP_PROJECT="your-nonprod-project-id"   # gcp.project of a NON-PRODUCTION config
+# Shape of nonprod compute: are machine types and counts the same as production's?
+gcloud compute instances list --project "$GCP_PROJECT" --format=json 2>/dev/null \
+  | jq -r '[.[] | {type: (.machineType | sub(".*/"; "")), status: .status}]
+           | group_by(.type) | map({type: .[0].type, n: length,
+               running: (map(select(.status=="RUNNING")) | length)})[]
+           | "\(.type)\tcount=\(.n)\trunning=\(.running)"' \
+  || echo "COST-GCP-040 reports excluded, reason: compute.instances.list denied"
+```
+
+**Round-the-clock running.** A non-production estate that bills 24×7 for a team working business
+hours is paying roughly three times what it needs to. This is the single largest nonprod lever and
+the most commonly skipped. `indicative_monthly_usd` prices it exactly: the published on-demand rate
+for the running resources × the hours a schedule would remove. State what breaks — overnight CI, a
+scheduled test, a shared environment in another timezone — and recommend a **schedule**, not a
+shutdown.
+
+**Premium tiers in non-production.** A premium inference tier, a premium managed-storage tier or a
+premium support/security tier in a QA project is almost never a deliberate choice; it is a default
+that was never revisited. Report each one with its nonprod spend; this is the most uncontroversial
+finding in the whole file, because nobody argues for paying a latency premium in QA.
+
+**Prod-sized non-production.** Where a nonprod resource matches its prod twin's machine type,
+replica count, storage tier or retention, report the pair side by side. Some parity is deliberate —
+performance testing needs prod-shaped capacity, and a staging environment that cannot reproduce a
+prod bug is worthless — so this is a **presence fact** with the pairs named, never an instruction.
+Ask which environments are load-test targets and exclude those.
 
 ## 11. Presence facts (COST-GCP-020 to COST-GCP-022)
 
