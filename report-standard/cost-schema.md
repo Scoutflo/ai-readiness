@@ -92,7 +92,7 @@ Schema identifier: `scoutflo-cost/v1`.
 | `run_date` | string | yes | `YYYY-MM-DD`, UTC; matches the directory name |
 | `generated_at` | string | yes | ISO 8601 UTC timestamp |
 | `providers_covered` | array | yes | Provider slugs whose cost checks actually ran this run |
-| `providers_excluded` | array | no | Each `{provider, reason}` — a configured provider whose cost section was excluded (missing scope, `cost_checks:false`, unreachable). Never silently dropped |
+| `providers_excluded` | array | **yes** | Each `{provider, reason}`, both non-empty — a configured provider whose cost section was excluded (missing scope, `cost_checks:false`, unreachable). Use `[]` when nothing was excluded. Never silently dropped: `check-cost.sh` enforces the field's presence, that every entry names a reason, that no provider appears in both this and `providers_covered`, and that **a run with no provider-native dollar at all names at least one exclusion** — otherwise "could not look" renders identically to "nothing to save" |
 | `summary` | object | yes | Savings roll-up; see below |
 | `findings` | array | yes | Opportunity objects, ranked: native-figure findings by descending `estimated_monthly_savings_usd` first, then presence facts |
 

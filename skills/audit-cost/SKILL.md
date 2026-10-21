@@ -28,10 +28,10 @@ This audit reads cost-recommendation and inventory surfaces for every **configur
 | Provider | Config keys | Cost scope needed (native-dollar checks) | Presence-fact checks need |
 | --- | --- | --- | --- |
 | AWS | `aws.profile`/chain, `aws.region`, `aws.cost_checks` | Compute Optimizer / Cost Explorer / Cost Optimization Hub / Trusted Advisor read | `ec2/elbv2/s3/rds Describe*`/`List*` |
-| GCP | `gcp.project`, `gcp.credentials_env`, `gcp.cost_checks` | Recommender viewer (`roles/recommender.*Viewer`) + Recommender API enabled | `compute.*.list` |
+| GCP | `gcp.project`, `gcp.credentials_env`, `gcp.cost_checks`, `gcp.billing_bq_dataset` | Recommender viewer (`roles/recommender.*Viewer`) + Recommender API enabled. For net spend and GKE per-namespace cost: the Cloud Billing BigQuery export (detailed flavour) + `roles/bigquery.jobUser`/`dataViewer` + the `bq` CLI | `compute.*.list` |
 | Azure | `azure.subscription_id`, `azure.cost_checks` | Cost Management Query (`Cost Management Reader`) + Advisor (`Reader`) — REST `2023-11-01`, 429-backoff (no `az costmanagement query` CLI) | Resource Graph + `az … list/show` |
 | Datadog | `datadog.*`, `datadog.cost_checks` | `usage_read`/`billing_read` | (usage API only; no cheaper fallback) |
-| Kubernetes | `kubernetes.context` | metrics source: metrics-server (`kubectl top`) or Prometheus | `get` on workloads/PVCs/PVs |
+| Kubernetes | `kubernetes.context`, `kubernetes.prometheus_url`, `kubernetes.cost_integration_url` | windowed metrics, in order: `prometheus_url` → **Cloud Monitoring on GKE** (already covered by `roles/monitoring.viewer`, nothing to install) → metrics-server `kubectl top` (a labelled snapshot). Cost source, in order: **the GCP billing export** (COST-GCP-024) → an existing Kubecost/OpenCost endpoint | `get` on workloads/PVCs/PVs |
 | DigitalOcean | `digitalocean.*` | (none — billing/list only) | `doctl ... list` / monitoring read |
 | SigNoz | `signoz.*` (host/org/token or ClickHouse read user) | Cost Meter (`signoz.meter.*`, `source:meter`) read; falls back to metrics-store reads | `POST /api/v3/query_range` / `SELECT` on the metrics store |
 | New Relic | `newrelic.*` (account, User key, region) | `NrConsumption` (billed GB; ~daily lag) with `bytecountestimate()` as the live fallback | NerdGraph NRQL reads (query documents only) |

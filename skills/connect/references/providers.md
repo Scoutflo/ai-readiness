@@ -723,6 +723,31 @@ gcp:
 
 Never hand the audit an editor or owner identity when a viewer set will do; the audit runs with editor but records that its credential can write, which is itself a posture gap.
 
+### GCP cost prerequisites
+
+The roles above cover **reliability** audits. `/scoutflo:audit-cost` needs more, and the two
+items that matter most are **not** granted by the read-only set — so an estate can pass
+`/scoutflo:doctor` cleanly and still produce a cost report with almost no money in it. Set
+these up explicitly.
+
+| # | Enable / grant | Unlocks | Without it |
+| --- | --- | --- | --- |
+| 1 | **Cloud Billing BigQuery export**, plus `bigquery.googleapis.com`, `roles/bigquery.jobUser`, `roles/bigquery.dataViewer` on the dataset, and the `bq` CLI. Record the dataset in `gcp.billing_bq_dataset`. | **Your actual spend by SKU** — the denominator for every savings figure (COST-GCP-023) | Savings are a floor with no total to measure them against; you cannot express a saving as a percentage of spend |
+| 2 | **GKE cost allocation** on each cluster (a Google-native cluster setting; it adds namespace and workload attribution to the billing export) | **Per-namespace and per-workload GKE cost**, attributed by the audit from first-party data | The audit still costs each cluster from the billing export and its own requests/node data, but namespace-level splits are coarser |
+| 3 | `recommender.googleapis.com` + `roles/recommender.viewer` | **Every GCP savings dollar** — figures are copied verbatim from Google's recommendations (COST-GCP-001 to -010) | The whole native-dollar section is excluded; only presence facts run |
+| 4 | The **per-service recommender APIs** you actually use: Cloud SQL, GKE/container, Cloud Run, BigQuery slots, **and commitments** (committed-use discounts) | Savings beyond plain compute. Commitments are frequently the single largest line | Those families silently contribute nothing; doctor's `cost-permissions` row reports a PARTIAL when the commitment family is unreadable |
+| 5 | `compute.googleapis.com` + `roles/compute.viewer` | Zone and region enumeration, which **gates every recommender loop**, plus all presence facts | The cost phase stops with a blocker (it must never report an empty project as clean) |
+| 6 | `cloudbilling.googleapis.com` + `roles/billing.viewer` | The billing-account link check | That one context line is excluded |
+| 7 | A metrics endpoint in `kubernetes.prometheus_url` (Prometheus, VictoriaMetrics or Thanos) | Utilisation measured over a **real window** (default 7d), so "over-provisioned" is evidence-backed | The audit falls back to `kubectl top`, a point-in-time **snapshot** that it labels as such and must not present as sustained |
+
+**Start item 1 first.** The billing export is configured at the *billing-account* level and
+takes **a few days** to accumulate data before the table is queryable, so requesting it late
+is the usual reason a "deep" cost audit comes back shallow.
+
+`/scoutflo:doctor` previews all of this before a run: the `cost-permissions`,
+`billing-export`, `cost-allocation` and `cost-metrics-window` rows each tell you exactly
+which of the above is missing and the command to fix it.
+
 ### Where to click
 
 1. Sign in to the Google Cloud console with rights to manage IAM on the target project, and confirm the project picker shows that project.
