@@ -1,5 +1,47 @@
 # Changelog
 
+## 0.1.226
+
+**Inference cost depth, the two analyses that make every other number interpretable, and the
+orphan chain.** On an AI-heavy estate, inference is routinely the largest line after compute and
+almost none of it is touched by a cost recommender — so it is the biggest unexamined number on the
+bill. Nine new checks, all read from SKU names and quantities already in the billing export, so
+none of them needs an application change or a new integration.
+
+- **Inference (`COST-GCP-035` to `COST-GCP-039`).** Provisioned-throughput versus on-demand, with
+  the breakeven computed against the observed volume floor rather than asserted. Context caching,
+  which cuts both ways — a caching opportunity where prefixes repeat, and cache storage costing
+  more than it returns on low-reuse traffic. Batch versus online for latency-tolerant work.
+  **Reasoning/thinking output spend**, reported as a share of total inference because that is what
+  makes a line nobody budgeted for visible — and carrying no savings figure, since capping it
+  changes answer quality. And model-tier right-sizing, which flags the shape that is almost always
+  unintended: a non-production project on a premium tier. SKUs are matched by **name pattern, never
+  a hardcoded model list**, so a new model generation needs no code change.
+- **`COST-GCP-028` rate versus usage.** "Spend is up 8%" has two causes with opposite fixes: if
+  usage rose the lever is engineering, if the rate rose the lever is commercial. The export carries
+  cost *and* usage quantity, so the split is arithmetic — and teams routinely spend a quarter
+  optimising usage on a bill that moved because a discount lapsed. Drops SKUs whose unit changed
+  rather than producing nonsense.
+- **`COST-GCP-029` spend that appeared.** The most expensive surprises are not inefficiencies,
+  they are things that quietly started — a service enabled, a Marketplace subscription landing on
+  the account, a tier defaulting to premium. A period-over-period SKU and project set difference
+  catches all of it in month one. Normalises to a daily rate so a 28-versus-31-day month is never
+  reported as a jump.
+- **`COST-GCP-040` non-production discipline.** Round-the-clock nonprod for a business-hours team,
+  premium tiers in QA, and prod-sized nonprod — in descending order of value, each compared against
+  its own prod twin. Recommends a *schedule*, not a shutdown, and treats sizing parity as a presence
+  fact because a staging environment that cannot reproduce a prod bug is worthless.
+- **`COST-K8S-011` the orphan chain.** A dead workload does not leave one piece of billing behind,
+  it leaves a chain: StatefulSet to zero, PVCs still Bound, PVs Released with Retain, cloud disks
+  still billing, snapshots still being taken. Reported separately that is five modest findings in
+  four sections, each easy to defer; rolled into one named dead workload with one total it gets
+  actioned. It **invents nothing** — it joins findings the other checks already produced on the
+  backing-volume handle, sums only already-sourced figures, marks every contributor `deduplicated`
+  so nothing is counted twice, and carries the **deletion order** in the finding, since getting that
+  wrong is how a Retain-policy volume becomes unrecoverable. A scaled-to-zero StatefulSet whose
+  volumes are deliberately retained is a paused service, not an orphan, and that distinction is the
+  whole check.
+
 ## 0.1.225
 
 **Cost analysis goes where the money actually is.** A live cost audit on a large GCP and GKE

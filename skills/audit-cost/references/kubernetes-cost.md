@@ -29,6 +29,7 @@ Kubernetes bills nothing on its own — the money lives in the cloud nodes and d
 
 | COST-K8S-009 | **Where a cluster's money actually goes**: net spend attributed per namespace and workload, ranked, with each one's request-vs-usage ratio beside it | COST-GCP-024 (the cloud's billing export + cost-allocation labels) joined to this cluster's requests/usage | **Native $** — verbatim export spend per namespace; the *saving* stays indicative or unpriced |
 | COST-K8S-010 | Node-pool economics: capacity type, machine family and zone spread versus what the workload needs | `kubectl get nodes` labels (instance type, spot/preemptible, zone) + the node pool's own billed spend | **Indicative** for a priced capacity-type or family change; presence fact for zone spread |
+| COST-K8S-011 | **The orphan chain**: one dead workload billing across several resource types at once, rolled into a single finding | Joins this file's own COST-K8S-003/005/006 to the cloud's disk and snapshot findings (COST-GCP-005/020/022) by backing-volume identity | Sums only the **already-sourced** figures from the joined findings; invents nothing, and the chain is marked `deduplicated` so nothing is double-counted |
 
 Only **COST-K8S-008 and COST-K8S-009** can ever carry a dollar, and only when a cost source is present and returns one. **COST-K8S-001 through COST-K8S-007 are presence/ratio facts and carry no `$` under any circumstance.**
 
@@ -433,6 +434,57 @@ drop the finding.
 small pools, a minimum node per zone. This is a **presence fact**: report nodes per zone and the
 stated availability requirement, and never recommend collapsing zones without it. For
 public-IP-per-node workloads such as media relays, zone spread is usually deliberate.
+
+## 12d. The orphan chain (COST-K8S-011)
+
+A workload that was deleted or scaled to zero does not leave one piece of billing behind — it leaves
+a chain. The StatefulSet goes to zero replicas, its PVCs stay Bound, the PVs behind them go Released
+with a Retain policy, the cloud disks behind *those* keep billing, and any snapshot schedule keeps
+snapshotting them. Reported separately that is four or five modest findings in four different
+sections, each easy to defer. Reported as one chain it is a single named dead workload with one
+total next to it, and it gets actioned.
+
+This check **invents nothing**: it is a join over findings the other checks already produced, and
+it sums only figures that already carry a provider-native or indicative source.
+
+```bash
+set -eu
+KUBE_CONTEXT="my-cluster"          # kubernetes.context
+# The join key is the backing volume handle: a Released PV names both the claim it belonged to
+# and the cloud disk still being billed.
+kubectl --context "$KUBE_CONTEXT" get pv -o json \
+  | jq -r '.items[]
+      | select(.status.phase=="Released" or .status.phase=="Available")
+      | {pv: .metadata.name,
+         phase: .status.phase,
+         reclaim: .spec.persistentVolumeReclaimPolicy,
+         capacity: .spec.capacity.storage,
+         handle: (.spec.csi.volumeHandle // .spec.gcePersistentDisk.pdName // .spec.awsElasticBlockStore.volumeID // "none"),
+         was: ((.spec.claimRef.namespace // "?") + "/" + (.spec.claimRef.name // "?"))}
+      | "\(.pv)\tphase=\(.phase)\treclaim=\(.reclaim)\tsize=\(.capacity)\twas=\(.was)\thandle=\(.handle)"'
+```
+
+Expected: every orphaned PV with the claim it belonged to and the backing volume handle. Build the
+chain per dead workload:
+
+1. Take the workload name from the PV's `claimRef` (strip the StatefulSet ordinal), and confirm the
+   owner is gone or at zero replicas — a **scaled-to-zero StatefulSet whose PVCs are deliberately
+   retained is not an orphan**, it is a paused service, and that distinction is the whole check.
+2. Attach its PVCs (COST-K8S-003), its PVs (COST-K8S-005), any uncleaned Jobs in the same namespace
+   (COST-K8S-006), and — matching on the volume handle — the cloud disk findings
+   (COST-GCP-005 priced, COST-GCP-022 presence) and any snapshots of those disks (COST-GCP-020).
+3. Sum **only** the figures that already carry a source. Where part of the chain has no figure, say
+   so: "three of five links priced" is honest and still persuasive.
+4. Mark every contributing finding `deduplicated: true` and name the chain id, so the same disk is
+   never counted twice between its own finding and the chain. The correlation engine's overlap rules
+   apply here exactly as they do across audits.
+
+Report the chain as: the dead workload, how long it has been dead (oldest link's age), the resource
+types it still bills across, the summed sourced figure, and the **deletion order** — snapshot first
+if the data might be wanted, then the PV object, then the backing disk, then the PVC. Getting that
+order wrong is how a Retain-policy volume becomes unrecoverable, so the order is part of the finding,
+not a footnote. A chain whose owner still exists at non-zero replicas is a bug in the join, not a
+finding: drop it and say the owner was live.
 
 ## 13. Named defaults
 
