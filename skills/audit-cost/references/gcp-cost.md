@@ -10,6 +10,37 @@ Runnable, read-only cost checks for the GCP provider phase of [audit-cost](../SK
 - ✅ `COST-GCP-005: Recommender (google.compute.disk.IdleResourceRecommender) flags disk 'data-scratch-3' (zone us-central1-a, 200 GB, pd-ssd) as idle; estimated_monthly_savings_usd is 34.00, copied verbatim from primaryImpact.costProjection.cost (units=-34, nanos=0, currencyCode=USD, duration=2592000s).`
 - ✅ `COST-GCP-021: 4 reserved static external IPs are in state RESERVED (not IN_USE): 'legacy-nat-ip' (region us-central1), ... . No estimated_monthly_savings_usd — this is a presence fact; the idle-IP dollar figure, when GCP produces one, is reported under COST-GCP-004 from the Recommender.`
 
+### 1b. The third class: an indicative figure, clearly labelled, never in the total
+
+Google prices only a narrow slice of waste. Whole categories it never costs — a managed share
+provisioned ten times larger than its use, a premium inference tier where a standard one exists,
+objects sitting in the wrong storage class — are where the largest money usually is, and reporting
+them with no number at all pushes the arithmetic onto the customer at exactly the moment they are
+deciding what to act on.
+
+So there is a **third class**, and it is still sourced: an **indicative** figure, computed from
+**Google's own published price for the specific SKU already on the bill**, applied to a quantity
+taken from the billing export or a provider API. It is not a market estimate and not a rate you
+looked up for a different resource.
+
+The rules are absolute:
+
+- It goes in `indicative_monthly_usd`, **never** `estimated_monthly_savings_usd`, and
+  `check-cost.sh` enforces that it is excluded from `summary.monthly_savings_identified_usd`.
+- It must name `indicative_source` — the SKU and the published price basis used.
+- It is rendered in its own column, labelled **"indicative, list price, before your discounts"**,
+  never merged with the Recommender total.
+- It is a **ceiling before discounts**, so say so: committed-use, sustained-use and negotiated
+  rates all reduce it. Never annualise an indicative figure into a headline.
+- Where the shape of the target is a judgement (how much smaller a share should be), report the
+  **current billed cost and the observed utilisation** and let the indicative figure describe only
+  the step you can price exactly — e.g. one tier down, or one class transition.
+
+The ❌ example above stays forbidden: it has no cited SKU, no published basis, and it was summed
+into a savings claim. The distinction is sourcing and labelling, not arithmetic.
+
+- ✅ `COST-GCP-030: Filestore share 'files-prod-1' is tier ENTERPRISE, 2048 GiB provisioned, 7-day max utilisation 0.9%; billed <amount> last month (export). indicative_monthly_usd describes ONE priced step — halving provisioned capacity at the same tier — from the published ENTERPRISE per-GiB-month price (indicative_source names it). Before discounts; the target shape needs the owner's SLA input.`
+
 ## 2. Check catalog
 
 One permanent ID per check; IDs never change or get reused. "Savings figure" is either a native Recommender dollar (copied verbatim) or "presence fact" (no dollar).
@@ -31,6 +62,14 @@ One permanent ID per check; IDs never change or get reused. "Savings figure" is 
 | COST-GCP-022 | Unattached / detached persistent disks | Compute `gcloud compute disks list` | None (presence fact) |
 | COST-GCP-023 | Net spend breakdown by project/service/SKU (context, not savings; `credits` unnested) | Cloud Billing BigQuery export | None (context; actual spend, not a savings figure) |
 | COST-GCP-024 | GKE net spend by cluster, namespace and workload (section 10b) | The same Cloud Billing export, detailed resource-level flavour + GKE cost allocation labels | None itself (context) — but it is the **first-party source COST-K8S-008 cites** for a Kubernetes dollar, so no third-party cost tool is required |
+| COST-GCP-025 | Object storage whose class and lifecycle do not match its access pattern | `gcloud storage buckets list` (class, lifecycle, versioning, location) + per-bucket spend from the export | **Indicative** — published class-price delta × billed bytes (section 3b); never Recommender |
+| COST-GCP-026 | Network shape: service tier, egress mix, Cloud NAT data processing, idle forwarding rules | `gcloud compute project-info describe` / `routers list` / `forwarding-rules list` + Networking SKU spend from the export | **Indicative** for a tier change; presence fact for an idle forwarding rule |
+| COST-GCP-027 | Log ingestion and retention beyond the free tier, with no exclusion filters | `gcloud logging sinks list` / `buckets list` + Cloud Logging SKU spend from the export | **Indicative** — published per-GiB ingestion rate × excluded volume |
+| COST-GCP-030 | Provisioned-but-unused managed capacity (Filestore and peers): a tier or size far above observed use | `gcloud filestore instances list` + Cloud Monitoring `used_bytes_percent` + per-instance spend from the export | **Indicative** — published tier/size price delta; Google publishes no Filestore cost recommender |
+| COST-GCP-031 | A large compute bill with zero commitments **and no CUD recommendation** (autoscaling leaves no floor Google will commit to) | `gcloud compute commitments list` + the Recommender sweep returning nothing + the observed spend floor from the export (section 10h) | **Indicative** — the floor is computed from billed spend, so it is a sourced figure, not a guess |
+| COST-GCP-032 | Stopped (TERMINATED) VMs whose disks keep billing | `gcloud compute instances list` + per-disk spend from the export | None (presence fact); the disk's own billed cost is the ceiling |
+| COST-GCP-033 | Premium-tier consumption where a standard tier exists — AI/ML inference and similar tiered services | Export SKU-name analysis (tier markers) + per-caller project split | **Indicative** — published tier price delta; the saving is a routing decision, not a resize |
+| COST-GCP-034 | Billed projects **outside** the audited config: spend no check ran against | Export `project.id` set minus the configured project set | None — a **coverage** finding: unmeasured spend, reported as such |
 
 ## 3. Conventions
 
@@ -329,6 +368,277 @@ COST-K8S finding may cite them as its `savings_source`; a figure derived by mult
 by a quantity may not (section 1).
 
 Expected: the top services and SKUs by last-month spend, in the export's own `currency`, reported as **context** beside the ranked savings — for example, so a reader sees that Compute Engine SKUs dominate the bill, which frames why the idle-VM and CUD recommendations matter most. If no billing export is configured, COST-GCP-023 reports `excluded, reason: "no Cloud Billing BigQuery export configured"`, not a fabricated breakdown. Never present spend as savings; the two are different numbers and mixing them misleads a budget conversation.
+
+## 10c. Premium-tier consumption where a standard tier exists (COST-GCP-033)
+
+Several Google services bill the same work at different rates depending on a tier chosen per
+request or per deployment — inference service tiers being the common one. The tier is visible in
+the **SKU description** on the bill, so the export tells you exactly how much is going through the
+premium path and from which project. A non-production project on a premium tier is almost always
+unintended, and it is the cheapest finding in this file to act on: it is a routing change, not a
+resize, with no capacity risk.
+
+```bash
+set -eu
+GCP_PROJECT="your-project-id"          # gcp.project (the project that can query the dataset)
+BILLING_DATASET="your_billing_dataset" # gcp.billing_bq_dataset
+BILLING_TABLE="$(bq ls --project_id="$GCP_PROJECT" --format=json "$BILLING_DATASET" 2>/dev/null \
+  | jq -r '[.[].tableReference.tableId] | (map(select(startswith("gcp_billing_export_resource_v1_"))) + map(select(startswith("gcp_billing_export_v1_")))) | .[0] // empty')"
+[ -n "$BILLING_TABLE" ] || { echo "COST-GCP-033 reports excluded, reason: no billing export table in ${BILLING_DATASET}"; exit 0; }
+# Split every service's spend by the tier marker in its SKU name. Markers are matched
+# case-insensitively and kept in one list so a new tier name is a one-line change.
+bq query --project_id="$GCP_PROJECT" --use_legacy_sql=false --format=prettyjson \
+'SELECT project.id AS project, service.description AS service,
+        CASE WHEN REGEXP_CONTAINS(LOWER(sku.description), r"priority|premium|provisioned throughput") THEN "premium"
+             WHEN REGEXP_CONTAINS(LOWER(sku.description), r"batch|standard|flex") THEN "standard"
+             ELSE "untiered" END AS tier,
+        ROUND(SUM(cost) + SUM(IFNULL((SELECT SUM(c.amount) FROM UNNEST(credits) c), 0)), 2) AS net,
+        currency, COUNT(DISTINCT sku.description) AS skus
+   FROM `'"${GCP_PROJECT}.${BILLING_DATASET}.${BILLING_TABLE}"'`
+  WHERE usage_start_time >= TIMESTAMP(DATE_TRUNC(DATE_SUB(CURRENT_DATE(), INTERVAL 1 MONTH), MONTH))
+    AND usage_start_time <  TIMESTAMP(DATE_TRUNC(CURRENT_DATE(), MONTH))
+  GROUP BY project, service, tier, currency
+ HAVING net > 0
+  ORDER BY net DESC
+  LIMIT 50' 2>/dev/null \
+  || echo "COST-GCP-033 reports excluded, reason: bq denied or the export is unreadable"
+```
+
+Expected: one row per project/service/tier. The finding fires when a service has **premium** spend
+and a standard tier exists for the same work. Report the premium spend per project, name the SKUs,
+and separate **production** from **non-production callers** — the second group is the
+uncontroversial half. `indicative_monthly_usd` prices only the step you can price exactly: the
+published premium-minus-standard rate delta on the same SKU family, applied to the billed premium
+volume, labelled before discounts. Do **not** claim the whole premium spend as a saving: some
+callers genuinely need the tier, and that is the owner's call. Where a tier's published rate is not
+available, report the spend split with no indicative figure rather than guessing.
+
+## 10d. Object storage: class and lifecycle versus access pattern (COST-GCP-025)
+
+Object storage is usually billed on bytes stored at a class rate, and the cheapest reduction in a
+media- or log-heavy estate is moving cold objects to a colder class or expiring them. Buckets with
+**no lifecycle rule** and versioning enabled accumulate noncurrent versions indefinitely, which
+bill at full class rate and are invisible in a bucket listing.
+
+```bash
+set -eu
+GCP_PROJECT="your-project-id"   # gcp.project
+# Bucket shape: default class, location type, lifecycle rule count, versioning, soft-delete.
+gcloud storage buckets list --project "$GCP_PROJECT" --format=json 2>/dev/null \
+  | jq -r '.[] | {name: .name, class: .default_storage_class, location: .location_type,
+                  lifecycle_rules: ((.lifecycle_config.rule // []) | length),
+                  versioning: (.versioning_enabled // false)}
+           | "\(.name)\tclass=\(.class)\tlocation=\(.location)\trules=\(.lifecycle_rules)\tversioning=\(.versioning)"' \
+  || echo "COST-GCP-025 reports excluded, reason: storage.buckets.list denied or Cloud Storage API off"
+```
+
+Expected: one line per bucket. The finding fires on a bucket that is **STANDARD class with zero
+lifecycle rules**, or **versioning on with no noncurrent-version expiry**, or **multi-region where
+the workload is single-region**. Pair each with its billed storage cost from the export (group the
+Cloud Storage SKUs by `resource.name` on the detailed export) so the largest buckets rank first.
+`indicative_monthly_usd` uses the **published class-price delta** — Standard to Nearline, Nearline
+to Coldline, Coldline to Archive — applied to the billed bytes of that bucket, and must note the
+two costs a class change carries: **early-delete minimum storage duration** and **retrieval cost**,
+which can make a colder class more expensive for data that is still read. State the access pattern
+you observed, or say that you could not observe it.
+
+## 10e. Network shape: service tier, egress, NAT and idle forwarding rules (COST-GCP-026)
+
+For a media, streaming or chat workload, networking is frequently the second-largest line and is
+almost never examined, because none of it is Recommender-priced. Four things are checkable
+read-only.
+
+```bash
+set -eu
+GCP_PROJECT="your-project-id"   # gcp.project
+# 1. Default network service tier for the project (PREMIUM routes over Google's backbone; STANDARD
+#    exits closer to the user and bills less — a real trade-off, not free money).
+gcloud compute project-info describe --project "$GCP_PROJECT" --format='value(defaultNetworkTier)' 2>/dev/null \
+  || echo "COST-GCP-026: project-info denied"
+# 2. Cloud NAT gateways. NAT bills a gateway-hour per gateway AND per-GiB data processing, so a
+#    gateway per zone or per cluster multiplies the fixed half.
+gcloud compute routers list --project "$GCP_PROJECT" --format=json 2>/dev/null \
+  | jq -r '.[] | . as $r | ($r.nats // [])[] | "\($r.region)/\($r.name)\tnat=\(.name)\tips=\((.natIps // []) | length)\tsubnets=\((.subnetworks // []) | length)"' \
+  || echo "COST-GCP-026: routers.list denied"
+# 3. Forwarding rules with no backend traffic are an idle load-balancer charge.
+gcloud compute forwarding-rules list --project "$GCP_PROJECT" --format=json 2>/dev/null \
+  | jq -r '.[] | "\(.region // "global")/\(.name)\tIP=\(.IPAddress)\ttier=\(.networkTier // "-")\ttarget=\((.target // .backendService // "-") | sub(".*/"; ""))"' \
+  || echo "COST-GCP-026: forwarding-rules.list denied"
+```
+
+Expected: the project's default tier, every NAT gateway with its IP and subnet count, and every
+forwarding rule. The finding fires on: **PREMIUM tier where the traffic is regional and
+latency-tolerant** (indicative = published PREMIUM-minus-STANDARD egress delta on the billed egress
+volume), **more NAT gateways than regions in use** (the gateway-hour half is priced exactly, so it
+is indicative-eligible), and **forwarding rules whose target no longer exists** (presence fact).
+Egress itself needs the export: group Networking SKUs by SKU name to separate inter-zone,
+inter-region and internet egress, because the three have very different rates and only the first is
+usually an architecture mistake. Never present total egress as waste — it is mostly the product
+working.
+
+## 10f. Log ingestion and retention (COST-GCP-027)
+
+Log ingestion bills per GiB above a monthly free allowance, and retention bills per GiB-month above
+the default. Teams facing this often disable logging wholesale — which is a reliability loss sold as
+a saving — when an **exclusion filter** on the noisiest few log types would have kept the signal and
+cut most of the cost.
+
+```bash
+set -eu
+GCP_PROJECT="your-project-id"   # gcp.project
+# Log buckets and their retention (the default _Default/_Required buckets included).
+gcloud logging buckets list --project "$GCP_PROJECT" --location=global --format=json 2>/dev/null \
+  | jq -r '.[] | "\(.name)\tretention_days=\(.retentionDays // "-")\tlocked=\(.locked // false)"' \
+  || echo "COST-GCP-027: logging.buckets.list denied or API off"
+# Sinks and, critically, whether any exclusion filter exists on the _Default sink.
+gcloud logging sinks list --project "$GCP_PROJECT" --format=json 2>/dev/null \
+  | jq -r '.[] | "\(.name)\tdest=\((.destination // "-") | sub(".*/"; ""))\texclusions=\((.exclusions // []) | length)"' \
+  || echo "COST-GCP-027: logging.sinks.list denied"
+```
+
+Expected: retention per bucket and exclusion count per sink. The finding fires when Cloud Logging
+spend is material **and** `_Default` carries zero exclusions, or retention exceeds the default with
+no stated policy. `indicative_monthly_usd` uses the **published per-GiB ingestion rate** times the
+volume of the specific log types you propose excluding — so name them from the export's SKU/label
+breakdown, never "logs in general". Record the reliability trade-off explicitly: an exclusion makes
+those lines unqueryable, so route them to cheaper storage instead where they are needed for audit.
+
+## 10g. Provisioned-but-unused managed capacity (COST-GCP-030)
+
+Managed file, cache and database services bill **provisioned** capacity and tier, not used bytes, so
+a share sized for a peak that never came bills at full rate forever. Google publishes no cost
+recommender for these, which is exactly why they survive years of review.
+
+```bash
+set -eu
+GCP_PROJECT="your-project-id"   # gcp.project
+MON_API="https://monitoring.googleapis.com/v3"
+if [ -n "${GOOGLE_APPLICATION_CREDENTIALS:-}" ]; then TOKEN="$(gcloud auth application-default print-access-token)"; export CLOUDSDK_AUTH_ACCESS_TOKEN="$TOKEN"; else TOKEN="$(gcloud auth print-access-token)"; fi
+START="$(date -u -v-7d +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d '7 days ago' +%Y-%m-%dT%H:%M:%SZ)"
+END="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+# Inventory: tier and provisioned capacity per share.
+gcloud filestore instances list --project "$GCP_PROJECT" --format=json 2>/dev/null \
+  | jq -r '.[] | "\(.name | sub(".*/"; ""))\ttier=\(.tier)\tgb=\((.fileShares // [])[0].capacityGb // "-")\tcreated=\(.createTime // "-")"' \
+  || echo "COST-GCP-030 reports excluded, reason: filestore.instances.list denied or API off"
+# Peak utilisation over a real window — ALIGN_MAX, because a mean hides the peak that sized it.
+curl -fsSG --max-time 60 -H "Authorization: Bearer ${TOKEN}" \
+  "${MON_API}/projects/${GCP_PROJECT}/timeSeries" \
+  --data-urlencode 'filter=metric.type = "file.googleapis.com/nfs/server/used_bytes_percent"' \
+  --data-urlencode "interval.startTime=${START}" --data-urlencode "interval.endTime=${END}" \
+  --data-urlencode 'aggregation.alignmentPeriod=3600s' \
+  --data-urlencode 'aggregation.perSeriesAligner=ALIGN_MAX' \
+  | jq -r '.timeSeries[]? | "\(.resource.labels.instance_name)\tmax_used_pct=\([.points[].value.doubleValue] | max)"' \
+  || echo "COST-GCP-030: monitoring timeSeries denied"
+```
+
+Expected: tier, provisioned size and 7-day peak utilisation per share, joined to its billed cost
+from the export. The finding fires below a low utilisation threshold. Report the **tier** as loudly
+as the size: a premium tier at 1% use is two decisions, not one, and the tier change is usually the
+larger of the two. `indicative_monthly_usd` prices **one step only** — one tier down, or halving
+provisioned capacity at the same tier — from the published per-GiB-month rate, before discounts. The
+target shape needs the owner's durability and throughput requirements, so ask rather than assume;
+several shares of the same tier in one region are also a **consolidation** candidate, which is a
+design change and gets no figure.
+
+## 10h. Large uncommitted compute with no CUD recommendation (COST-GCP-031)
+
+The Recommender sizes a commitment to a **stable floor** of observed usage. An aggressively
+autoscaled estate has no stable floor at the resource level, so Google returns *no* recommendation
+precisely where the bill is largest — the opposite of helpful. The floor still exists in the
+**billed spend**, and spend-based commitments exist for this case, so compute the floor from the
+export rather than reporting "no recommendation" and stopping.
+
+```bash
+set -eu
+GCP_PROJECT="your-project-id"          # gcp.project
+BILLING_DATASET="your_billing_dataset" # gcp.billing_bq_dataset
+TARGET_PROJECT="the-project-to-size"   # the project whose compute bill has no CUD recommendation
+BILLING_TABLE="$(bq ls --project_id="$GCP_PROJECT" --format=json "$BILLING_DATASET" 2>/dev/null \
+  | jq -r '[.[].tableReference.tableId] | (map(select(startswith("gcp_billing_export_resource_v1_"))) + map(select(startswith("gcp_billing_export_v1_")))) | .[0] // empty')"
+[ -n "$BILLING_TABLE" ] || { echo "COST-GCP-031 reports the no-recommendation fact only, reason: no export to compute a floor from"; exit 0; }
+# Daily net compute spend over 90 days. The MINIMUM and 5th-percentile days are the committable
+# floor: spend the estate never drops below, even at its quietest.
+bq query --project_id="$GCP_PROJECT" --use_legacy_sql=false --format=prettyjson \
+'WITH daily AS (
+  SELECT DATE(usage_start_time) AS d,
+         SUM(cost) + SUM(IFNULL((SELECT SUM(c.amount) FROM UNNEST(credits) c), 0)) AS net
+    FROM `'"${GCP_PROJECT}.${BILLING_DATASET}.${BILLING_TABLE}"'`
+   WHERE service.description = "Compute Engine"
+     AND project.id = "'"${TARGET_PROJECT}"'"
+     AND usage_start_time >= TIMESTAMP(DATE_SUB(CURRENT_DATE(), INTERVAL 90 DAY))
+   GROUP BY d)
+ SELECT COUNT(*) AS days_observed,
+        ROUND(MIN(net), 2) AS min_day,
+        ROUND(APPROX_QUANTILES(net, 100)[OFFSET(5)], 2) AS p5_day,
+        ROUND(APPROX_QUANTILES(net, 100)[OFFSET(50)], 2) AS p50_day,
+        ROUND(MAX(net), 2) AS max_day
+   FROM daily' 2>/dev/null \
+  || echo "COST-GCP-031: bq denied; report the no-recommendation fact without a floor"
+```
+
+Expected: the daily floor over a real quarter. Report the **p5 day** as the conservative committable
+floor (the minimum day can be an incomplete or anomalous day), state `days_observed` so a short
+export is visible, and multiply by 30 for a monthly floor. `indicative_monthly_usd` applies the
+**published spend-based commitment discount rate** to that floor — a sourced figure from billed
+spend, not a guess — and must say plainly that a commitment is a **spend decision locking a term**,
+not recovered waste. Keep the underlying fact in the finding either way: a large bill with zero
+commitments and no recommendation is itself the headline, and the floor is what makes it actionable.
+If the export is too short to see a quarter, say so and report the fact alone.
+
+## 10i. Stopped resources that still bill (COST-GCP-032)
+
+A stopped VM bills nothing for CPU and everything for its attached disks, so a machine stopped
+"temporarily" months ago is a pure, uncontroversial cut. This is a presence fact with an exact
+ceiling: the disk's own billed cost.
+
+```bash
+set -eu
+GCP_PROJECT="your-project-id"   # gcp.project
+gcloud compute instances list --project "$GCP_PROJECT" --filter='status=TERMINATED' --format=json 2>/dev/null \
+  | jq -r '.[] | "\(.zone | sub(".*/"; ""))/\(.name)\ttype=\(.machineType | sub(".*/"; ""))\tstopped=\(.lastStopTimestamp // "unknown")\tdisks=\([(.disks // [])[] | .diskSizeGb] | add // 0)GB"' \
+  || echo "COST-GCP-032 reports excluded, reason: compute.instances.list denied"
+```
+
+Expected: every TERMINATED instance with how long it has been stopped and how much disk it still
+holds. Rank by **stopped duration × disk size**; a machine stopped for over a quarter with hundreds
+of GiB attached is the clearest case in the whole report. No savings figure — but attach the disks'
+billed cost from the export, which is the exact ceiling. Exclude instance templates and
+autoscaler-stopped members, and respect the **snapshot-before-delete** order in the action.
+
+## 10j. Billed projects outside the audited config (COST-GCP-034)
+
+An audit's most dangerous blind spot is spend it never looked at. The export knows every project
+that billed; the config knows every project that was checked. The difference is unmeasured spend,
+and reporting it is what stops a clean report being mistaken for a clean estate.
+
+```bash
+set -eu
+GCP_PROJECT="your-project-id"          # gcp.project
+BILLING_DATASET="your_billing_dataset" # gcp.billing_bq_dataset
+BILLING_TABLE="$(bq ls --project_id="$GCP_PROJECT" --format=json "$BILLING_DATASET" 2>/dev/null \
+  | jq -r '[.[].tableReference.tableId] | (map(select(startswith("gcp_billing_export_resource_v1_"))) + map(select(startswith("gcp_billing_export_v1_")))) | .[0] // empty')"
+[ -n "$BILLING_TABLE" ] || { echo "COST-GCP-034 reports excluded, reason: no export, so billed projects cannot be enumerated"; exit 0; }
+# Every project that billed last month, largest first. Compare this set with the configured set.
+bq query --project_id="$GCP_PROJECT" --use_legacy_sql=false --format=prettyjson \
+'SELECT project.id AS project,
+        ROUND(SUM(cost) + SUM(IFNULL((SELECT SUM(c.amount) FROM UNNEST(credits) c), 0)), 2) AS net, currency
+   FROM `'"${GCP_PROJECT}.${BILLING_DATASET}.${BILLING_TABLE}"'`
+  WHERE usage_start_time >= TIMESTAMP(DATE_TRUNC(DATE_SUB(CURRENT_DATE(), INTERVAL 1 MONTH), MONTH))
+    AND usage_start_time <  TIMESTAMP(DATE_TRUNC(CURRENT_DATE(), MONTH))
+  GROUP BY project, currency
+ HAVING net > 0
+  ORDER BY net DESC' 2>/dev/null \
+  || echo "COST-GCP-034 reports excluded, reason: bq denied"
+```
+
+Expected: the full billed-project list. Subtract the projects configured for this run (every `gcp`
+target across the config used) and report the remainder **with their spend, ranked**, plus the share
+of total spend they represent. This is a **coverage** finding, not a waste finding: it carries no
+savings figure and says explicitly that no check ran against this spend. Classify where you can —
+Marketplace or third-party SaaS subscriptions billed through the account behave differently from a
+first-party project nobody owns — and the action is to add the real ones to the config, not to cut
+them. A project that bills and is audited by nobody is also the single most likely place for the
+next surprise.
 
 ## 11. Presence facts (COST-GCP-020 to COST-GCP-022)
 

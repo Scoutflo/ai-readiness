@@ -27,7 +27,10 @@ Kubernetes bills nothing on its own — the money lives in the cloud nodes and d
 | COST-K8S-007 | Under-packed nodes / node-pool headroom (summed pod requests far below allocatable across the pool) | `kubectl get nodes` + `kubectl top nodes` + Prometheus | None — ratio fact (surplus node count) |
 | COST-K8S-008 | Cluster / namespace / workload cost allocation, and a right-sizing figure where the source offers one | **On GKE, the cloud's own billing export** (COST-GCP-024 — nodes are Compute Engine VMs, so their real cost is already billed; GKE cost allocation adds the namespace/workload labels). **Or** an existing Kubecost `/model/*` / OpenCost `/allocation/*` endpoint | **Native $** — verbatim from the billing export, or from Kubecost `monthlySavings`; OpenCost `totalCost` is verbatim actual spend. Never a figure derived by multiplying a rate by a quantity |
 
-Only **COST-K8S-008** can ever carry a dollar, and only when the integration is present and returns one. **COST-K8S-001 through COST-K8S-007 are presence/ratio facts and carry no `$` under any circumstance.**
+| COST-K8S-009 | **Where a cluster's money actually goes**: net spend attributed per namespace and workload, ranked, with each one's request-vs-usage ratio beside it | COST-GCP-024 (the cloud's billing export + cost-allocation labels) joined to this cluster's requests/usage | **Native $** — verbatim export spend per namespace; the *saving* stays indicative or unpriced |
+| COST-K8S-010 | Node-pool economics: capacity type, machine family and zone spread versus what the workload needs | `kubectl get nodes` labels (instance type, spot/preemptible, zone) + the node pool's own billed spend | **Indicative** for a priced capacity-type or family change; presence fact for zone spread |
+
+Only **COST-K8S-008 and COST-K8S-009** can ever carry a dollar, and only when a cost source is present and returns one. **COST-K8S-001 through COST-K8S-007 are presence/ratio facts and carry no `$` under any circumstance.**
 
 ## 3. Doctor-gate dependency
 
@@ -351,6 +354,85 @@ Expected and the money rule: from **Kubecost**, `estimated_monthly_savings_usd` 
 - ❌ `COST-K8S-008: OpenCost reports staging namespace totalCost $900/mo at 20% efficiency, so ~$720/mo is wasted.`
 - ✅ `COST-K8S-008: OpenCost reports staging namespace totalCost 900.00 (verbatim, actual spend) at cpuEfficiency 0.20 — reported as actual-cost + efficiency-ratio facts, NO estimated_monthly_savings_usd, because OpenCost publishes no savings figure to copy.`
 - ✅ `COST-K8S-008: Kubecost right-sizing recommends staging/Deployment/web CPU 250m; estimated_monthly_savings_usd is 63.10, copied verbatim from the savings API monthlySavings field.`
+
+## 12b. Where a cluster's money actually goes (COST-K8S-009)
+
+"This cluster costs X" is a bill. "This namespace is most of X, and it reserves twelve times what
+it uses" is a decision. This check is the join that turns one into the other, and it is the single
+most useful thing in this file for a large cluster — because without it a team optimises whatever
+they happen to remember, not the thing that costs the most.
+
+It needs no third-party tool: the per-namespace spend comes from the cloud's own billing export
+(COST-GCP-024 on GCP), and the per-namespace request-vs-usage ratio is already computed in section
+5. Join them on namespace.
+
+```bash
+set -eu
+KUBE_CONTEXT="my-cluster"          # kubernetes.context — passed on every kubectl call
+WINDOW="7d"                        # the ratio window; must match the basis you report
+# Per-namespace CPU requested, from the cluster itself. Pair each line with that namespace's
+# net spend from COST-GCP-024 (same cluster label, same month) before ranking.
+kubectl --context "$KUBE_CONTEXT" get pods -A -o json \
+  | jq -r '[.items[] | select(.status.phase=="Running" or .status.phase=="Pending")
+            | {ns: .metadata.namespace,
+               cpu: ([.spec.containers[].resources.requests.cpu // "0"] | map(
+                      if test("m$") then (sub("m$";"") | tonumber / 1000) else tonumber end) | add)}]
+           | group_by(.ns) | map({namespace: .[0].ns, requested_cores: (map(.cpu) | add | . * 1000 | round / 1000)})
+           | sort_by(-.requested_cores)[] | "\(.namespace)\trequested_cores=\(.requested_cores)"'
+```
+
+Expected: namespaces ranked by reserved CPU, each joined to its billed spend and its observed
+usage ratio from section 5. Report the top namespaces by **spend**, not by request — the two differ
+whenever one namespace runs expensive machine types — and give each the same `basis` you used for
+the ratio. The dollar on the line is **actual spend**, so label it as such: the saving is what
+right-sizing would recover, which stays indicative or unpriced. Where the export has no
+cost-allocation labels, say the namespace split is unavailable and report cluster-level spend with
+the per-namespace *requests* only, clearly marked as a reservation share rather than a cost share.
+A namespace that is a large share of reserved capacity but a small share of usage is the finding;
+a namespace that is large because it genuinely runs the product is not.
+
+## 12c. Node-pool economics (COST-K8S-010)
+
+Right-sizing requests changes how much capacity you need; this check changes what that capacity
+costs. The three levers are visible from node labels alone, and all three are decisions the
+customer must make — so report the trade-off, never just the cheaper option.
+
+```bash
+set -eu
+KUBE_CONTEXT="my-cluster"          # kubernetes.context
+# Capacity type, machine family and zone per node, grouped into pools.
+kubectl --context "$KUBE_CONTEXT" get nodes -o json \
+  | jq -r '[.items[] | {
+      pool: (.metadata.labels["cloud.google.com/gke-nodepool"] // .metadata.labels["eks.amazonaws.com/nodegroup"] // "unknown"),
+      type: (.metadata.labels["node.kubernetes.io/instance-type"] // .metadata.labels["beta.kubernetes.io/instance-type"] // "unknown"),
+      zone: (.metadata.labels["topology.kubernetes.io/zone"] // "unknown"),
+      spot: ((.metadata.labels["cloud.google.com/gke-spot"] // .metadata.labels["cloud.google.com/gke-preemptible"] // .metadata.labels["karpenter.sh/capacity-type"] // "on-demand") | tostring)
+    }]
+    | group_by(.pool) | map({pool: .[0].pool, nodes: length,
+        types: (map(.type) | unique | join(",")), zones: (map(.zone) | unique | length),
+        spot: (map(.spot) | unique | join(","))})[]
+    | "\(.pool)\tnodes=\(.nodes)\ttypes=\(.types)\tzones=\(.zones)\tcapacity=\(.spot)"'
+```
+
+Expected: one line per node pool. Three findings, each paired with that pool's billed spend:
+
+**Capacity type.** A pool running only on-demand nodes whose workloads are stateless, replicated
+and interruption-tolerant is a spot/preemptible candidate — the published on-demand-minus-spot rate
+delta is an exact indicative figure. But say the cost plainly: spot nodes are reclaimed with little
+warning, so this is unsafe for stateful sets, single-replica services, long media sessions that
+cannot migrate, or anything without a disruption budget. Recommend it only where the workload
+already tolerates a node drain.
+
+**Machine family.** A pool on an older or general-purpose family where a newer generation offers
+the same vCPU and memory at a lower published rate is a priced, low-risk change; name both families
+and the published delta. Where the workload is pinned to a family for a real reason — a specific
+CPU platform, local SSD, GPU or sustained single-thread performance — record that as the reason and
+drop the finding.
+
+**Zone spread.** More zones than the availability target needs adds inter-zone traffic and, for
+small pools, a minimum node per zone. This is a **presence fact**: report nodes per zone and the
+stated availability requirement, and never recommend collapsing zones without it. For
+public-IP-per-node workloads such as media relays, zone spread is usually deliberate.
 
 ## 13. Named defaults
 

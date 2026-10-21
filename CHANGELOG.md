@@ -1,5 +1,51 @@
 # Changelog
 
+## 0.1.225
+
+**Cost analysis goes where the money actually is.** A live cost audit on a large GCP and GKE
+estate priced ten recommender opportunities — and left the four biggest categories with spend
+but no saving, so the headline came to roughly 2% of the real bill. Worse, four of the most
+valuable findings in that report were invented by the agent mid-run because the catalog had no
+check for them: they were not reproducible, not gated, and would not reliably recur. This
+release registers them properly and adds the categories that were missing entirely.
+
+- **Nine new GCP checks, registered and reproducible.** `COST-GCP-030` provisioned-but-unused
+  managed capacity (tier *and* size, since a premium tier at 1% use is two decisions);
+  `COST-GCP-031` a large compute bill with zero commitments **and no recommendation** — the case
+  the recommender cannot help with, now answered by computing the committable spend floor from 90
+  days of billed spend; `COST-GCP-032` stopped VMs whose disks keep billing; `COST-GCP-033`
+  premium-tier consumption where a standard tier exists, split per project so a non-production
+  caller on a premium tier is obvious; `COST-GCP-034` **billed projects outside the audited
+  config** — spend no check ran against, which is what stops a clean report being mistaken for a
+  clean estate; plus `COST-GCP-025` object-storage class and lifecycle, `COST-GCP-026` network
+  tier, egress mix, Cloud NAT and idle forwarding rules, and `COST-GCP-027` log ingestion and
+  retention with no exclusion filters.
+- **Two new Kubernetes checks.** `COST-K8S-009` attributes a cluster's spend per namespace and
+  workload — joining the billing export to this cluster's requests, so "the cluster costs X"
+  becomes "this namespace is most of X and reserves twelve times what it uses". `COST-K8S-010`
+  node-pool economics: capacity type, machine family and zone spread, each reported with its
+  trade-off rather than just the cheaper option.
+- **A third class of figure: indicative, sourced, and never in the total.** Whole categories are
+  never provider-priced, and a number is what makes them actionable — so a finding may now carry
+  `indicative_monthly_usd`, computed from the provider's **published price for the SKU already on
+  the bill**. It must name `indicative_source` and the single step it prices, is rendered in its
+  own column labelled "before your discounts", and `check-cost.sh` **rejects** a report that sums
+  it into the savings total or emits it unsourced. The never-invent-a-dollar rule is preserved,
+  not relaxed: the forbidden pattern was always an *unsourced, unlabelled, summed-in* estimate.
+- **The headline now carries its denominator.** `observed_monthly_spend`,
+  `savings_pct_of_spend` and `unassessed_monthly_spend` are reported together, because a savings
+  figure with no bill to compare against cannot be judged — and a low percentage over a large
+  bill is itself a finding. Spend that billed while nothing checked it is reported beside the
+  result, not buried.
+- **A snapshot can no longer read as a trend.** Any finding reporting a measured ratio must state
+  its `basis` (`p95 over 7d`, `max over 7d`, `snapshot <ts>`), and one finding may not mix a
+  window with a snapshot — the validator rejects both. Resources that bill but could not be
+  assessed are marked `assessable:false` instead of silently appearing in a spend table with no
+  verdict.
+
+Seven new `check-cost.sh` cases cover the indicative and basis rules (22 in total), plus a new
+pressure scenario.
+
 ## 0.1.224
 
 **GCP and GKE cost: real dollars from first-party data, and a blocked scope can no longer
