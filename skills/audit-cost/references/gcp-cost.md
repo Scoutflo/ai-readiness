@@ -29,7 +29,8 @@ One permanent ID per check; IDs never change or get reused. "Savings figure" is 
 | COST-GCP-020 | Aged Compute Engine snapshots vs the team's stated retention | Compute `gcloud compute snapshots list` | None (presence fact) |
 | COST-GCP-021 | Reserved-but-unused static external IPs | Compute `gcloud compute addresses list` | None (presence fact) |
 | COST-GCP-022 | Unattached / detached persistent disks | Compute `gcloud compute disks list` | None (presence fact) |
-| COST-GCP-023 | Spend breakdown by service/SKU (context, not savings) | Cloud Billing BigQuery export | None (context; actual spend, not a savings figure) |
+| COST-GCP-023 | Net spend breakdown by project/service/SKU (context, not savings; `credits` unnested) | Cloud Billing BigQuery export | None (context; actual spend, not a savings figure) |
+| COST-GCP-024 | GKE net spend by cluster, namespace and workload (section 10b) | The same Cloud Billing export, detailed resource-level flavour + GKE cost allocation labels | None itself (context) — but it is the **first-party source COST-K8S-008 cites** for a Kubernetes dollar, so no third-party cost tool is required |
 
 ## 3. Conventions
 
@@ -41,8 +42,15 @@ GCP_PROJECT="your-project-id"   # gcp.project — clearly-marked config placehol
 # Set: the key file is the identity for gcloud and REST alike. Unset: your active gcloud login is.
 if [ -n "${GOOGLE_APPLICATION_CREDENTIALS:-}" ]; then
   TOKEN="$(gcloud auth application-default print-access-token)"; export CLOUDSDK_AUTH_ACCESS_TOKEN="$TOKEN"
+else
+  TOKEN="$(gcloud auth print-access-token)"   # plain gcloud login is the identity
 fi
 ```
+
+The `else` branch matters: without it `TOKEN` is unset on the gcloud-login path, so any REST
+read in this catalog (the Cloud Monitoring utilisation reads this lane shares with
+`kubernetes-cost.md`) would send an empty `Authorization` header. Identical to the preamble in
+`audit-gcp/references/gcp-checks.md` — keep the two in step.
 
   If minting the token fails, stop; do not fall back to a different credential. `TOKEN` travels only in `Authorization` headers — never echo it, never put it in a URL, evidence, or the report.
 - **Explicit project on everything.** Every command carries `--project "${GCP_PROJECT}"`. Ambient gcloud config is never trusted; this audit never runs `gcloud config set` or `gcloud config configurations activate` (section 10). Where a customer runs the toolkit against a named configuration, they pass it themselves; the catalog stays account-agnostic.
@@ -77,6 +85,11 @@ GCP_PROJECT="your-project-id"       # gcp.project
 RECOMMENDER="google.compute.instance.IdleResourceRecommender"   # the flag changes per check; location kind must match (see section 3)
 # Zonal recommenders (instances, disks) loop over zones; regional ones (addresses, MIGs, commitments, Cloud SQL) over regions; images use global.
 LOCATIONS="$(gcloud compute zones list --project "$GCP_PROJECT" --filter='status=UP' --format='value(name)')"
+# FAIL CLOSED. Every Recommender loop below iterates this list, and each gcloud call inside
+# is `2>/dev/null`. So an empty list runs the loop ZERO times and produces no findings and no
+# error — indistinguishable from "this project has no savings". A denied compute.viewer must
+# never read as a clean project.
+[ -n "$LOCATIONS" ] || { echo "GCP cost: could not enumerate zones for ${GCP_PROJECT}. This is a BLOCKER, not an empty result — report the GCP Recommender phase as excluded with this reason, never as 'no savings found'. Unlock: gcloud services enable compute.googleapis.com --project ${GCP_PROJECT} and grant roles/compute.viewer to the audit identity."; exit 1; }
 
 for LOC in $LOCATIONS; do
   gcloud recommender recommendations list \
@@ -118,7 +131,9 @@ Run the section 5 extraction with each recommender and its correct location kind
 set -eu
 GCP_PROJECT="your-project-id"   # gcp.project
 ZONES="$(gcloud compute zones list --project "$GCP_PROJECT" --filter='status=UP' --format='value(name)')"
+[ -n "$ZONES" ] || { echo "GCP cost: could not enumerate zones for ${GCP_PROJECT} — BLOCKER, not an empty result (the loops below would run zero times and look clean). Report this phase excluded. Unlock: enable compute.googleapis.com and grant roles/compute.viewer."; exit 1; }
 REGIONS="$(gcloud compute regions list --project "$GCP_PROJECT" --filter='status=UP' --format='value(name)')"
+[ -n "$REGIONS" ] || { echo "GCP cost: could not enumerate regions for ${GCP_PROJECT} — BLOCKER, not an empty result (the loops below would run zero times and look clean). Report this phase excluded. Unlock: enable compute.googleapis.com and grant roles/compute.viewer."; exit 1; }
 
 # COST-GCP-001: idle VMs — zonal. Subtypes STOP_VM / SNAPSHOT_AND_DELETE / DELETE_VM.
 for Z in $ZONES; do
@@ -145,7 +160,9 @@ Expected: each recommendation names one instance or MIG, its current and recomme
 set -eu
 GCP_PROJECT="your-project-id"   # gcp.project
 ZONES="$(gcloud compute zones list --project "$GCP_PROJECT" --filter='status=UP' --format='value(name)')"
+[ -n "$ZONES" ] || { echo "GCP cost: could not enumerate zones for ${GCP_PROJECT} — BLOCKER, not an empty result (the loops below would run zero times and look clean). Report this phase excluded. Unlock: enable compute.googleapis.com and grant roles/compute.viewer."; exit 1; }
 REGIONS="$(gcloud compute regions list --project "$GCP_PROJECT" --filter='status=UP' --format='value(name)')"
+[ -n "$REGIONS" ] || { echo "GCP cost: could not enumerate regions for ${GCP_PROJECT} — BLOCKER, not an empty result (the loops below would run zero times and look clean). Report this phase excluded. Unlock: enable compute.googleapis.com and grant roles/compute.viewer."; exit 1; }
 
 # COST-GCP-004: idle reserved external IPs — regional. Subtype DELETE_ADDRESS.
 for R in $REGIONS; do
@@ -170,6 +187,7 @@ Expected: each recommendation names one address (with its region), disk (with it
 set -eu
 GCP_PROJECT="your-project-id"   # gcp.project
 REGIONS="$(gcloud compute regions list --project "$GCP_PROJECT" --filter='status=UP' --format='value(name)')"
+[ -n "$REGIONS" ] || { echo "GCP cost: could not enumerate regions for ${GCP_PROJECT} — BLOCKER, not an empty result (the loops below would run zero times and look clean). Report this phase excluded. Unlock: enable compute.googleapis.com and grant roles/compute.viewer."; exit 1; }
 
 # COST-GCP-007: committed-use discount purchase opportunities — regional. Subtype PURCHASE_COMMITMENT.
 # The cost figure is the projected SAVING from committing to steady-state usage — read verbatim, do not model it yourself.
@@ -231,20 +249,84 @@ gcloud billing projects describe "$GCP_PROJECT" \
 ```bash
 set -eu
 GCP_PROJECT="your-project-id"          # gcp.project
-BILLING_DATASET="your_billing_dataset" # gcp.billing_bq_dataset — clearly-marked placeholder; the dataset holding gcp_billing_export_v1_*
-BILLING_TABLE="gcp_billing_export_v1_XXXXXX_XXXXXX_XXXXXX"  # the standard-usage export table id
-# Last full month spend by service and SKU. Read-only SELECT; no table is created or modified.
+BILLING_DATASET="your_billing_dataset" # gcp.billing_bq_dataset — clearly-marked placeholder; the dataset holding the export
+# DISCOVER the table id; never hand-edit it. The standard-usage export is
+# gcp_billing_export_v1_*, the detailed resource-level export gcp_billing_export_resource_v1_*.
+# Prefer the detailed one: it is the only flavour carrying per-resource rows, and the only one
+# GKE cost allocation can attribute to a cluster/namespace (section 10b).
+BILLING_TABLE="$(bq ls --project_id="$GCP_PROJECT" --format=json "$BILLING_DATASET" 2>/dev/null \
+  | jq -r '[.[].tableReference.tableId] | (map(select(startswith("gcp_billing_export_resource_v1_"))) + map(select(startswith("gcp_billing_export_v1_")))) | .[0] // empty')"
+[ -n "$BILLING_TABLE" ] || { echo "no gcp_billing_export_* table in ${BILLING_DATASET}: COST-GCP-023 reports excluded (no spend export). The export is billing-account level and takes a few DAYS to appear and fill."; exit 0; }
+# Last full month NET spend by project, service and SKU. `credits` is unnested because gross
+# cost overstates the bill wherever a discount, promotion or CUD applies — and this number is
+# the denominator every savings figure is read against, so it has to be the real one.
+# Read-only SELECT; no table is created or modified.
 bq query --project_id="$GCP_PROJECT" --use_legacy_sql=false --format=prettyjson \
-'SELECT service.description AS service, sku.description AS sku,
-        ROUND(SUM(cost), 2) AS cost_usd, currency
+'SELECT project.id AS project, service.description AS service, sku.description AS sku,
+        ROUND(SUM(cost), 2) AS gross_usd,
+        ROUND(SUM(cost) + SUM(IFNULL((SELECT SUM(c.amount) FROM UNNEST(credits) c), 0)), 2) AS net_usd,
+        currency
    FROM `'"${GCP_PROJECT}.${BILLING_DATASET}.${BILLING_TABLE}"'`
   WHERE usage_start_time >= TIMESTAMP(DATE_TRUNC(DATE_SUB(CURRENT_DATE(), INTERVAL 1 MONTH), MONTH))
     AND usage_start_time <  TIMESTAMP(DATE_TRUNC(CURRENT_DATE(), MONTH))
-  GROUP BY service, sku, currency
-  ORDER BY cost_usd DESC
+  GROUP BY project, service, sku, currency
+  ORDER BY net_usd DESC
   LIMIT 25' 2>/dev/null \
   || echo "billing BigQuery export not configured or bq denied; COST-GCP-023 reports excluded (no spend export)"
 ```
+
+### 10b. GKE spend by cluster, namespace and workload (COST-GCP-024)
+
+The same export, the same auth, the same `bq` invocation — one different `GROUP BY`. **GKE nodes
+are Compute Engine VMs, so their real cost is already in this table**; no third-party cost tool
+is needed and none should ever be asked for. When **GKE cost allocation** is enabled on a
+cluster, Google adds `goog-k8s-cluster-name`, `goog-k8s-namespace` and `goog-k8s-workload-name`
+labels to the detailed export, which is what turns cluster spend into namespace and workload
+spend. This is the only first-party path to a Kubernetes dollar, and `kubernetes-cost.md`
+section 12 reads it for COST-K8S-008.
+
+```bash
+set -eu
+GCP_PROJECT="your-project-id"          # gcp.project
+BILLING_DATASET="your_billing_dataset" # gcp.billing_bq_dataset
+# Discover the table here too: every block in this catalog runs alone in a fresh shell.
+BILLING_TABLE="$(bq ls --project_id="$GCP_PROJECT" --format=json "$BILLING_DATASET" 2>/dev/null \
+  | jq -r '[.[].tableReference.tableId] | (map(select(startswith("gcp_billing_export_resource_v1_"))) + map(select(startswith("gcp_billing_export_v1_")))) | .[0] // empty')"
+[ -n "$BILLING_TABLE" ] || { echo "COST-GCP-024 reports excluded, reason: no gcp_billing_export_* table in ${BILLING_DATASET}"; exit 0; }
+# Requires the DETAILED export (gcp_billing_export_resource_v1_*).
+case "$BILLING_TABLE" in
+  gcp_billing_export_resource_v1_*) : ;;
+  *) echo "COST-GCP-024 reports excluded, reason: only the standard-usage export (${BILLING_TABLE}) is configured; per-cluster and per-namespace attribution needs the detailed resource-level export plus GKE cost allocation on the cluster"; exit 0 ;;
+esac
+bq query --project_id="$GCP_PROJECT" --use_legacy_sql=false --format=prettyjson \
+'SELECT (SELECT value FROM UNNEST(labels) WHERE key = "goog-k8s-cluster-name")  AS cluster,
+        (SELECT value FROM UNNEST(labels) WHERE key = "goog-k8s-namespace")     AS namespace,
+        (SELECT value FROM UNNEST(labels) WHERE key = "goog-k8s-workload-name") AS workload,
+        ROUND(SUM(cost) + SUM(IFNULL((SELECT SUM(c.amount) FROM UNNEST(credits) c), 0)), 2) AS net_usd,
+        currency
+   FROM `'"${GCP_PROJECT}.${BILLING_DATASET}.${BILLING_TABLE}"'`
+  WHERE usage_start_time >= TIMESTAMP(DATE_TRUNC(DATE_SUB(CURRENT_DATE(), INTERVAL 1 MONTH), MONTH))
+    AND usage_start_time <  TIMESTAMP(DATE_TRUNC(CURRENT_DATE(), MONTH))
+    AND EXISTS (SELECT 1 FROM UNNEST(labels) WHERE key = "goog-k8s-cluster-name")
+  GROUP BY cluster, namespace, workload, currency
+  ORDER BY net_usd DESC
+  LIMIT 50' 2>/dev/null \
+  || echo "COST-GCP-024 reports excluded, reason: bq denied or the GKE allocation labels are absent (enable GKE cost allocation on the cluster)"
+```
+
+**A freshly enabled export has no history.** Neither the billing export nor GKE cost allocation
+backfills: both start at the moment they are switched on. So a last-full-month window returns
+**zero rows** on an export enabled days ago, which must never be read as "no spend". When the
+month query comes back empty, re-run it over the data that exists — swap the `WHERE` clause for
+`usage_start_time >= TIMESTAMP(DATE_SUB(CURRENT_DATE(), INTERVAL 7 DAY))` — and label the
+finding with the window actually covered (`net spend, 7d — export enabled <date>, partial
+month`). Say the coverage out loud rather than annualising a partial week into a yearly figure.
+
+Expected: one row per cluster/namespace/workload with its net monthly spend. A cluster that
+appears with spend but **no** namespace rows has cost allocation off — report that as the
+reason, never as "the namespaces cost nothing". These are **verbatim billing figures**, so a
+COST-K8S finding may cite them as its `savings_source`; a figure derived by multiplying a rate
+by a quantity may not (section 1).
 
 Expected: the top services and SKUs by last-month spend, in the export's own `currency`, reported as **context** beside the ranked savings — for example, so a reader sees that Compute Engine SKUs dominate the bill, which frames why the idle-VM and CUD recommendations matter most. If no billing export is configured, COST-GCP-023 reports `excluded, reason: "no Cloud Billing BigQuery export configured"`, not a fabricated breakdown. Never present spend as savings; the two are different numbers and mixing them misleads a budget conversation.
 

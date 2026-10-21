@@ -25,7 +25,7 @@ Kubernetes bills nothing on its own — the money lives in the cloud nodes and d
 | COST-K8S-005 | Orphaned Released / never-bound Available PersistentVolumes still holding a billable backing disk | `kubectl get pv -o json` | None (presence fact) |
 | COST-K8S-006 | Completed / failed Jobs (and their Pods) never cleaned up (no `ttlSecondsAfterFinished`) | `kubectl get jobs,pods -o json` | None (presence fact) |
 | COST-K8S-007 | Under-packed nodes / node-pool headroom (summed pod requests far below allocatable across the pool) | `kubectl get nodes` + `kubectl top nodes` + Prometheus | None — ratio fact (surplus node count) |
-| COST-K8S-008 | Cluster-cost allocation + right-sizing recommendation, when Kubecost/OpenCost is installed | Kubecost `/model/*` **or** OpenCost `/allocation/*` HTTP API | **Native $** — verbatim from Kubecost savings API (`monthlySavings`); OpenCost `totalCost` is verbatim actual spend, never a derived saving |
+| COST-K8S-008 | Cluster / namespace / workload cost allocation, and a right-sizing figure where the source offers one | **On GKE, the cloud's own billing export** (COST-GCP-024 — nodes are Compute Engine VMs, so their real cost is already billed; GKE cost allocation adds the namespace/workload labels). **Or** an existing Kubecost `/model/*` / OpenCost `/allocation/*` endpoint | **Native $** — verbatim from the billing export, or from Kubecost `monthlySavings`; OpenCost `totalCost` is verbatim actual spend. Never a figure derived by multiplying a rate by a quantity |
 
 Only **COST-K8S-008** can ever carry a dollar, and only when the integration is present and returns one. **COST-K8S-001 through COST-K8S-007 are presence/ratio facts and carry no `$` under any circumstance.**
 
@@ -33,9 +33,9 @@ Only **COST-K8S-008** can ever carry a dollar, and only when the integration is 
 
 Every check here depends on the doctor gate's Kubernetes reachability probe plus a cost-specific probe row, `kubernetes cost-metrics` (`skills/doctor/scripts/doctor.sh`). That probe is informational and **never fails the run**; a missing scope **excludes the affected check with the reason**, it never guesses. The dependency splits three ways, so state the split explicitly rather than excluding the whole provider when only part of it is blocked:
 
-- **Ratio checks (COST-K8S-001, -003 usage ratio, -004, -007)** need a metrics source: metrics-server answering `kubectl top`, **or** a Prometheus scraping `kube-state-metrics` + cAdvisor. If neither is reachable → those checks report `excluded, reason: "no metrics source (metrics-server / Prometheus) reachable"`. Never fabricate usage.
+- **Ratio checks (COST-K8S-001, -003 usage ratio, -004, -007)** need a windowed metrics source, resolved in this order: (1) an explicit `kubernetes.prometheus_url` scraping `kube-state-metrics` + cAdvisor; (2) **on GKE, Cloud Monitoring** — `kubernetes.io/container/*` is already there under the `roles/monitoring.viewer` this audit holds, with roughly six weeks of retention, so **no extra setup and nothing to install** (section 6b); (3) metrics-server answering `kubectl top`, which is a **snapshot** and must be labelled one (section 4). If none is reachable → `excluded, reason: "no metrics source (Prometheus / Cloud Monitoring / metrics-server) reachable"`. Never fabricate usage.
 - **Plain-`get` presence checks (COST-K8S-002, -003 idle/bound, -005, -006)** need only `list`/`get` view RBAC already covered by the base Kubernetes doctor probe, so they still run even when no metrics source exists.
-- **COST-K8S-008** needs a configured Kubecost/OpenCost endpoint (`kubernetes.cost_integration_url` in `toolkit.yaml`). Absent → `excluded, reason: "no Kubecost/OpenCost integration configured"`. **Never assume it is installed.**
+- **COST-K8S-008** needs a cost source, resolved in this order: (1) **on GKE, the Cloud Billing export** via COST-GCP-024 (`gcp.billing_bq_dataset` + GKE cost allocation on the cluster) — first-party, nothing to install; (2) an **existing** Kubecost/OpenCost endpoint at `kubernetes.cost_integration_url`. Absent both → `excluded, reason: "no cost source: neither a GCP billing export with GKE cost allocation nor a Kubecost/OpenCost endpoint"`. **Never assume an integration is installed, and never ask a customer to install one so that we can audit them** — on a managed cloud the billing data is already ours to read.
 
 ```bash
 set -eu
@@ -102,7 +102,50 @@ curl -sG "$PROM_URL/api/v1/query" \
            | "\(.metric.namespace)/\(.metric.pod)/\(.metric.container)\tmem_max/request=\(.value[1]|tonumber|.*1000|round/1000)"'
 ```
 
-**metrics-server path (fallback — a snapshot).** When Prometheus is not configured, read the current usage from `kubectl top` and the requests from the pod spec, then compute the ratio yourself. Label it a snapshot:
+**Cloud Monitoring path (GKE — a real window, with nothing to install).** When no
+`kubernetes.prometheus_url` is set and the cluster is GKE, do **not** fall through to the
+snapshot: `kubernetes.io/container/*` utilisation is already in Cloud Monitoring, retained for
+roughly six weeks, readable with the `roles/monitoring.viewer` this audit already requires. Same
+identity preamble and the same `timeSeries` GET shape as
+`audit-gcp/references/gcp-checks.md` — keep them in step.
+
+```bash
+set -eu
+GCP_PROJECT="your-project-id"      # gcp.project
+MON_API="https://monitoring.googleapis.com/v3"
+if [ -n "${GOOGLE_APPLICATION_CREDENTIALS:-}" ]; then TOKEN="$(gcloud auth application-default print-access-token)"; export CLOUDSDK_AUTH_ACCESS_TOKEN="$TOKEN"; else TOKEN="$(gcloud auth print-access-token)"; fi
+# Portable 7-day window: BSD date first, GNU fallback; both labeled.
+START="$(date -u -v-7d +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d '7 days ago' +%Y-%m-%dT%H:%M:%SZ)"
+END="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+# CPU: p95 of request_utilization over the window, per container. Mirrors the Prometheus p95 above.
+curl -fsSG --max-time 60 -H "Authorization: Bearer ${TOKEN}" \
+  "${MON_API}/projects/${GCP_PROJECT}/timeSeries" \
+  --data-urlencode 'filter=metric.type = "kubernetes.io/container/cpu/request_utilization"' \
+  --data-urlencode "interval.startTime=${START}" --data-urlencode "interval.endTime=${END}" \
+  --data-urlencode 'aggregation.alignmentPeriod=3600s' \
+  --data-urlencode 'aggregation.perSeriesAligner=ALIGN_PERCENTILE_95' \
+  | jq -r '.timeSeries[]? | "\(.resource.labels.cluster_name)/\(.resource.labels.namespace_name)/\(.resource.labels.pod_name)/\(.resource.labels.container_name)\tcpu_p95_of_request=\([.points[].value.doubleValue] | max)"'
+# Memory: MAX of request_utilization (memory is not compressible — peak, never p95).
+curl -fsSG --max-time 60 -H "Authorization: Bearer ${TOKEN}" \
+  "${MON_API}/projects/${GCP_PROJECT}/timeSeries" \
+  --data-urlencode 'filter=metric.type = "kubernetes.io/container/memory/request_utilization"' \
+  --data-urlencode "interval.startTime=${START}" --data-urlencode "interval.endTime=${END}" \
+  --data-urlencode 'aggregation.alignmentPeriod=3600s' \
+  --data-urlencode 'aggregation.perSeriesAligner=ALIGN_MAX' \
+  | jq -r '.timeSeries[]? | "\(.resource.labels.cluster_name)/\(.resource.labels.namespace_name)/\(.resource.labels.pod_name)/\(.resource.labels.container_name)\tmem_max_of_request=\([.points[].value.doubleValue] | max)"'
+```
+
+Expected: a ratio per container already expressed as a fraction of its request, so a value of
+`0.075` is the same 13.3x over-provisioning the Prometheus query reports. Basis is
+`p95 over 7d (Cloud Monitoring)` for CPU and `max over 7d (Cloud Monitoring)` for memory —
+record that basis verbatim in the finding. An **empty** result is not "no over-provisioning":
+GKE system metrics can be switched off per cluster to save cost (`enableComponents` in
+`audit-gcp`'s `gke-clusters.json`), so an empty series means this cluster has no monitoring
+data — say so and fall through to the snapshot path, labelled.
+
+**metrics-server path (last fallback — a snapshot).** When neither a Prometheus URL nor Cloud
+Monitoring data is available, read the current usage from `kubectl top` and the requests from
+the pod spec, then compute the ratio yourself. Label it a snapshot:
 
 ```bash
 set -eu
@@ -269,7 +312,7 @@ curl -sG "$PROM_URL/api/v1/query" \
 # below to a negative node count. Only scheduled-pod requests reserve real capacity.
 ```
 
-Expected: a reservation ratio near 1.0 means the pool is well-packed. A low ratio (much of the allocatable CPU/memory is neither requested nor used across the pool) is the finding — report the ratio, the total node count, and how many nodes' worth of allocatable capacity is idle (`(1 - ratio) x node_count`, as a **node count**, not dollars), listing the candidate under-utilized nodes by name and instance type. No dollar: the node price belongs to the cloud provider's catalog (AWS/GCP), reached through correlation.json, not invented here. Respect anti-affinity, DaemonSet, and taint constraints before claiming a node is removable — a node kept for a GPU/spot/zonal constraint is not surplus.
+Expected: a reservation ratio near 1.0 means the pool is well-packed. A low ratio (much of the allocatable CPU/memory is neither requested nor used across the pool) is the finding — report the ratio, the total node count, and how many nodes' worth of allocatable capacity is idle (`(1 - ratio) x node_count`, as a **node count**, not dollars), listing the candidate under-utilized nodes by name and instance type. **On GKE the dollar is legitimately available and must be used:** these nodes are Compute Engine VMs, so their real billed cost is already in the Cloud Billing export. Join the surplus-node count and each node's `instance-type` from this section to the per-cluster net spend from COST-GCP-024, and cite that export as the `savings_source` — it is a verbatim provider figure, not a derived one. Report it under COST-K8S-008; this check stays a node-count ratio. Off a managed cloud (or with no export configured) there is **no dollar**: the node price belongs to the provider's catalog, reached through correlation.json, and is never invented here by multiplying a rate by a quantity. Respect anti-affinity, DaemonSet, and taint constraints before claiming a node is removable — a node kept for a GPU/spot/zonal constraint is not surplus.
 
 ## 12. Cluster-cost integration — Kubecost / OpenCost (COST-K8S-008)
 

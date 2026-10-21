@@ -187,6 +187,21 @@ gcp:
   # credentials_env: GOOGLE_APPLICATION_CREDENTIALS  # optional; names the variable holding a service
   #                                         # account key file path. Omit to use your active gcloud login.
   tier: read-only                           # read-only | elevated; audits require read-only
+  # --- cost (audit-cost) ---
+  # cost_checks: true                       # set false to skip the GCP Recommender cost checks entirely.
+  #                                         # When true (default) they need recommender.googleapis.com
+  #                                         # enabled + roles/recommender.viewer. Recommender is the ONLY
+  #                                         # source of a GCP savings dollar — see connect
+  #                                         # references/providers.md "GCP cost prerequisites".
+  # billing_bq_dataset: my_billing_export   # BigQuery dataset holding the gcp_billing_export_v1_* tables.
+  #                                         # This is the ONLY source of your actual spend by SKU (the
+  #                                         # denominator for every savings figure). It is a billing-account
+  #                                         # level export that takes a few DAYS to accumulate data, so set
+  #                                         # it up well before the audit. Needs bigquery.googleapis.com,
+  #                                         # roles/bigquery.jobUser, roles/bigquery.dataViewer on the
+  #                                         # dataset, and the `bq` CLI. Omit it and COST-GCP-023 is
+  #                                         # excluded with that reason — savings are then a floor, with
+  #                                         # no total spend to measure them against.
 
 azure:
   subscription_id: 00000000-0000-0000-0000-000000000000  # subscription the audits target (one per run); auth is `az login`
@@ -214,6 +229,23 @@ github:
 kubernetes:
   context: your-kube-context                # kubectl context for cluster checks
   # monitoring_namespace: monitoring
+  # --- cost (audit-cost) ---
+  # On GKE the audit needs NEITHER of the keys below: node cost comes from the GCP billing
+  # export (GKE nodes are Compute Engine VMs) and per-namespace attribution from GKE cost
+  # allocation, while the utilisation window comes from Cloud Monitoring — all first-party,
+  # all under read access the audit already holds. Set these only to override that.
+  # cost_integration_url: http://localhost:9003  # OPTIONAL accelerator. If you ALREADY run Kubecost
+  #                                         # (`/model`) or OpenCost (`/allocation`), point this at it and
+  #                                         # the audit reads its figures verbatim instead of attributing
+  #                                         # cost itself. Never required — and never a reason to install
+  #                                         # a new tool just to be audited.
+  # prometheus_url: http://localhost:9090   # OPTIONAL override for the utilisation window (default 7d).
+  #                                         # Use it for a non-GKE cluster, or when Cloud Monitoring is
+  #                                         # disabled on the cluster (some teams switch it off to save
+  #                                         # cost). Point it at Prometheus, VictoriaMetrics or Thanos.
+  #                                         # With neither this nor Cloud Monitoring the audit falls back
+  #                                         # to `kubectl top` — a point-in-time SNAPSHOT, labelled as one
+  #                                         # and never presented as sustained.
 
 slack:
   webhook_env: SCOUTFLO_SLACK_WEBHOOK       # incoming-webhook URL for audit briefs

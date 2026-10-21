@@ -17,6 +17,7 @@ good() {
   "schema":"scoutflo-cost/v1","toolkit_version":"0.1.79","skill":"audit-cost","target":"cost",
   "run_date":"2026-08-03","generated_at":"2026-08-03T12:00:00Z",
   "providers_covered":["aws"],
+  "providers_excluded":[{"provider":"gcp","reason":"recommender.googleapis.com disabled"}],
   "summary":{"opportunities_total":2,"opportunities_with_native_figure":1,"presence_fact_opportunities":1,
     "monthly_savings_identified_usd":340,"annual_savings_identified_usd":4080,
     "largest_single_lever":{"id":"COST-AWS-001","monthly_usd":340,"title":"right-size"},"deduplicated_overlaps":0},
@@ -80,6 +81,31 @@ echo "PASS"
 echo "Test 10: empty providers_covered is REJECTED"
 mutate '.providers_covered = []'
 expect_fail "checker accepted an empty providers_covered"
+echo "PASS"
+
+echo "Test 11: a missing providers_excluded is REJECTED (exclusions must never be silent)"
+mutate 'del(.providers_excluded)'
+expect_fail "checker accepted a report with no providers_excluded field"
+echo "PASS"
+
+echo "Test 12: an exclusion with no reason is REJECTED (a reasonless exclusion is a silent drop)"
+mutate '.providers_excluded = [{"provider":"gcp"}]'
+expect_fail "checker accepted an exclusion carrying no reason"
+echo "PASS"
+
+echo "Test 13: a provider in BOTH covered and excluded is REJECTED"
+mutate '.providers_excluded = [{"provider":"aws","reason":"scope missing"}]'
+expect_fail "checker accepted a provider listed as both covered and excluded"
+echo "PASS"
+
+echo "Test 14: zero native dollars with NOTHING excluded is REJECTED (blocked run must not read as 'no waste')"
+mutate '.findings = [.findings[1]] | .summary.opportunities_total = 1 | .summary.opportunities_with_native_figure = 0 | .summary.presence_fact_opportunities = 1 | .summary.monthly_savings_identified_usd = 0 | .summary.annual_savings_identified_usd = 0 | .providers_excluded = []'
+expect_fail "checker accepted a \$0 cost report with no stated reason"
+echo "PASS"
+
+echo "Test 15: zero native dollars WITH a stated exclusion PASSES (honest 'could not look')"
+mutate '.findings = [.findings[1]] | .summary.opportunities_total = 1 | .summary.opportunities_with_native_figure = 0 | .summary.presence_fact_opportunities = 1 | .summary.monthly_savings_identified_usd = 0 | .summary.annual_savings_identified_usd = 0 | .providers_excluded = [{"provider":"aws","reason":"Cost Explorer scope missing"}] | .providers_covered = ["gcp"]'
+sh "$CHECK" "$WORK/f.json" >/dev/null 2>&1 || { echo "FAIL: checker rejected an honest \$0 report that names its exclusion" >&2; exit 1; }
 echo "PASS"
 
 echo

@@ -22,7 +22,7 @@ FAIL=0
 fail() { echo "COST-FAIL: $1"; FAIL=1; }
 
 # 1. Envelope.
-for k in schema toolkit_version skill target run_date generated_at providers_covered summary findings; do
+for k in schema toolkit_version skill target run_date generated_at providers_covered providers_excluded summary findings; do
   jq -e --arg k "$k" 'has($k)' "$F" >/dev/null 2>&1 || fail "missing required envelope field: $k"
 done
 sch="$(jq -r '.schema // ""' "$F")"
@@ -61,6 +61,26 @@ d_presence="$(jq -r '.summary.presence_fact_opportunities // -1' "$F")"
 d_total="$(jq -r '.summary.opportunities_total // -1' "$F")"
 n_total="$(jq '.findings | length' "$F")"
 [ "$d_total" = "$n_total" ] || fail "summary.opportunities_total=$d_total != actual findings count $n_total"
+
+# 2e. EXCLUSION DISCLOSURE. "Never silently dropped" was stated in the schema but
+#     nothing enforced it, so a run whose cost scope was blocked could emit a clean-looking
+#     report with no dollars and no reason — indistinguishable from "we looked and found
+#     no waste". Live consequence: a customer read a thin cost section as good news.
+#     Every excluded provider must name itself and a reason.
+jq -e '(.providers_excluded | type) == "array"' "$F" >/dev/null 2>&1 \
+  || fail "providers_excluded must be an array (use [] when nothing was excluded)"
+badx="$(jq -r '[.providers_excluded[]? | select(((.provider // "") == "") or ((.reason // "") == "")) | (.provider // "?")] | join(" ")' "$F" 2>/dev/null)"
+[ -z "$badx" ] || fail "providers_excluded entries missing a provider or a reason (an exclusion with no reason is a silent drop): $badx"
+dupx="$(jq -r '[.providers_excluded[]?.provider] as $x | [.providers_covered[]? | select(. as $c | $x | index($c))] | join(" ")' "$F" 2>/dev/null)"
+[ -z "$dupx" ] || fail "provider(s) in BOTH providers_covered and providers_excluded (a provider either ran or it did not): $dupx"
+
+# 2f. A ZERO TOTAL MUST BE EXPLAINED. If not one provider produced a native figure, the
+#     report has to say why — otherwise "could not look" renders identically to "nothing
+#     to save", which is the exact failure this rule exists to stop.
+if [ "$n_native" = "0" ]; then
+  nx="$(jq -r '(.providers_excluded | length) // 0' "$F" 2>/dev/null)"
+  [ "${nx:-0}" -gt 0 ] || fail "no finding carries a provider-native dollar figure, yet providers_excluded is empty: a \$0 cost report with no stated reason is indistinguishable from a blocked run. Record why each configured provider produced no figure (missing scope, API disabled, cost_checks:false, or 'returned no COST recommendations with full scope confirmed')."
+fi
 
 # 3. Ranking: native-figure findings must be sorted by descending savings, and
 #    must all appear before presence-fact findings (the report leads with money).

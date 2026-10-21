@@ -1506,12 +1506,41 @@ else
           if [ "$GCP_COST_CHECKS" = "false" ]; then
             row "$GCP_INT" cost-permissions yes "${GCP_CRED_VAR:-none}" skipped - "gcp.cost_checks is false in toolkit.yaml; audit-cost GCP Recommender checks will be skipped"
           else
-            # status-probe-ok: informational cost-permissions probe on googleapis.com (fixed JSON API), skipped either way — never a pass/fail gate.
+            # Probe TWO recommender families, not one. The compute-image recommender alone proves
+            # only that the API is on and the role reads compute; it says nothing about the
+            # commitment family, which is where most priced savings usually sit (committed-use
+            # discounts). A pass on one family while another is disabled is a false green: the
+            # operator is told dollars are available, then the audit silently finds none.
+            GCP_REC_REGION="$(tv gcp "$GCP_KIND" "$_gpi" region)"; [ -n "$GCP_REC_REGION" ] || GCP_REC_REGION="us-central1"
+            # status-probe-ok: informational cost-permissions probes on googleapis.com (fixed JSON API), skipped either way — never a pass/fail gate.
             GCP_REC_CODE="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 -H "Authorization: Bearer ${GCP_TOKEN}" "https://recommender.googleapis.com/v1/projects/${GCP_PROJECT}/locations/global/recommenders/google.compute.image.IdleResourceRecommender/recommendations?pageSize=1" 2>/dev/null || echo 000)"
-            if [ "$GCP_REC_CODE" = "200" ]; then
-              row "$GCP_INT" cost-permissions yes "${GCP_CRED_VAR:-none}" pass "$GCP_REC_CODE" -
+            # status-probe-ok: same informational probe, commitment (committed-use discount) family.
+            GCP_CUD_CODE="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 -H "Authorization: Bearer ${GCP_TOKEN}" "https://recommender.googleapis.com/v1/projects/${GCP_PROJECT}/locations/${GCP_REC_REGION}/recommenders/google.compute.commitment.UsageCommitmentRecommender/recommendations?pageSize=1" 2>/dev/null || echo 000)"
+            GCP_REC_UNLOCK="Unlock: gcloud services enable recommender.googleapis.com --project ${GCP_PROJECT} ; then grant your audit identity: gcloud projects add-iam-policy-binding ${GCP_PROJECT} --member='serviceAccount:<your-audit-SA>@${GCP_PROJECT}.iam.gserviceaccount.com' --role=roles/recommender.viewer . audit-cost also reads the Cloud SQL, GKE/container and Cloud Run recommender families; each needs its own API enabled to contribute a figure."
+            if [ "$GCP_REC_CODE" = "200" ] && [ "$GCP_CUD_CODE" = "200" ]; then
+              row "$GCP_INT" cost-permissions yes "${GCP_CRED_VAR:-none}" pass "$GCP_REC_CODE" "compute + commitment families readable; Cloud SQL / GKE / Cloud Run families are read per-check and reported excluded individually if their API is off"
+            elif [ "$GCP_REC_CODE" = "200" ]; then
+              row "$GCP_INT" cost-permissions yes "${GCP_CRED_VAR:-none}" skipped "$GCP_CUD_CODE" "PARTIAL: compute family reads (HTTP 200) but the commitment/committed-use-discount family does not (HTTP ${GCP_CUD_CODE} in ${GCP_REC_REGION}) — committed-use savings are usually the largest single line, so a cost run now will understate. ${GCP_REC_UNLOCK}"
             else
-              row "$GCP_INT" cost-permissions yes "${GCP_CRED_VAR:-none}" skipped "$GCP_REC_CODE" "Recommender API/viewer role not confirmed (HTTP ${GCP_REC_CODE}); audit-cost will report GCP native-dollar checks excluded with this reason, presence-fact checks still run. Unlock: gcloud services enable recommender.googleapis.com --project ${GCP_PROJECT} ; then grant your audit identity: gcloud projects add-iam-policy-binding ${GCP_PROJECT} --member='serviceAccount:<your-audit-SA>@${GCP_PROJECT}.iam.gserviceaccount.com' --role=roles/recommender.viewer"
+              row "$GCP_INT" cost-permissions yes "${GCP_CRED_VAR:-none}" skipped "$GCP_REC_CODE" "Recommender API/viewer role not confirmed (HTTP ${GCP_REC_CODE}); audit-cost will report GCP native-dollar checks excluded with this reason, presence-fact checks still run. ${GCP_REC_UNLOCK}"
+            fi
+          fi
+          # Spend denominator: the Cloud Billing BigQuery export is the ONLY source of actual
+          # spend by SKU. Without it every savings figure is a floor with nothing to measure it
+          # against, so preflight it explicitly instead of discovering it mid-audit.
+          GCP_BQ_DS="$(tv gcp "$GCP_KIND" "$_gpi" billing_bq_dataset)"
+          if [ -z "$GCP_BQ_DS" ]; then
+            row "$GCP_INT" billing-export yes "${GCP_CRED_VAR:-none}" skipped - "no gcp.billing_bq_dataset in toolkit.yaml: COST-GCP-023 (spend by SKU) will be excluded, so savings have no total-spend denominator. The export is billing-account level and takes a few DAYS to accumulate data — start it early. Setup: connect references/providers.md 'GCP cost prerequisites'"
+          elif ! command -v bq >/dev/null 2>&1; then
+            row "$GCP_INT" billing-export yes "${GCP_CRED_VAR:-none}" fail - "gcp.billing_bq_dataset is set (${GCP_BQ_DS}) but the bq CLI is not installed; it ships with the Google Cloud SDK (gcloud components install bq)"
+          else
+            GCP_BQ_OUT="$(bq ls --project_id="$GCP_PROJECT" --format=json "$GCP_BQ_DS" 2>&1 || true)"
+            if printf '%s' "$GCP_BQ_OUT" | grep -q 'gcp_billing_export_v1'; then
+              row "$GCP_INT" billing-export yes "${GCP_CRED_VAR:-none}" pass - "gcp_billing_export_v1_* present in ${GCP_BQ_DS}"
+            elif printf '%s' "$GCP_BQ_OUT" | grep -qiE 'denied|forbidden|not found|403|404'; then
+              row "$GCP_INT" billing-export yes "${GCP_CRED_VAR:-none}" fail - "cannot read dataset ${GCP_BQ_DS}: enable bigquery.googleapis.com and grant roles/bigquery.jobUser plus roles/bigquery.dataViewer on that dataset to the audit identity"
+            else
+              row "$GCP_INT" billing-export yes "${GCP_CRED_VAR:-none}" fail - "dataset ${GCP_BQ_DS} is readable but holds no gcp_billing_export_v1_* table: confirm the Cloud Billing export targets THIS dataset, and remember it needs a few days before the table appears and fills"
             fi
           fi
         fi
@@ -1679,6 +1708,43 @@ else
               row "$K_INT" rbac yes - fail - "context error: ${K_LINE}; run kubectl config get-contexts and fix kubernetes.context — a GKE/EKS/AKS context failing here often needs exec-plugin reauth (gcloud auth login / aws sso login / az aks get-credentials), not an RBAC change. A private or unreachable API server (no such host, dial tcp, i/o timeout, connection refused) is a NETWORK problem, not RBAC: run from inside the VNet, add your IP to the cluster API-server authorized ranges, or open a tunnel/JIT session and point KUBECONFIG at its kubeconfig. 'az aks command invoke' only carries a single tiny read (its 512 KB cap truncates a real inventory pull), so it is not a substitute" ;;
           esac
         fi
+      fi
+      # Cost allocation. On GKE this needs NO third-party tool and NO customer install: node
+      # cost comes from the GCP billing export (GKE nodes are Compute Engine VMs) and
+      # per-namespace attribution from GKE cost allocation, both first-party. An existing
+      # Kubecost/OpenCost endpoint is only an accelerator whose figures we read verbatim.
+      # Never ask a customer to install a tool so that we can audit them.
+      K_COST_URL="$(tv kubernetes "$KUBE_KIND" "$_ki" cost_integration_url)"
+      if [ -z "$K_COST_URL" ]; then
+        row "$K_INT" cost-allocation yes - skipped - "no kubernetes.cost_integration_url (expected, and fine): on GKE the audit attributes cost from the GCP billing export plus GKE cost allocation and this cluster's own requests/node data — set gcp.billing_bq_dataset for that. Point this key at an EXISTING Kubecost/OpenCost only if you already run one"
+      else
+        note "doctor: checking ${K_INT} cost-allocation: GET ${K_COST_URL}/allocation"
+        K_CA_BODY="$(mktemp)"; K_CA_RC=0
+        K_CA_META="$(curl -s -o "$K_CA_BODY" -w '%{http_code} %{content_type}' --connect-timeout "$CONNECT_TIMEOUT" --max-time "$MAX_TIME" "${K_COST_URL%/}/allocation?window=1d" 2>/dev/null)" || K_CA_RC=$?
+        K_CA_CODE="${K_CA_META%% *}"; K_CA_CT="${K_CA_META#* }"
+        if [ "$K_CA_RC" -ne 0 ]; then
+          row "$K_INT" cost-allocation yes - fail "000" "$(transport_hint "$K_CA_RC") (${K_COST_URL})"
+        elif [ "$K_CA_CODE" = "200" ] && printf '%s' "$K_CA_CT" | grep -qi json; then
+          row "$K_INT" cost-allocation yes - pass "$K_CA_CODE" "cost allocation readable; COST-K8S-008 can carry a native dollar"
+        elif [ "$K_CA_CODE" = "200" ]; then
+          row "$K_INT" cost-allocation yes - fail "$K_CA_CODE" "200 but Content-Type='${K_CA_CT}' is not JSON — that is a UI or proxy page, not the Kubecost /model or OpenCost /allocation API; point kubernetes.cost_integration_url at the API base"
+        else
+          row "$K_INT" cost-allocation yes - fail "$K_CA_CODE" "$(http_hint "$K_CA_CODE") — expected the Kubecost /model or OpenCost /allocation API at ${K_COST_URL}"
+        fi
+        rm -f "$K_CA_BODY"
+      fi
+      # Metrics window. A sustained over-provisioning claim needs a real window — but on GKE we
+      # do NOT have to ask for one: Cloud Monitoring already holds ~6 weeks of
+      # kubernetes.io/container/* utilisation, under the monitoring.viewer role the audit
+      # already needs. Order of preference: an explicit prometheus_url override, else Cloud
+      # Monitoring, else a labelled `kubectl top` snapshot. Say which will be used up front.
+      K_PROM_URL="$(tv kubernetes "$KUBE_KIND" "$_ki" prometheus_url)"
+      if [ -n "$K_PROM_URL" ]; then
+        row "$K_INT" cost-metrics-window yes - pass - "windowed: kubernetes.prometheus_url overrides the default source, so utilisation is a p95/max over a real window (default 7d)"
+      elif [ -n "${GCP_PROJECT:-}" ]; then
+        row "$K_INT" cost-metrics-window yes - pass - "windowed: no extra setup needed — utilisation comes from Cloud Monitoring (kubernetes.io/container/* over the default 7d window) using the monitoring.viewer access this audit already holds. Set kubernetes.prometheus_url only to override, or if Cloud Monitoring is switched off on this cluster"
+      else
+        row "$K_INT" cost-metrics-window yes - skipped - "no windowed metrics source for a non-GCP cluster: utilisation falls back to 'kubectl top', a point-in-time SNAPSHOT which the audit labels as such and must not present as sustained. Set kubernetes.prometheus_url to get a windowed p95/max"
       fi
     fi
     _ki=$((_ki+1))

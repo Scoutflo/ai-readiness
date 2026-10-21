@@ -1,5 +1,47 @@
 # Changelog
 
+## 0.1.224
+
+**GCP and GKE cost: real dollars from first-party data, and a blocked scope can no longer
+read as "no waste".** A customer's GCP cost review showed the lane priced what Google had
+priced and then went quiet — counting 109 unattached disks, 55 idle IPs, 311 uncommitted VMs
+and two clusters holding 754 idle cores without a figure against any of them. The sources to
+price them existed; nothing could reach them.
+
+- **GKE cost needs no third-party tool.** GKE nodes are Compute Engine VMs, so their cost is
+  already in the Cloud Billing export. `COST-K8S-008` now resolves its cost source in order:
+  the GCP billing export via the new **COST-GCP-024** (per cluster, namespace and workload,
+  using GKE cost allocation's own labels) first, then an *existing* Kubecost/OpenCost endpoint.
+  The toolkit no longer asks a customer to install anything so that it can audit them, and
+  `COST-K8S-007`'s surplus-node count can now cite a verbatim billed figure instead of refusing
+  a dollar outright.
+- **Windowed utilisation on GKE with no setup.** The ratio checks resolve their metrics source
+  in order: an explicit `kubernetes.prometheus_url`, then **Cloud Monitoring**
+  (`kubernetes.io/container/*`, already covered by the `monitoring.viewer` role the audit
+  requires, ~6 weeks retained), then `kubectl top` as a clearly labelled snapshot. A snapshot is
+  never presented as a sustained trend, and an empty Cloud Monitoring series is reported as
+  "monitoring is off on this cluster", not as "nothing is over-provisioned".
+- **Net spend, not gross.** `COST-GCP-023` now unnests `credits` and groups by project as well
+  as service and SKU, and discovers the export table instead of relying on a hand-edited
+  literal — preferring the detailed resource-level export, the only flavour GKE cost allocation
+  can attribute.
+- **Two config keys that did not really exist now do.** `gcp.billing_bq_dataset` and
+  `kubernetes.cost_integration_url` were referenced only inside reference docs; both are now in
+  the config template, documented in a new **GCP cost prerequisites** section in connect
+  (which previously documented Datadog's cost scopes and nothing for GCP), and preflighted by
+  `/scoutflo:doctor` via new `billing-export`, `cost-allocation` and `cost-metrics-window` rows.
+- **No more silent false-clean.** Six unguarded zone/region enumerations in the GCP lane now
+  fail closed: a denied `compute.viewer` left the list empty, every loop ran zero times with
+  its errors discarded, and the result read as a project with nothing to save. The
+  `cost-permissions` probe also checks the commitment (committed-use) recommender family, not
+  just compute, so a green row no longer promises dollars the run cannot produce.
+- **The validator enforces the disclosure it always claimed.** `providers_excluded` is now
+  required, every entry must name a provider *and* a reason, no provider may appear as both
+  covered and excluded, and **a run with no provider-native dollar must say why** — so "we
+  could not look" can never render identically to "there is nothing to save". Also fixed a
+  latent break where the GCP identity preamble never minted a token on the plain gcloud-login
+  path.
+
 ## 0.1.223
 
 **A token saved in the secret store now reaches every step that needs it, and only that token.**
