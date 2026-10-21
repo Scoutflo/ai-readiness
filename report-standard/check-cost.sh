@@ -62,6 +62,35 @@ d_total="$(jq -r '.summary.opportunities_total // -1' "$F")"
 n_total="$(jq '.findings | length' "$F")"
 [ "$d_total" = "$n_total" ] || fail "summary.opportunities_total=$d_total != actual findings count $n_total"
 
+# 2g. THE INDICATIVE CLASS stays out of the savings total, and stays sourced.
+#     An indicative figure is computed from the provider's published price for a SKU already on
+#     the bill. It is useful precisely because whole categories of waste are never
+#     provider-priced — but the moment it is summed into the headline, or stated without its
+#     basis, it becomes the invented dollar this file exists to prevent.
+noind="$(jq -r '.findings[] | select((.indicative_monthly_usd // null) != null and ((.indicative_source // "") == "")) | .id' "$F")"
+[ -z "$noind" ] || fail "findings with indicative_monthly_usd but no indicative_source (an indicative figure must name the published SKU price and the single step it prices): $(echo "$noind" | tr '\n' ' ')"
+bothfig="$(jq -r '.findings[] | select((.indicative_monthly_usd // null) != null and (.estimated_monthly_savings_usd // null) != null) | .id' "$F")"
+[ -z "$bothfig" ] || fail "findings carrying BOTH estimated_monthly_savings_usd and indicative_monthly_usd (a figure is provider-native or indicative, never both — pick the native one): $(echo "$bothfig" | tr '\n' ' ')"
+ind_sum="$(jq -r '[.findings[].indicative_monthly_usd | select(. != null)] | add // 0' "$F")"
+d_ind="$(jq -r '.summary.indicative_monthly_usd // 0' "$F")"
+jq -e --argjson a "$ind_sum" --argjson d "$d_ind" '(($d - $a) | if . < 0 then -. else . end) < 0.01' "$F" >/dev/null 2>&1 \
+  || fail "summary.indicative_monthly_usd=$d_ind != sum of per-finding indicative figures=$ind_sum"
+# The hard one: the savings total must NOT have absorbed any indicative figure.
+jq -e --argjson a "$ind_sum" '
+  ([.findings[].estimated_monthly_savings_usd | select(. != null)] | add // 0) as $native
+  | ((.summary.monthly_savings_identified_usd // 0) - $native) as $d
+  | (if $d < 0 then -$d else $d end) < 0.01
+' "$F" >/dev/null 2>&1 \
+  || fail "summary.monthly_savings_identified_usd includes something other than provider-native figures — an indicative (published-list-price) figure must never be summed into the savings total; report it in summary.indicative_monthly_usd instead"
+
+# 2h. A WINDOWED NUMBER MUST NAME ITS WINDOW, and must not mix bases.
+#     "Peaked under 10% all week" and "usage was 6% at 15:30" are different claims. A finding
+#     that carries both lets a point-in-time snapshot be read as a sustained trend.
+nobasis="$(jq -r '.findings[] | select((.utilization // "") != "" and ((.basis // "") == "")) | .id' "$F")"
+[ -z "$nobasis" ] || fail "findings reporting a utilization with no basis (state 'p95 over 7d', 'max over 7d', or 'snapshot <ts>' so a snapshot is never read as a trend): $(echo "$nobasis" | tr '\n' ' ')"
+mixed="$(jq -r '.findings[] | select(((.basis // "") | test("snapshot"; "i")) and ((.basis // "") | test("over [0-9]+[dhm]"; "i"))) | .id' "$F")"
+[ -z "$mixed" ] || fail "findings whose basis mixes a snapshot with a window (split them into separate findings; one basis per finding): $(echo "$mixed" | tr '\n' ' ')"
+
 # 2e. EXCLUSION DISCLOSURE. "Never silently dropped" was stated in the schema but
 #     nothing enforced it, so a run whose cost scope was blocked could emit a clean-looking
 #     report with no dollars and no reason — indistinguishable from "we looked and found

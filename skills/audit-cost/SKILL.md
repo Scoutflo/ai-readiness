@@ -166,7 +166,27 @@ If `correlation.json` exists, annotate any finding whose resource overlaps a pri
 
 ## Phase 4: Rank, write findings.json, render report.md
 
-Rank findings native-figure-first (descending `estimated_monthly_savings_usd`), then presence facts. Build the summary: `opportunities_total`, the native-vs-presence split as **separate** counts, `monthly_savings_identified_usd` = the sum of only the native figures, `annual = monthly * 12`, and `largest_single_lever`. Write `findings.json` (`scoutflo-cost/v1`), then render `report.md` per the [report template](../../report-standard/report-template.md)'s cost/savings rule: **savings summary line first**, then per-provider ranked tables (resource, region, signal, `$X/mo` or `—`), then top opportunities as What / Where / Why / How / Done-when, then the evidence appendix.
+Rank findings native-figure-first (descending `estimated_monthly_savings_usd`), then indicative-figure findings, then presence facts. Build the summary: `opportunities_total`, the native-vs-presence split as **separate** counts, `monthly_savings_identified_usd` = the sum of only the native figures, `annual = monthly * 12`, and `largest_single_lever`. Write `findings.json` (`scoutflo-cost/v1`), then render `report.md` per the [report template](../../report-standard/report-template.md)'s cost/savings rule: **savings summary line first**, then per-provider ranked tables (resource, region, signal, `$X/mo` or `—`), then top opportunities as What / Where / Why / How / Done-when, then the evidence appendix.
+
+**Three numbers that must appear together, or the headline misleads.** A savings figure with no
+denominator cannot be judged, and a clean-looking report over partly-unmeasured spend is the single
+most expensive way to be wrong:
+
+- `observed_monthly_spend` — actual spend for the audited scope, from the billing export. Without
+  it, say so; never present savings as if the bill were unknown by choice.
+- `savings_pct_of_spend` — the savings as a percentage of that spend. Two separate numbers do not
+  tell a reader whether this found 2% or 40% of the bill; one number does. A low percentage over a
+  large bill is itself the finding: it means the priced levers are the floor and the unpriced
+  categories are where the money is.
+- `unassessed_monthly_spend` — spend that billed while **no check ran against it** (COST-GCP-034,
+  plus any target marked `assessable:false` such as an unreachable cluster). Report it beside the
+  savings, never only in an appendix, so a clean result is never mistaken for a clean estate.
+
+Render the **indicative** total in its own line and its own column, labelled "indicative, list
+price, before your discounts", and never add it to the savings total — `check-cost.sh` rejects a
+report that does. Every finding carrying a measured ratio states its `basis` (`p95 over 7d`,
+`max over 7d`, `snapshot <ts>`), and a single finding never mixes a window with a snapshot: split
+them, so a point-in-time reading is never read as a sustained trend.
 
 ```bash
 set -eu

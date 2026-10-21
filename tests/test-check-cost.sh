@@ -108,5 +108,40 @@ mutate '.findings = [.findings[1]] | .summary.opportunities_total = 1 | .summary
 sh "$CHECK" "$WORK/f.json" >/dev/null 2>&1 || { echo "FAIL: checker rejected an honest \$0 report that names its exclusion" >&2; exit 1; }
 echo "PASS"
 
+echo "Test 16: an indicative figure summed into the savings total is REJECTED"
+mutate '.findings[1].indicative_monthly_usd = 100 | .findings[1].indicative_source = "published pd-standard GB-month rate, one class transition" | .summary.indicative_monthly_usd = 100 | .summary.monthly_savings_identified_usd = (.summary.monthly_savings_identified_usd + 100)'
+expect_fail "checker let a published-list-price figure into the provider-native savings total"
+echo "PASS"
+
+echo "Test 17: an indicative figure with no indicative_source is REJECTED"
+mutate '.findings[1].indicative_monthly_usd = 100 | .summary.indicative_monthly_usd = 100'
+expect_fail "checker accepted an indicative figure that named no published price basis"
+echo "PASS"
+
+echo "Test 18: a finding carrying BOTH a native and an indicative figure is REJECTED"
+mutate '.findings[0].indicative_monthly_usd = 50 | .findings[0].indicative_source = "published rate" | .summary.indicative_monthly_usd = 50'
+expect_fail "checker accepted a finding with both a native and an indicative figure"
+echo "PASS"
+
+echo "Test 19: a correctly-reported indicative figure PASSES (sourced, separate, not in the total)"
+mutate '.findings[1].indicative_monthly_usd = 100 | .findings[1].indicative_source = "published Nearline GB-month rate; one storage-class transition" | .summary.indicative_monthly_usd = 100'
+sh "$CHECK" "$WORK/f.json" >/dev/null 2>&1 || { echo "FAIL: checker rejected a properly sourced, separately-reported indicative figure" >&2; exit 1; }
+echo "PASS"
+
+echo "Test 20: a utilization with no basis is REJECTED (a snapshot must not read as a trend)"
+mutate '.findings[1].utilization = "6% of requests"'
+expect_fail "checker accepted a utilization figure with no measurement basis"
+echo "PASS"
+
+echo "Test 21: a basis mixing a snapshot AND a window in one finding is REJECTED"
+mutate '.findings[1].utilization = "6% of requests" | .findings[1].basis = "p95 over 7d and snapshot 2026-10-21T15:30Z"'
+expect_fail "checker accepted one finding mixing a windowed and a snapshot basis"
+echo "PASS"
+
+echo "Test 22: a utilization with a single clear basis PASSES"
+mutate '.findings[1].utilization = "6% of requests" | .findings[1].basis = "p95 over 7d"'
+sh "$CHECK" "$WORK/f.json" >/dev/null 2>&1 || { echo "FAIL: checker rejected a utilization carrying one clear basis" >&2; exit 1; }
+echo "PASS"
+
 echo
 echo "=== check-cost self-test passed ==="

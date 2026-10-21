@@ -1,6 +1,6 @@
 {
   "name": "scoutflo",
-  "version": "0.1.224",
+  "version": "0.1.225",
   "description": "Audit cloud, Kubernetes and observability setups from Claude Code. Find monitoring and alert-routing gaps, review local evidence reports, and prioritize fixes. Use read-only audits with your credentials; approve supported setup changes before execution.",
   "author": {
     "name": "Scoutflo",

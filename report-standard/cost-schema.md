@@ -106,6 +106,10 @@ Schema identifier: `scoutflo-cost/v1`.
 | `monthly_savings_identified_usd` | number | Sum of **only** the provider-native `estimated_monthly_savings_usd` values. Never includes a recomputed or presence-fact number |
 | `annual_savings_identified_usd` | number | `monthly_savings_identified_usd * 12`, labelled an estimate |
 | `largest_single_lever` | object\|null | `{id, monthly_usd, title}` of the highest native-figure finding, or null if none |
+| `indicative_monthly_usd` | number | Sum of the non-null `indicative_monthly_usd` values, reported **separately** and never added to `monthly_savings_identified_usd`. `0` when none |
+| `observed_monthly_spend` | object\|null | `{amount, currency, period, source}` — actual spend for the audited scope, from the billing export. The **denominator**: without it a savings figure has no scale |
+| `savings_pct_of_spend` | number\|null | `monthly_savings_identified_usd` as a percentage of `observed_monthly_spend` converted to USD, or `null` when spend is unknown. Two separate numbers do not tell a reader whether 2% or 40% of the bill was found; this does |
+| `unassessed_monthly_spend` | object\|null | `{amount, currency, projects_or_targets, reason}` — spend that billed but **no check ran against** (COST-GCP-034 and any `assessable:false` target). Reported beside the savings so a clean result is never mistaken for a clean estate |
 | `deduplicated_overlaps` | integer | Findings annotated as overlapping a prior audit's cost finding via correlation.json |
 
 The two counts (`_with_native_figure` vs `presence_fact_`) MUST be reported
@@ -128,6 +132,10 @@ story when many opportunities have no number.
 | `evidence` | array | yes | ≥1 `{check, command, observed}`; the command is the real read-only call, `observed` is the trimmed real output |
 | `recommendation` | string | yes | What to do, in one or two sentences |
 | `utilization` | string | no | The observed utilization backing a rightsizing/idle finding |
+| `basis` | string | no | **Required on any finding whose number came from a measurement window**: the exact basis, e.g. `p95 over 7d`, `max over 7d`, or `snapshot <ISO ts>`. One finding carries ONE basis — never mix windowed and snapshot rows in a single finding; split them so a snapshot is never read as a trend |
+| `indicative_monthly_usd` | number\|null | no | A **third class** of figure: computed from the provider's own **published price for the SKU already on the bill**, applied to a quantity from the billing export or a provider API. A ceiling **before** committed-use, sustained-use and negotiated discounts. **Never** summed into `monthly_savings_identified_usd`, never annualised into a headline, and always rendered in its own column labelled "indicative, list price, before your discounts" |
+| `indicative_source` | string\|null | no | **Required whenever `indicative_monthly_usd` is non-null**: the SKU and published price basis used, plus the single priced step it describes (e.g. `one tier down`, `one storage-class transition`, `premium-minus-standard rate delta`). Without it the figure is an unsourced guess and the validator rejects it |
+| `assessable` | boolean | no | `false` when the resource **bills but could not be assessed** this run (unreachable cluster, denied scope). Its spend still appears in the context tables, so saying so is what stops billed-but-unchecked spend reading as healthy |
 | `deduplicated` | boolean | no | True when correlation.json shows this overlaps a prior audit's cost finding |
 
 ## The one hard rule (enforced by `check-cost.sh`)
