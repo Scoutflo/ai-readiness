@@ -29,6 +29,7 @@ works). Pass `--project` explicitly on every call:
 ```bash
 set -eu
 GCP_PROJECT="your-project-id"        # from toolkit.yaml gcp.project (resolved in Phase 0)
+export CLOUDSDK_CORE_DISABLE_PROMPTS=1   # read-only safety: a disabled API must fail, never prompt to enable itself
 gcloud auth list --filter=status:ACTIVE --format="value(account)" | head -n1 | grep -q . \
   || { echo "no active gcloud identity — run gcloud auth login / set credentials_env"; exit 1; }
 gcloud projects describe "$GCP_PROJECT" --format="value(projectId)" >/dev/null \

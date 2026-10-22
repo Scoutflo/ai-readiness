@@ -121,14 +121,22 @@ if [ -n "${GOOGLE_APPLICATION_CREDENTIALS:-}" ]; then TOKEN="$(gcloud auth appli
 # Portable 7-day window: BSD date first, GNU fallback; both labeled.
 START="$(date -u -v-7d +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d '7 days ago' +%Y-%m-%dT%H:%M:%SZ)"
 END="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-# CPU: p95 of request_utilization over the window, per container. Mirrors the Prometheus p95 above.
-curl -fsSG --max-time 60 -H "Authorization: Bearer ${TOKEN}" \
+# CPU: hourly MEAN from the API, then the p95 ACROSS those hourly points computed here.
+# Why not ALIGN_PERCENTILE_95: live-caught HTTP 400 —
+#   "The aligner cannot be applied to metrics with kind GAUGE and value type DOUBLE."
+# Percentile aligners only accept DISTRIBUTION metrics, and request_utilization is a double
+# gauge. So align hourly and take the percentile client-side; `hours` is reported alongside so
+# a short or gappy series is visible rather than silently averaged away.
+curl -fsSG --max-time 90 -H "Authorization: Bearer ${TOKEN}" \
   "${MON_API}/projects/${GCP_PROJECT}/timeSeries" \
   --data-urlencode 'filter=metric.type = "kubernetes.io/container/cpu/request_utilization"' \
   --data-urlencode "interval.startTime=${START}" --data-urlencode "interval.endTime=${END}" \
   --data-urlencode 'aggregation.alignmentPeriod=3600s' \
-  --data-urlencode 'aggregation.perSeriesAligner=ALIGN_PERCENTILE_95' \
-  | jq -r '.timeSeries[]? | "\(.resource.labels.cluster_name)/\(.resource.labels.namespace_name)/\(.resource.labels.pod_name)/\(.resource.labels.container_name)\tcpu_p95_of_request=\([.points[].value.doubleValue] | max)"'
+  --data-urlencode 'aggregation.perSeriesAligner=ALIGN_MEAN' \
+  | jq -r '.timeSeries[]?
+      | ([.points[].value.doubleValue] | sort) as $p | ($p | length) as $n
+      | select($n > 0)
+      | "\(.resource.labels.cluster_name)/\(.resource.labels.namespace_name)/\(.resource.labels.pod_name)/\(.resource.labels.container_name)\tcpu_p95_of_request=\(($p[(((($n-1)*95)/100) | floor)] * 1000 | round / 1000))\thours=\($n)"'
 # Memory: MAX of request_utilization (memory is not compressible — peak, never p95).
 curl -fsSG --max-time 60 -H "Authorization: Bearer ${TOKEN}" \
   "${MON_API}/projects/${GCP_PROJECT}/timeSeries" \
@@ -141,8 +149,12 @@ curl -fsSG --max-time 60 -H "Authorization: Bearer ${TOKEN}" \
 
 Expected: a ratio per container already expressed as a fraction of its request, so a value of
 `0.075` is the same 13.3x over-provisioning the Prometheus query reports. Basis is
-`p95 over 7d (Cloud Monitoring)` for CPU and `max over 7d (Cloud Monitoring)` for memory —
-record that basis verbatim in the finding. An **empty** result is not "no over-provisioning":
+`p95 of hourly means over 7d (Cloud Monitoring)` for CPU and `max over 7d (Cloud Monitoring)`
+for memory — record that basis verbatim in the finding, and say "of hourly means" rather than a
+bare "p95": the API aligns to the hour before this percentile is taken, so it is a percentile over
+168 hourly values, not over raw samples. **Check `hours` before trusting a ratio**: a series
+covering 6 hours of a 7-day window is a partial reading and belongs in the snapshot lane, not the
+windowed one. An **empty** result is not "no over-provisioning":
 GKE system metrics can be switched off per cluster to save cost (`enableComponents` in
 `audit-gcp`'s `gke-clusters.json`), so an empty series means this cluster has no monitoring
 data — say so and fall through to the snapshot path, labelled.
