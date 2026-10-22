@@ -475,7 +475,7 @@ general.
 3. Apply business context (Metadata Load): escalate critical-service findings,
    record exclusions `not-in-scope`, reduce severity for non-production-only
    gaps, order the cost section by `cost_sensitivity`.
-4. Emit one `checks[]` row for every stable `NR-*` readiness catalog check,
+4. Emit one `checks[]` row for every stable `NR-*` readiness catalog check, Every `not-in-scope` row additionally carries `not_in_scope_reason` — one of `inapplicable` (nothing of the kind exists on this target: a platform version, engine or configured stack without the feature), `target-gone` (proven decommissioned), `by-design` (the customer declared it, via `resource_intent` or an `exclusions` match) or `covered-elsewhere` (verified on the plane that owns it) — per [not-in-scope-reasons.md](../../report-standard/not-in-scope-reasons.md). A row you cannot evidence is `blocked`, not `not-in-scope`.
    including passes, partials, failures, blockers, and not-in-scope checks.
    Derive category counts, readiness, assessment coverage, and `score.check_set`
    from that complete ledger; never write them independently. `NROPT-*` findings

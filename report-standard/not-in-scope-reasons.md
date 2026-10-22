@@ -115,11 +115,14 @@ Use when the observed state is what the customer chose: a warm standby, a DR
 replica, a backup target, a deliberately cold environment, an accepted
 trade-off.
 
-**Must be declared, never inferred.** The only admissible evidence is a matching
-`intent` declaration in the business-context SSOT projection, captured through
-`/scoutflo:business-context`. Intent is a fact about the customer's plans. It is
-not visible in telemetry, it is not derivable from a naming convention, and a
-resource that *looks* like a standby is not a standby.
+**Must be declared, never inferred.** The admissible evidence is a customer
+declaration recorded in the business-context SSOT projection and captured through
+`/scoutflo:business-context` — either a matching `resource_intent` entry, or a
+matching `exclusions` / per-resource `action: "skip"` entry (an exclusion *is* a
+declaration: the customer said "do not judge this", which is why the exclusions
+path maps here and not to `inapplicable`). Intent is a fact about the customer's
+plans. It is not visible in telemetry, it is not derivable from a naming
+convention, and a resource that *looks* like a standby is not a standby.
 
 Specifically, **none of these establishes intent**: the resource name containing
 `standby`, `dr`, `backup`, `canary`, or `spare`; a label or tag asserting it; a
@@ -191,13 +194,15 @@ The practical test: could you name the exact rule, monitor, or object that
 satisfies this check, and say it is enabled? If yes, exonerate. If you can only
 name the *system* that probably holds it, reframe.
 
-**Emit the coverage gap, do not hide it.** When this audit cannot see the owning
-plane, the honest output is a `not-in-scope` row *plus* a stated coverage gap:
-the capability is owned elsewhere, this run did not verify it, and here is the
-integration that would. A `not-in-scope` row with no coverage gap recorded is
-how "we did not check" silently becomes "it is fine". If the owning plane *is*
-configured in the same `toolkit.yaml`, the right move is stronger still: point
-the reader at that audit's result instead of asserting coverage on its behalf.
+**When this audit cannot see the owning plane, the row is `blocked` — not this
+reason.** The honest output is a **`blocked` row plus a populated
+[`coverage_gap`](findings-schema.md)**: the capability is owned elsewhere, this
+run did not verify it, and here is the integration that would. Reaching for
+`not-in-scope` there is how "we did not check" silently becomes "it is fine",
+and because `coverage_gap` is advisory and unvalidated, nothing downstream would
+catch it. If the owning plane *is* configured in the same `toolkit.yaml`, the
+right move is stronger still: point the reader at that audit's result instead of
+asserting coverage on its behalf.
 
 ## Hard rules
 

@@ -1,5 +1,73 @@
 # Changelog
 
+## 0.1.231
+
+**What an independent review round caught in v0.1.229-230 before any of it merged.** A
+read-only reviewer that did not write the change was asked to assume it was wrong and prove
+where. It found nine must-fix defects that all 52 test suites, all 25 CI gates and the full
+selftest had passed over. The two worst were in the guard whose entire purpose is to be
+careful — and one of them is a bug the v0.1.229 commit message claimed to have already fixed.
+
+- **The cluster-gone probe was still fail-open, and would have declared a live cluster
+  decommissioned.** v0.1.229 required an explicit not-found signature before concluding a
+  cluster was deleted. But the signature was matched against the *whole* of gcloud's stderr,
+  and gcloud reports unrelated plumbing failures in exactly those words: `command
+  [docker-credential-gcloud] **was not found** on the PATH` and `Required
+  container.clusters.get permission; credential file **was not found**`. Either one made the
+  audit tell an operator that a running production cluster no longer exists and to delete it
+  from their config. A decommissioned verdict now requires **two** conditions — a not-found
+  signature **and** the message naming the cluster that was asked about — so only an answer
+  *about this cluster* can prove it is gone.
+- **The same probe truncated cluster names and could ask about the wrong cluster.** A GKE
+  context is `gke_<project>_<location>_<cluster>` and the cluster name may itself contain
+  underscores, so splitting on `_` asked the control plane about `my` for a cluster named
+  `my_prod_cluster`, received a perfectly *truthful* not-found, and reported a live cluster as
+  deleted. An empty location was also passed through unchecked. Both fixed; an incomplete
+  identity now makes no cloud call at all.
+- **The probe may never have fired for a genuinely deleted GKE cluster.** gcloud renders a
+  missing cluster as `Response: [404] Not found: projects/…/clusters/<name>`, which matched
+  none of the three patterns (`NOT_FOUND` is case-sensitive). Added, and now covered by a test
+  using gcloud's real wording.
+- **The PROM-001 verdict table left a branch unassigned and sent two unknowns to a `critical`
+  "restore or fail over".** The DNS classifier produces five outcomes; the table had three
+  rows. NXDOMAIN-with-a-failing-apex — which the classifier itself calls unattributable — had
+  no row, and SERVFAIL and "no authoritative answer" both landed on the availability-incident
+  row. The table now has a row per branch, and everything that does not authoritatively prove
+  absence is `blocked`: a DNS answer is evidence about DNS, not about the server.
+- **Seventeen skills still told their audit to emit the field-less form.** `not_in_scope_reason`
+  became required in v0.1.229, but seventeen SKILL.md files still said "record them
+  `not-in-scope` with the reason". An audit following its own skill would emit a row the
+  validator rejects — and `check-findings.sh` fails the *whole* findings document, so an audit
+  that passed yesterday would produce no output. All seventeen fixed, plus each audit's
+  emission contract, and **new gate `ci/not-in-scope-reason-check.sh`** (the 25th) now fails the
+  build if a v2 ledger author mentions a `not-in-scope` row without naming the field, or if any
+  JSON example sets that result without one.
+- **The canonical schema example violated the rule its own file introduced** — the most-copied
+  shape in the repo. Caught by the new gate, which exists partly for this.
+- **The new SSOT contradicted itself on the one case it was written to settle.** It said an
+  unreadable owning plane is "not `not-in-scope`, the check stays a finding" in one paragraph
+  and "the honest output is a `not-in-scope` row plus a coverage gap" in the next. The second
+  was the fail-open the file exists to prevent, and nothing would have caught it because
+  `coverage_gap` is advisory and unvalidated. Now consistently `blocked` + `coverage_gap`.
+- **The SSOT forbade the `by-design` mapping the business-context doc mandates.** It admitted
+  only a `resource_intent` declaration, while the integration doc routes `exclusions` matches to
+  `by-design`. The SSOT now names both, because an exclusion *is* a customer declaration.
+- **A pressure scenario still specified the behavior the change replaced**, and the lane that
+  got the riskiest code had no scenario of its own. Both fixed:
+  `audit-kubernetes/decommissioned-cluster-is-a-stale-config.md` is new, and the
+  private-endpoint scenario now documents the `no such host` split and the fail-closed rule.
+- Also from the review: `not-in-scope` was still glossed as "declared by you" in
+  `severity-and-scoring.md`, which every audit links for verdict semantics — true now only of
+  `by-design`, since the other three are detected. Grafana ruler responses were left in
+  `TMPDIR` after the run (they hold rule expressions and internal hostnames) and are now
+  removed. And a test comment claimed the comment filter was load-bearing; the reviewer showed
+  the parser is comment-immune structurally, so the comment now says what is actually proven
+  rather than overclaiming.
+
+New guard: `skills/audit-kubernetes/tests/test-cluster-gone-probe.sh` extracts the branch from
+the shipped SKILL.md and runs the whole fail-closed matrix — every input above is now a
+permanent case. It fails on the pre-fix tree at exactly the reviewer's first failing input.
+
 ## 0.1.230
 
 **A shipped feature that could never turn on.** v0.1.227 shipped unit economics: `audit-cost`
@@ -82,9 +150,8 @@ right.
   when the server was deleted. `audit-kubernetes` gets the same fix at the cluster level: a
   `"no such host"` API server used to read as *"private or unreachable — run from inside the
   VNet"*, which is the wrong hunt for a cluster that was deleted, so it now asks the owning
-  cloud control plane. **It fails closed** — only an explicit `ResourceNotFoundException` /
-  `was not found` proves absence; an expired credential, a missing CLI or a denied permission
-  all fall through to "private endpoint, posture UNKNOWN", never to "deleted".
+  cloud control plane. It fails closed — see v0.1.231, where an independent review round found
+  that the first version of this guard was **still fail-open** and tightened it.
 - **Intent is declared, never inferred (`by-design`).** New `resource_intent` block in the
   business-context template (`standby`, `dr`, `backup`, `pre-scaled`,
   `accepted-tradeoff`, with an optional `review_by`), and `audit-cost` applies it. The

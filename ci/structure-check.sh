@@ -54,5 +54,6 @@ sh "$SELF_DIR/config-key-agreement-check.sh" "$DIR" || FAIL=1
 sh "$SELF_DIR/optional-key-parity-check.sh" "$DIR" || FAIL=1
 sh "$SELF_DIR/prefix-registry-check.sh" "$DIR" || FAIL=1
 sh "$SELF_DIR/command-ref-check.sh" "$DIR" || FAIL=1
+sh "$SELF_DIR/not-in-scope-reason-check.sh" "$DIR" || FAIL=1
 sh "$SELF_DIR/contract-map-check.sh" "$DIR" || FAIL=1
 [ "$FAIL" -eq 0 ] && echo STRUCTURE-OK || exit 1

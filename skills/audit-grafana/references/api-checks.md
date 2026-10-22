@@ -403,6 +403,9 @@ printf '%s' "$DS_JSON" | jq -r '.[]? | select(.type | test("prometheus|loki|mimi
     *)       echo "ruler ${DS_NAME} (${DS_TYPE}): HTTP ${R_CODE} — unresolved; treat as unknown, not as empty" ;;
   esac
 done
+# Ruler bodies hold rule expressions, internal hostnames and label values — do not
+# leave them on disk after the classification is read.
+rm -f "${TMPDIR:-/tmp}"/graf-ruler-*.json
 # External Alertmanager: when Grafana routes to one, notification policy and contact
 # points live THERE, so GRAF-050..055 read only part of the delivery path.
 curl -fsS --max-time 15 -H "Authorization: Bearer ${GRAFANA_TOKEN}" \

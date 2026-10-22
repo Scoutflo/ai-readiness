@@ -744,8 +744,12 @@ PR; the live smoke against a real estate is a hard merge gate (`AGENTS.md`).
 - **SSOT:** `report-standard/not-in-scope-reasons.md` (the four reasons);
   `report-standard/findings-schema.md` (the field).
 - **Guards:** `report-standard/check-findings.sh` (closed set, required on
-  `not-in-scope`, rejected elsewhere), `tests/test-check-findings.sh` (tests
-  31-34), and the three per-class pressure scenarios
+  `not-in-scope`, rejected elsewhere), `ci/not-in-scope-reason-check.sh` (every v2
+  ledger author names the field; every `not-in-scope` JSON example carries one —
+  so the instruction and the validator cannot drift apart),
+  `tests/test-check-findings.sh` (tests 31-34),
+  `skills/audit-kubernetes/tests/test-cluster-gone-probe.sh` (the fail-closed
+  matrix for `target-gone`), and the three per-class pressure scenarios
   (`audit-prometheus/decommissioned-is-not-an-outage.md`,
   `audit-cost/intent-is-declared-never-inferred.md`,
   `audit-grafana/alerting-lives-on-the-ruler-this-audit-cannot-read.md`).

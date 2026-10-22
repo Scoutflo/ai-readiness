@@ -119,16 +119,29 @@ if [ "$K_RC" -ne 0 ]; then
       GONE=""
       case "$EXEC_CMD" in
         *gke-gcloud-auth-plugin*)
-          # Context shape: gke_<project>_<location>_<cluster>
-          G_PROJ="$(printf '%s' "$KUBE_CONTEXT" | awk -F_ '/^gke_/{print $2}')"
-          G_LOC="$(printf '%s' "$KUBE_CONTEXT" | awk -F_ '/^gke_/{print $3}')"
-          G_NAME="$(printf '%s' "$KUBE_CONTEXT" | awk -F_ '/^gke_/{print $4}')"
-          if [ -n "$G_PROJ" ] && [ -n "$G_NAME" ] && command -v gcloud >/dev/null 2>&1; then
+          # Context shape: gke_<project>_<location>_<cluster>. The cluster name may
+          # itself contain underscores, so strip the three known leading fields rather
+          # than splitting on `_` (awk -F_ '{print $4}' would ask about `my` for a
+          # cluster called `my_prod_cluster`, get a TRUTHFUL not-found, and report a
+          # LIVE cluster as deleted).
+          G_PROJ="$(printf '%s' "$KUBE_CONTEXT" | sed -n 's#^gke_\([^_]*\)_.*#\1#p')"
+          G_LOC="$(printf '%s' "$KUBE_CONTEXT" | sed -n 's#^gke_[^_]*_\([^_]*\)_.*#\1#p')"
+          G_NAME="$(printf '%s' "$KUBE_CONTEXT" | sed -n 's#^gke_[^_]*_[^_]*_##p')"
+          if [ -n "$G_PROJ" ] && [ -n "$G_LOC" ] && [ -n "$G_NAME" ] && command -v gcloud >/dev/null 2>&1; then
             G_ERR="$(CLOUDSDK_CORE_DISABLE_PROMPTS=1 gcloud container clusters describe "$G_NAME" \
               --project "$G_PROJ" --location "$G_LOC" --format='value(name)' 2>&1 1>/dev/null)" || true
+            # The not-found signature alone is NOT enough: gcloud writes unrelated
+            # plumbing failures in the same words ("command [docker-credential-gcloud]
+            # was not found on the PATH", "credential file was not found"), and
+            # treating those as absence declares a live cluster decommissioned. Require
+            # BOTH a not-found signature AND the message naming the cluster we asked
+            # about, so only an answer *about this cluster* can prove it is gone.
             case "$G_ERR" in
-              *"was not found"*|*NOT_FOUND*|*"No cluster named"*)
-                GONE="gcloud container clusters describe: cluster '$G_NAME' not found in project '$G_PROJ'" ;;
+              *"$G_NAME"*)
+                case "$G_ERR" in
+                  *"was not found"*|*NOT_FOUND*|*"Not found"*|*"[404]"*|*"No cluster named"*)
+                    GONE="gcloud container clusters describe: cluster '$G_NAME' not found in project '$G_PROJ' (${G_LOC})" ;;
+                esac ;;
             esac
           fi ;;
         *aws*)
@@ -139,8 +152,12 @@ if [ "$K_RC" -ne 0 ]; then
             # Uses whatever AWS credentials this kubeconfig context already authenticates with.
             E_ERR="$(aws eks describe-cluster --name "$E_NAME" --region "$E_REGION" \
               --query 'cluster.name' --output text 2>&1 1>/dev/null)" || true
+            # Same two-part rule as the GKE branch: the exception AND this cluster's name.
             case "$E_ERR" in
-              *ResourceNotFoundException*) GONE="aws eks describe-cluster: ResourceNotFoundException for cluster '$E_NAME' in $E_REGION" ;;
+              *"$E_NAME"*)
+                case "$E_ERR" in
+                  *ResourceNotFoundException*) GONE="aws eks describe-cluster: ResourceNotFoundException for cluster '$E_NAME' in $E_REGION" ;;
+                esac ;;
             esac
           fi ;;
       esac
@@ -390,7 +407,7 @@ Write `findings.json` first (canonical), then regenerate `report.md`, the histor
 1. Load the previous run's `findings.json` when one exists; classify every finding, `K8S-*` and `K8SRT-*` alike, per the lifecycle table in the [findings schema](../../report-standard/findings-schema.md) (`new`, `unchanged`, `regressed`; resolved IDs go to the delta, and the executive summary names regressions first).
 2. Load `./scoutflo-audits/exemptions.yaml` when present. Entries with `id`, `reason`, and `expires` all set and unexpired suppress their finding into the Suppressed appendix; malformed or expired entries are reported, never honored. For a readiness finding, retain the observed `partial` or `fail` result on the same-ID `checks[]` row and add `suppressed: true` plus `suppression_reason`; set the finding's `points_recoverable` to 0. Suppressed readiness checks remain assessed for coverage but are excluded from readiness scoring. A non-scored `K8SRT-*` finding has no check row: set only its lifecycle to `suppressed`, preserve `scoring_scope: "non-scored"`, and keep zero readiness points.
 3. Every findings area and coverage cell carries its denominator (`passed/total`).
-4. Emit one `checks[]` row for every stable `K8S-*` readiness catalog check (`{id, category, result}` with `result ∈ pass|partial|fail|blocked|not-in-scope`, and a non-empty `reason` on any partial/blocked/not-in-scope row), including passes, partials, failures, blockers, and not-in-scope checks. Derive category counts, readiness, assessment coverage, and `score.check_set` (the `cksum-v2:N:M` fingerprint over each check's id + category, every category's name + weight, and the gate, per the pipeline in [findings-schema.md](../../report-standard/findings-schema.md#check-ledger-v2)) from that complete ledger; never write them independently. A category with zero assessed checks goes in `score.excluded[]` and out of `overall`. `K8SRT-*` findings stay outside the readiness ledger and explicitly carry `scoring_scope: "non-scored"`.
+4. Emit one `checks[]` row for every stable `K8S-*` readiness catalog check (`{id, category, result}` with `result ∈ pass|partial|fail|blocked|not-in-scope`, and a non-empty `reason` on any partial/blocked/not-in-scope row, plus `not_in_scope_reason` (`inapplicable`|`target-gone`|`by-design`|`covered-elsewhere`) on every not-in-scope row), including passes, partials, failures, blockers, and not-in-scope checks. Derive category counts, readiness, assessment coverage, and `score.check_set` (the `cksum-v2:N:M` fingerprint over each check's id + category, every category's name + weight, and the gate, per the pipeline in [findings-schema.md](../../report-standard/findings-schema.md#check-ledger-v2)) from that complete ledger; never write them independently. A category with zero assessed checks goes in `score.excluded[]` and out of `overall`. `K8SRT-*` findings stay outside the readiness ledger and explicitly carry `scoring_scope: "non-scored"`.
 5. Every finding declares `scoring_scope` (`readiness` for a same-ID non-pass `K8S-*` check; `non-scored` for every `K8SRT-*`) and `report_lanes`: a unique, non-empty subset of `general-audit` and `ai-sre-readiness`. Default to `general-audit` (operational reliability and security posture); add/also use `ai-sre-readiness` only when the finding bears on telemetry quality, service identity/naming, topology/ownership context, incident routing evidence, RCA trust, or action safety — what trustworthy AI-assisted diagnosis needs. The flagship external-exposure blast-radius path (K8S-010) and the RBAC-power findings (K8S-002/006/009) inform the blast-radius and action-safety reasoning an AI SRE relies on, so those are typically both lanes; a pure hardening, network-segmentation, resource-limit, or resilience gap (K8S-001/007/008, K8S-003/011, K8S-004/014, K8S-005/012/013) is `general-audit` only. This classification never changes severity or score. Referential-integrity rules the gate enforces: every `partial`/`fail`/`blocked` check has a same-ID readiness finding, every readiness finding has a same-ID non-pass check row (never `pass`/`not-in-scope`), a blocked check's finding carries `status: "blocked"` and `points_recoverable: 0`, and a `non-scored` finding has `points_recoverable: 0` and no check row.
 
 Then run the report-standard self-validation, exactly as every other audit does — `check-findings.sh` (score reconciles with the scorecard, the v2 checks[] ledger and schema invariants hold) before `check-report.sh` (shape):
@@ -553,7 +570,7 @@ fi
 # its per-resource action/escalation/sla refine (never weaken) the workspace rule for that one resource.
 ```
 
-When context is available, apply it per [BUSINESS-CONTEXT-INTEGRATION-v0168.md](../../docs/BUSINESS-CONTEXT-INTEGRATION-v0168.md): **exclude** namespaces/resources matched by an exclusion (record them `not-in-scope` with the reason, never a fail); **escalate** findings on a `critical_dependencies` service (raise Reliability findings to high, mark it in the coverage matrix); reduce severity for a gap that exists only in a non-production `environment`; and apply `cost_sensitivity` to ordering. With no context, run neutral defaults and say so — never invent a business rule.
+When context is available, apply it per [BUSINESS-CONTEXT-INTEGRATION-v0168.md](../../docs/BUSINESS-CONTEXT-INTEGRATION-v0168.md): **exclude** namespaces/resources matched by an exclusion (record them `not-in-scope` with `not_in_scope_reason: "by-design"` (the exclusion is the customer's declaration) and the exclusion as the `reason`, never a fail); **escalate** findings on a `critical_dependencies` service (raise Reliability findings to high, mark it in the coverage matrix); reduce severity for a gap that exists only in a non-production `environment`; and apply `cost_sensitivity` to ordering. With no context, run neutral defaults and say so — never invent a business rule.
 
 ## Remediation pointers
 

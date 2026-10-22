@@ -19,7 +19,7 @@ Version 2 adds a normalized `checks[]` ledger. The score is verified against tha
     { "id": "LGTM-014", "category": "Alert routing", "result": "fail", "reason": "The configured default receiver refused the live read-only reachability probe." },
     { "id": "LGTM-031", "category": "Service coverage", "result": "partial", "reason": "Two of six critical services use different names across signals." },
     { "id": "LGTM-040", "category": "Traces layer", "result": "blocked", "reason": "The traces endpoint returned HTTP 502 on every read." },
-    { "id": "LGTM-050", "category": "Reliability and security", "result": "not-in-scope", "reason": "This externally managed backend is outside the declared infrastructure scope." }
+    { "id": "LGTM-050", "category": "Reliability and security", "result": "not-in-scope", "not_in_scope_reason": "inapplicable", "reason": "This externally managed backend is outside the declared infrastructure scope." }
   ],
   "score": {
     "overall": 42,

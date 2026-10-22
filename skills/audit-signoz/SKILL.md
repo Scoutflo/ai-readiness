@@ -188,7 +188,7 @@ fi
 # its per-resource action/escalation/sla refine (never weaken) the workspace rule for that one resource.
 ```
 
-When context is available, apply it per [BUSINESS-CONTEXT-INTEGRATION-v0168.md](../../docs/BUSINESS-CONTEXT-INTEGRATION-v0168.md): **exclude** services matched by an exclusion (record them `not-in-scope` with the reason, never a fail); **escalate** a coverage or freshness gap on a `critical_dependencies` service; **reduce severity** for a gap that exists only in a non-production `environment` (a short retention TTL on a dev telemetry signal is not a prod compliance gap); and apply `cost_sensitivity` to the ordering of the retention (SIG-020) and capacity (SIG-060) findings. With no context, run neutral defaults and say so — never invent a business rule.
+When context is available, apply it per [BUSINESS-CONTEXT-INTEGRATION-v0168.md](../../docs/BUSINESS-CONTEXT-INTEGRATION-v0168.md): **exclude** services matched by an exclusion (record them `not-in-scope` with `not_in_scope_reason: "by-design"` (the exclusion is the customer's declaration) and the exclusion as the `reason`, never a fail); **escalate** a coverage or freshness gap on a `critical_dependencies` service; **reduce severity** for a gap that exists only in a non-production `environment` (a short retention TTL on a dev telemetry signal is not a prod compliance gap); and apply `cost_sensitivity` to the ordering of the retention (SIG-020) and capacity (SIG-060) findings. With no context, run neutral defaults and say so — never invent a business rule.
 
 ## Phase 1: Service context
 

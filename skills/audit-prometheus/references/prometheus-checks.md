@@ -105,15 +105,18 @@ if [ -z "$(dig +short A "$HOST"; dig +short CNAME "$HOST")" ]; then
 fi
 ```
 
-- **The classification above decides the verdict — it is not decoration.** The three outcomes need opposite responses, and reporting the wrong one is the fastest way to lose a reader who knows the estate:
+- **The classification above decides the verdict — it is not decoration.** The outcomes need opposite responses, and reporting the wrong one is the fastest way to lose a reader who knows the estate. **Every branch the classifier can print has a row here; there is no default.** Note that only the last row is a finding about the *server*, because only the last row has evidence about the server:
 
-  | Classification | PROM-001 result | What to say |
+  | Classification the block printed | PROM-001 result | What to say |
   | --- | --- | --- |
-  | NXDOMAIN-authoritative, apex resolves | `not-in-scope`, `not_in_scope_reason: target-gone` | The server was decommissioned and the config outlived it. The action is on `toolkit.yaml`: retarget or remove the `prometheus:` block. **Never** a restore/scale/failover recommendation |
+  | NXDOMAIN-authoritative, **apex resolves** | `not-in-scope`, `not_in_scope_reason: target-gone` | The server was decommissioned and the config outlived it. The action is on `toolkit.yaml`: retarget or remove the `prometheus:` block. **Never** a restore/scale/failover recommendation |
+  | NXDOMAIN but **the apex also failed** | `blocked` | The classifier itself says this cannot be told apart from a resolver/network failure. Re-run from a working resolver before concluding anything. **Not** `target-gone` |
+  | SERVFAIL | `blocked` | A broken zone delegation or DNSSEC — upstream of this server and says nothing about its health. Fix the zone, then re-run |
+  | No authoritative answer for the host | `blocked` | We could not even ask. Classify manually (`dig NS <zone>`; `dig @<ns> <host>`) and re-run |
   | NOERROR at the authoritative NS, local path failed | `blocked` | The name exists, the path is down. Unlock the read (VPN, ingress, port-forward), then re-run — the server's health is still unknown |
-  | Reachable, but unhealthy / SERVFAIL / unattributable DNS failure | `critical` finding, as below | A real availability incident |
+  | **Reachable**, but unhealthy | `fail` (severity `critical`) | A real availability incident — the finding below |
 
-  A timeout or refused connection is `blocked`, never `target-gone`: it is indistinguishable from a firewall you are not behind. Only the authoritative-NXDOMAIN path proves absence. Full rules: [not-in-scope-reasons.md](../../../report-standard/not-in-scope-reasons.md).
+  Everything except the first and last row is `blocked`: a DNS answer that does not authoritatively prove absence is **evidence about DNS, not about the server**, and filing "restore or fail over the server" on it is the same wrong-finding class this release exists to remove. A timeout or refused connection is likewise `blocked`, never `target-gone` — it is indistinguishable from a firewall you are not behind. Only the authoritative-NXDOMAIN-with-resolving-apex path proves absence. Full rules: [not-in-scope-reasons.md](../../../report-standard/not-in-scope-reasons.md).
 
 - **Finding (PROM-001, critical) — only on the reachable-but-unhealthy path:** an unreachable Prometheus is the root of a cascade, not a yes/no. Pull `/api/v1/rules` and `/api/v1/targets` first and state what goes dark — "this server loads N alerting rules (M at `severity=page`) and scrapes K critical services; while it is down every rule evaluates to no-data and pages nothing, and every service is unmonitored." This is an availability incident (restore/scale/failover the server), then close the HA gap that let one instance take the plane down.
 - **On the `target-gone` path, the cascade framing is wrong and must not be emitted.** Nothing "goes dark" — it went dark when the server was deleted, and the rules and targets you would enumerate no longer exist to enumerate. Report the stale config, and if this was the only metrics backend, that absence is a separate, honest finding about the estate having no metrics plane — not about this host being down.

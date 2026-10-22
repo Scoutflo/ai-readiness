@@ -206,7 +206,7 @@ if [ "$sch" = "scoutflo-findings/v2" ]; then
   [ -z "$missing_reason" ] || fail "v2 partial/blocked/not-in-scope checks missing reason: $(echo "$missing_reason" | tr '\n' ' ')"
 
   # A not-in-scope row says "known, nothing to do" and leaves BOTH denominators,
-  # so it must name which of the three closed reasons applies. Without this, an
+  # so it must name which of the four closed reasons applies. Without this, an
   # unmeasured check can be parked as not-in-scope and read as a clean result.
   # See report-standard/not-in-scope-reasons.md.
   bad_nis_reason="$(jq -r '

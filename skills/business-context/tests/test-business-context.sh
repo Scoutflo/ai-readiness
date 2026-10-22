@@ -119,11 +119,26 @@ resource_intent:
   - cluster: <cluster-name>
     intent: dr
     why: an unfilled placeholder must be dropped
+  - cluster: commented-tail
+    intent: standby
+    why: a real declaration whose following keys are commented out
+    # intent: by-a-commented-line
+    # why: a commented line must never OVERWRITE the entry above it
 ```
 MD
 bc_derive_json >/dev/null
 ri="$(jq '.resource_intent | length' "$J")"
-[ "$ri" -eq 2 ] || fail "expected exactly 2 valid resource_intent entries, got $ri: $(jq -c '.resource_intent' "$J")"
+[ "$ri" -eq 3 ] || fail "expected exactly 3 valid resource_intent entries, got $ri: $(jq -c '.resource_intent' "$J")"
+# Comment-immunity here is STRUCTURAL, not guarded by the explicit `/^#/` skip:
+# a commented `# intent: x` parses its key as "# intent", which matches no known
+# key, so it is inert either way (verified: removing both `/^#/` filters leaves
+# this suite green). The skip stays as defence-in-depth for future key handling.
+# What IS load-bearing and proven by this test: the closed-vocabulary filter and
+# the placeholder filter — removing either fails the assertions below.
+jq -e '.resource_intent[] | select(.match=="commented-tail" and .intent=="standby" and (.why|test("real declaration")))' "$J" >/dev/null \
+  || fail "commented key lines overwrote the declaration above them: $(jq -c '.resource_intent' "$J")"
+jq -e '.resource_intent[] | select((.intent=="by-a-commented-line") or (.why|test("must never OVERWRITE")))' "$J" >/dev/null \
+  && fail "a commented key line was parsed as a real value"
 jq -e '.resource_intent[] | select(.match=="standby-cluster" and .intent=="standby" and .review_by=="2027-01-01" and (.why|length>0))' "$J" >/dev/null \
   || fail "the declared standby entry did not parse with its why and review_by"
 jq -e '.resource_intent[] | select(.match=="archive" and .intent=="backup" and .match_kind=="namespace")' "$J" >/dev/null \
@@ -137,12 +152,17 @@ jq -e '.resource_intent[] | select(.why|test("commented example"))' "$J" >/dev/n
 echo "PASS"
 
 echo "Test 10: the shipped template alone declares NOTHING"
-# A fresh SSOT copied from the template must yield zero intents. If the template's
-# own example ever counts, every customer who runs the skill gets silent exemptions.
+# A fresh SSOT copied from the template must yield zero intents and zero units. If
+# the template's own example ever counts, every customer who runs the skill gets a
+# silent exemption or a fabricated denominator. This is an end-to-end property of
+# the shipped artifact, not a test of one guard: it would catch a template edit
+# that uncomments an example just as surely as a parser regression.
 cp "$ROOT/templates/business_context_template.md" "$WORK/.scoutflo/business_context.md"
 bc_derive_json >/dev/null
 [ "$(jq '.resource_intent | length' "$J")" -eq 0 ] \
   || fail "the shipped template produced resource_intent declarations: $(jq -c '.resource_intent' "$J")"
+[ "$(jq '.unit_metrics | length' "$J")" -eq 0 ] \
+  || fail "the shipped template produced unit_metrics declarations: $(jq -c '.unit_metrics' "$J")"
 echo "PASS"
 
 echo "Test 11: unit_metrics parses only REAL declarations from the closed source set"

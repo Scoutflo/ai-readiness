@@ -34,6 +34,18 @@ is broken. It's a private cluster. What's actually wrong?"
    (jumpbox/VPN/bastion), add your IP to the cluster API-server authorized IP
    ranges, or use `az aks command invoke`; explicitly say this is **not** an RBAC
    or credential problem.
+   - **One signature splits further: `no such host`.** DNS absence has two causes
+     needing opposite advice — a PRIVATE endpoint unresolvable from here, and a
+     cluster that was DELETED while its kubeconfig entry survived. Telling the
+     second "run from inside the VNet" sends the reader hunting a network problem
+     for infrastructure that no longer exists. So on `no such host` only, ask the
+     owning cloud control plane first, and **fail closed**: report the cluster as
+     decommissioned (action = fix the config) ONLY on an explicit not-found that
+     names *this* cluster; on any other answer — expired credential, denied
+     permission, throttling, empty stderr, a missing CLI, an unparseable context —
+     fall through to this NETWORK message with the posture stated as UNKNOWN.
+     Covered by [decommissioned-cluster-is-a-stale-config.md](decommissioned-cluster-is-a-stale-config.md)
+     and locked by `skills/audit-kubernetes/tests/test-cluster-gone-probe.sh`.
 4. Point at the reachable alternative: the cluster's monitoring posture is still
    auditable via `/scoutflo:audit-azure` over ARM (Container Insights, managed
    Prometheus, diagnostic settings) with no cluster network access.
