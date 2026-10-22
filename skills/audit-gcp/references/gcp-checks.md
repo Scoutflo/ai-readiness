@@ -12,6 +12,7 @@ MON_API="https://monitoring.googleapis.com/v3"
 # gcp.credentials_env (optional) names GOOGLE_APPLICATION_CREDENTIALS, the key-file path variable
 # that application-default credentials read. Set: the key file is the identity for REST and gcloud
 # alike (CLOUDSDK_AUTH_ACCESS_TOKEN hands gcloud the same token). Unset: your active gcloud login is.
+export CLOUDSDK_CORE_DISABLE_PROMPTS=1   # read-only safety: a disabled API must fail, never prompt to enable itself
 if [ -n "${GOOGLE_APPLICATION_CREDENTIALS:-}" ]; then TOKEN="$(gcloud auth application-default print-access-token)"; export CLOUDSDK_AUTH_ACCESS_TOKEN="$TOKEN"; else TOKEN="$(gcloud auth print-access-token)"; fi
 ```
 
@@ -97,6 +98,7 @@ Capture raw state once per run; later sections re-fetch specific objects before 
 set -eu
 GCP_PROJECT="your-project-id"   # gcp.project
 MON_API="https://monitoring.googleapis.com/v3"
+export CLOUDSDK_CORE_DISABLE_PROMPTS=1   # read-only safety: a disabled API must fail, never prompt to enable itself
 if [ -n "${GOOGLE_APPLICATION_CREDENTIALS:-}" ]; then TOKEN="$(gcloud auth application-default print-access-token)"; export CLOUDSDK_AUTH_ACCESS_TOKEN="$TOKEN"; else TOKEN="$(gcloud auth print-access-token)"; fi
 RUN_DATE="$(date -u +%Y-%m-%d)"
 RAW_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/gcp/${RUN_DATE}/raw"
@@ -227,6 +229,7 @@ GCP-007 only trips when a project has zero policies AND zero channels. GCP-008 c
 ```bash
 GCP_PROJECT="your-project-id"            # monitoring.project
 MON1="https://monitoring.googleapis.com/v1"
+export CLOUDSDK_CORE_DISABLE_PROMPTS=1   # read-only safety: a disabled API must fail, never prompt to enable itself
 TOKEN="$(gcloud auth print-access-token --project="$GCP_PROJECT")"   # user/ADC read token
 # The scoping project's metrics scope: which projects it actually monitors.
 curl -fsS --max-time 30 -H "Authorization: Bearer ${TOKEN}" \
@@ -291,6 +294,7 @@ A Cloud Monitoring **Service** with a defined SLO but no burn-rate alert policy 
 
 ```bash
 GCP_PROJECT="your-project-id"; MON="https://monitoring.googleapis.com/v3"
+export CLOUDSDK_CORE_DISABLE_PROMPTS=1   # read-only safety: a disabled API must fail, never prompt to enable itself
 TOKEN="$(gcloud auth print-access-token --project="$GCP_PROJECT")"
 # Cloud Monitoring Services (empty list => no SLOs defined => GCP-017 not-in-scope, stated).
 curl -fsS --max-time 30 -H "Authorization: Bearer ${TOKEN}" \
@@ -324,6 +328,7 @@ Expected: at least a warning tier per serving VM group; two named tiers (warning
 set -eu
 GCP_PROJECT="your-project-id"   # gcp.project
 MON_API="https://monitoring.googleapis.com/v3"
+export CLOUDSDK_CORE_DISABLE_PROMPTS=1   # read-only safety: a disabled API must fail, never prompt to enable itself
 if [ -n "${GOOGLE_APPLICATION_CREDENTIALS:-}" ]; then TOKEN="$(gcloud auth application-default print-access-token)"; export CLOUDSDK_AUTH_ACCESS_TOKEN="$TOKEN"; else TOKEN="$(gcloud auth print-access-token)"; fi
 # Portable 30-minute window: BSD date first, GNU fallback; both labeled.
 START="$(date -u -v-30M +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d '30 minutes ago' +%Y-%m-%dT%H:%M:%SZ)"
@@ -344,6 +349,7 @@ Expected: the count equals your serving VM count. Compare the instance ids retur
 set -eu
 GCP_PROJECT="your-project-id"   # gcp.project
 MON_API="https://monitoring.googleapis.com/v3"
+export CLOUDSDK_CORE_DISABLE_PROMPTS=1   # read-only safety: a disabled API must fail, never prompt to enable itself
 if [ -n "${GOOGLE_APPLICATION_CREDENTIALS:-}" ]; then TOKEN="$(gcloud auth application-default print-access-token)"; export CLOUDSDK_AUTH_ACCESS_TOKEN="$TOKEN"; else TOKEN="$(gcloud auth print-access-token)"; fi
 POLICY_FILTER='metric.type = "compute.googleapis.com/instance/cpu/utilization"'  # copy the exact condition filter from the policy JSON
 START="$(date -u -v-1H +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d '1 hour ago' +%Y-%m-%dT%H:%M:%SZ)"

@@ -90,6 +90,7 @@ if [ -n "$GCP_CRED_VAR" ]; then
   TOKEN="$(gcloud auth application-default print-access-token)"
   export CLOUDSDK_AUTH_ACCESS_TOKEN="$TOKEN"
 else
+  export CLOUDSDK_CORE_DISABLE_PROMPTS=1   # read-only safety: a disabled API must fail, never prompt to enable itself
   TOKEN="$(gcloud auth print-access-token)"
 fi
 PROJECT_ID="$(gcloud projects describe "$GCP_PROJECT" --format='value(projectId)')"
@@ -198,6 +199,7 @@ if [ -n "$GCP_CRED_VAR" ]; then
   { [ -n "$GCP_CRED_PATH" ] && [ -f "$GCP_CRED_PATH" ]; } || { echo "gcp.credentials_env ('${GCP_CRED_VAR}') is unset or names a missing key file"; exit 1; }
   export GOOGLE_APPLICATION_CREDENTIALS="$GCP_CRED_PATH"; TOKEN="$(gcloud auth application-default print-access-token)"; export CLOUDSDK_AUTH_ACCESS_TOKEN="$TOKEN"
 else
+  export CLOUDSDK_CORE_DISABLE_PROMPTS=1   # read-only safety: a disabled API must fail, never prompt to enable itself
   TOKEN="$(gcloud auth print-access-token)"
 fi
 SMALL_MAX_OBJECTS="15"    # example, tune to your environment

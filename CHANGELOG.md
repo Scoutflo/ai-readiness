@@ -1,5 +1,42 @@
 # Changelog
 
+## 0.1.228
+
+**Live-smoke fixes: three real bugs the gates could not see.** The four cost releases in
+v0.1.224-227 passed every static gate, 51 test suites and the full selftest — then a read-only
+run against a real GCP project and two real GKE clusters found three defects in minutes. One of
+them meant a feature shipped in v0.1.224 had never worked at all.
+
+- **gcloud prompts are now disabled everywhere a read-only skill calls gcloud.** Live-caught:
+  `gcloud filestore instances list` against a project where the Filestore API is disabled does not
+  fail — it prints *"Would you like to enable and retry?"* and **waits for input**. In an audit that
+  means the run hangs on a prompt nobody sees, or something answers yes and the audit **enables a
+  Google API** — a write, performed by a skill that promises to change nothing. 156 gcloud calls
+  across four read-only GCP surfaces had no guard. `CLOUDSDK_CORE_DISABLE_PROMPTS=1` is now set in
+  every identity preamble in `audit-cost`, `audit-gcp` and `map-topology`, documented as a
+  read-only *safety* requirement rather than a convenience, and a disabled API now exits non-zero
+  into the existing exclusion path where it belongs.
+- **`ALIGN_PERCENTILE_95` never worked on container utilisation.** The Cloud Monitoring API
+  rejects it with HTTP 400 — *"the aligner cannot be applied to metrics with kind GAUGE and value
+  type DOUBLE"* — because percentile aligners accept only DISTRIBUTION metrics. The GKE
+  windowed-CPU path introduced in v0.1.224 therefore returned nothing on every estate. Replaced
+  with hourly `ALIGN_MEAN` plus the percentile computed client-side across those points, verified
+  live over 168 hourly values; the basis string is now the precise **"p95 of hourly means over
+  7d"**, and each series reports its `hours` so a short or gappy window is visible instead of being
+  silently averaged away.
+- **Region names rendered as full API URLs.** The Cloud NAT and forwarding-rule blocks printed
+  `https://www.googleapis.com/compute/v1/projects/.../regions/asia-south1` where they meant
+  `asia-south1`; `.zone` and `.target` were path-stripped and `.region` was missed. Fixed and
+  re-verified against live output.
+
+**What the smoke proved, and what it could not.** Passing live on real data:
+`COST-GCP-025` (every jq field name correct), `COST-GCP-026`, `COST-GCP-027`, `COST-K8S-010`, and
+the Cloud Monitoring call shape. SQL for `COST-GCP-024/028/031/035..039` verified to parse by
+dry-run. **Still unexercised**, recorded in the smoke matrix rather than assumed: every
+export-dependent check and all of `COST-UNIT-*`, because the project used has no billing export —
+those close on the first customer run that has one.
+
+
 ## 0.1.227
 
 **Unit economics: cost per unit of delivered value, and the false positive it removes.** Every

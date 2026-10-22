@@ -87,12 +87,24 @@ One permanent ID per check; IDs never change or get reused. "Savings figure" is 
 GCP_PROJECT="your-project-id"   # gcp.project — clearly-marked config placeholder, never a hardcoded account
 # gcp.credentials_env (optional) names GOOGLE_APPLICATION_CREDENTIALS, the key-file path variable.
 # Set: the key file is the identity for gcloud and REST alike. Unset: your active gcloud login is.
+export CLOUDSDK_CORE_DISABLE_PROMPTS=1   # MANDATORY — see below; never let gcloud ask a question
 if [ -n "${GOOGLE_APPLICATION_CREDENTIALS:-}" ]; then
   TOKEN="$(gcloud auth application-default print-access-token)"; export CLOUDSDK_AUTH_ACCESS_TOKEN="$TOKEN"
 else
   TOKEN="$(gcloud auth print-access-token)"   # plain gcloud login is the identity
 fi
 ```
+
+**`CLOUDSDK_CORE_DISABLE_PROMPTS=1` is a read-only safety requirement, not a convenience.**
+Live-caught: `gcloud filestore instances list` against a project where the Filestore API is
+disabled does not simply fail — it prints `API [file.googleapis.com] not enabled on project
+[...]. Would you like to enable and retry?` and **waits for input**. In an audit that means one
+of two bad outcomes: the run hangs on a prompt nobody sees, or something answers `y` and the
+audit **enables a Google API** — a write, performed by a skill that promises to change nothing.
+Several APIs behave this way, so set this once in every block's preamble and treat a disabled
+API as the exclusion it is. With prompts disabled the same command exits non-zero with
+`PERMISSION_DENIED: ... API has not been used in project ... or it is disabled`, which the
+`|| echo "... reports excluded ..."` fallback already handles correctly.
 
 The `else` branch matters: without it `TOKEN` is unset on the gcloud-login path, so any REST
 read in this catalog (the Cloud Monitoring utilisation reads this lane shares with
@@ -466,11 +478,11 @@ gcloud compute project-info describe --project "$GCP_PROJECT" --format='value(de
 # 2. Cloud NAT gateways. NAT bills a gateway-hour per gateway AND per-GiB data processing, so a
 #    gateway per zone or per cluster multiplies the fixed half.
 gcloud compute routers list --project "$GCP_PROJECT" --format=json 2>/dev/null \
-  | jq -r '.[] | . as $r | ($r.nats // [])[] | "\($r.region)/\($r.name)\tnat=\(.name)\tips=\((.natIps // []) | length)\tsubnets=\((.subnetworks // []) | length)"' \
+  | jq -r '.[] | . as $r | ($r.nats // [])[] | "\($r.region | sub(".*/"; ""))/\($r.name)\tnat=\(.name)\tips=\((.natIps // []) | length)\tsubnets=\((.subnetworks // []) | length)"' \
   || echo "COST-GCP-026: routers.list denied"
 # 3. Forwarding rules with no backend traffic are an idle load-balancer charge.
 gcloud compute forwarding-rules list --project "$GCP_PROJECT" --format=json 2>/dev/null \
-  | jq -r '.[] | "\(.region // "global")/\(.name)\tIP=\(.IPAddress)\ttier=\(.networkTier // "-")\ttarget=\((.target // .backendService // "-") | sub(".*/"; ""))"' \
+  | jq -r '.[] | "\((.region // "global") | sub(".*/"; ""))/\(.name)\tIP=\(.IPAddress)\ttier=\(.networkTier // "-")\ttarget=\((.target // .backendService // "-") | sub(".*/"; ""))"' \
   || echo "COST-GCP-026: forwarding-rules.list denied"
 ```
 
