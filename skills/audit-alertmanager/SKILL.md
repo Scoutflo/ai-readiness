@@ -466,7 +466,7 @@ Before writing `findings.json` and `report.md`, since `findings.json` requires t
    `scoring_scope: "non-scored"`, and keep zero readiness points.
 3. Every findings area and coverage cell carries its denominator
    (`passed/total checks`); the scorecard states the suppressed count.
-4. Emit one `checks[]` row for every stable `ALR-*` catalog check, including
+4. Emit one `checks[]` row for every stable `ALR-*` catalog check, including Every `not-in-scope` row additionally carries `not_in_scope_reason` — one of `inapplicable` (nothing of the kind exists on this target), `target-gone` (proven decommissioned), `by-design` (the customer declared it) or `covered-elsewhere` (verified on the plane that owns it) — per [not-in-scope-reasons.md](../../report-standard/not-in-scope-reasons.md). A row you cannot evidence is `blocked`, not `not-in-scope`.
    passes, partials, failures, blockers, and not-in-scope checks (the retired
    `ALR-001` / `ALR-021` are never emitted). Derive category counts, readiness,
    assessment coverage, and `score.check_set` from that complete ledger; never

@@ -182,13 +182,15 @@ normalized `covers == affected` match on a monitor that is `enabled != false`
   normally look. Emit `not-in-scope` / `covered-elsewhere`. Nothing is hidden,
   because something was verified.
 - **The audit could not read the owning plane** — it only has a pointer saying
-  the plane exists. That is *not* `not-in-scope`. The check stays a finding, with
-  its severity lowered to reflect the pointer and its
-  [`coverage_gap`](findings-schema.md) populated so the correlation engine can
-  reframe it against the owning provider's own audit. Per `/scoutflo:rca`,
-  cross-tool coverage **reframes a gap as a single-tool dependency; it does not
-  exonerate it.** A pointer is evidence that someone else might be looking, not
-  evidence that anyone is.
+  the plane exists. That is *not* `not-in-scope`. The row is **`blocked`**, with
+  `points_recoverable: 0` and its [`coverage_gap`](findings-schema.md) populated
+  so the correlation engine can reframe it against the owning provider's own
+  audit. Do **not** use `partial` or a lowered-severity `fail` here: both claim a
+  measurement, and no measurement happened — the result is unknown, which is
+  exactly what `blocked` means. Per `/scoutflo:rca`, cross-tool coverage
+  **reframes a gap as a single-tool dependency; it does not exonerate it.** A
+  pointer is evidence that someone else might be looking, not evidence that
+  anyone is.
 
 The practical test: could you name the exact rule, monitor, or object that
 satisfies this check, and say it is enabled? If yes, exonerate. If you can only

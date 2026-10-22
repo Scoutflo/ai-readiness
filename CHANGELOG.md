@@ -1,5 +1,79 @@
 # Changelog
 
+## 0.1.232
+
+**A second review round, on the fix commit itself — and the same bug a third time.** Two more
+independent reviewers were run, one per unreviewed commit. They found twelve more must-fix
+defects. The headline one is that the fail-open cluster-gone guard was **still** fail-open after
+v0.1.231 had already "fixed" it twice, for a reason neither earlier pass saw.
+
+- **`gcloud` prefixes every error with `(gcloud.container.clusters.describe)`, so requiring the
+  error to "name the cluster" was satisfied by construction.** v0.1.231 added a second condition —
+  a not-found signature AND the stderr naming the cluster asked about — but tested that as a bare
+  substring. GKE names may be a single character, so a live cluster called `a`, `b`, `cloud`,
+  `cluster`, `clusters`, `describe`, `found`, `not` or `on` is "named" by gcloud's own preamble in
+  **every** error, collapsing the guard back to the single-condition version it replaced. A 404
+  about an entirely *different* cluster was also accepted as proof about this one. The match is now
+  **structural** — the resource path gcloud echoes (`.../clusters/<name>`), delimited by
+  end-of-string or a non-name character — which also rejects a prefix collision (a 404 about
+  `live-2` no longer proves `live` is gone). Nine formerly-fatal names are now permanent test cases.
+- **The new test was making real, authenticated cloud API calls.** `test-cluster-gone-probe.sh`'s
+  "a missing CLI cannot prove absence" case deleted its own stubs, after which `command -v gcloud`
+  resolved the **system** CLI — so `ci/run-tests.sh` on any developer machine fired real
+  `gcloud container clusters describe` and `aws eks describe-cluster` requests with whatever
+  ambient credentials were loaded. That is a test-hygiene failure and a credential-guardrail
+  violation in the very test written to prove caution. It now runs with a PATH that provably cannot
+  resolve either CLI, and **skips honestly** rather than risk a live call if a machine ships them in
+  `/usr/bin`. A new case asserts the whole suite invokes a cloud CLI exactly twice — once per
+  well-formed context — and never with an empty target flag. Verified with a logging stand-in:
+  **zero** real CLI invocations across the suite.
+- **"All seventeen fixed" was wrong: nineteen skills author a v2 ledger, and four kept the
+  field-less form.** Two had only their step-4 contract updated and kept the old business-context
+  sentence; two more used different phrasing the first sweep did not match. Worse, the new gate
+  could not see them, because its check was **file-scoped** — one mention of the field anywhere in
+  the file satisfied it. The gate now requires the field **on the emission-contract line itself**,
+  which is what an audit actually reads before writing `findings.json`, and all 19 contracts carry
+  it. Its docstring and the `AGENTS.md` entry now state the limit plainly: it guards the contract,
+  not every per-check sentence in a `references/*.md`.
+- **The gate also false-FAILED on correct content.** Its JSON rule was line-scoped, so the
+  canonical object in its most readable pretty-printed form was rejected (the sibling key sits two
+  lines down), and any prose sentence quoting `"result": "not-in-scope"` tripped the build — the
+  repo was barred from documenting its own rule. The rule is now object-scoped and fence-scoped.
+  And `for f in $(find …)` word-split, so a repo path containing a space made it scan **nothing**
+  and print OK; it now reads the file list safely.
+- **A step-4 edit was spliced mid-sentence** in `audit-newrelic`, severing the original clause and
+  leaving a dangling fragment the agent would read as part of the instruction. Repaired.
+- **`bcval` ended a quoted scalar at the LAST quote, not the first.** So
+  `- cluster: "prod-east"  # the "big" one` stored `prod-east"  # the "big`, which matches no real
+  cluster — the customer's declared exemption silently stopped applying, which is the exact failure
+  class v0.1.229 exists to remove. Quoted scalars now end at their first closing quote, which also
+  makes trailing comments on quoted values work properly rather than by accident.
+- **A YAML block scalar silently became the string `">"`.** `query: >` with the real expression on
+  the next line stored `">"` — and because the entry was *present*, `COST-UNIT-004` did not fire, so
+  an operator believed unit economics was on while `>` was what got sent to their metric backend.
+  Block scalars are now rejected, so the honest "no unit declared" path runs instead.
+- **`source: Prometheus` silently dropped the whole declaration** (the closed-set match was
+  case-sensitive, and that is how the product is normally written) — reproducing the very bug
+  v0.1.230 was written to fix. Now case-insensitive.
+- **`why` was truncated at the first ` #`**, so `why: see ticket #123 for the retention decision`
+  stored `see ticket`, on the one field the template promises is quoted back in the customer's own
+  words. Free text is now read verbatim; `query` still strips a trailing YAML comment, because
+  keeping it would send the comment to the metric backend.
+- **`per: 0` was accepted**, giving `cost per 0 units` and a literal division by zero downstream.
+  Now falls back to the documented default.
+- **No dropped declaration is silent any more.** A `<placeholder>`, an out-of-vocabulary intent or
+  source, or a rejected block scalar used to vanish with `units=0` as the only evidence. A warning
+  now names what was dropped and where to fix it — while staying quiet on a fresh scaffold, whose
+  template example is a placeholder rather than a failed attempt.
+- Also: `CONTRACTS.md` C6 still declared the projection without `resource_intent` or `unit_metrics`
+  (the same doc-vs-code drift being fixed, in the file that is supposed to be the contract SSOT);
+  `ci/structure-check.sh`'s own header still said 24 gates; the SSOT's "stays a finding, severity
+  lowered" clause contradicted its own `blocked` mandate; Grafana ruler temp files are now
+  `$$`-scoped so a cleanup cannot touch a concurrent run's files; and a lib comment claimed the
+  `unit_metrics` template example is commented out — it is not, it is a live placeholder entry, so
+  the **placeholder** filter is what holds that line, and the comment, the CHANGELOG and a vacuous
+  test assertion all said otherwise.
+
 ## 0.1.231
 
 **What an independent review round caught in v0.1.229-230 before any of it merged.** A

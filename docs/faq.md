@@ -54,7 +54,6 @@ Yes, even in a new session days later. Every setup change backs up what it touch
 Yes — the toolkit uses **both** and picks the best transport per operation, so you don't choose and don't configure anything. Most integrations (Grafana, Prometheus, Loki, Tempo, VictoriaMetrics/Logs, Sentry, Datadog, New Relic, PagerDuty, ELK, JSM, Zenduty, Groundcover, SigNoz, ClickStack) are reached over HTTPS with a token, so a read needs only `curl` + `jq` — no vendor CLI; only Kubernetes and AWS/GCP/DigitalOcean use a CLI. Reads take the fast direct CLI/HTTP path; a connected MCP tool is used when it is the equivalent read route or the only reachable one, and for a write whose typed MCP tool is the safer path than a hand-built call. A stack with only CLIs, only MCP servers, or a mix all work. Safety is unchanged: audits only ever call read-only tools (classified by effect, not name), never anything that mutates state.
 
 **The report says a check is "not applicable" — is that the same as passing?**
-
 No. The report distinguishes four things, and only one of them is "nothing to do": a check can be
 **not applicable** because there is genuinely nothing to assess (your platform version removed the
 feature, your managed engine has no such concept, the target was decommissioned, you declared the
@@ -65,7 +64,6 @@ answer. If we are unsure which applies, we report blocked — "we could not see 
 say, "there is nothing to do here" is not.
 
 **Why did it stop flagging our standby cluster — and why did it flag it before?**
-
 Because you told it. A warm standby, a DR replica or a backup target looks exactly like waste to
 every signal an audit can read: low CPU, low traffic, large instance. Intent is a fact about your
 plans that exists nowhere in your telemetry, so the audit does not guess it — if you declare the
@@ -76,7 +74,6 @@ standby costs you one correction, while wrongly staying silent about a forgotten
 money every month and you would never see the finding that was not written.
 
 **Our alert rules live in Git, applied to a Mimir/Prometheus ruler — will the Grafana audit say we have no alerts?**
-
 No. Grafana has two rule planes: its own, and the datasource's ruler. The audit checks both. When it
 can read a rule for a service on the datasource's ruler it reports that service as covered and names
 the rule; when it can see a ruler exists but cannot read it (no permission, or the rules only exist

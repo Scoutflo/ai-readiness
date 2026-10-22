@@ -374,7 +374,7 @@ DS_JSON="$(curl -fsS --max-time 15 -H "Authorization: Bearer ${GRAFANA_TOKEN}" \
 printf '%s' "$DS_JSON" | jq -r '.[]? | select(.type | test("prometheus|loki|mimir|cortex|alertmanager"))
   | "\(.uid)\t\(.type)\t\(.name)"' | while IFS="$(printf '\t')" read -r DS_UID DS_TYPE DS_NAME; do
   [ -n "$DS_UID" ] || continue
-  R_CODE="$(curl -sS -o "${TMPDIR:-/tmp}/graf-ruler-$DS_UID.json" -w '%{http_code}' --max-time 20 \
+  R_CODE="$(curl -sS -o "${TMPDIR:-/tmp}/graf-ruler-$$-$DS_UID.json" -w '%{http_code}' --max-time 20 \
     -H "Authorization: Bearer ${GRAFANA_TOKEN}" \
     "${GRAFANA_URL}/api/ruler/${DS_UID}/api/v1/rules" 2>/dev/null || echo 000)"
   case "$R_CODE" in
@@ -383,7 +383,7 @@ printf '%s' "$DS_JSON" | jq -r '.[]? | select(.type | test("prometheus|loki|mimi
       # HTML, and parsing that as "zero rules" would fail GRAF-091 on a fully-alerted
       # estate — the exact wrong verdict this section exists to prevent. Assert JSON
       # FIRST, and treat an unparseable body as unknown, never as empty.
-      if ! jq -e 'type == "object" or type == "array"' "${TMPDIR:-/tmp}/graf-ruler-$DS_UID.json" >/dev/null 2>&1; then
+      if ! jq -e 'type == "object" or type == "array"' "${TMPDIR:-/tmp}/graf-ruler-$$-$DS_UID.json" >/dev/null 2>&1; then
         echo "ruler ${DS_NAME} (${DS_TYPE}): HTTP 200 but the body is not JSON (an SSO/login page or a proxy interstitial) — UNKNOWN, not empty. GRAF-091 is BLOCKED for its services"
         continue
       fi
@@ -391,13 +391,13 @@ printf '%s' "$DS_JSON" | jq -r '.[]? | select(.type | test("prometheus|loki|mimi
       # Count ALERTING rules separately from RECORDING rules. Only an alerting rule
       # can satisfy GRAF-091 — a ruler holding nothing but recording rules pages
       # nobody, and counting those as coverage would exonerate an unalerted service.
-      N_ALERT="$(jq '[.[]?[]?.rules[]? | select(has("alert"))] | length' "${TMPDIR:-/tmp}/graf-ruler-$DS_UID.json" 2>/dev/null || echo 0)"
-      N_REC="$(jq '[.[]?[]?.rules[]? | select(has("record"))] | length' "${TMPDIR:-/tmp}/graf-ruler-$DS_UID.json" 2>/dev/null || echo 0)"
+      N_ALERT="$(jq '[.[]?[]?.rules[]? | select(has("alert"))] | length' "${TMPDIR:-/tmp}/graf-ruler-$$-$DS_UID.json" 2>/dev/null || echo 0)"
+      N_REC="$(jq '[.[]?[]?.rules[]? | select(has("record"))] | length' "${TMPDIR:-/tmp}/graf-ruler-$$-$DS_UID.json" 2>/dev/null || echo 0)"
       echo "ruler ${DS_NAME} (${DS_TYPE}, uid=${DS_UID}): HTTP 200, alerting rules=${N_ALERT}, recording rules=${N_REC} (only alerting rules count toward GRAF-091)"
       [ "${N_ALERT:-0}" -gt 0 ] && jq -r '[.[]?[]?.rules[]? | select(has("alert"))
           | "\(.labels.service // "-"):\(.alert)\(if (.labels.severity // "") == "" then " [NO severity label]" else "" end)"]
         | unique | "  alerting rules here (service:rule): " + (join(", ") | .[0:400])' \
-        "${TMPDIR:-/tmp}/graf-ruler-$DS_UID.json" 2>/dev/null ;;
+        "${TMPDIR:-/tmp}/graf-ruler-$$-$DS_UID.json" 2>/dev/null ;;
     404|501) echo "ruler ${DS_NAME} (${DS_TYPE}): no ruler API (HTTP ${R_CODE}) — this datasource holds no rules; NOT an empty ruler" ;;
     401|403) echo "ruler ${DS_NAME} (${DS_TYPE}): HTTP ${R_CODE} — the token cannot read this ruler. GRAF-091 is BLOCKED for its services, never passed or failed" ;;
     *)       echo "ruler ${DS_NAME} (${DS_TYPE}): HTTP ${R_CODE} — unresolved; treat as unknown, not as empty" ;;
@@ -405,7 +405,7 @@ printf '%s' "$DS_JSON" | jq -r '.[]? | select(.type | test("prometheus|loki|mimi
 done
 # Ruler bodies hold rule expressions, internal hostnames and label values — do not
 # leave them on disk after the classification is read.
-rm -f "${TMPDIR:-/tmp}"/graf-ruler-*.json
+rm -f "${TMPDIR:-/tmp}"/graf-ruler-$$-*.json   # $$-scoped: never another run's files
 # External Alertmanager: when Grafana routes to one, notification policy and contact
 # points live THERE, so GRAF-050..055 read only part of the delivery path.
 curl -fsS --max-time 15 -H "Authorization: Bearer ${GRAFANA_TOKEN}" \

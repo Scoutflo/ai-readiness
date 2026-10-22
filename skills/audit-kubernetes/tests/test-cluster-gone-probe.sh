@@ -65,6 +65,25 @@ do
 done
 echo "PASS"
 
+echo "Test 1b: a name appearing in gcloud's OWN error preamble is not a naming match"
+# gcloud prefixes every error with "(gcloud.container.clusters.describe)", so a
+# bare substring test for the cluster name is satisfied by construction for any
+# cluster named after a word in that preamble. 1-char GKE names are legal, so this
+# is reachable in practice — it silently reduced the two-condition guard back to
+# the single-condition one. The match must be STRUCTURAL (.../clusters/<name>).
+PRE='ERROR: (gcloud.container.clusters.describe)'
+for n in a b cloud cluster clusters describe found not on; do
+  [ "$(verdict "gke_myproj_us-central1_$n" "$PRE command [docker-credential-gcloud] was not found on the PATH" gke-gcloud-auth-plugin)" = "UNKNOWN" ] \
+    || fail "a live cluster named '$n' was declared deleted by a plumbing error that merely contains its name"
+done
+# A 404 about a DIFFERENT cluster is not evidence about this one.
+[ "$(verdict "gke_p_eu-west1_a" "$PRE Response: [404] Not found: projects/p/locations/eu-west1/clusters/some-other-cluster." gke-gcloud-auth-plugin)" = "UNKNOWN" ] \
+  || fail "a 404 about a different cluster was accepted as proof about this one"
+# Nor is a 404 about a cluster whose name merely has this one as a PREFIX.
+[ "$(verdict "gke_p_eu-west1_live" "$PRE Response: [404] Not found: projects/p/locations/eu-west1/clusters/live-2." gke-gcloud-auth-plugin)" = "UNKNOWN" ] \
+  || fail "a 404 about 'live-2' was accepted as proof that 'live' is gone"
+echo "PASS"
+
 echo "Test 2: an inconclusive answer is never 'gone'"
 for e in \
   "ERROR: (gcloud) Your credentials have expired" \
@@ -121,9 +140,44 @@ A="arn:aws:eks:eu-west-1:1234:cluster/prod"
 echo "PASS"
 
 echo "Test 7: a missing CLI cannot prove absence"
-rm -f "$WORK/bin/gcloud" "$WORK/bin/aws"
-[ "$(verdict "$CTX" "" gke-gcloud-auth-plugin)" = "UNKNOWN" ] || fail "a missing gcloud produced a gone verdict"
-[ "$(verdict "$A" "" aws)" = "UNKNOWN" ] || fail "a missing aws produced a gone verdict"
+# Deleting the stubs is NOT enough: `command -v gcloud` would then resolve the
+# REAL CLI on a developer machine and the probe would make an authenticated cloud
+# call with whatever ambient credentials are loaded — a live API call from a unit
+# test, and a profile-guardrail violation. Run with a PATH that cannot resolve
+# either CLI instead.
+mkdir -p "$WORK/empty"
+# A minimal PATH that still resolves the shell but not the cloud CLIs. Verify that
+# before using it: if a machine really does ship gcloud/aws in /usr/bin we SKIP
+# rather than let the probe make a live authenticated call.
+NOCLI_PATH="$WORK/empty:/usr/bin:/bin"
+if PATH="$NOCLI_PATH" command -v gcloud >/dev/null 2>&1 || PATH="$NOCLI_PATH" command -v aws >/dev/null 2>&1; then
+  echo "SKIP (a cloud CLI is installed in /usr/bin or /bin on this machine, so the"
+  echo "      missing-CLI path cannot be exercised without risking a live call)"
+else
+  verdict_nocli() { PATH="$NOCLI_PATH" STUB_ERR="$2" sh "$WORK/probe.sh" "$1" "$3"; }
+  [ "$(verdict_nocli "$CTX" "" gke-gcloud-auth-plugin)" = "UNKNOWN" ] || fail "a missing gcloud produced a gone verdict"
+  [ "$(verdict_nocli "$A" "" aws)" = "UNKNOWN" ] || fail "a missing aws produced a gone verdict"
+fi
+echo "PASS"
+
+echo "Test 8: no cloud CLI is ever invoked with an ambient or empty target"
+# Belt-and-braces against the class of bug Test 7 itself had: log every argv and
+# assert nothing ran without a fully-populated target.
+: > "$WORK/argv.log"
+for c in gcloud aws; do
+  printf '#!/bin/sh\nprintf "%%s %%s\\n" "%s" "$*" >> "%s"\nexit 1\n' "$c" "$WORK/argv.log" > "$WORK/bin/$c"
+  chmod +x "$WORK/bin/$c"
+done
+verdict "gke_myproj_us-central1_live" "" gke-gcloud-auth-plugin >/dev/null
+verdict "arn:aws:eks:eu-west-1:1234:cluster/prod" "" aws >/dev/null
+verdict "renamed-by-user" "" gke-gcloud-auth-plugin >/dev/null
+verdict "gke_myproj__live" "" gke-gcloud-auth-plugin >/dev/null
+verdict "my-eks-alias" "" aws >/dev/null
+grep -qE -- '--project +(--|$)|--location +(--|$)|--name +(--|$)|--region +(--|$)' "$WORK/argv.log" \
+  && fail "a cloud CLI was invoked with an empty target flag: $(cat "$WORK/argv.log")"
+[ "$(grep -c . "$WORK/argv.log")" -eq 2 ] \
+  || fail "expected exactly 2 cloud calls (one per well-formed context), got: $(cat "$WORK/argv.log")"
+stub_gcloud; stub_aws
 echo "PASS"
 
 echo

@@ -190,7 +190,7 @@ fi
 # its per-resource action/escalation/sla refine (never weaken) the workspace rule for that one resource.
 ```
 
-When context is available, apply it per [BUSINESS-CONTEXT-INTEGRATION-v0168.md](../../docs/BUSINESS-CONTEXT-INTEGRATION-v0168.md): **exclude** a service/job matched by an exclusion (record it `not-in-scope` with the reason, never a fail — a deliberately-unmonitored dev job is not a coverage gap); **escalate** a scrape gap (PROM-011), a dead rule (PROM-020/022), or a stalled remote-write (PROM-040) on a `critical_dependencies` service; **reduce severity** for a gap that exists only in a non-production `environment` (a high-cardinality label on a dev Prometheus is not a prod cost gap); and apply `cost_sensitivity` to the ordering of the cardinality (PROM-030/032) and remote-write findings. With no context, run neutral defaults and say so — never invent a business rule.
+When context is available, apply it per [BUSINESS-CONTEXT-INTEGRATION-v0168.md](../../docs/BUSINESS-CONTEXT-INTEGRATION-v0168.md): **exclude** a service/job matched by an exclusion (record it `not-in-scope` with `not_in_scope_reason: "by-design"` (the exclusion is the customer's declaration) and the exclusion as the `reason`, never a fail — a deliberately-unmonitored dev job is not a coverage gap); **escalate** a scrape gap (PROM-011), a dead rule (PROM-020/022), or a stalled remote-write (PROM-040) on a `critical_dependencies` service; **reduce severity** for a gap that exists only in a non-production `environment` (a high-cardinality label on a dev Prometheus is not a prod cost gap); and apply `cost_sensitivity` to the ordering of the cardinality (PROM-030/032) and remote-write findings. With no context, run neutral defaults and say so — never invent a business rule.
 
 ## Phase 1: Service context
 
@@ -282,8 +282,8 @@ fi
 Behavior this enforces:
 
 - **Reachable Prometheus, zero targets and zero `up` series:** do **not** score PROM-010 (target health), PROM-011 (coverage/freshness), and PROM-012 (scrape-config limits) as a confident `0/100`, and do not score them a vacuous high from an empty set — note PROM-012's `..._exceeded_*_total` counters return empty with zero targets, which is *not* a clean pass. Mark **all three** `blocked` with the visibility-gap reason so the entire weight-20 "Scrape targets and coverage" category is unassessable and drops out on renormalization (leaving one member scoreable would let PROM-012 register a vacuous coverage sub-score — exactly the empty-set inflation this guardrail exists to prevent). **Keep TSDB health (PROM-030/031/032) and Security posture (PROM-050/051) included** (they read the server, not the fleet), renormalize per [severity-and-scoring.md](../../report-standard/severity-and-scoring.md), and emit **PROM-007** naming the gap (empty scrape config / broken service discovery / a query-only frontend) and the fix. Keeping server-plane categories included means at least one scored category always remains, which `check-findings.sh` requires.
-- **Zero loaded rules:** mark the whole rule-engine category (PROM-020/021/022/023) `not-in-scope` with the reason — a scrape-only Prometheus with rules run elsewhere is a real topology, not a confident zero — and renormalize.
-- **No remote-write self-metrics** (a pure local-TSDB Prometheus): mark PROM-040 `not-in-scope`, renormalize; never a fail.
+- **Zero loaded rules:** mark the whole rule-engine category (PROM-020/021/022/023) `not-in-scope` with `not_in_scope_reason: "inapplicable"` and the reason — a scrape-only Prometheus with rules run elsewhere is a real topology, not a confident zero — and renormalize.
+- **No remote-write self-metrics** (a pure local-TSDB Prometheus): mark PROM-040 `not-in-scope` with `not_in_scope_reason: "inapplicable"`, renormalize; never a fail.
 - **Never** write a confident `0/100`, a vacuously-high score, or an end-to-end claim on a tripped guardrail.
 
 ## Phase 2: Read-only inventory

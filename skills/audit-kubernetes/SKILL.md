@@ -133,11 +133,21 @@ if [ "$K_RC" -ne 0 ]; then
             # The not-found signature alone is NOT enough: gcloud writes unrelated
             # plumbing failures in the same words ("command [docker-credential-gcloud]
             # was not found on the PATH", "credential file was not found"), and
-            # treating those as absence declares a live cluster decommissioned. Require
-            # BOTH a not-found signature AND the message naming the cluster we asked
-            # about, so only an answer *about this cluster* can prove it is gone.
+            # treating those as absence declares a live cluster decommissioned.
+            #
+            # A bare substring test for the cluster name is ALSO not enough, and fails
+            # the same way: gcloud prefixes every error with
+            # "(gcloud.container.clusters.describe)", so a cluster legally named `a`,
+            # `cloud`, `cluster`, `describe` or `found` (1-char names are valid) is
+            # "named" by that preamble in EVERY error, and the guard silently degrades
+            # to the single-condition match again.
+            #
+            # So match the identity STRUCTURALLY — the resource path gcloud echoes
+            # (".../clusters/<name>") delimited by end-of-string or a non-name
+            # character. That accepts a real 404 about this cluster, rejects a 404
+            # about a different or truncated name, and rejects every plumbing error.
             case "$G_ERR" in
-              *"$G_NAME"*)
+              *"clusters/$G_NAME"|*"clusters/$G_NAME"[!-0-9A-Za-z_]*|*"No cluster named '$G_NAME'"*)
                 case "$G_ERR" in
                   *"was not found"*|*NOT_FOUND*|*"Not found"*|*"[404]"*|*"No cluster named"*)
                     GONE="gcloud container clusters describe: cluster '$G_NAME' not found in project '$G_PROJ' (${G_LOC})" ;;
@@ -152,9 +162,12 @@ if [ "$K_RC" -ne 0 ]; then
             # Uses whatever AWS credentials this kubeconfig context already authenticates with.
             E_ERR="$(aws eks describe-cluster --name "$E_NAME" --region "$E_REGION" \
               --query 'cluster.name' --output text 2>&1 1>/dev/null)" || true
-            # Same two-part rule as the GKE branch: the exception AND this cluster's name.
+            # Same structural rule as the GKE branch. The AWS CLI echoes the asked
+            # name as "No cluster found for name: <name>." — match that delimited,
+            # not a bare substring (a cluster named `prod` or `cluster` appears
+            # incidentally in unrelated error text).
             case "$E_ERR" in
-              *"$E_NAME"*)
+              *"name: $E_NAME"|*"name: $E_NAME"[!-0-9A-Za-z_]*)
                 case "$E_ERR" in
                   *ResourceNotFoundException*) GONE="aws eks describe-cluster: ResourceNotFoundException for cluster '$E_NAME' in $E_REGION" ;;
                 esac ;;

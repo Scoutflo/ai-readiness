@@ -145,18 +145,20 @@ bc_derive_json() {
   excl_resources="$(bc_exclusion_list Resources)"; [ -n "$excl_resources" ] || excl_resources='[]'
 
   # Declared resource intent: the `resource_intent:` YAML list under
-  # "## Resource Intent". Only UNCOMMENTED entries count — the template ships a
-  # commented example, and parsing that as a real declaration would silently
-  # exempt a resource nobody declared. An entry starts at `- <matchkey>: <value>`;
-  # its following indented keys belong to it. Unknown intents are dropped rather
-  # than passed through, so only the closed vocabulary can ever reach an audit.
-  rintent="$(awk '
+  # "## Resource Intent". An entry starts at `- <matchkey>: <value>`; its following
+  # indented keys belong to it. Two filters keep an undeclared resource from being
+  # exempted, and BOTH are load-bearing: an unfilled `<placeholder>` match is
+  # dropped, and an intent outside the closed vocabulary is dropped rather than
+  # passed through. (The `/^#/` skip is defence-in-depth only — a commented
+  # `# intent: x` parses its key as "# intent", which matches nothing, so the
+  # parser is comment-immune by construction.)
+  _ri_raw="$(awk '
       /^## Resource Intent/{sec=1;next} /^## /{sec=0}
       !sec{next}
       /^```/{inyaml=!inyaml;next}
       !inyaml{next}
       { line=$0; sub(/\r$/,"",line); gsub(/\t/," ",line); sub(/^[[:space:]]+/,"",line) }
-      line ~ /^#/ {next}                                  # commented example: never a declaration
+      line ~ /^#/ {next}                                  # defence-in-depth; see the note above
       line ~ /^-[[:space:]]/ {
         if (mk!="") print mk "\t" mv "\t" it "\t" wy "\t" rb
         mk="";mv="";it="";wy="";rb=""
@@ -166,38 +168,60 @@ bc_derive_json() {
         k=line; v=line
         sub(/:.*$/,"",k); sub(/^[^:]*:[[:space:]]*/,"",v)
         gsub(/^[[:space:]]+|[[:space:]]+$/,"",k)
-        v=bcval(v)
+        v=(k=="why") ? bcraw(v) : bcval(v)
         if (k=="intent") it=v
         else if (k=="why") wy=v
         else if (k=="review_by") rb=v
         else if (k=="cluster"||k=="namespace"||k=="workload"||k=="instance_id"||k=="resource_name") { mk=k; mv=v }
       }
       END{ if (mk!="") print mk "\t" mv "\t" it "\t" wy "\t" rb }
-      # One value reader for every YAML scalar this file parses. Takes what is
-      # INSIDE a quoted value verbatim (a PromQL query is full of quotes, braces
-      # and brackets, and a trailing-comment strip would truncate it); strips a
-      # trailing ` # comment` only from an UNQUOTED value.
-      function bcval(s) {
-        if (s ~ /^"/)      { sub(/^"/,"",s); if (match(s,/"[^"]*$/)) s=substr(s,1,RSTART-1); return s }
-        else if (s ~ /^\x27/) { sub(/^\x27/,"",s); if (match(s,/\x27[^\x27]*$/)) s=substr(s,1,RSTART-1); return s }
-        sub(/[[:space:]]+#.*$/,"",s); sub(/[[:space:]]+$/,"",s); return s
+      # --- YAML scalar readers, shared by both parsers below ---------------------
+      # A quoted scalar ends at its FIRST closing quote. Ending at the LAST one
+      # (match(/"[^"]*$/)) let a trailing comment that itself contains a quote
+      # extend the value: `- cluster: "prod-east"  # the "big" one` captured
+      # `prod-east"  # the "big`, which matches no real cluster — so a declared
+      # exemption silently stopped applying.
+      # bcval strips a trailing ` # comment` from an UNQUOTED scalar (YAML-correct,
+      # and it stops `intent: standby # warm` from voiding the whole entry).
+      # bcraw never strips it: `#` is ordinary in free text ("see ticket #123"),
+      # and the template promises those words are quoted back verbatim.
+      function bcval(s) { return bcscalar(s, 1) }
+      function bcraw(s) { return bcscalar(s, 0) }
+      function bcscalar(s, strip,   i, q) {
+        q = sprintf("%c", 39)                       # single quote, without \x27 (not POSIX)
+        if (substr(s,1,1) == "\"") { s=substr(s,2); i=index(s,"\""); if (i>0) s=substr(s,1,i-1); return s }
+        if (substr(s,1,1) == q)    { s=substr(s,2); i=index(s,q);    if (i>0) s=substr(s,1,i-1); return s }
+        if (strip) sub(/[[:space:]]+#.*$/,"",s)
+        sub(/[[:space:]]+$/,"",s)
+        return s
       }
-    ' "$SSOT_MD" \
+    ' "$SSOT_MD")"
+  rintent="$(printf '%s\n' "$_ri_raw" \
     | jq -R -s 'split("\n") | map(select(length>0) | split("\t"))
                 | map({match_kind:.[0], match:.[1], intent:.[2], why:.[3], review_by:.[4]})
+                | map(.match = ((.match // "") | sub("^\\s+";"") | sub("\\s+$";"")))
                 | map(select(((.match // "")|length>0) and ((.match // "")|test("^<|^\\[")|not))
                       | select(.intent | IN("standby","dr","backup","pre-scaled","accepted-tradeoff")))' 2>/dev/null || echo '[]')"
   [ -n "$rintent" ] || rintent='[]'
 
   # Declared unit of delivered value: the `unit_metrics:` YAML list under
-  # "## Unit of Delivered Value". Same two rules as resource_intent, for the same
-  # reason: only UNCOMMENTED entries count (the template ships a commented
-  # example, and parsing it would publish a cost-per-unit against a denominator
-  # nobody declared — a wrong denominator is harder to spot than a missing one,
-  # because the number looks finished), and `source` must be in the closed set.
-  # `query` is passed through VERBATIM: it is the customer's own metric query and
-  # jq does the JSON encoding, so quotes, braces and brackets survive intact.
-  umetrics="$(awk '
+  # "## Unit of Delivered Value".
+  #
+  # NOTE the asymmetry with resource_intent above: this template example is NOT
+  # commented out — it is a LIVE entry carrying `<placeholder>` values. So the
+  # PLACEHOLDER filter is the only thing keeping a freshly scaffolded SSOT at `[]`,
+  # and it is load-bearing in the strongest sense: without it every customer who
+  # runs the skill gets a fabricated unit, and `COST-UNIT-004` stops firing, so
+  # they believe unit economics is on while the denominator means nothing. A wrong
+  # denominator is harder to spot than a missing one, because the number looks
+  # finished.
+  #
+  # `query` is the customer's own metric query and is passed through VERBATIM (jq
+  # does the JSON encoding, so quotes, braces and brackets survive). A YAML block
+  # scalar (`query: >` / `query: |`) is REJECTED rather than accepted as the
+  # one-character string ">": a kept entry would be sent to their Prometheus as a
+  # query, and silently shipping `>` is worse than honestly reporting no unit.
+  _um_raw="$(awk '
       /^## Unit of Delivered Value/{sec=1;next} /^## /{sec=0}
       !sec{next}
       /^```/{inyaml=!inyaml;next}
@@ -213,7 +237,11 @@ bc_derive_json() {
         k=line; v=line
         sub(/:.*$/,"",k); sub(/^[^:]*:[[:space:]]*/,"",v)
         gsub(/^[[:space:]]+|[[:space:]]+$/,"",k)
-        v=bcval(v)
+        v=bcval(v)   # `query` strips a trailing YAML comment: keeping it would send
+                     # the comment to the metric backend as part of the query. A
+                     # query that gets TRUNCATED by that strip (an unquoted value
+                     # with `#` inside a label) is caught by the balanced-quote
+                     # check in the jq filter and dropped with a warning.
         if (k=="name") nm=v
         else if (k=="query") qr=v
         else if (k=="source") sr=v
@@ -221,20 +249,58 @@ bc_derive_json() {
         else if (k=="per") pr=v
       }
       END{ if (nm!="") print nm "\t" qr "\t" sr "\t" sc "\t" pr }
-      function bcval(s) {
-        if (s ~ /^"/)      { sub(/^"/,"",s); if (match(s,/"[^"]*$/)) s=substr(s,1,RSTART-1); return s }
-        else if (s ~ /^\x27/) { sub(/^\x27/,"",s); if (match(s,/\x27[^\x27]*$/)) s=substr(s,1,RSTART-1); return s }
-        sub(/[[:space:]]+#.*$/,"",s); sub(/[[:space:]]+$/,"",s); return s
+      # --- YAML scalar readers, shared by both parsers below ---------------------
+      # A quoted scalar ends at its FIRST closing quote. Ending at the LAST one
+      # (match(/"[^"]*$/)) let a trailing comment that itself contains a quote
+      # extend the value: `- cluster: "prod-east"  # the "big" one` captured
+      # `prod-east"  # the "big`, which matches no real cluster — so a declared
+      # exemption silently stopped applying.
+      # bcval strips a trailing ` # comment` from an UNQUOTED scalar (YAML-correct,
+      # and it stops `intent: standby # warm` from voiding the whole entry).
+      # bcraw never strips it: `#` is ordinary in free text ("see ticket #123"),
+      # and the template promises those words are quoted back verbatim.
+      function bcval(s) { return bcscalar(s, 1) }
+      function bcraw(s) { return bcscalar(s, 0) }
+      function bcscalar(s, strip,   i, q) {
+        q = sprintf("%c", 39)                       # single quote, without \x27 (not POSIX)
+        if (substr(s,1,1) == "\"") { s=substr(s,2); i=index(s,"\""); if (i>0) s=substr(s,1,i-1); return s }
+        if (substr(s,1,1) == q)    { s=substr(s,2); i=index(s,q);    if (i>0) s=substr(s,1,i-1); return s }
+        if (strip) sub(/[[:space:]]+#.*$/,"",s)
+        sub(/[[:space:]]+$/,"",s)
+        return s
       }
-    ' "$SSOT_MD" \
-    | jq -R -s 'split("\n") | map(select(length>0) | split("\t"))
-                | map({name:.[0], query:.[1], source:.[2],
-                       scope:(if ((.[3] // "")|length>0) then .[3] else "all" end),
-                       per:(((.[4] // "") | if test("^[0-9]+$") then tonumber else 1000 end))})
-                | map(select(((.name // "")|length>0) and ((.name // "")|test("^<|^\\[")|not))
-                      | select(((.query // "")|length>0) and ((.query // "")|test("^<|^\\[")|not))
+    ' "$SSOT_MD")"
+  umetrics="$(printf '%s\n' "$_um_raw" \
+    | jq -R -s 'def trim: sub("^\\s+";"") | sub("\\s+$";"");
+                split("\n") | map(select(length>0) | split("\t"))
+                | map({name:((.[0] // "")|trim), query:((.[1] // "")|trim),
+                       source:((.[2] // "")|trim|ascii_downcase),
+                       scope:(((.[3] // "")|trim) as $s | if ($s|length>0) then $s else "all" end),
+                       per:(((.[4] // "")|trim) | if test("^[1-9][0-9]*$") then tonumber else 1000 end)})
+                | map(select((.name|length>0) and (.name|test("^<|^\\[")|not))
+                      | select((.query|length>0) and (.query|test("^<|^\\[")|not))
+                      | select(.query|test("^[>|][-+0-9]*$")|not)
+                      | select(((.query|gsub("[^\"]";"")|length) % 2) == 0)
+                      | select(.scope|test("^<|^\\[")|not)
                       | select(.source | IN("prometheus","victoriametrics","thanos","cloud-monitoring")))' 2>/dev/null || echo '[]')"
   [ -n "$umetrics" ] || umetrics='[]'
+
+  # A dropped entry is the dangerous direction: a dropped resource_intent re-flags
+  # a resource the customer exempted, and a dropped unit_metrics silently reverts to
+  # COST-UNIT-004 while the operator believes they declared a unit. Count them and
+  # say so, rather than leaving "units=0" as the only evidence.
+  # Count only entries the operator really attempted: a leading `<placeholder>` or
+  # `[placeholder]` is the shipped template's own example, not a failed declaration,
+  # and warning about it on every fresh scaffold would train people to ignore this.
+  _ri_seen="$(printf '%s' "$_ri_raw" | grep -c '^[^<[	]*	[^<[]' 2>/dev/null || true)"; _ri_seen="${_ri_seen:-0}"
+  _um_seen="$(printf '%s' "$_um_raw" | grep -c '^[^<[	]*	[^<[]' 2>/dev/null || true)"; _um_seen="${_um_seen:-0}"
+  _ri_kept="$(printf '%s' "$rintent"  | jq 'length')"
+  _um_kept="$(printf '%s' "$umetrics" | jq 'length')"
+  _ri_drop=$(( _ri_seen - _ri_kept )); [ "$_ri_drop" -ge 0 ] || _ri_drop=0
+  _um_drop=$(( _um_seen - _um_kept )); [ "$_um_drop" -ge 0 ] || _um_drop=0
+  if [ "$_ri_drop" -gt 0 ] || [ "$_um_drop" -gt 0 ]; then
+    echo "[derived] WARNING: dropped ${_ri_drop} resource_intent and ${_um_drop} unit_metrics entr(ies) — an unfilled <placeholder>, an intent outside standby|dr|backup|pre-scaled|accepted-tradeoff, a source outside prometheus|victoriametrics|thanos|cloud-monitoring, or a YAML block scalar (query: > / |) which cannot be executed as a query. Those declarations are NOT in effect; fix them in ${SSOT_MD} and re-run." >&2
+  fi
 
   now="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date)"
   jq -n \

@@ -196,15 +196,15 @@ these two classes existed; these steps are what caught them.
 
 - **Producers:** `business-context` `bc_derive_json` →
   `~/.scoutflo/business_context.json` = `{environment, cost_sensitivity,
-  critical_dependencies, environment_map[], service_slas[], exclusions{accounts,
-  regions,services,resources}, derived_at}`; `business-context-resolver` →
+  critical_dependencies, environment_map[], service_slas[], resource_intent[],
+  unit_metrics[], exclusions{accounts,regions,services,resources}, derived_at}`; `business-context-resolver` →
   `~/.scoutflo/computed_metadata.jsonl` (per-resource); the `.md` is the SSOT and
   a valid fallback source.
 - **Consumers:** all 17 own-block audits' **Metadata Load** block — the canonical
   block (byte-identical across all 17) that loads the workspace layer
   (`business_context.json`, else the `.md` via the ssot-md fallback) **and** the
   per-resource layer (`computed_metadata.jsonl`) **together**, then applies:
-  exclude (`.exclusions` → `not-in-scope`, never a fail), escalate
+  exclude (`.exclusions` → `not-in-scope` with `not_in_scope_reason: "by-design"`, never a fail), escalate
   `critical_dependencies`, per-env `uptime_sla` from `environment_map` with
   per-service `service_slas` winning, `cost_sensitivity` ordering.
 - **Design limit (D1):** one integration block is judged against ONE environment;
@@ -242,6 +242,13 @@ these two classes existed; these steps are what caught them.
   `map-topology` is **per-target** (re-run per labeled kubernetes context or
   cloud target; one shared `topology.md` describes the wrong estate for the
   others).
+  `resource_intent[]` and `unit_metrics[]` are **declared, never inferred**: both are
+  parsed only from UNCOMMENTED, non-placeholder entries, both validate against a closed
+  vocabulary (intent, and `source`) and drop anything outside it rather than passing it
+  through, and a dropped entry is reported on stderr rather than left silent. A `query` is
+  stored verbatim (jq does the JSON encoding) so a PromQL expression survives byte-identical;
+  a YAML block scalar is rejected rather than stored as `">"`. With `unit_metrics` absent,
+  `audit-cost` emits `COST-UNIT-004` and never infers a unit.
 - **SSOT:** `skills/map-topology/references/scoutflo-export.md`.
 - **Guards:** the G6 topology-readiness maintainer review; `rca`/`render-report-viz`
   edge handling; `tests/test-cloud-mode-aws.sh` (export-section + redaction +
