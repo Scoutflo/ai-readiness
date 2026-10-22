@@ -145,5 +145,79 @@ bc_derive_json >/dev/null
   || fail "the shipped template produced resource_intent declarations: $(jq -c '.resource_intent' "$J")"
 echo "PASS"
 
+echo "Test 11: unit_metrics parses only REAL declarations from the closed source set"
+# Same two rules as resource_intent, for a sharper reason: a WRONG denominator is
+# harder to spot than a missing one, because the number looks finished. A unit the
+# customer never declared would publish a confident cost-per-unit measuring nothing.
+cat >> "$WORK/.scoutflo/business_context.md" <<'MD'
+
+## Unit of Delivered Value
+
+```yaml
+unit_metrics:
+  # - name: "<commented example>"
+  #   query: 'never_counts'
+  #   source: prometheus
+  - name: "meeting minutes"
+    query: 'sum(increase(app_minutes_total{job="api",env!~"dev|test"}[30d]))'
+    source: prometheus
+    scope: namespace:prod
+    per: 1000
+  - name: recordings
+    query: sum(increase(rec_total[30d]))   # a trailing comment must be stripped
+    source: cloud-monitoring
+  - name: bogus
+    query: 'x'
+    source: datadog
+  - name: "<what you count, in your words>"
+    query: '<your own metric query>'
+    source: prometheus
+```
+MD
+bc_derive_json >/dev/null
+um="$(jq '.unit_metrics | length' "$J")"
+[ "$um" -eq 2 ] || fail "expected exactly 2 valid unit_metrics, got $um: $(jq -c '.unit_metrics' "$J")"
+# The query is the customer's own PromQL: quotes, braces, brackets and !~ must survive
+# BYTE-IDENTICAL. jq does the JSON encoding precisely so this cannot be corrupted.
+q="$(jq -r '.unit_metrics[] | select(.name=="meeting minutes") | .query' "$J")"
+[ "$q" = 'sum(increase(app_minutes_total{job="api",env!~"dev|test"}[30d]))' ] \
+  || fail "the declared PromQL query was not preserved verbatim: $q"
+jq -e '.unit_metrics[] | select(.name=="recordings" and .query=="sum(increase(rec_total[30d]))" and .scope=="all" and .per==1000)' "$J" >/dev/null \
+  || fail "trailing comment not stripped, or scope/per defaults not applied: $(jq -c '.unit_metrics' "$J")"
+jq -e '.unit_metrics[] | select(.source=="datadog")' "$J" >/dev/null \
+  && fail "a source outside the closed set reached the projection"
+jq -e '.unit_metrics[] | select((.name|test("^<")) or (.query|test("^<")))' "$J" >/dev/null \
+  && fail "an unfilled <placeholder> was treated as a real declaration"
+jq -e '.unit_metrics[] | select(.query=="never_counts")' "$J" >/dev/null \
+  && fail "a COMMENTED template example became a live unit declaration"
+echo "PASS"
+
+echo "Test 12: free text containing a backslash or a quote does not silently drop a declaration"
+# Hand-built JSON in awk made this a SILENT data loss: an invalid \escape made jq
+# emit [] and every declaration vanished with no error in the file. Letting jq do
+# the encoding is what fixes it, so this test guards the technique, not the text.
+cp "$ROOT/templates/business_context_template.md" "$WORK/.scoutflo/business_context.md"
+cat >> "$WORK/.scoutflo/business_context.md" <<'MD'
+
+## Resource Intent
+
+```yaml
+resource_intent:
+  - cluster: dr-west
+    intent: standby
+    why: warm standby for "primary"; runbook at C:\dr\plan — holds 100% capacity
+  - namespace: archive
+    intent: backup
+    why: nightly archive target
+```
+MD
+err="$(bc_derive_json 2>&1 >/dev/null)"
+[ -z "$err" ] || fail "bc_derive_json wrote to stderr on valid input (a count built with echo mangles backslashes): $err"
+ri2="$(jq '.resource_intent | length' "$J")"
+[ "$ri2" -eq 2 ] || fail "expected 2 declarations to survive quotes/backslashes, got $ri2: $(jq -c '.resource_intent' "$J")"
+jq -e '.resource_intent[] | select(.match=="dr-west" and (.why|test("C:")) and (.why|test("\"primary\"")))' "$J" >/dev/null \
+  || fail "the why text lost its quotes or its backslash path"
+echo "PASS"
+
 echo
 echo "=== business-context SSOT tests passed ==="

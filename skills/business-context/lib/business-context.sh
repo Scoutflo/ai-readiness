@@ -155,34 +155,93 @@ bc_derive_json() {
       !sec{next}
       /^```/{inyaml=!inyaml;next}
       !inyaml{next}
-      { line=$0; sub(/^[[:space:]]+/,"",line) }
+      { line=$0; sub(/\r$/,"",line); gsub(/\t/," ",line); sub(/^[[:space:]]+/,"",line) }
       line ~ /^#/ {next}                                  # commented example: never a declaration
       line ~ /^-[[:space:]]/ {
-        if (mk!="") print "{\"match_kind\":\""mk"\",\"match\":\""mv"\",\"intent\":\""it"\",\"why\":\""wy"\",\"review_by\":\""rb"\"}"
+        if (mk!="") print mk "\t" mv "\t" it "\t" wy "\t" rb
         mk="";mv="";it="";wy="";rb=""
         sub(/^-[[:space:]]*/,"",line)
       }
       {
         k=line; v=line
         sub(/:.*$/,"",k); sub(/^[^:]*:[[:space:]]*/,"",v)
-        gsub(/^[[:space:]]+|[[:space:]]+$/,"",k); gsub(/^[[:space:]]+|[[:space:]]+$/,"",v)
-        gsub(/"/,"",v)
+        gsub(/^[[:space:]]+|[[:space:]]+$/,"",k)
+        v=bcval(v)
         if (k=="intent") it=v
         else if (k=="why") wy=v
         else if (k=="review_by") rb=v
         else if (k=="cluster"||k=="namespace"||k=="workload"||k=="instance_id"||k=="resource_name") { mk=k; mv=v }
       }
-      END{ if (mk!="") print "{\"match_kind\":\""mk"\",\"match\":\""mv"\",\"intent\":\""it"\",\"why\":\""wy"\",\"review_by\":\""rb"\"}" }
+      END{ if (mk!="") print mk "\t" mv "\t" it "\t" wy "\t" rb }
+      # One value reader for every YAML scalar this file parses. Takes what is
+      # INSIDE a quoted value verbatim (a PromQL query is full of quotes, braces
+      # and brackets, and a trailing-comment strip would truncate it); strips a
+      # trailing ` # comment` only from an UNQUOTED value.
+      function bcval(s) {
+        if (s ~ /^"/)      { sub(/^"/,"",s); if (match(s,/"[^"]*$/)) s=substr(s,1,RSTART-1); return s }
+        else if (s ~ /^\x27/) { sub(/^\x27/,"",s); if (match(s,/\x27[^\x27]*$/)) s=substr(s,1,RSTART-1); return s }
+        sub(/[[:space:]]+#.*$/,"",s); sub(/[[:space:]]+$/,"",s); return s
+      }
     ' "$SSOT_MD" \
-    | jq -s 'map(select((.match|length>0) and (.match|test("^<|^\\[")|not))
-                 | select(.intent | IN("standby","dr","backup","pre-scaled","accepted-tradeoff")))' 2>/dev/null || echo '[]')"
+    | jq -R -s 'split("\n") | map(select(length>0) | split("\t"))
+                | map({match_kind:.[0], match:.[1], intent:.[2], why:.[3], review_by:.[4]})
+                | map(select(((.match // "")|length>0) and ((.match // "")|test("^<|^\\[")|not))
+                      | select(.intent | IN("standby","dr","backup","pre-scaled","accepted-tradeoff")))' 2>/dev/null || echo '[]')"
   [ -n "$rintent" ] || rintent='[]'
+
+  # Declared unit of delivered value: the `unit_metrics:` YAML list under
+  # "## Unit of Delivered Value". Same two rules as resource_intent, for the same
+  # reason: only UNCOMMENTED entries count (the template ships a commented
+  # example, and parsing it would publish a cost-per-unit against a denominator
+  # nobody declared — a wrong denominator is harder to spot than a missing one,
+  # because the number looks finished), and `source` must be in the closed set.
+  # `query` is passed through VERBATIM: it is the customer's own metric query and
+  # jq does the JSON encoding, so quotes, braces and brackets survive intact.
+  umetrics="$(awk '
+      /^## Unit of Delivered Value/{sec=1;next} /^## /{sec=0}
+      !sec{next}
+      /^```/{inyaml=!inyaml;next}
+      !inyaml{next}
+      { line=$0; sub(/\r$/,"",line); gsub(/\t/," ",line); sub(/^[[:space:]]+/,"",line) }
+      line ~ /^#/ {next}
+      line ~ /^-[[:space:]]/ {
+        if (nm!="") print nm "\t" qr "\t" sr "\t" sc "\t" pr
+        nm="";qr="";sr="";sc="";pr=""
+        sub(/^-[[:space:]]*/,"",line)
+      }
+      {
+        k=line; v=line
+        sub(/:.*$/,"",k); sub(/^[^:]*:[[:space:]]*/,"",v)
+        gsub(/^[[:space:]]+|[[:space:]]+$/,"",k)
+        v=bcval(v)
+        if (k=="name") nm=v
+        else if (k=="query") qr=v
+        else if (k=="source") sr=v
+        else if (k=="scope") sc=v
+        else if (k=="per") pr=v
+      }
+      END{ if (nm!="") print nm "\t" qr "\t" sr "\t" sc "\t" pr }
+      function bcval(s) {
+        if (s ~ /^"/)      { sub(/^"/,"",s); if (match(s,/"[^"]*$/)) s=substr(s,1,RSTART-1); return s }
+        else if (s ~ /^\x27/) { sub(/^\x27/,"",s); if (match(s,/\x27[^\x27]*$/)) s=substr(s,1,RSTART-1); return s }
+        sub(/[[:space:]]+#.*$/,"",s); sub(/[[:space:]]+$/,"",s); return s
+      }
+    ' "$SSOT_MD" \
+    | jq -R -s 'split("\n") | map(select(length>0) | split("\t"))
+                | map({name:.[0], query:.[1], source:.[2],
+                       scope:(if ((.[3] // "")|length>0) then .[3] else "all" end),
+                       per:(((.[4] // "") | if test("^[0-9]+$") then tonumber else 1000 end))})
+                | map(select(((.name // "")|length>0) and ((.name // "")|test("^<|^\\[")|not))
+                      | select(((.query // "")|length>0) and ((.query // "")|test("^<|^\\[")|not))
+                      | select(.source | IN("prometheus","victoriametrics","thanos","cloud-monitoring")))' 2>/dev/null || echo '[]')"
+  [ -n "$umetrics" ] || umetrics='[]'
 
   now="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date)"
   jq -n \
     --arg env "$stage" --arg cost "$cost" --arg now "$now" \
     --argjson crit "$crit" --argjson envmap "$envmap" \
     --argjson svcslas "$svcslas" --argjson rintent "$rintent" \
+    --argjson umetrics "$umetrics" \
     --argjson excl_accounts "$excl_accounts" --argjson excl_regions "$excl_regions" \
     --argjson excl_services "$excl_services" --argjson excl_resources "$excl_resources" \
     '{
@@ -193,6 +252,7 @@ bc_derive_json() {
       environment_map: $envmap,
       service_slas: $svcslas,
       resource_intent: $rintent,
+      unit_metrics: $umetrics,
       exclusions: {
         accounts: $excl_accounts,
         regions: $excl_regions,
@@ -201,7 +261,12 @@ bc_derive_json() {
       },
       derived_at: $now
     }' > "$SSOT_JSON"
-  echo "[derived] $SSOT_JSON (environment=$stage cost=$cost critical=$(echo "$crit" | jq 'length') envs=$(echo "$envmap" | jq 'length') slas=$(echo "$svcslas" | jq 'length') intents=$(echo "$rintent" | jq 'length'))"
+  # printf '%s', never echo: `echo` interprets backslashes in some shells, so a
+  # declaration whose free text contains one (a Windows path in a `why`, a regex
+  # in a query) reaches jq as mangled JSON and this summary line dies with a
+  # parse error on stderr while the written file is perfectly fine. Counting is
+  # not worth a scary error message about data that is correct.
+  echo "[derived] $SSOT_JSON (environment=$stage cost=$cost critical=$(printf '%s' "$crit" | jq 'length') envs=$(printf '%s' "$envmap" | jq 'length') slas=$(printf '%s' "$svcslas" | jq 'length') intents=$(printf '%s' "$rintent" | jq 'length') units=$(printf '%s' "$umetrics" | jq 'length'))"
 }
 
 # --- Read helpers other skills can source -------------------------------------

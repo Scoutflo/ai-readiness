@@ -1,5 +1,49 @@
 # Changelog
 
+## 0.1.230
+
+**A shipped feature that could never turn on.** v0.1.227 shipped unit economics: `audit-cost`
+reads `unit_metrics` from the business-context projection, renders cost **per unit** above the
+ranked savings, and emits `COST-UNIT-004` when nothing is declared. It also added the
+"Unit of Delivered Value" section to the SSOT template. But `bc_derive_json()` never parsed that
+section, the skill never asked for it, and the projection never carried the key — so
+`unit_metrics` was **always** absent, every run took the "none declared" branch, and
+`COST-UNIT-004` fired for every customer forever. Verified against the previous tree: a valid
+declaration in the SSOT still produced `unit_metrics = null`. Exactly the doc-versus-code drift
+class the `command-ref` gate was built for, one layer up.
+
+- **`unit_metrics` is now captured.** `bc_derive_json()` parses the `unit_metrics:` YAML list into
+  the projection with the five fields `audit-cost` actually reads (`name`, `query`, `source`,
+  `scope`, `per`), applying the same defaults the consumer assumes (`scope: all`, `per: 1000`).
+  `source` is validated against its closed set (`prometheus`, `victoriametrics`, `thanos`,
+  `cloud-monitoring`); an unknown source is dropped rather than passed through. The skill now asks
+  for it in its guided questions, and the projection key list in both the skill and
+  `BUSINESS-CONTEXT-INTEGRATION-v0168.md` matches the code.
+- **Two rules carried over from `resource_intent`, for a sharper reason.** Only **uncommented**
+  entries count and unfilled `<placeholders>` are dropped — the template ships a commented example,
+  and parsing it would publish a confident cost-per-unit against a denominator nobody declared. A
+  **wrong** denominator is harder to spot than a missing one, because the number looks finished. And
+  the unit is never chosen on the customer's behalf: a countable infrastructure metric (requests,
+  pods, nodes) is always available and almost never what the business counts.
+- **The customer's query survives verbatim.** A PromQL query is full of double quotes, braces,
+  brackets and `!~`. Both parsers now emit TAB-separated fields and let **jq** do the JSON
+  encoding, instead of hand-building JSON strings in awk. This fixed a **silent data-loss bug in
+  v0.1.229's `resource_intent`**: a `why` containing a backslash (a Windows path in a runbook
+  reference) produced an invalid JSON escape, `jq -s` returned `[]`, and **every declaration
+  vanished with no error** — the exemption the customer declared simply stopped applying. Values
+  inside quotes are taken as-is; a trailing ` # comment` is stripped only from an unquoted value;
+  CRLF and tabs are normalised.
+- **`[derived]` no longer dies on valid data.** The summary line counted entries with
+  `echo "$json" | jq length`, and `echo` interprets backslashes, so a declaration containing one
+  made that line fail with `jq: parse error: Invalid escape` on stderr **while the written file was
+  perfectly correct** — a frightening error message about data that was fine. Now `printf '%s'`.
+  The same latent pattern applied to the pre-existing `critical`/`envs`/`slas` counts and is fixed
+  with it.
+- Two new tests. One asserts real declarations parse (with the PromQL query compared
+  **byte-for-byte**), while an out-of-set source, an unfilled placeholder and the commented template
+  example are all dropped. The other asserts that free text containing a quote or a backslash
+  neither drops a declaration nor writes anything to stderr — it guards the technique, not the text.
+
 ## 0.1.229
 
 **Three classes of confidently wrong finding, and the missing vocabulary behind all
