@@ -1,5 +1,79 @@
 # Changelog
 
+## 0.1.229
+
+**Three classes of confidently wrong finding, and the missing vocabulary behind all
+three.** Each of these was structurally valid, reconciled with its scorecard and passed
+every gate, while being wrong about the estate: a *deleted* monitoring server reported as a
+*broken* one ("restore or fail over", for a machine that no longer existed); a warm standby
+reported as waste ("shrink it", for the thing whose purpose is to be big before it is
+needed); and a fully-alerted estate reported as entirely unalerted, because the rules lived
+on a plane the audit does not read. The shared root cause: **the audit reported the limit of
+its own view as a property of the customer's system.** A reader who knows their estate spots
+that instantly and stops trusting the rest of the report, including the findings that were
+right.
+
+- **`not_in_scope_reason` — a closed, evidenced vocabulary for "nothing to do here".**
+  `not-in-scope` already existed as a verdict and already left both denominators, but its
+  `reason` was free text, so "the platform removed this feature" and "we decided not to
+  look" rendered identically. It now requires one of exactly four values, each with its own
+  evidence duty: **`inapplicable`** (the check has no meaning for this target's platform,
+  version, engine or composition — the original and commonest meaning, detected from the
+  target's own identity), **`target-gone`**, **`by-design`**, and **`covered-elsewhere`**.
+  New reference [`report-standard/not-in-scope-reasons.md`](report-standard/not-in-scope-reasons.md)
+  is the single definition; `check-findings.sh` enforces the closed set, rejects an
+  unexplained `not-in-scope` row, and rejects the field on a scored row (where it would read
+  as an excuse while still counting). Four new validator tests. **The distinction that makes
+  it safe: `blocked` means *unknown* — go unlock the evidence; `not-in-scope` means *known,
+  and nothing to do*. Guessing the second to make a red row disappear converts an unmeasured
+  risk into a clean bill of health, and the report gives the reader no way to tell.**
+- **A decommissioned target is a stale config, not an outage (`target-gone`).**
+  `audit-prometheus` already classified an authoritative NXDOMAIN as a decommissioned server
+  — and then filed PROM-001 as a `critical` availability incident anyway, because the
+  classifier's conclusion never reached the verdict. The classification now *decides* the
+  result: authoritative-NXDOMAIN (with a resolving zone apex) → `not-in-scope`/`target-gone`
+  whose action is on `toolkit.yaml`, never a restore or failover; NOERROR with a failing local
+  path → `blocked` with the network unlock named; everything else → the real incident. The
+  cascade framing is suppressed on the gone path, because nothing "goes dark" — it went dark
+  when the server was deleted. `audit-kubernetes` gets the same fix at the cluster level: a
+  `"no such host"` API server used to read as *"private or unreachable — run from inside the
+  VNet"*, which is the wrong hunt for a cluster that was deleted, so it now asks the owning
+  cloud control plane. **It fails closed** — only an explicit `ResourceNotFoundException` /
+  `was not found` proves absence; an expired credential, a missing CLI or a denied permission
+  all fall through to "private endpoint, posture UNKNOWN", never to "deleted".
+- **Intent is declared, never inferred (`by-design`).** New `resource_intent` block in the
+  business-context template (`standby`, `dr`, `backup`, `pre-scaled`,
+  `accepted-tradeoff`, with an optional `review_by`), and `audit-cost` applies it. The
+  asymmetry is deliberate and load-bearing: a name containing `standby`, a tag asserting it,
+  a low request rate or a plausible architectural guess are each worth *mentioning as a
+  prompt to declare* and **none** is a licence to downgrade — because wrongly reporting an
+  intentional standby costs one correction, while wrongly silencing a forgotten resource
+  costs money every month and is invisible (nobody reviews the finding that was never
+  written). A matching declaration **annotates and downgrades rather than disappearing the
+  row**: the resource, utilisation and spend stay visible with the customer's own words
+  beside them, the dollar figure drops to `null` and leaves the ranked total, and drift past
+  the declared purpose is still reported. A declaration silences the verdict, not the fact.
+- **An empty rule list is not an unalerted estate (`covered-elsewhere`).** Grafana has two
+  rule planes and `audit-grafana` read only one: `datasource-managed` rules live in a
+  Mimir/Cortex/Loki/Prometheus ruler, usually applied from Git, and are invisible to the
+  provisioning API. The audit now enumerates each datasource's ruler before judging coverage,
+  and distinguishes a `404`/`501` (no ruler API — not an empty ruler) from a real empty ruler
+  from a `401`/`403`. **Verified coverage exonerates; inferred coverage only reframes** — an
+  enabled rule found on the owning ruler makes GRAF-091 `not-in-scope`/`covered-elsewhere`,
+  but a ruler plane that merely *exists* and could not be read makes it **`blocked`** with
+  `coverage_gap` set, never `fail` and never `not-in-scope`. This matches the honesty bar the
+  correlation engine already enforced for the same word (exact `covers==affected`, enabled,
+  routed) and the `/scoutflo:rca` rule that cross-tool coverage *reframes a gap as a
+  single-tool dependency rather than exonerating it* — one meaning for one word, not two. The
+  same boundary is now stated for GRAF-090 and the GRAF-050-055 delivery path.
+- Three new pressure scenarios, one per class, each including the refusal the class needs:
+  the Grafana one requires self-correction **from the ruler evidence** rather than from the
+  customer's pushback, and the cost one explicitly refuses "stop flagging anything that
+  *looks like* a standby" — a blanket inference request is the false-negative bug wearing a
+  customer's voice. `audit-grafana/empty-org.md` keeps its `fail` verdict and now says **why
+  it is correct there specifically** (zero datasources means no other plane exists, so the
+  absence is proven) with a warning not to reuse that row where a datasource is present.
+
 ## 0.1.228
 
 **Live-smoke fixes: three real bugs the gates could not see.** The four cost releases in

@@ -715,3 +715,37 @@ PR; the live smoke against a real estate is a hard merge gate (`AGENTS.md`).
 - **SSOT:** `skills/map-repos/SKILL.md`.
 - **Guards:** `tests/pressure-scenarios/map-repos/` (never-auto-accept); the
   catalog gate (user-facing skill rows).
+
+## C23 — The `not-in-scope` verdict and its four evidenced reasons
+
+- **Contract:** a `checks[]` row whose `result` is `not-in-scope` leaves **both**
+  the readiness and assessment-coverage denominators, so it must declare
+  `not_in_scope_reason` from a closed four-value set — `inapplicable`,
+  `target-gone`, `by-design`, `covered-elsewhere` — plus a `reason` stating the
+  *evidence*, not the conclusion.
+- **Producer → consumer:** every scored `audit-*` emits the row; the
+  business-context SSOT projection (`resource_intent`) is the only admissible
+  source for `by-design`; `check-findings.sh` validates it; the report renderer
+  and `correlation-engine` consume the result.
+- **Invariants:** `blocked` means **unknown** (go unlock the evidence);
+  `not-in-scope` means **known, nothing to do**. When in doubt, choose `blocked`
+  — unknown is always safe to say. `target-gone` requires a positive not-found
+  from the owning control plane and **fails closed** (a timeout, refused
+  connection, missing CLI, expired credential or denied permission is `blocked`,
+  never gone) and its action is on the config, never a live-system remediation.
+  `by-design` is **declared, never inferred** — no name, tag, label, utilisation
+  level or architectural guess establishes intent, and with no declaration the
+  finding stands. `covered-elsewhere` requires the capability to be **verified**
+  on the owning plane (an exact, enabled, routed match — the same honesty bar as
+  C14); a plane that merely *exists* but could not be read stays a `blocked`
+  finding with `coverage_gap` set, because per C21 cross-tool coverage *reframes*
+  a gap rather than exonerating it. The field is invalid on any non-`not-in-scope`
+  row. There is no `other` value.
+- **SSOT:** `report-standard/not-in-scope-reasons.md` (the four reasons);
+  `report-standard/findings-schema.md` (the field).
+- **Guards:** `report-standard/check-findings.sh` (closed set, required on
+  `not-in-scope`, rejected elsewhere), `tests/test-check-findings.sh` (tests
+  31-34), and the three per-class pressure scenarios
+  (`audit-prometheus/decommissioned-is-not-an-outage.md`,
+  `audit-cost/intent-is-declared-never-inferred.md`,
+  `audit-grafana/alerting-lives-on-the-ruler-this-audit-cannot-read.md`).

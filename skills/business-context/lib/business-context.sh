@@ -144,11 +144,45 @@ bc_derive_json() {
   excl_services="$(bc_exclusion_list Services)";   [ -n "$excl_services" ]  || excl_services='[]'
   excl_resources="$(bc_exclusion_list Resources)"; [ -n "$excl_resources" ] || excl_resources='[]'
 
+  # Declared resource intent: the `resource_intent:` YAML list under
+  # "## Resource Intent". Only UNCOMMENTED entries count — the template ships a
+  # commented example, and parsing that as a real declaration would silently
+  # exempt a resource nobody declared. An entry starts at `- <matchkey>: <value>`;
+  # its following indented keys belong to it. Unknown intents are dropped rather
+  # than passed through, so only the closed vocabulary can ever reach an audit.
+  rintent="$(awk '
+      /^## Resource Intent/{sec=1;next} /^## /{sec=0}
+      !sec{next}
+      /^```/{inyaml=!inyaml;next}
+      !inyaml{next}
+      { line=$0; sub(/^[[:space:]]+/,"",line) }
+      line ~ /^#/ {next}                                  # commented example: never a declaration
+      line ~ /^-[[:space:]]/ {
+        if (mk!="") print "{\"match_kind\":\""mk"\",\"match\":\""mv"\",\"intent\":\""it"\",\"why\":\""wy"\",\"review_by\":\""rb"\"}"
+        mk="";mv="";it="";wy="";rb=""
+        sub(/^-[[:space:]]*/,"",line)
+      }
+      {
+        k=line; v=line
+        sub(/:.*$/,"",k); sub(/^[^:]*:[[:space:]]*/,"",v)
+        gsub(/^[[:space:]]+|[[:space:]]+$/,"",k); gsub(/^[[:space:]]+|[[:space:]]+$/,"",v)
+        gsub(/"/,"",v)
+        if (k=="intent") it=v
+        else if (k=="why") wy=v
+        else if (k=="review_by") rb=v
+        else if (k=="cluster"||k=="namespace"||k=="workload"||k=="instance_id"||k=="resource_name") { mk=k; mv=v }
+      }
+      END{ if (mk!="") print "{\"match_kind\":\""mk"\",\"match\":\""mv"\",\"intent\":\""it"\",\"why\":\""wy"\",\"review_by\":\""rb"\"}" }
+    ' "$SSOT_MD" \
+    | jq -s 'map(select((.match|length>0) and (.match|test("^<|^\\[")|not))
+                 | select(.intent | IN("standby","dr","backup","pre-scaled","accepted-tradeoff")))' 2>/dev/null || echo '[]')"
+  [ -n "$rintent" ] || rintent='[]'
+
   now="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date)"
   jq -n \
     --arg env "$stage" --arg cost "$cost" --arg now "$now" \
     --argjson crit "$crit" --argjson envmap "$envmap" \
-    --argjson svcslas "$svcslas" \
+    --argjson svcslas "$svcslas" --argjson rintent "$rintent" \
     --argjson excl_accounts "$excl_accounts" --argjson excl_regions "$excl_regions" \
     --argjson excl_services "$excl_services" --argjson excl_resources "$excl_resources" \
     '{
@@ -158,6 +192,7 @@ bc_derive_json() {
       critical_dependencies: $crit,
       environment_map: $envmap,
       service_slas: $svcslas,
+      resource_intent: $rintent,
       exclusions: {
         accounts: $excl_accounts,
         regions: $excl_regions,
@@ -166,7 +201,7 @@ bc_derive_json() {
       },
       derived_at: $now
     }' > "$SSOT_JSON"
-  echo "[derived] $SSOT_JSON (environment=$stage cost=$cost critical=$(echo "$crit" | jq 'length') envs=$(echo "$envmap" | jq 'length') slas=$(echo "$svcslas" | jq 'length'))"
+  echo "[derived] $SSOT_JSON (environment=$stage cost=$cost critical=$(echo "$crit" | jq 'length') envs=$(echo "$envmap" | jq 'length') slas=$(echo "$svcslas" | jq 'length') intents=$(echo "$rintent" | jq 'length'))"
 }
 
 # --- Read helpers other skills can source -------------------------------------

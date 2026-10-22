@@ -105,7 +105,18 @@ if [ -z "$(dig +short A "$HOST"; dig +short CNAME "$HOST")" ]; then
 fi
 ```
 
-- **Finding (PROM-001, critical):** an unreachable Prometheus is the root of a cascade, not a yes/no. Pull `/api/v1/rules` and `/api/v1/targets` first and state what goes dark — "this server loads N alerting rules (M at `severity=page`) and scrapes K critical services; while it is down every rule evaluates to no-data and pages nothing, and every service is unmonitored." This is an availability incident (restore/scale/failover the server), then close the HA gap that let one instance take the plane down.
+- **The classification above decides the verdict — it is not decoration.** The three outcomes need opposite responses, and reporting the wrong one is the fastest way to lose a reader who knows the estate:
+
+  | Classification | PROM-001 result | What to say |
+  | --- | --- | --- |
+  | NXDOMAIN-authoritative, apex resolves | `not-in-scope`, `not_in_scope_reason: target-gone` | The server was decommissioned and the config outlived it. The action is on `toolkit.yaml`: retarget or remove the `prometheus:` block. **Never** a restore/scale/failover recommendation |
+  | NOERROR at the authoritative NS, local path failed | `blocked` | The name exists, the path is down. Unlock the read (VPN, ingress, port-forward), then re-run — the server's health is still unknown |
+  | Reachable, but unhealthy / SERVFAIL / unattributable DNS failure | `critical` finding, as below | A real availability incident |
+
+  A timeout or refused connection is `blocked`, never `target-gone`: it is indistinguishable from a firewall you are not behind. Only the authoritative-NXDOMAIN path proves absence. Full rules: [not-in-scope-reasons.md](../../../report-standard/not-in-scope-reasons.md).
+
+- **Finding (PROM-001, critical) — only on the reachable-but-unhealthy path:** an unreachable Prometheus is the root of a cascade, not a yes/no. Pull `/api/v1/rules` and `/api/v1/targets` first and state what goes dark — "this server loads N alerting rules (M at `severity=page`) and scrapes K critical services; while it is down every rule evaluates to no-data and pages nothing, and every service is unmonitored." This is an availability incident (restore/scale/failover the server), then close the HA gap that let one instance take the plane down.
+- **On the `target-gone` path, the cascade framing is wrong and must not be emitted.** Nothing "goes dark" — it went dark when the server was deleted, and the rules and targets you would enumerate no longer exist to enumerate. Report the stale config, and if this was the only metrics backend, that absence is a separate, honest finding about the estate having no metrics plane — not about this host being down.
 - **Forbidden:** GET only; see section 9.
 
 ### PROM-002 — last config reload succeeded

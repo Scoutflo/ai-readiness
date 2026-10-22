@@ -343,6 +343,98 @@ curl -fsS --max-time 15 -H "Authorization: Bearer ${GRAFANA_TOKEN}" \
 - **GRAF-057 (high):** any `isPaused==true` rule on a covered service — name the rule, its service, and severity, and state that the service's alerting coverage (GRAF-091) is illusory for as long as it stays paused. Blast radius is the count of covered critical services whose only rule is paused. Remediation `setup-grafana#alert-rules`.
 - **GRAF-007 (high):** any `isEnabled==true` public dashboard — join `dashboardUid` to the dashboard title and its panel expressions and state exactly what internal data and label values are world-readable (host class only, never a secret value). Remediation `setup-grafana#dashboards`. Verified live: the benchmark Grafana returns `0` for both (a clean pass), proving the endpoints and filters work on a real instance.
 
+## Datasource-managed alerting (the GRAF-091 coverage boundary)
+
+Grafana unified alerting has **two** rule planes, and this audit reads only one
+of them by default. `grafana-managed` rules live in Grafana's own database and
+are what `/api/v1/provisioning/alert-rules` and `/api/ruler/grafana/api/v1/rules`
+return. **`datasource-managed` rules live in the datasource's own ruler** — a
+Mimir, Cortex, Loki, or Prometheus ruler — and are usually applied from Git by a
+separate pipeline. They are invisible to every endpoint the inventory script
+reads.
+
+So an estate that moved its alerting to a datasource-managed ruler returns an
+empty grafana-managed rule list, and a presence-only reading of that emptiness
+reports **every critical service as unalerted while the estate is fully
+alerted**. That is the single most expensive wrong verdict this audit can
+produce: it is confident, specific, names real services, and is completely
+wrong. Probe the other plane before concluding anything about coverage.
+
+```bash
+# Read-only. Enumerate the rule planes Grafana knows about, then ask each
+# datasource's ruler whether it holds rules. A 404/501 means that datasource has
+# no ruler API (normal for most types) — not an error, and not an empty ruler.
+SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.scoutflo/env" ]; then SCOUTFLO_ENV="./.scoutflo/env"; else SCOUTFLO_ENV="$HOME/.scoutflo/env"; fi; }
+_SF_CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$_SF_CFG" ] || for _sf_c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_sf_c" ] && { _SF_CFG="$_sf_c"; break; }; done
+_SF_TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+if [ "$(sh "$_SF_TT" "$_SF_CFG" grafana kind 2>/dev/null || true)" = seq ]; then _sf_i=0; while [ "$_sf_i" -lt "$(sh "$_SF_TT" "$_SF_CFG" grafana count 2>/dev/null || echo 0)" ]; do [ -z "$(sh "$_SF_TT" "$_SF_CFG" grafana get "$_sf_i" token_env 2>/dev/null || true)" ] || { echo "grafana in ${_SF_CFG} is a list of targets that each name their own token_env, and this step reads GRAFANA_TOKEN by its default name, so it cannot tell which target's value to use. It stops instead of guessing: give that target a config of its own where grafana is a single block, and run with SCOUTFLO_CONFIG set to that file (and SCOUTFLO_AUDIT_DIR to its own folder)."; exit 1; }; _sf_i=$((_sf_i+1)); done; fi
+_sf_tv="$(sh "$_SF_TT" "$_SF_CFG" grafana get 0 token_env 2>/dev/null || true)"; if [ -n "$_sf_tv" ] && [ "$(sh "$_SF_TT" "$_SF_CFG" grafana kind 2>/dev/null || true)" != seq ]; then _sf_v="$(sh -c '( [ -f "$1" ] && . "$1" >/dev/null 2>&1; printenv -- "$2" ) 2>/dev/null || printenv -- "$2"' _ "$SCOUTFLO_ENV" "$_sf_tv" 2>/dev/null || true)"; if [ -n "$_sf_v" ]; then GRAFANA_TOKEN="$_sf_v"; export GRAFANA_TOKEN; else unset GRAFANA_TOKEN; echo "note: ${_sf_tv} (named by grafana.token_env) is not set in the secret store or the shell" >&2; fi; fi
+DS_JSON="$(curl -fsS --max-time 15 -H "Authorization: Bearer ${GRAFANA_TOKEN}" \
+  "${GRAFANA_URL}/api/datasources" 2>/dev/null || echo '[]')"
+printf '%s' "$DS_JSON" | jq -r '.[]? | select(.type | test("prometheus|loki|mimir|cortex|alertmanager"))
+  | "\(.uid)\t\(.type)\t\(.name)"' | while IFS="$(printf '\t')" read -r DS_UID DS_TYPE DS_NAME; do
+  [ -n "$DS_UID" ] || continue
+  R_CODE="$(curl -sS -o "${TMPDIR:-/tmp}/graf-ruler-$DS_UID.json" -w '%{http_code}' --max-time 20 \
+    -H "Authorization: Bearer ${GRAFANA_TOKEN}" \
+    "${GRAFANA_URL}/api/ruler/${DS_UID}/api/v1/rules" 2>/dev/null || echo 000)"
+  case "$R_CODE" in
+    200)
+      # A 200 is not proof of an answer: an SSO/login interstitial returns HTTP 200 with
+      # HTML, and parsing that as "zero rules" would fail GRAF-091 on a fully-alerted
+      # estate — the exact wrong verdict this section exists to prevent. Assert JSON
+      # FIRST, and treat an unparseable body as unknown, never as empty.
+      if ! jq -e 'type == "object" or type == "array"' "${TMPDIR:-/tmp}/graf-ruler-$DS_UID.json" >/dev/null 2>&1; then
+        echo "ruler ${DS_NAME} (${DS_TYPE}): HTTP 200 but the body is not JSON (an SSO/login page or a proxy interstitial) — UNKNOWN, not empty. GRAF-091 is BLOCKED for its services"
+        continue
+      fi
+      # Shape: { "<namespace>": [ { "name": <group>, "rules": [...] }, ... ] }
+      # Count ALERTING rules separately from RECORDING rules. Only an alerting rule
+      # can satisfy GRAF-091 — a ruler holding nothing but recording rules pages
+      # nobody, and counting those as coverage would exonerate an unalerted service.
+      N_ALERT="$(jq '[.[]?[]?.rules[]? | select(has("alert"))] | length' "${TMPDIR:-/tmp}/graf-ruler-$DS_UID.json" 2>/dev/null || echo 0)"
+      N_REC="$(jq '[.[]?[]?.rules[]? | select(has("record"))] | length' "${TMPDIR:-/tmp}/graf-ruler-$DS_UID.json" 2>/dev/null || echo 0)"
+      echo "ruler ${DS_NAME} (${DS_TYPE}, uid=${DS_UID}): HTTP 200, alerting rules=${N_ALERT}, recording rules=${N_REC} (only alerting rules count toward GRAF-091)"
+      [ "${N_ALERT:-0}" -gt 0 ] && jq -r '[.[]?[]?.rules[]? | select(has("alert"))
+          | "\(.labels.service // "-"):\(.alert)\(if (.labels.severity // "") == "" then " [NO severity label]" else "" end)"]
+        | unique | "  alerting rules here (service:rule): " + (join(", ") | .[0:400])' \
+        "${TMPDIR:-/tmp}/graf-ruler-$DS_UID.json" 2>/dev/null ;;
+    404|501) echo "ruler ${DS_NAME} (${DS_TYPE}): no ruler API (HTTP ${R_CODE}) — this datasource holds no rules; NOT an empty ruler" ;;
+    401|403) echo "ruler ${DS_NAME} (${DS_TYPE}): HTTP ${R_CODE} — the token cannot read this ruler. GRAF-091 is BLOCKED for its services, never passed or failed" ;;
+    *)       echo "ruler ${DS_NAME} (${DS_TYPE}): HTTP ${R_CODE} — unresolved; treat as unknown, not as empty" ;;
+  esac
+done
+# External Alertmanager: when Grafana routes to one, notification policy and contact
+# points live THERE, so GRAF-050..055 read only part of the delivery path.
+curl -fsS --max-time 15 -H "Authorization: Bearer ${GRAFANA_TOKEN}" \
+  "${GRAFANA_URL}/api/v1/ngalert/alertmanagers" 2>/dev/null \
+  | jq -r '(.data.activeAlertmanagers // []) as $a
+           | "external alertmanagers active: \($a | length)",
+             ($a[]? | "  " + ((.url // "-") | sub("//[^@/]*@"; "//")))' || true
+```
+
+**How this sets the GRAF-091 verdict** (rules:
+[not-in-scope-reasons.md](../../../report-standard/not-in-scope-reasons.md)):
+
+| Observed | GRAF-091 result | Why |
+| --- | --- | --- |
+| Grafana-managed rules cover the service | `pass` | Normal path, nothing changes |
+| No grafana-managed rule, **and** a datasource ruler holds a severity-labeled **alerting** rule naming that service | `not-in-scope`, `not_in_scope_reason: covered-elsewhere` | The capability is **verified present** on the plane that owns it. Name the ruler and the rule in `reason` |
+| A datasource ruler holds an **alerting** rule for the service but with **no `severity` label** | `partial` | The rule fires but cannot route by severity — the same defect GRAF-053 names, just on the other plane. Coverage exists and is degraded; that is not "nothing to do" |
+| The ruler holds only **recording** rules | treat as **no coverage** on that plane | A recording rule derives a series and pages nobody. Counting it as alerting coverage would exonerate an unalerted service — the block reports alerting and recording counts separately for exactly this reason |
+| No grafana-managed rule, a datasource ruler **exists** but this audit could not enumerate it (401/403, or rules applied from Git with no readable ruler) | **`blocked`** — not a `fail`, not `not-in-scope` | A pointer is evidence someone *might* be looking, not that anyone is. Populate `coverage_gap` so the correlation engine can reframe it against `audit-prometheus` / `audit-alertmanager` |
+| No grafana-managed rule and no ruler plane at all (404/501 everywhere) | `fail` | A genuine coverage gap, now proven rather than assumed |
+
+The middle two rows are the whole point: **an empty grafana-managed rule list is
+not evidence of an unalerted estate** until the other plane has been accounted
+for. Say which plane you read in the evidence, every time — a coverage claim that
+does not state its own boundary is not auditable.
+
+When a datasource ruler is in play, the same boundary applies to GRAF-090
+(dashboards may be provisioned from Git and still present) and to GRAF-050-055
+(an external Alertmanager owns the delivery path). Point the reader at
+`/scoutflo:audit-prometheus` or `/scoutflo:audit-alertmanager` for the owning
+plane instead of asserting coverage on its behalf.
+
 ## Alert-hygiene noise signals (GRAF-100 to GRAF-103)
 
 Lookup material for [Phase 4b](../SKILL.md#phase-4b-alert-hygiene-noise-signals). Every block is read-only and reuses the provisioning objects the inventory script already wrote (`alert-rules.json`, `notification-policies.json`, `contact-points.json`) plus two cheap live reads. Each block re-declares its inputs so it runs pasted into a fresh shell.

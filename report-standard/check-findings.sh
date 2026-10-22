@@ -205,6 +205,22 @@ if [ "$sch" = "scoutflo-findings/v2" ]; then
   missing_reason="$(jq -r '.checks[]? | select(.result | IN("partial","blocked","not-in-scope")) | select(((.reason // "") | length) == 0) | .id' "$F")"
   [ -z "$missing_reason" ] || fail "v2 partial/blocked/not-in-scope checks missing reason: $(echo "$missing_reason" | tr '\n' ' ')"
 
+  # A not-in-scope row says "known, nothing to do" and leaves BOTH denominators,
+  # so it must name which of the three closed reasons applies. Without this, an
+  # unmeasured check can be parked as not-in-scope and read as a clean result.
+  # See report-standard/not-in-scope-reasons.md.
+  bad_nis_reason="$(jq -r '
+    .checks[]?
+    | select(.result == "not-in-scope")
+    | select(((.not_in_scope_reason // "") | IN("inapplicable","target-gone","by-design","covered-elsewhere")) | not)
+    | .id' "$F")"
+  [ -z "$bad_nis_reason" ] || fail "v2 not-in-scope checks need not_in_scope_reason of inapplicable|target-gone|by-design|covered-elsewhere: $(echo "$bad_nis_reason" | tr '\n' ' ')"
+
+  # The field means one thing only. On a scored row it would read as an excuse
+  # while still counting, which is exactly the ambiguity the closed set removes.
+  stray_nis_reason="$(jq -r '.checks[]? | select(.result != "not-in-scope") | select(has("not_in_scope_reason")) | .id' "$F")"
+  [ -z "$stray_nis_reason" ] || fail "v2 not_in_scope_reason is only valid on not-in-scope rows: $(echo "$stray_nis_reason" | tr '\n' ' ')"
+
   bad_suppressed_check="$(jq -r '
     .checks[]?
     | select(.suppressed == true)

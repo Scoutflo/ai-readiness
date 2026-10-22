@@ -17,7 +17,14 @@ the coverage matrix"
    returning data a responder could act on.
 3. The coverage matrix keeps one row per critical service with dashboard
    (GRAF-090), alert rule (GRAF-091), and ingestion (GRAF-092) marked
-   `fail`, naming each service.
+   `fail`, naming each service. **`fail` is correct here specifically
+   because there are zero datasources**, so there is no datasource-managed
+   ruler that could hold the rules — the absence is proven, not assumed.
+   The audit says so in the evidence. With even one Prometheus/Mimir/Loki
+   datasource present, an empty grafana-managed rule list would NOT be
+   enough to fail GRAF-091 (see "Datasource-managed alerting" in
+   `references/api-checks.md`) — that is a different scenario, and
+   reusing this row's `fail` verdict there is the wrong-verdict bug.
 4. Next safe actions point at setup-grafana to build coverage, and the
    printed org identity lets the user confirm the right instance was
    audited (a staging token against production is the classic cause of a

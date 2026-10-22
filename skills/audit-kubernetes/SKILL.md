@@ -102,7 +102,53 @@ if [ "$K_RC" -ne 0 ]; then
   case "$K_ERR" in
     *localhost:*|*127.0.0.1:*)
       echo "context '$KUBE_CONTEXT': its API server is a local tunnel (localhost) that is not answering — your just-in-time / tunnelled access session (Cloudanix cdx, Teleport, a bastion 'ssh -L' tunnel, or 'kubectl port-forward') has expired or was never opened. Re-establish it in another terminal and point KUBECONFIG at the session's kubeconfig by adding one line to the store this audit already reads: echo 'export KUBECONFIG=\"<the session's kubeconfig path>\"' >> ~/.scoutflo/env — then retry. Scoutflo holds no standing cluster credential by design, so it can only audit while your session is live (see 'Accessing private or JIT-tunnelled clusters' below). This is NOT an RBAC, credential, or authorized-IP-range problem."; exit 1 ;;
-    *"no such host"*|*"dial tcp"*|*"i/o timeout"*|*"connection refused"*|*"Unable to connect"*|*"TLS handshake timeout"*|*privatelink*)
+    *"no such host"*)
+      # DNS absence has TWO causes that need OPPOSITE advice, and they are
+      # indistinguishable at the socket: a PRIVATE endpoint you cannot resolve
+      # from here, and a cluster that was DELETED while its kubeconfig entry
+      # survived. Telling the second one "run from inside the VNet" sends the
+      # reader hunting a network problem for infrastructure that no longer
+      # exists. Only the owning cloud control plane can tell them apart, so ask
+      # it — read-only, one call, and skip clean when it is unavailable.
+      # Reasons and rules: report-standard/not-in-scope-reasons.md.
+      # FAIL CLOSED. Only an EXPLICIT not-found answer proves absence. An expired
+      # credential, a missing CLI, a denied permission, or an unparseable context
+      # all mean "we do not know" — and must fall through to the private-endpoint
+      # message below, never to "deleted". Match the control plane's own
+      # not-found signature on stderr; treat every other failure as unknown.
+      GONE=""
+      case "$EXEC_CMD" in
+        *gke-gcloud-auth-plugin*)
+          # Context shape: gke_<project>_<location>_<cluster>
+          G_PROJ="$(printf '%s' "$KUBE_CONTEXT" | awk -F_ '/^gke_/{print $2}')"
+          G_LOC="$(printf '%s' "$KUBE_CONTEXT" | awk -F_ '/^gke_/{print $3}')"
+          G_NAME="$(printf '%s' "$KUBE_CONTEXT" | awk -F_ '/^gke_/{print $4}')"
+          if [ -n "$G_PROJ" ] && [ -n "$G_NAME" ] && command -v gcloud >/dev/null 2>&1; then
+            G_ERR="$(CLOUDSDK_CORE_DISABLE_PROMPTS=1 gcloud container clusters describe "$G_NAME" \
+              --project "$G_PROJ" --location "$G_LOC" --format='value(name)' 2>&1 1>/dev/null)" || true
+            case "$G_ERR" in
+              *"was not found"*|*NOT_FOUND*|*"No cluster named"*)
+                GONE="gcloud container clusters describe: cluster '$G_NAME' not found in project '$G_PROJ'" ;;
+            esac
+          fi ;;
+        *aws*)
+          # Context is usually the cluster ARN: arn:aws:eks:<region>:<acct>:cluster/<name>
+          E_REGION="$(printf '%s' "$KUBE_CONTEXT" | awk -F: '/^arn:aws:eks:/{print $4}')"
+          E_NAME="$(printf '%s' "$KUBE_CONTEXT" | sed -n 's#^arn:aws:eks:.*:cluster/##p')"
+          if [ -n "$E_REGION" ] && [ -n "$E_NAME" ] && command -v aws >/dev/null 2>&1; then
+            # Uses whatever AWS credentials this kubeconfig context already authenticates with.
+            E_ERR="$(aws eks describe-cluster --name "$E_NAME" --region "$E_REGION" \
+              --query 'cluster.name' --output text 2>&1 1>/dev/null)" || true
+            case "$E_ERR" in
+              *ResourceNotFoundException*) GONE="aws eks describe-cluster: ResourceNotFoundException for cluster '$E_NAME' in $E_REGION" ;;
+            esac
+          fi ;;
+      esac
+      if [ -n "$GONE" ]; then
+        echo "context '$KUBE_CONTEXT': the cluster NO LONGER EXISTS — its API-server DNS name is gone AND its cloud control plane does not know it ($GONE). This is a DECOMMISSIONED cluster whose kubeconfig entry outlived it, not a private endpoint and not a network problem: do not open a VPN or tunnel for it. Fix the config instead — remove this context from kubernetes.context in toolkit.yaml (and 'kubectl config delete-context $KUBE_CONTEXT' to clean up your kubeconfig). If this cluster was expected to be running, that is an estate finding to raise with whoever deleted it, separate from this audit."; exit 1
+      fi
+      echo "context '$KUBE_CONTEXT': the API server's DNS name does not resolve from here, and the cloud control plane was not asked or still lists the cluster — treat it as a PRIVATE endpoint (resolvable only inside the VPC/VNet) and open a tunnel/JIT session or run from inside the network, per 'Accessing private or JIT-tunnelled clusters' below. The cluster's posture is UNKNOWN, not healthy. This is NOT an RBAC or credential problem."; exit 1 ;;
+    *"dial tcp"*|*"i/o timeout"*|*"connection refused"*|*"Unable to connect"*|*"TLS handshake timeout"*|*privatelink*)
       echo "context '$KUBE_CONTEXT': the AKS/API server is private or unreachable from here — run from inside the VNet (jumpbox/VPN/bastion), add your IP to the cluster API-server authorized IP ranges, or open a tunnel/JIT session and point KUBECONFIG at its kubeconfig (see 'Accessing private or JIT-tunnelled clusters' below). \`az aks command invoke\` only carries a SINGLE tiny read — its 512 KB output cap truncates this audit's inventory pull (measured: a 39-pod cluster's pods-only JSON is already 524 KB), so it is not a substitute. This is NOT an RBAC or credential problem. The cluster monitoring posture is still auditable via /scoutflo:audit-azure over ARM (Container Insights, managed Prometheus, diagnostic settings) with no cluster network access."; exit 1 ;;
   esac
   # Not a network signature: a failed can-i on an exec-plugin context is usually an EXPIRED
