@@ -1,5 +1,46 @@
 # Changelog
 
+## 0.1.233
+
+**Stop deciding whether a cluster exists by reading error messages.** A final adversarial pass
+before release found the "is this cluster deleted or merely unreachable" guard fail-open for a
+**fourth** and **fifth** time, and the pattern across all five is the lesson: every fix was a
+tighter string match on the cloud CLI's stderr, and every one was defeated by another wording.
+**Error prose is not an API.** The mechanism is now structured and the whole class is gone.
+
+- **The two new holes.** (4) A gcloud **IAM denial** echoes the resource path *and* ends
+  "credential file **was not found**", satisfying both of the previous version's independent
+  conditions — so a live cluster with a permissions problem was reported deleted, with "remove this
+  context from your config" as the advice. (5) `Not found: nodePool "default" in
+  .../clusters/<name>` — a missing **node pool** read as a missing **cluster**.
+- **The replacement.** The branch now asks the control plane for its **list** of clusters
+  (`gcloud container clusters list` / `aws eks list-clusters`) and does an **exact whole-line
+  match**. If the call succeeds its output is authoritative about what exists; if it fails for any
+  reason we do not know, and the verdict is "private endpoint, posture unknown". Fail-closed is now
+  a property of the control flow rather than a list of error strings to enumerate, so an error
+  wording nobody has seen yet cannot produce a false "deleted".
+- **Three whole failure classes die by construction, not by patch.** Name collisions (1-character
+  names, prefixes like `live-2`, substrings like `liveness`, underscores) cannot occur against an
+  exact whole-line compare. Error-text variation cannot matter, because no verdict is read from
+  text. And the zonal-vs-regional mismatch is gone because the list is **not** pinned to a
+  location — listing per project covers both.
+- **A padded list entry can no longer flip the verdict** either: each line is trimmed before the
+  compare, so if a CLI ever padded its output we would not report a cluster that *is* there as
+  deleted.
+- The test was rewritten around the new mechanism and now carries **all four historical fail-open
+  inputs as cases that must return "unknown"** — they do, by construction. It also asserts the list
+  call is never pinned to a location, never runs with an empty target, and that the suite makes
+  **zero** real cloud CLI invocations (verified with a logging stand-in on `PATH`).
+
+**Also fixed, and directly on the path a customer hits next:** `/scoutflo:doctor` reported "no
+Cloud Billing export present" to anyone who had enabled only the **detailed, resource-level**
+export. That table is named `gcp_billing_export_resource_v1_*`, which does not contain the
+substring `gcp_billing_export_v1_` the doctor grepped for — so the flavour the cost audit
+*prefers*, and the only one GKE cost allocation can attribute per cluster and namespace, read as
+absent. The doctor now recognises both flavours and says which one it found, because they support
+different checks. Regression-tested, including an assertion that pins the substring trap so nobody
+collapses the two branches back into one.
+
 ## 0.1.232
 
 **A second review round, on the fix commit itself — and the same bug a third time.** Two more

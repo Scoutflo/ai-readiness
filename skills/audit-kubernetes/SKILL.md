@@ -111,71 +111,61 @@ if [ "$K_RC" -ne 0 ]; then
       # exists. Only the owning cloud control plane can tell them apart, so ask
       # it — read-only, one call, and skip clean when it is unavailable.
       # Reasons and rules: report-standard/not-in-scope-reasons.md.
-      # FAIL CLOSED. Only an EXPLICIT not-found answer proves absence. An expired
-      # credential, a missing CLI, a denied permission, or an unparseable context
-      # all mean "we do not know" — and must fall through to the private-endpoint
-      # message below, never to "deleted". Match the control plane's own
-      # not-found signature on stderr; treat every other failure as unknown.
+      # FAIL CLOSED, and do it STRUCTURALLY. Only the control plane's own list of
+      # clusters proves absence: ask for the list and look for an exact match.
+      #
+      # Deliberately NOT by pattern-matching the CLI's error text. That approach
+      # went fail-open four separate times here — a plumbing error saying "was not
+      # found"; the cluster name colliding with gcloud's own error preamble; an IAM
+      # denial that echoes the resource path and also says "was not found"; and
+      # `Not found: nodePool "default" in .../clusters/<name>`, a missing NODE POOL
+      # read as a missing CLUSTER. Each time the fix was a tighter pattern, and each
+      # time another wording defeated it. Error prose is not an API.
+      #
+      # A list call separates the two things that matter with no parsing at all: if
+      # the call SUCCEEDS, its output is authoritative about what exists; if it
+      # fails for any reason (denied, expired, missing CLI, throttled, no network),
+      # we simply do not know and fall through to the private-endpoint message
+      # below. An exact whole-line match also removes every name-collision case —
+      # 1-character names, prefixes, underscores, substrings — by construction.
       GONE=""
       case "$EXEC_CMD" in
         *gke-gcloud-auth-plugin*)
           # Context shape: gke_<project>_<location>_<cluster>. The cluster name may
-          # itself contain underscores, so strip the three known leading fields rather
-          # than splitting on `_` (awk -F_ '{print $4}' would ask about `my` for a
-          # cluster called `my_prod_cluster`, get a TRUTHFUL not-found, and report a
-          # LIVE cluster as deleted).
+          # itself contain underscores, so strip the two known leading fields rather
+          # than splitting on `_`. The location is NOT needed: listing per project
+          # covers zonal and regional clusters together, so a zonal/regional mismatch
+          # in the context cannot cause a false verdict.
           G_PROJ="$(printf '%s' "$KUBE_CONTEXT" | sed -n 's#^gke_\([^_]*\)_.*#\1#p')"
-          G_LOC="$(printf '%s' "$KUBE_CONTEXT" | sed -n 's#^gke_[^_]*_\([^_]*\)_.*#\1#p')"
           G_NAME="$(printf '%s' "$KUBE_CONTEXT" | sed -n 's#^gke_[^_]*_[^_]*_##p')"
-          if [ -n "$G_PROJ" ] && [ -n "$G_LOC" ] && [ -n "$G_NAME" ] && command -v gcloud >/dev/null 2>&1; then
-            G_ERR="$(CLOUDSDK_CORE_DISABLE_PROMPTS=1 gcloud container clusters describe "$G_NAME" \
-              --project "$G_PROJ" --location "$G_LOC" --format='value(name)' 2>&1 1>/dev/null)" || true
-            # The not-found signature alone is NOT enough: gcloud writes unrelated
-            # plumbing failures in the same words ("command [docker-credential-gcloud]
-            # was not found on the PATH", "credential file was not found"), and
-            # treating those as absence declares a live cluster decommissioned.
-            #
-            # A bare substring test for the cluster name is ALSO not enough, and fails
-            # the same way: gcloud prefixes every error with
-            # "(gcloud.container.clusters.describe)", so a cluster legally named `a`,
-            # `cloud`, `cluster`, `describe` or `found` (1-char names are valid) is
-            # "named" by that preamble in EVERY error, and the guard silently degrades
-            # to the single-condition match again.
-            #
-            # So match the identity STRUCTURALLY — the resource path gcloud echoes
-            # (".../clusters/<name>") delimited by end-of-string or a non-name
-            # character. That accepts a real 404 about this cluster, rejects a 404
-            # about a different or truncated name, and rejects every plumbing error.
-            case "$G_ERR" in
-              *"clusters/$G_NAME"|*"clusters/$G_NAME"[!-0-9A-Za-z_]*|*"No cluster named '$G_NAME'"*)
-                case "$G_ERR" in
-                  *"was not found"*|*NOT_FOUND*|*"Not found"*|*"[404]"*|*"No cluster named"*)
-                    GONE="gcloud container clusters describe: cluster '$G_NAME' not found in project '$G_PROJ' (${G_LOC})" ;;
-                esac ;;
-            esac
+          if [ -n "$G_PROJ" ] && [ -n "$G_NAME" ] && command -v gcloud >/dev/null 2>&1; then
+            # Only a SUCCEEDING list is evidence. On any failure the `if` is false and
+            # GONE stays empty, so the verdict is "unknown", never "deleted".
+            if G_LIST="$(CLOUDSDK_CORE_DISABLE_PROMPTS=1 gcloud container clusters list \
+                 --project "$G_PROJ" --format='value(name)' 2>/dev/null)"; then
+              # Trim each line before the exact match: if the CLI ever padded its
+              # output, an exact-line compare would miss a cluster that IS there and
+              # report it deleted — the one failure this whole branch exists to avoid.
+              printf '%s\n' "$G_LIST" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | grep -qxF "$G_NAME" \
+                || GONE="gcloud container clusters list --project $G_PROJ succeeded and does not list cluster '$G_NAME'"
+            fi
           fi ;;
         *aws*)
           # Context is usually the cluster ARN: arn:aws:eks:<region>:<acct>:cluster/<name>
           E_REGION="$(printf '%s' "$KUBE_CONTEXT" | awk -F: '/^arn:aws:eks:/{print $4}')"
           E_NAME="$(printf '%s' "$KUBE_CONTEXT" | sed -n 's#^arn:aws:eks:.*:cluster/##p')"
           if [ -n "$E_REGION" ] && [ -n "$E_NAME" ] && command -v aws >/dev/null 2>&1; then
-            # Uses whatever AWS credentials this kubeconfig context already authenticates with.
-            E_ERR="$(aws eks describe-cluster --name "$E_NAME" --region "$E_REGION" \
-              --query 'cluster.name' --output text 2>&1 1>/dev/null)" || true
-            # Same structural rule as the GKE branch. The AWS CLI echoes the asked
-            # name as "No cluster found for name: <name>." — match that delimited,
-            # not a bare substring (a cluster named `prod` or `cluster` appears
-            # incidentally in unrelated error text).
-            case "$E_ERR" in
-              *"name: $E_NAME"|*"name: $E_NAME"[!-0-9A-Za-z_]*)
-                case "$E_ERR" in
-                  *ResourceNotFoundException*) GONE="aws eks describe-cluster: ResourceNotFoundException for cluster '$E_NAME' in $E_REGION" ;;
-                esac ;;
-            esac
+            # Uses whatever AWS credentials this kubeconfig context already authenticates
+            # with. Same rule: only a succeeding list is evidence.
+            if E_LIST="$(aws eks list-clusters --region "$E_REGION" \
+                 --query 'clusters[]' --output text 2>/dev/null)"; then
+              printf '%s\n' "$E_LIST" | tr '\t' '\n' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | grep -qxF "$E_NAME" \
+                || GONE="aws eks list-clusters --region $E_REGION succeeded and does not list cluster '$E_NAME'"
+            fi
           fi ;;
       esac
       if [ -n "$GONE" ]; then
-        echo "context '$KUBE_CONTEXT': the cluster NO LONGER EXISTS — its API-server DNS name is gone AND its cloud control plane does not know it ($GONE). This is a DECOMMISSIONED cluster whose kubeconfig entry outlived it, not a private endpoint and not a network problem: do not open a VPN or tunnel for it. Fix the config instead — remove this context from kubernetes.context in toolkit.yaml (and 'kubectl config delete-context $KUBE_CONTEXT' to clean up your kubeconfig). If this cluster was expected to be running, that is an estate finding to raise with whoever deleted it, separate from this audit."; exit 1
+        echo "context '$KUBE_CONTEXT': the cluster NO LONGER EXISTS — its API-server DNS name is gone AND its cloud control plane, asked for its own list of clusters, does not list it ($GONE). This is a DECOMMISSIONED cluster whose kubeconfig entry outlived it, not a private endpoint and not a network problem: do not open a VPN or tunnel for it. Fix the config instead — remove this context from kubernetes.context in toolkit.yaml (and 'kubectl config delete-context $KUBE_CONTEXT' to clean up your kubeconfig). If this cluster was expected to be running, that is an estate finding to raise with whoever deleted it, separate from this audit."; exit 1
       fi
       echo "context '$KUBE_CONTEXT': the API server's DNS name does not resolve from here, and the cloud control plane was not asked or still lists the cluster — treat it as a PRIVATE endpoint (resolvable only inside the VPC/VNet) and open a tunnel/JIT session or run from inside the network, per 'Accessing private or JIT-tunnelled clusters' below. The cluster's posture is UNKNOWN, not healthy. This is NOT an RBAC or credential problem."; exit 1 ;;
     *"dial tcp"*|*"i/o timeout"*|*"connection refused"*|*"Unable to connect"*|*"TLS handshake timeout"*|*privatelink*)
