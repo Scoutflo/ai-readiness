@@ -13,7 +13,7 @@ sh ci/run-tests.sh .
 claude plugin validate . --strict
 ```
 
-`ci/structure-check.sh` composes 24 checks: anchor, cross-block, coverage,
+`ci/structure-check.sh` composes 25 checks: anchor, cross-block, coverage,
 remediation-map, **skill-completeness**, the four behavioral-parity gates
 (scope-checkpoint, redaction-parity, business-context-parity, **env-load-parity**),
 and manifest-compat, min-version-consistency, catalog-consistency,
@@ -49,7 +49,12 @@ are reflected in the config template, the sub-key granularity `config-key-agreem
 does not cover), **command-ref** (every `${CLAUDE_PLUGIN_ROOT}`-relative `*.sh`
 reference a SKILL/reference doc executes resolves to a shipped file, and the
 demoted `scoutflo_addsecret` helper never appears as a runnable recipe line — the
-mechanical catch for the IMP-012 doc↔code drift class), and **contract-map**
+mechanical catch for the IMP-012 doc↔code drift class), **not-in-scope-reason** (a skill that authors a v2 check ledger must name
+`not_in_scope_reason` **on its `Emit one \`checks[]\` row` emission-contract
+line**, and every fenced JSON object setting that result must carry the key — the
+validator requires the field, so a contract that omits it tells an audit to emit a
+row that fails its own gate. It guards the contract each audit reads, not every
+per-check sentence in a `references/*.md`), and **contract-map**
 (keeps [docs/CONTRACTS.md](docs/CONTRACTS.md) honest — every composed gate is
 documented there and every gate it names exists).
 

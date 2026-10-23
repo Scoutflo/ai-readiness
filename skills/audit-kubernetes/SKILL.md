@@ -102,7 +102,73 @@ if [ "$K_RC" -ne 0 ]; then
   case "$K_ERR" in
     *localhost:*|*127.0.0.1:*)
       echo "context '$KUBE_CONTEXT': its API server is a local tunnel (localhost) that is not answering — your just-in-time / tunnelled access session (Cloudanix cdx, Teleport, a bastion 'ssh -L' tunnel, or 'kubectl port-forward') has expired or was never opened. Re-establish it in another terminal and point KUBECONFIG at the session's kubeconfig by adding one line to the store this audit already reads: echo 'export KUBECONFIG=\"<the session's kubeconfig path>\"' >> ~/.scoutflo/env — then retry. Scoutflo holds no standing cluster credential by design, so it can only audit while your session is live (see 'Accessing private or JIT-tunnelled clusters' below). This is NOT an RBAC, credential, or authorized-IP-range problem."; exit 1 ;;
-    *"no such host"*|*"dial tcp"*|*"i/o timeout"*|*"connection refused"*|*"Unable to connect"*|*"TLS handshake timeout"*|*privatelink*)
+    *"no such host"*)
+      # DNS absence has TWO causes that need OPPOSITE advice, and they are
+      # indistinguishable at the socket: a PRIVATE endpoint you cannot resolve
+      # from here, and a cluster that was DELETED while its kubeconfig entry
+      # survived. Telling the second one "run from inside the VNet" sends the
+      # reader hunting a network problem for infrastructure that no longer
+      # exists. Only the owning cloud control plane can tell them apart, so ask
+      # it — read-only, one call, and skip clean when it is unavailable.
+      # Reasons and rules: report-standard/not-in-scope-reasons.md.
+      # FAIL CLOSED, and do it STRUCTURALLY. Only the control plane's own list of
+      # clusters proves absence: ask for the list and look for an exact match.
+      #
+      # Deliberately NOT by pattern-matching the CLI's error text. That approach
+      # went fail-open four separate times here — a plumbing error saying "was not
+      # found"; the cluster name colliding with gcloud's own error preamble; an IAM
+      # denial that echoes the resource path and also says "was not found"; and
+      # `Not found: nodePool "default" in .../clusters/<name>`, a missing NODE POOL
+      # read as a missing CLUSTER. Each time the fix was a tighter pattern, and each
+      # time another wording defeated it. Error prose is not an API.
+      #
+      # A list call separates the two things that matter with no parsing at all: if
+      # the call SUCCEEDS, its output is authoritative about what exists; if it
+      # fails for any reason (denied, expired, missing CLI, throttled, no network),
+      # we simply do not know and fall through to the private-endpoint message
+      # below. An exact whole-line match also removes every name-collision case —
+      # 1-character names, prefixes, underscores, substrings — by construction.
+      GONE=""
+      case "$EXEC_CMD" in
+        *gke-gcloud-auth-plugin*)
+          # Context shape: gke_<project>_<location>_<cluster>. The cluster name may
+          # itself contain underscores, so strip the two known leading fields rather
+          # than splitting on `_`. The location is NOT needed: listing per project
+          # covers zonal and regional clusters together, so a zonal/regional mismatch
+          # in the context cannot cause a false verdict.
+          G_PROJ="$(printf '%s' "$KUBE_CONTEXT" | sed -n 's#^gke_\([^_]*\)_.*#\1#p')"
+          G_NAME="$(printf '%s' "$KUBE_CONTEXT" | sed -n 's#^gke_[^_]*_[^_]*_##p')"
+          if [ -n "$G_PROJ" ] && [ -n "$G_NAME" ] && command -v gcloud >/dev/null 2>&1; then
+            # Only a SUCCEEDING list is evidence. On any failure the `if` is false and
+            # GONE stays empty, so the verdict is "unknown", never "deleted".
+            if G_LIST="$(CLOUDSDK_CORE_DISABLE_PROMPTS=1 gcloud container clusters list \
+                 --project "$G_PROJ" --format='value(name)' 2>/dev/null)"; then
+              # Trim each line before the exact match: if the CLI ever padded its
+              # output, an exact-line compare would miss a cluster that IS there and
+              # report it deleted — the one failure this whole branch exists to avoid.
+              printf '%s\n' "$G_LIST" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | grep -qxF "$G_NAME" \
+                || GONE="gcloud container clusters list --project $G_PROJ succeeded and does not list cluster '$G_NAME'"
+            fi
+          fi ;;
+        *aws*)
+          # Context is usually the cluster ARN: arn:aws:eks:<region>:<acct>:cluster/<name>
+          E_REGION="$(printf '%s' "$KUBE_CONTEXT" | awk -F: '/^arn:aws:eks:/{print $4}')"
+          E_NAME="$(printf '%s' "$KUBE_CONTEXT" | sed -n 's#^arn:aws:eks:.*:cluster/##p')"
+          if [ -n "$E_REGION" ] && [ -n "$E_NAME" ] && command -v aws >/dev/null 2>&1; then
+            # Uses whatever AWS credentials this kubeconfig context already authenticates
+            # with. Same rule: only a succeeding list is evidence.
+            if E_LIST="$(aws eks list-clusters --region "$E_REGION" \
+                 --query 'clusters[]' --output text 2>/dev/null)"; then
+              printf '%s\n' "$E_LIST" | tr '\t' '\n' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | grep -qxF "$E_NAME" \
+                || GONE="aws eks list-clusters --region $E_REGION succeeded and does not list cluster '$E_NAME'"
+            fi
+          fi ;;
+      esac
+      if [ -n "$GONE" ]; then
+        echo "context '$KUBE_CONTEXT': the cluster NO LONGER EXISTS — its API-server DNS name is gone AND its cloud control plane, asked for its own list of clusters, does not list it ($GONE). This is a DECOMMISSIONED cluster whose kubeconfig entry outlived it, not a private endpoint and not a network problem: do not open a VPN or tunnel for it. Fix the config instead — remove this context from kubernetes.context in toolkit.yaml (and 'kubectl config delete-context $KUBE_CONTEXT' to clean up your kubeconfig). If this cluster was expected to be running, that is an estate finding to raise with whoever deleted it, separate from this audit."; exit 1
+      fi
+      echo "context '$KUBE_CONTEXT': the API server's DNS name does not resolve from here, and the cloud control plane was not asked or still lists the cluster — treat it as a PRIVATE endpoint (resolvable only inside the VPC/VNet) and open a tunnel/JIT session or run from inside the network, per 'Accessing private or JIT-tunnelled clusters' below. The cluster's posture is UNKNOWN, not healthy. This is NOT an RBAC or credential problem."; exit 1 ;;
+    *"dial tcp"*|*"i/o timeout"*|*"connection refused"*|*"Unable to connect"*|*"TLS handshake timeout"*|*privatelink*)
       echo "context '$KUBE_CONTEXT': the AKS/API server is private or unreachable from here — run from inside the VNet (jumpbox/VPN/bastion), add your IP to the cluster API-server authorized IP ranges, or open a tunnel/JIT session and point KUBECONFIG at its kubeconfig (see 'Accessing private or JIT-tunnelled clusters' below). \`az aks command invoke\` only carries a SINGLE tiny read — its 512 KB output cap truncates this audit's inventory pull (measured: a 39-pod cluster's pods-only JSON is already 524 KB), so it is not a substitute. This is NOT an RBAC or credential problem. The cluster monitoring posture is still auditable via /scoutflo:audit-azure over ARM (Container Insights, managed Prometheus, diagnostic settings) with no cluster network access."; exit 1 ;;
   esac
   # Not a network signature: a failed can-i on an exec-plugin context is usually an EXPIRED
@@ -344,7 +410,7 @@ Write `findings.json` first (canonical), then regenerate `report.md`, the histor
 1. Load the previous run's `findings.json` when one exists; classify every finding, `K8S-*` and `K8SRT-*` alike, per the lifecycle table in the [findings schema](../../report-standard/findings-schema.md) (`new`, `unchanged`, `regressed`; resolved IDs go to the delta, and the executive summary names regressions first).
 2. Load `./scoutflo-audits/exemptions.yaml` when present. Entries with `id`, `reason`, and `expires` all set and unexpired suppress their finding into the Suppressed appendix; malformed or expired entries are reported, never honored. For a readiness finding, retain the observed `partial` or `fail` result on the same-ID `checks[]` row and add `suppressed: true` plus `suppression_reason`; set the finding's `points_recoverable` to 0. Suppressed readiness checks remain assessed for coverage but are excluded from readiness scoring. A non-scored `K8SRT-*` finding has no check row: set only its lifecycle to `suppressed`, preserve `scoring_scope: "non-scored"`, and keep zero readiness points.
 3. Every findings area and coverage cell carries its denominator (`passed/total`).
-4. Emit one `checks[]` row for every stable `K8S-*` readiness catalog check (`{id, category, result}` with `result ∈ pass|partial|fail|blocked|not-in-scope`, and a non-empty `reason` on any partial/blocked/not-in-scope row), including passes, partials, failures, blockers, and not-in-scope checks. Derive category counts, readiness, assessment coverage, and `score.check_set` (the `cksum-v2:N:M` fingerprint over each check's id + category, every category's name + weight, and the gate, per the pipeline in [findings-schema.md](../../report-standard/findings-schema.md#check-ledger-v2)) from that complete ledger; never write them independently. A category with zero assessed checks goes in `score.excluded[]` and out of `overall`. `K8SRT-*` findings stay outside the readiness ledger and explicitly carry `scoring_scope: "non-scored"`.
+4. Emit one `checks[]` row for every stable `K8S-*` readiness catalog check (`{id, category, result}` with `result ∈ pass|partial|fail|blocked|not-in-scope`, and a non-empty `reason` on any partial/blocked/not-in-scope row, plus `not_in_scope_reason` (`inapplicable`|`target-gone`|`by-design`|`covered-elsewhere`) on every not-in-scope row), including passes, partials, failures, blockers, and not-in-scope checks. Derive category counts, readiness, assessment coverage, and `score.check_set` (the `cksum-v2:N:M` fingerprint over each check's id + category, every category's name + weight, and the gate, per the pipeline in [findings-schema.md](../../report-standard/findings-schema.md#check-ledger-v2)) from that complete ledger; never write them independently. A category with zero assessed checks goes in `score.excluded[]` and out of `overall`. `K8SRT-*` findings stay outside the readiness ledger and explicitly carry `scoring_scope: "non-scored"`.
 5. Every finding declares `scoring_scope` (`readiness` for a same-ID non-pass `K8S-*` check; `non-scored` for every `K8SRT-*`) and `report_lanes`: a unique, non-empty subset of `general-audit` and `ai-sre-readiness`. Default to `general-audit` (operational reliability and security posture); add/also use `ai-sre-readiness` only when the finding bears on telemetry quality, service identity/naming, topology/ownership context, incident routing evidence, RCA trust, or action safety — what trustworthy AI-assisted diagnosis needs. The flagship external-exposure blast-radius path (K8S-010) and the RBAC-power findings (K8S-002/006/009) inform the blast-radius and action-safety reasoning an AI SRE relies on, so those are typically both lanes; a pure hardening, network-segmentation, resource-limit, or resilience gap (K8S-001/007/008, K8S-003/011, K8S-004/014, K8S-005/012/013) is `general-audit` only. This classification never changes severity or score. Referential-integrity rules the gate enforces: every `partial`/`fail`/`blocked` check has a same-ID readiness finding, every readiness finding has a same-ID non-pass check row (never `pass`/`not-in-scope`), a blocked check's finding carries `status: "blocked"` and `points_recoverable: 0`, and a `non-scored` finding has `points_recoverable: 0` and no check row.
 
 Then run the report-standard self-validation, exactly as every other audit does — `check-findings.sh` (score reconciles with the scorecard, the v2 checks[] ledger and schema invariants hold) before `check-report.sh` (shape):
@@ -507,7 +573,7 @@ fi
 # its per-resource action/escalation/sla refine (never weaken) the workspace rule for that one resource.
 ```
 
-When context is available, apply it per [BUSINESS-CONTEXT-INTEGRATION-v0168.md](../../docs/BUSINESS-CONTEXT-INTEGRATION-v0168.md): **exclude** namespaces/resources matched by an exclusion (record them `not-in-scope` with the reason, never a fail); **escalate** findings on a `critical_dependencies` service (raise Reliability findings to high, mark it in the coverage matrix); reduce severity for a gap that exists only in a non-production `environment`; and apply `cost_sensitivity` to ordering. With no context, run neutral defaults and say so — never invent a business rule.
+When context is available, apply it per [BUSINESS-CONTEXT-INTEGRATION-v0168.md](../../docs/BUSINESS-CONTEXT-INTEGRATION-v0168.md): **exclude** namespaces/resources matched by an exclusion (record them `not-in-scope` with `not_in_scope_reason: "by-design"` (the exclusion is the customer's declaration) and the exclusion as the `reason`, never a fail); **escalate** findings on a `critical_dependencies` service (raise Reliability findings to high, mark it in the coverage matrix); reduce severity for a gap that exists only in a non-production `environment`; and apply `cost_sensitivity` to ordering. With no context, run neutral defaults and say so — never invent a business rule.
 
 ## Remediation pointers
 

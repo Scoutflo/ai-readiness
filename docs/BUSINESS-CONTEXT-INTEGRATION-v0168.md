@@ -16,7 +16,8 @@ individual resources on top of it.
 
 ```
 workspace layer    business_context.json  (environment, cost_sensitivity, critical_dependencies,
-                                            environment_map[].uptime_sla, service_slas[], exclusions)
+                                            environment_map[].uptime_sla, service_slas[], exclusions,
+                                            resource_intent[], unit_metrics[])
                      else business_context.md   (ssot-md fallback: parse the SSOT directly when the json was not derived)
                      else none                  (no business context; audit runs with neutral defaults)
 
@@ -40,7 +41,9 @@ the per-resource cache never replaces the workspace rules, it only adds detail.
 | `service_slas[]` | Per-service SLA/SLO. When a finding's affected service has a row here, judge it against **that service's** SLA — a per-service SLA wins over the environment default from `environment_map[]`. |
 | `critical_dependencies[]` | A finding on a critical service is escalated (raise Reliability findings to high; mark it in the coverage matrix). Never lower a critical-service finding. |
 | `cost_sensitivity` | `high` → the cost section / audit-cost orders opportunities ROI-first (largest annual savings first); `low` → impact-first. Never changes a reliability score. |
-| `exclusions` (regions/accounts/services/resources) | A resource matched by an exclusion is skipped and recorded as `not-in-scope` with the exclusion as the reason — never silently dropped, never scored as a fail. |
+| `exclusions` (regions/accounts/services/resources) | A resource matched by an exclusion is skipped and recorded as `not-in-scope` with `not_in_scope_reason: "by-design"` and the exclusion as the `reason` — never silently dropped, never scored as a fail. The exclusion *is* the customer's declaration, which is what makes `by-design` admissible here. |
+| `unit_metrics[]` | The customer's **declared** unit of delivered value (`name`, `query`, `source`, `scope`, `per`). `audit-cost` runs [unit-economics.md](../skills/audit-cost/references/unit-economics.md) after every provider lane and renders cost **per unit** above the ranked savings, because a bill up 12% against volume up 20% is efficiency *improving*. **Declared, never inferred** — a countable infrastructure metric is always available and almost never what the business counts; with none declared `audit-cost` emits `COST-UNIT-004` and reports per-namespace/per-project spend instead. `source` is a closed set (`prometheus`, `victoriametrics`, `thanos`, `cloud-monitoring`); `query` is passed through verbatim. |
+| `resource_intent[]` | Per-resource declared intent (`standby`, `dr`, `backup`, `pre-scaled`, `accepted-tradeoff`, optional `review_by`). A matched resource's idle/over-provisioned finding becomes `not-in-scope` with `not_in_scope_reason: "by-design"` in a scored audit, or an annotated zero-dollar observation in `audit-cost`. **Declared, never inferred**: a name, tag, label, low utilisation or architectural guess establishes nothing, and with no declaration the finding stands. Past `review_by`, ask the customer to re-confirm instead of staying silent. See [not-in-scope-reasons.md](../report-standard/not-in-scope-reasons.md). |
 | `computed_metadata.jsonl` (per-resource) | When the resolver has run, a finding's affected resource is looked up here for its own `environment` / `sla` / `escalation` / `action`, refining the workspace rule for that one resource (e.g. an `action:"skip"` exclusion or `escalation:"CRITICAL"` mark that applies to just that resource). It adds detail; it never overrides the workspace exclusions/critical lists. |
 | Risky Operations (setup skills) | A setup gates the listed operation behind explicit approval; a critical-service change requires the second confirmation. |
 | Custom Rules / Runbooks | Read as additional guidance; honor a stated rule (e.g. a retention policy, a paging window) when it applies to a finding. |
@@ -118,8 +121,14 @@ refine (never weaken) the workspace rule for that one resource.
 **Apply behaviors (identical in every mode):**
 
 - **Exclude** — a resource matched by `exclusions` (or a per-resource `action:"skip"`)
-  is recorded `not-in-scope` with the exclusion as the reason; never a fail, never
-  silently dropped.
+  is recorded `not-in-scope` with `not_in_scope_reason: "by-design"` and the exclusion
+  as the reason; never a fail, never silently dropped.
+- **Declared intent** — a resource matched by `resource_intent[]` has its idle /
+  over-provisioned finding recorded `not-in-scope` with
+  `not_in_scope_reason: "by-design"`, quoting the customer's own `why`. It
+  **annotates and downgrades, never disappears the row**: the resource and its
+  observed utilisation stay visible, so a standby that drifted past its purpose is
+  still legible. Intent is declared, never inferred.
 - **Escalate critical** — a finding on a `critical_dependencies` service (or a
   per-resource `escalation:"CRITICAL"`) is raised, never lowered.
 - **Per-environment SLA** — judge a finding against its environment's `uptime_sla`

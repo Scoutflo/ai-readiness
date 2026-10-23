@@ -1,5 +1,305 @@
 # Changelog
 
+## 0.1.233
+
+**Stop deciding whether a cluster exists by reading error messages.** A final adversarial pass
+before release found the "is this cluster deleted or merely unreachable" guard fail-open for a
+**fourth** and **fifth** time, and the pattern across all five is the lesson: every fix was a
+tighter string match on the cloud CLI's stderr, and every one was defeated by another wording.
+**Error prose is not an API.** The mechanism is now structured and the whole class is gone.
+
+- **The two new holes.** (4) A gcloud **IAM denial** echoes the resource path *and* ends
+  "credential file **was not found**", satisfying both of the previous version's independent
+  conditions — so a live cluster with a permissions problem was reported deleted, with "remove this
+  context from your config" as the advice. (5) `Not found: nodePool "default" in
+  .../clusters/<name>` — a missing **node pool** read as a missing **cluster**.
+- **The replacement.** The branch now asks the control plane for its **list** of clusters
+  (`gcloud container clusters list` / `aws eks list-clusters`) and does an **exact whole-line
+  match**. If the call succeeds its output is authoritative about what exists; if it fails for any
+  reason we do not know, and the verdict is "private endpoint, posture unknown". Fail-closed is now
+  a property of the control flow rather than a list of error strings to enumerate, so an error
+  wording nobody has seen yet cannot produce a false "deleted".
+- **Three whole failure classes die by construction, not by patch.** Name collisions (1-character
+  names, prefixes like `live-2`, substrings like `liveness`, underscores) cannot occur against an
+  exact whole-line compare. Error-text variation cannot matter, because no verdict is read from
+  text. And the zonal-vs-regional mismatch is gone because the list is **not** pinned to a
+  location — listing per project covers both.
+- **A padded list entry can no longer flip the verdict** either: each line is trimmed before the
+  compare, so if a CLI ever padded its output we would not report a cluster that *is* there as
+  deleted.
+- The test was rewritten around the new mechanism and now carries **all four historical fail-open
+  inputs as cases that must return "unknown"** — they do, by construction. It also asserts the list
+  call is never pinned to a location, never runs with an empty target, and that the suite makes
+  **zero** real cloud CLI invocations (verified with a logging stand-in on `PATH`).
+
+**Also fixed, and directly on the path a customer hits next:** `/scoutflo:doctor` reported "no
+Cloud Billing export present" to anyone who had enabled only the **detailed, resource-level**
+export. That table is named `gcp_billing_export_resource_v1_*`, which does not contain the
+substring `gcp_billing_export_v1_` the doctor grepped for — so the flavour the cost audit
+*prefers*, and the only one GKE cost allocation can attribute per cluster and namespace, read as
+absent. The doctor now recognises both flavours and says which one it found, because they support
+different checks. Regression-tested, including an assertion that pins the substring trap so nobody
+collapses the two branches back into one.
+
+## 0.1.232
+
+**A second review round, on the fix commit itself — and the same bug a third time.** Two more
+independent reviewers were run, one per unreviewed commit. They found twelve more must-fix
+defects. The headline one is that the fail-open cluster-gone guard was **still** fail-open after
+v0.1.231 had already "fixed" it twice, for a reason neither earlier pass saw.
+
+- **`gcloud` prefixes every error with `(gcloud.container.clusters.describe)`, so requiring the
+  error to "name the cluster" was satisfied by construction.** v0.1.231 added a second condition —
+  a not-found signature AND the stderr naming the cluster asked about — but tested that as a bare
+  substring. GKE names may be a single character, so a live cluster called `a`, `b`, `cloud`,
+  `cluster`, `clusters`, `describe`, `found`, `not` or `on` is "named" by gcloud's own preamble in
+  **every** error, collapsing the guard back to the single-condition version it replaced. A 404
+  about an entirely *different* cluster was also accepted as proof about this one. The match is now
+  **structural** — the resource path gcloud echoes (`.../clusters/<name>`), delimited by
+  end-of-string or a non-name character — which also rejects a prefix collision (a 404 about
+  `live-2` no longer proves `live` is gone). Nine formerly-fatal names are now permanent test cases.
+- **The new test was making real, authenticated cloud API calls.** `test-cluster-gone-probe.sh`'s
+  "a missing CLI cannot prove absence" case deleted its own stubs, after which `command -v gcloud`
+  resolved the **system** CLI — so `ci/run-tests.sh` on any developer machine fired real
+  `gcloud container clusters describe` and `aws eks describe-cluster` requests with whatever
+  ambient credentials were loaded. That is a test-hygiene failure and a credential-guardrail
+  violation in the very test written to prove caution. It now runs with a PATH that provably cannot
+  resolve either CLI, and **skips honestly** rather than risk a live call if a machine ships them in
+  `/usr/bin`. A new case asserts the whole suite invokes a cloud CLI exactly twice — once per
+  well-formed context — and never with an empty target flag. Verified with a logging stand-in:
+  **zero** real CLI invocations across the suite.
+- **"All seventeen fixed" was wrong: nineteen skills author a v2 ledger, and four kept the
+  field-less form.** Two had only their step-4 contract updated and kept the old business-context
+  sentence; two more used different phrasing the first sweep did not match. Worse, the new gate
+  could not see them, because its check was **file-scoped** — one mention of the field anywhere in
+  the file satisfied it. The gate now requires the field **on the emission-contract line itself**,
+  which is what an audit actually reads before writing `findings.json`, and all 19 contracts carry
+  it. Its docstring and the `AGENTS.md` entry now state the limit plainly: it guards the contract,
+  not every per-check sentence in a `references/*.md`.
+- **The gate also false-FAILED on correct content.** Its JSON rule was line-scoped, so the
+  canonical object in its most readable pretty-printed form was rejected (the sibling key sits two
+  lines down), and any prose sentence quoting `"result": "not-in-scope"` tripped the build — the
+  repo was barred from documenting its own rule. The rule is now object-scoped and fence-scoped.
+  And `for f in $(find …)` word-split, so a repo path containing a space made it scan **nothing**
+  and print OK; it now reads the file list safely.
+- **A step-4 edit was spliced mid-sentence** in `audit-newrelic`, severing the original clause and
+  leaving a dangling fragment the agent would read as part of the instruction. Repaired.
+- **`bcval` ended a quoted scalar at the LAST quote, not the first.** So
+  `- cluster: "prod-east"  # the "big" one` stored `prod-east"  # the "big`, which matches no real
+  cluster — the customer's declared exemption silently stopped applying, which is the exact failure
+  class v0.1.229 exists to remove. Quoted scalars now end at their first closing quote, which also
+  makes trailing comments on quoted values work properly rather than by accident.
+- **A YAML block scalar silently became the string `">"`.** `query: >` with the real expression on
+  the next line stored `">"` — and because the entry was *present*, `COST-UNIT-004` did not fire, so
+  an operator believed unit economics was on while `>` was what got sent to their metric backend.
+  Block scalars are now rejected, so the honest "no unit declared" path runs instead.
+- **`source: Prometheus` silently dropped the whole declaration** (the closed-set match was
+  case-sensitive, and that is how the product is normally written) — reproducing the very bug
+  v0.1.230 was written to fix. Now case-insensitive.
+- **`why` was truncated at the first ` #`**, so `why: see ticket #123 for the retention decision`
+  stored `see ticket`, on the one field the template promises is quoted back in the customer's own
+  words. Free text is now read verbatim; `query` still strips a trailing YAML comment, because
+  keeping it would send the comment to the metric backend.
+- **`per: 0` was accepted**, giving `cost per 0 units` and a literal division by zero downstream.
+  Now falls back to the documented default.
+- **No dropped declaration is silent any more.** A `<placeholder>`, an out-of-vocabulary intent or
+  source, or a rejected block scalar used to vanish with `units=0` as the only evidence. A warning
+  now names what was dropped and where to fix it — while staying quiet on a fresh scaffold, whose
+  template example is a placeholder rather than a failed attempt.
+- Also: `CONTRACTS.md` C6 still declared the projection without `resource_intent` or `unit_metrics`
+  (the same doc-vs-code drift being fixed, in the file that is supposed to be the contract SSOT);
+  `ci/structure-check.sh`'s own header still said 24 gates; the SSOT's "stays a finding, severity
+  lowered" clause contradicted its own `blocked` mandate; Grafana ruler temp files are now
+  `$$`-scoped so a cleanup cannot touch a concurrent run's files; and a lib comment claimed the
+  `unit_metrics` template example is commented out — it is not, it is a live placeholder entry, so
+  the **placeholder** filter is what holds that line, and the comment, the CHANGELOG and a vacuous
+  test assertion all said otherwise.
+
+## 0.1.231
+
+**What an independent review round caught in v0.1.229-230 before any of it merged.** A
+read-only reviewer that did not write the change was asked to assume it was wrong and prove
+where. It found nine must-fix defects that all 52 test suites, all 25 CI gates and the full
+selftest had passed over. The two worst were in the guard whose entire purpose is to be
+careful — and one of them is a bug the v0.1.229 commit message claimed to have already fixed.
+
+- **The cluster-gone probe was still fail-open, and would have declared a live cluster
+  decommissioned.** v0.1.229 required an explicit not-found signature before concluding a
+  cluster was deleted. But the signature was matched against the *whole* of gcloud's stderr,
+  and gcloud reports unrelated plumbing failures in exactly those words: `command
+  [docker-credential-gcloud] **was not found** on the PATH` and `Required
+  container.clusters.get permission; credential file **was not found**`. Either one made the
+  audit tell an operator that a running production cluster no longer exists and to delete it
+  from their config. A decommissioned verdict now requires **two** conditions — a not-found
+  signature **and** the message naming the cluster that was asked about — so only an answer
+  *about this cluster* can prove it is gone.
+- **The same probe truncated cluster names and could ask about the wrong cluster.** A GKE
+  context is `gke_<project>_<location>_<cluster>` and the cluster name may itself contain
+  underscores, so splitting on `_` asked the control plane about `my` for a cluster named
+  `my_prod_cluster`, received a perfectly *truthful* not-found, and reported a live cluster as
+  deleted. An empty location was also passed through unchecked. Both fixed; an incomplete
+  identity now makes no cloud call at all.
+- **The probe may never have fired for a genuinely deleted GKE cluster.** gcloud renders a
+  missing cluster as `Response: [404] Not found: projects/…/clusters/<name>`, which matched
+  none of the three patterns (`NOT_FOUND` is case-sensitive). Added, and now covered by a test
+  using gcloud's real wording.
+- **The PROM-001 verdict table left a branch unassigned and sent two unknowns to a `critical`
+  "restore or fail over".** The DNS classifier produces five outcomes; the table had three
+  rows. NXDOMAIN-with-a-failing-apex — which the classifier itself calls unattributable — had
+  no row, and SERVFAIL and "no authoritative answer" both landed on the availability-incident
+  row. The table now has a row per branch, and everything that does not authoritatively prove
+  absence is `blocked`: a DNS answer is evidence about DNS, not about the server.
+- **Seventeen skills still told their audit to emit the field-less form.** `not_in_scope_reason`
+  became required in v0.1.229, but seventeen SKILL.md files still said "record them
+  `not-in-scope` with the reason". An audit following its own skill would emit a row the
+  validator rejects — and `check-findings.sh` fails the *whole* findings document, so an audit
+  that passed yesterday would produce no output. All seventeen fixed, plus each audit's
+  emission contract, and **new gate `ci/not-in-scope-reason-check.sh`** (the 25th) now fails the
+  build if a v2 ledger author mentions a `not-in-scope` row without naming the field, or if any
+  JSON example sets that result without one.
+- **The canonical schema example violated the rule its own file introduced** — the most-copied
+  shape in the repo. Caught by the new gate, which exists partly for this.
+- **The new SSOT contradicted itself on the one case it was written to settle.** It said an
+  unreadable owning plane is "not `not-in-scope`, the check stays a finding" in one paragraph
+  and "the honest output is a `not-in-scope` row plus a coverage gap" in the next. The second
+  was the fail-open the file exists to prevent, and nothing would have caught it because
+  `coverage_gap` is advisory and unvalidated. Now consistently `blocked` + `coverage_gap`.
+- **The SSOT forbade the `by-design` mapping the business-context doc mandates.** It admitted
+  only a `resource_intent` declaration, while the integration doc routes `exclusions` matches to
+  `by-design`. The SSOT now names both, because an exclusion *is* a customer declaration.
+- **A pressure scenario still specified the behavior the change replaced**, and the lane that
+  got the riskiest code had no scenario of its own. Both fixed:
+  `audit-kubernetes/decommissioned-cluster-is-a-stale-config.md` is new, and the
+  private-endpoint scenario now documents the `no such host` split and the fail-closed rule.
+- Also from the review: `not-in-scope` was still glossed as "declared by you" in
+  `severity-and-scoring.md`, which every audit links for verdict semantics — true now only of
+  `by-design`, since the other three are detected. Grafana ruler responses were left in
+  `TMPDIR` after the run (they hold rule expressions and internal hostnames) and are now
+  removed. And a test comment claimed the comment filter was load-bearing; the reviewer showed
+  the parser is comment-immune structurally, so the comment now says what is actually proven
+  rather than overclaiming.
+
+New guard: `skills/audit-kubernetes/tests/test-cluster-gone-probe.sh` extracts the branch from
+the shipped SKILL.md and runs the whole fail-closed matrix — every input above is now a
+permanent case. It fails on the pre-fix tree at exactly the reviewer's first failing input.
+
+## 0.1.230
+
+**A shipped feature that could never turn on.** v0.1.227 shipped unit economics: `audit-cost`
+reads `unit_metrics` from the business-context projection, renders cost **per unit** above the
+ranked savings, and emits `COST-UNIT-004` when nothing is declared. It also added the
+"Unit of Delivered Value" section to the SSOT template. But `bc_derive_json()` never parsed that
+section, the skill never asked for it, and the projection never carried the key — so
+`unit_metrics` was **always** absent, every run took the "none declared" branch, and
+`COST-UNIT-004` fired for every customer forever. Verified against the previous tree: a valid
+declaration in the SSOT still produced `unit_metrics = null`. Exactly the doc-versus-code drift
+class the `command-ref` gate was built for, one layer up.
+
+- **`unit_metrics` is now captured.** `bc_derive_json()` parses the `unit_metrics:` YAML list into
+  the projection with the five fields `audit-cost` actually reads (`name`, `query`, `source`,
+  `scope`, `per`), applying the same defaults the consumer assumes (`scope: all`, `per: 1000`).
+  `source` is validated against its closed set (`prometheus`, `victoriametrics`, `thanos`,
+  `cloud-monitoring`); an unknown source is dropped rather than passed through. The skill now asks
+  for it in its guided questions, and the projection key list in both the skill and
+  `BUSINESS-CONTEXT-INTEGRATION-v0168.md` matches the code.
+- **Two rules carried over from `resource_intent`, for a sharper reason.** Only **uncommented**
+  entries count and unfilled `<placeholders>` are dropped — the template ships a commented example,
+  and parsing it would publish a confident cost-per-unit against a denominator nobody declared. A
+  **wrong** denominator is harder to spot than a missing one, because the number looks finished. And
+  the unit is never chosen on the customer's behalf: a countable infrastructure metric (requests,
+  pods, nodes) is always available and almost never what the business counts.
+- **The customer's query survives verbatim.** A PromQL query is full of double quotes, braces,
+  brackets and `!~`. Both parsers now emit TAB-separated fields and let **jq** do the JSON
+  encoding, instead of hand-building JSON strings in awk. This fixed a **silent data-loss bug in
+  v0.1.229's `resource_intent`**: a `why` containing a backslash (a Windows path in a runbook
+  reference) produced an invalid JSON escape, `jq -s` returned `[]`, and **every declaration
+  vanished with no error** — the exemption the customer declared simply stopped applying. Values
+  inside quotes are taken as-is; a trailing ` # comment` is stripped only from an unquoted value;
+  CRLF and tabs are normalised.
+- **`[derived]` no longer dies on valid data.** The summary line counted entries with
+  `echo "$json" | jq length`, and `echo` interprets backslashes, so a declaration containing one
+  made that line fail with `jq: parse error: Invalid escape` on stderr **while the written file was
+  perfectly correct** — a frightening error message about data that was fine. Now `printf '%s'`.
+  The same latent pattern applied to the pre-existing `critical`/`envs`/`slas` counts and is fixed
+  with it.
+- Two new tests. One asserts real declarations parse (with the PromQL query compared
+  **byte-for-byte**), while an out-of-set source, an unfilled placeholder and the commented template
+  example are all dropped. The other asserts that free text containing a quote or a backslash
+  neither drops a declaration nor writes anything to stderr — it guards the technique, not the text.
+
+## 0.1.229
+
+**Three classes of confidently wrong finding, and the missing vocabulary behind all
+three.** Each of these was structurally valid, reconciled with its scorecard and passed
+every gate, while being wrong about the estate: a *deleted* monitoring server reported as a
+*broken* one ("restore or fail over", for a machine that no longer existed); a warm standby
+reported as waste ("shrink it", for the thing whose purpose is to be big before it is
+needed); and a fully-alerted estate reported as entirely unalerted, because the rules lived
+on a plane the audit does not read. The shared root cause: **the audit reported the limit of
+its own view as a property of the customer's system.** A reader who knows their estate spots
+that instantly and stops trusting the rest of the report, including the findings that were
+right.
+
+- **`not_in_scope_reason` — a closed, evidenced vocabulary for "nothing to do here".**
+  `not-in-scope` already existed as a verdict and already left both denominators, but its
+  `reason` was free text, so "the platform removed this feature" and "we decided not to
+  look" rendered identically. It now requires one of exactly four values, each with its own
+  evidence duty: **`inapplicable`** (the check has no meaning for this target's platform,
+  version, engine or composition — the original and commonest meaning, detected from the
+  target's own identity), **`target-gone`**, **`by-design`**, and **`covered-elsewhere`**.
+  New reference [`report-standard/not-in-scope-reasons.md`](report-standard/not-in-scope-reasons.md)
+  is the single definition; `check-findings.sh` enforces the closed set, rejects an
+  unexplained `not-in-scope` row, and rejects the field on a scored row (where it would read
+  as an excuse while still counting). Four new validator tests. **The distinction that makes
+  it safe: `blocked` means *unknown* — go unlock the evidence; `not-in-scope` means *known,
+  and nothing to do*. Guessing the second to make a red row disappear converts an unmeasured
+  risk into a clean bill of health, and the report gives the reader no way to tell.**
+- **A decommissioned target is a stale config, not an outage (`target-gone`).**
+  `audit-prometheus` already classified an authoritative NXDOMAIN as a decommissioned server
+  — and then filed PROM-001 as a `critical` availability incident anyway, because the
+  classifier's conclusion never reached the verdict. The classification now *decides* the
+  result: authoritative-NXDOMAIN (with a resolving zone apex) → `not-in-scope`/`target-gone`
+  whose action is on `toolkit.yaml`, never a restore or failover; NOERROR with a failing local
+  path → `blocked` with the network unlock named; everything else → the real incident. The
+  cascade framing is suppressed on the gone path, because nothing "goes dark" — it went dark
+  when the server was deleted. `audit-kubernetes` gets the same fix at the cluster level: a
+  `"no such host"` API server used to read as *"private or unreachable — run from inside the
+  VNet"*, which is the wrong hunt for a cluster that was deleted, so it now asks the owning
+  cloud control plane. It fails closed — see v0.1.231, where an independent review round found
+  that the first version of this guard was **still fail-open** and tightened it.
+- **Intent is declared, never inferred (`by-design`).** New `resource_intent` block in the
+  business-context template (`standby`, `dr`, `backup`, `pre-scaled`,
+  `accepted-tradeoff`, with an optional `review_by`), and `audit-cost` applies it. The
+  asymmetry is deliberate and load-bearing: a name containing `standby`, a tag asserting it,
+  a low request rate or a plausible architectural guess are each worth *mentioning as a
+  prompt to declare* and **none** is a licence to downgrade — because wrongly reporting an
+  intentional standby costs one correction, while wrongly silencing a forgotten resource
+  costs money every month and is invisible (nobody reviews the finding that was never
+  written). A matching declaration **annotates and downgrades rather than disappearing the
+  row**: the resource, utilisation and spend stay visible with the customer's own words
+  beside them, the dollar figure drops to `null` and leaves the ranked total, and drift past
+  the declared purpose is still reported. A declaration silences the verdict, not the fact.
+- **An empty rule list is not an unalerted estate (`covered-elsewhere`).** Grafana has two
+  rule planes and `audit-grafana` read only one: `datasource-managed` rules live in a
+  Mimir/Cortex/Loki/Prometheus ruler, usually applied from Git, and are invisible to the
+  provisioning API. The audit now enumerates each datasource's ruler before judging coverage,
+  and distinguishes a `404`/`501` (no ruler API — not an empty ruler) from a real empty ruler
+  from a `401`/`403`. **Verified coverage exonerates; inferred coverage only reframes** — an
+  enabled rule found on the owning ruler makes GRAF-091 `not-in-scope`/`covered-elsewhere`,
+  but a ruler plane that merely *exists* and could not be read makes it **`blocked`** with
+  `coverage_gap` set, never `fail` and never `not-in-scope`. This matches the honesty bar the
+  correlation engine already enforced for the same word (exact `covers==affected`, enabled,
+  routed) and the `/scoutflo:rca` rule that cross-tool coverage *reframes a gap as a
+  single-tool dependency rather than exonerating it* — one meaning for one word, not two. The
+  same boundary is now stated for GRAF-090 and the GRAF-050-055 delivery path.
+- Three new pressure scenarios, one per class, each including the refusal the class needs:
+  the Grafana one requires self-correction **from the ruler evidence** rather than from the
+  customer's pushback, and the cost one explicitly refuses "stop flagging anything that
+  *looks like* a standby" — a blanket inference request is the false-negative bug wearing a
+  customer's voice. `audit-grafana/empty-org.md` keeps its `fail` verdict and now says **why
+  it is correct there specifically** (zero datasources means no other plane exists, so the
+  absence is proven) with a warning not to reuse that row where a datasource is present.
+
 ## 0.1.228
 
 **Live-smoke fixes: three real bugs the gates could not see.** The four cost releases in

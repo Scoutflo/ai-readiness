@@ -19,7 +19,7 @@ Version 2 adds a normalized `checks[]` ledger. The score is verified against tha
     { "id": "LGTM-014", "category": "Alert routing", "result": "fail", "reason": "The configured default receiver refused the live read-only reachability probe." },
     { "id": "LGTM-031", "category": "Service coverage", "result": "partial", "reason": "Two of six critical services use different names across signals." },
     { "id": "LGTM-040", "category": "Traces layer", "result": "blocked", "reason": "The traces endpoint returned HTTP 502 on every read." },
-    { "id": "LGTM-050", "category": "Reliability and security", "result": "not-in-scope", "reason": "This externally managed backend is outside the declared infrastructure scope." }
+    { "id": "LGTM-050", "category": "Reliability and security", "result": "not-in-scope", "not_in_scope_reason": "inapplicable", "reason": "This externally managed backend is outside the declared infrastructure scope." }
   ],
   "score": {
     "overall": 42,
@@ -160,7 +160,32 @@ Each `checks[]` row has exactly one stable check ID, its scorecard category, and
 | `partial` | Assessed and incomplete, stale, or only partly healthy | 0.5 credit; `reason` required |
 | `fail` | Assessed and verified absent or broken | 0 credit |
 | `blocked` | No conclusion was possible because the read failed or evidence was unavailable | Excluded from the readiness denominator; `reason` required |
-| `not-in-scope` | Deliberately not applicable to this target | Excluded from readiness and assessment-coverage denominators; `reason` required |
+| `not-in-scope` | Deliberately not applicable to this target | Excluded from readiness and assessment-coverage denominators; `reason` **and** `not_in_scope_reason` required |
+
+`blocked` and `not-in-scope` both leave the readiness denominator, but they are
+opposite statements and must never be swapped. `blocked` means **unknown** — the
+next action is to unlock the evidence. `not-in-scope` means **known, and there is
+nothing to do** — the next action is nothing, or a config edit. Guessing
+`not-in-scope` to make a red row disappear is the single worst failure in this
+schema: it converts an unmeasured risk into a clean bill of health.
+
+So a `not-in-scope` row must also carry `not_in_scope_reason`, one of exactly
+four values, each with its own evidence duty — the full rules, including how
+each reason is established and what each one is forbidden to hide, are in
+[not-in-scope-reasons.md](not-in-scope-reasons.md):
+
+| `not_in_scope_reason` | Means | Established by |
+| --- | --- | --- |
+| `inapplicable` | The check has no meaning for this target's platform, version, engine, or declared composition — there is no such thing here to assess | **Detected** from the target's own identity: a server version that removed the feature, an engine that does not have the concept, a component the configured stack does not include. The commonest reason, and the original meaning of `not-in-scope` |
+| `target-gone` | The configured target no longer exists — it was decommissioned, and the config outlived it | **Detected**, authoritatively: a positive not-found from the owning control plane (an NXDOMAIN confirmed against the authoritative nameserver with a resolving sibling, a cloud API that returns "no such resource", a cluster absent from the provider's own cluster list). A connection timeout is `blocked`, never this |
+| `by-design` | The observed state is intentional — the customer declared this resource a standby, DR, backup, or an accepted trade-off | **Declared**, never inferred: a matching `intent` declaration in the business-context SSOT projection. No declaration means the finding stands |
+| `covered-elsewhere` | The capability genuinely exists, but on a plane this audit does not read — so this audit's absence of it is not the estate's absence of it | **Detected**, with a pointer: evidence naming the plane that owns it (an external/datasource-managed ruler, rules held in Git and applied by another component). "The customer said it is handled" is `by-design`, not this |
+
+A `not-in-scope` row carries no finding and recovers no points, exactly as a
+`pass` row does — which is why the reason must be evidenced rather than assumed.
+`target-gone` is the one reason that still owes the reader an action, and it is
+an action on the *config*, not on the infrastructure: retarget or remove the
+block. Say so in `reason`.
 
 For a readiness finding, an active exemption is represented on the original
 `partial` or `fail` row with `"suppressed": true` and a non-empty

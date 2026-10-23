@@ -61,7 +61,7 @@ good_v2() {
     {"id":"FX-002","category":"Signals","result":"partial","reason":"one of two services is stale"},
     {"id":"FX-003","category":"Routing","result":"fail"},
     {"id":"FX-004","category":"Signals","result":"blocked","reason":"HTTP 403"},
-    {"id":"FX-005","category":"Routing","result":"not-in-scope","reason":"no paging service is declared"}
+    {"id":"FX-005","category":"Routing","result":"not-in-scope","not_in_scope_reason":"inapplicable","reason":"no paging service is declared in this stack's configuration"}
   ],
   "score": {
     "overall": 45,
@@ -244,6 +244,32 @@ set_a="$(jq -r '.score.check_set' "$WORK/f.json")"
 jq '.score.categories[0].weight=90 | .score.categories[1].weight=10 | .score.overall=67' "$WORK/f.json" > "$WORK/f.tmp" && mv "$WORK/f.tmp" "$WORK/f.json"
 set_b="$(fp_of "$WORK/f.json")"
 [ "$set_a" != "$set_b" ] || fail "re-weighting did not change the check_set fingerprint — a re-weighted run would render a fabricated trend delta"
+echo "PASS"
+
+echo "Test 31: a not-in-scope check without not_in_scope_reason is REJECTED"
+# The row leaves BOTH denominators, so an unmeasured check parked here would
+# read as a clean result. The reason is what makes it falsifiable.
+mutate_v2 'del(.checks[] | select(.id=="FX-005") | .not_in_scope_reason)'
+expect_fail "checker accepted a not-in-scope row that did not say why"
+echo "PASS"
+
+echo "Test 32: a not_in_scope_reason outside the closed set is REJECTED"
+mutate_v2 '(.checks[] | select(.id=="FX-005") | .not_in_scope_reason)="other"'
+expect_fail "checker accepted an open-ended not_in_scope_reason"
+echo "PASS"
+
+echo "Test 33: each of the four closed reasons is ACCEPTED"
+for r in inapplicable target-gone by-design covered-elsewhere; do
+  mutate_v2 "(.checks[] | select(.id==\"FX-005\") | .not_in_scope_reason)=\"$r\""
+  expect_ok "checker rejected the valid not_in_scope_reason '$r'"
+done
+echo "PASS"
+
+echo "Test 34: not_in_scope_reason on a scored row is REJECTED"
+# On a fail row it would read as an excuse while still counting — the exact
+# ambiguity the closed set exists to remove.
+mutate_v2 '(.checks[] | select(.id=="FX-003")) += {"not_in_scope_reason":"by-design"}'
+expect_fail "checker accepted not_in_scope_reason on a scored check row"
 echo "PASS"
 
 echo "Test 2: real repo fleet — the 4 known-clean latest runs PASS"

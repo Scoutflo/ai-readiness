@@ -335,7 +335,7 @@ scoped out.
 Load business context per the Metadata Load section below. The critical-services
 list drives NR-014 (the flagship paging path), NR-030/NR-031 escalation, and the
 bounded per-entity topology reads; exclusions remove matched entities from every
-denominator (recorded `not-in-scope` with the reason, never a fail).
+denominator (recorded `not-in-scope` with `not_in_scope_reason: "by-design"` (the exclusion is the customer's declaration) and the exclusion as the `reason`, never a fail).
 
 ## Phase 2: Read-only inventory
 
@@ -473,10 +473,9 @@ general.
    `suppressed`, preserve `scoring_scope: "non-scored"`, and keep zero readiness
    points.
 3. Apply business context (Metadata Load): escalate critical-service findings,
-   record exclusions `not-in-scope`, reduce severity for non-production-only
+   record exclusions `not-in-scope` with `not_in_scope_reason: "by-design"` (the exclusion is the customer's declaration) and the exclusion as the `reason`, reduce severity for non-production-only
    gaps, order the cost section by `cost_sensitivity`.
-4. Emit one `checks[]` row for every stable `NR-*` readiness catalog check,
-   including passes, partials, failures, blockers, and not-in-scope checks.
+4. Emit one `checks[]` row for every stable `NR-*` readiness catalog check, including passes, partials, failures, blockers, and not-in-scope checks. Every `not-in-scope` row additionally carries `not_in_scope_reason` — one of `inapplicable` (nothing of the kind exists on this target: a platform version, engine or configured stack without the feature), `target-gone` (proven decommissioned), `by-design` (the customer declared it, via `resource_intent` or an `exclusions` match) or `covered-elsewhere` (verified on the plane that owns it) — per [not-in-scope-reasons.md](../../report-standard/not-in-scope-reasons.md). A row you cannot evidence is `blocked`, not `not-in-scope`.
    Derive category counts, readiness, assessment coverage, and `score.check_set`
    from that complete ledger; never write them independently. `NROPT-*` findings
    stay outside the readiness ledger and explicitly carry

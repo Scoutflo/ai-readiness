@@ -32,9 +32,9 @@ Check results (used in scoring and in the coverage matrix, one value per check p
 | `partial` | Present but incomplete, stale, or unproven live | 0.5 |
 | `fail` | Verified absent or broken | 0 |
 | `blocked` | Could not verify; blocker stated | unassessed; removed from the readiness denominator and counted against assessment coverage |
-| `not-in-scope` | Intentionally not part of this environment, declared by you | removed from the denominator |
+| `not-in-scope` | Nothing to assess here, for one of four evidenced reasons: `inapplicable` (no such thing on this target), `target-gone` (proven decommissioned), `by-design` (**you** declared it) or `covered-elsewhere` (verified on the plane that owns it) — `not_in_scope_reason` is required, see [not-in-scope-reasons.md](not-in-scope-reasons.md) | removed from the denominator |
 
-Score conservatively. When evidence proves an incomplete state, use `partial` or `fail`. Use `blocked` only when no conclusion is possible. Never turn an API denial, timeout, unsupported endpoint, or incomplete page set into `pass`, `fail`, or an empty inventory.
+Score conservatively. When evidence proves an incomplete state, use `partial` or `fail`. Use `blocked` only when no conclusion is possible — and prefer it over `not-in-scope` whenever you are unsure which applies: `blocked` says *unknown*, which is always safe, while `not-in-scope` says *known, nothing to do*, which turns an unmeasured risk into a clean bill of health the reader cannot distinguish from a real pass. Never turn an API denial, timeout, unsupported endpoint, or incomplete page set into `pass`, `fail`, or an empty inventory.
 
 Audit skills migrated to evidence-aware output use `scoutflo-findings/v2`. Its readiness score measures the checks that were actually assessed. Its assessment coverage separately measures how much of the applicable check set was observable. Historical artifacts and audit skills still in the staged migration may emit `v1`; those retain their original semantics and must not be compared numerically with `v2` runs.
 

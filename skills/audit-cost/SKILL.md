@@ -218,6 +218,36 @@ and reporting the 12% alone mislabels a win as a problem. A unit of value is a p
 is **declared, never inferred** — with none declared, emit `COST-UNIT-004`, report per-namespace and
 per-project spend instead, and ask the one question that enables it next run.
 
+The projection also carries **`resource_intent`** — the customer's declared reason a resource is
+*meant* to look idle (`standby`, `dr`, `backup`, `pre-scaled`, `accepted-tradeoff`). A warm standby
+sized for failover is indistinguishable from gross over-provisioning by every signal this skill can
+read: low CPU, low request rate, large instance. Intent is the only thing that separates them, and
+it is **declared, never inferred** — a name containing `standby`, a tag asserting it, a low request
+rate, or a plausible architectural guess are each worth *mentioning* and none is a licence to
+downgrade. With no declaration the opportunity stands, because wrongly reporting an intentional
+standby costs one correction while wrongly silencing a forgotten resource costs the customer money
+every month.
+
+When a declaration **does** match, **annotate and downgrade — never disappear the row**:
+
+- Keep the resource, its utilisation, and its spend visible; quote the customer's own `why` beside
+  it ("754 cores at 3% CPU — declared warm standby for the primary region").
+- Drop any `estimated_monthly_savings_usd` and `indicative_monthly_usd` to `null` and remove it from
+  the ranked savings total — a declared standby is not a saving, so counting it would inflate the
+  headline with money the customer has already decided to spend.
+- Say so in the summary's context tables, not as a finding. A declared-intent resource is reported
+  for *awareness*, exactly like an `assessable:false` one.
+- A standby that has drifted well past the capacity its stated purpose needs is still worth saying
+  out loud, as an observation with no dollar figure: the declaration silences the verdict, not the
+  fact.
+- When `review_by` has passed, ask the customer to re-confirm rather than staying silent forever —
+  an intent declared two years ago is a fact about a plan that may no longer exist.
+
+For the scored own-block audits the same declaration feeds the `not-in-scope` /
+`by-design` verdict defined in
+[not-in-scope-reasons.md](../../report-standard/not-in-scope-reasons.md); here, where every
+finding is already non-scored, it changes the dollar figure and the annotation instead.
+
 **Deliberate exemption — exclusions are advisory here, not scope-limiting.** Unlike the scored own-block audits (which drop `exclusions`-matched resources as `not-in-scope`), `audit-cost` is a ranked-savings, report-only skill: it still surfaces a savings opportunity on an excluded/vendor-managed resource, but annotates it with the exclusion so the reader knows the resource is out of the operational audit's scope. This keeps a real, large saving from being silently hidden by an exclusion that exists for a different (reliability/compliance) reason. If you want an excluded resource omitted entirely, exclude it at the provider query, not via `business_context.json`.
 
 ## Remediation pointers

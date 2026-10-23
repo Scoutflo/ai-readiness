@@ -36,6 +36,48 @@ that environment's own SLA. One row per environment; add as many as you run.
 
 ---
 
+## Resource Intent (why something that looks idle is meant to be idle)
+
+Some resources are **supposed** to look wasteful. A warm standby sized for
+failover, a DR replica, a backup target, and a deliberately pre-scaled cluster
+are indistinguishable from gross over-provisioning by every signal an audit can
+read — low CPU, low request rate, big instance. The difference is *intent*, and
+intent is a fact about your plans that exists nowhere in telemetry.
+
+Declare them here and audits will stop recommending you shrink the thing whose
+purpose is to be big before it is needed. Leave it blank and those resources
+will be reported — which is deliberate: an audit that silently assumed "probably
+intentional" would also silence the genuinely forgotten resources you are paying
+for.
+
+```yaml
+resource_intent:
+  # - match:    how to recognise the resource. One of:
+  #               cluster / namespace / workload / instance_id / resource_name
+  #   intent:   standby | dr | backup | pre-scaled | accepted-tradeoff
+  #   why:      one line in your words — this is quoted back in the report
+  #   review_by: optional YYYY-MM-DD; after this date the audit asks you to
+  #              re-confirm instead of staying silent forever
+  #
+  # - cluster: <cluster-name>
+  #   intent: standby
+  #   why: warm standby for the primary region; sized to take full production load on failover
+  #   review_by: 2027-01-01
+```
+
+- **`standby` / `dr`** — capacity held ready for failover. Idle is the point.
+- **`backup`** — a destination for backups; low utilisation is expected.
+- **`pre-scaled`** — deliberately over-provisioned ahead of known demand.
+- **`accepted-tradeoff`** — you know, you have decided, and you do not want to
+  be asked again (give a `review_by` so "do not ask again" has an end date).
+
+What a declaration does **not** do: it does not hide the observation. The report
+still states the resource and its utilisation, with your `why` beside it — so a
+standby that has drifted to three times the capacity its purpose needs is still
+visible. It removes the *verdict*, not the *fact*.
+
+---
+
 ## SLAs / SLOs
 
 | Service | SLA | SLO (Error Budget) |

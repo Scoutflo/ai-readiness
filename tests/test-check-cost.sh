@@ -144,4 +144,31 @@ sh "$CHECK" "$WORK/f.json" >/dev/null 2>&1 || { echo "FAIL: checker rejected a u
 echo "PASS"
 
 echo
+# --- doctor: both Cloud Billing export flavours must be recognised -------------
+# The DETAILED, resource-level export table is named gcp_billing_export_RESOURCE_v1_*
+# and therefore does NOT contain the substring "gcp_billing_export_v1". A doctor
+# that greps only the standard name reports "no export present" to a customer who
+# enabled exactly the flavour the audit prefers — and it is the only flavour GKE
+# cost allocation can attribute per cluster/namespace. Live-caught before a
+# customer run.
+echo "Test 23: doctor recognises BOTH the standard and the detailed billing export"
+DOCTOR="$ROOT/skills/doctor/scripts/doctor.sh"
+grep -q "grep -q 'gcp_billing_export_resource_v1'" "$DOCTOR" \
+  || fail "doctor does not probe for the DETAILED export (gcp_billing_export_resource_v1_*)"
+grep -q "grep -q 'gcp_billing_export_v1'" "$DOCTOR" \
+  || fail "doctor no longer probes for the standard export (gcp_billing_export_v1_*)"
+# The detailed branch must be tested FIRST: the standard pattern is a substring of
+# neither, but ordering also decides which capability message the operator sees.
+_res_ln="$(grep -n "grep -q 'gcp_billing_export_resource_v1'" "$DOCTOR" | head -1 | cut -d: -f1)"
+_std_ln="$(grep -n "grep -q 'gcp_billing_export_v1'" "$DOCTOR" | head -1 | cut -d: -f1)"
+[ "$_res_ln" -lt "$_std_ln" ] \
+  || fail "the standard-export branch precedes the detailed one, so a detailed export would be described as standard-only"
+# And prove the substring trap itself, so nobody 'simplifies' this back to one grep.
+printf '%s' 'gcp_billing_export_resource_v1_0123AB_ABCDEF' | grep -q 'gcp_billing_export_v1' \
+  && fail "assumption broken: the detailed table name now contains the standard pattern; simplify the doctor branches"
+printf '%s' 'gcp_billing_export_v1_0123AB_ABCDEF' | grep -q 'gcp_billing_export_v1' \
+  || fail "the standard pattern no longer matches the standard table name"
+echo "PASS"
+
+echo
 echo "=== check-cost self-test passed ==="

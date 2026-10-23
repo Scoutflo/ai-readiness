@@ -1535,8 +1535,17 @@ else
             row "$GCP_INT" billing-export yes "${GCP_CRED_VAR:-none}" fail - "gcp.billing_bq_dataset is set (${GCP_BQ_DS}) but the bq CLI is not installed; it ships with the Google Cloud SDK (gcloud components install bq)"
           else
             GCP_BQ_OUT="$(bq ls --project_id="$GCP_PROJECT" --format=json "$GCP_BQ_DS" 2>&1 || true)"
-            if printf '%s' "$GCP_BQ_OUT" | grep -q 'gcp_billing_export_v1'; then
-              row "$GCP_INT" billing-export yes "${GCP_CRED_VAR:-none}" pass - "gcp_billing_export_v1_* present in ${GCP_BQ_DS}"
+            # Match BOTH flavours. The detailed, resource-level export is named
+            # gcp_billing_export_RESOURCE_v1_* and therefore does NOT contain the
+            # substring "gcp_billing_export_v1" — so a grep for the standard name
+            # alone reports "no export present" to a customer who enabled the very
+            # flavour the audit prefers (and the only one GKE cost allocation can
+            # attribute per cluster/namespace). Say which flavour was found, because
+            # the two support different checks.
+            if printf '%s' "$GCP_BQ_OUT" | grep -q 'gcp_billing_export_resource_v1'; then
+              row "$GCP_INT" billing-export yes "${GCP_CRED_VAR:-none}" pass - "gcp_billing_export_resource_v1_* (DETAILED, resource-level) present in ${GCP_BQ_DS} — per-resource and GKE cluster/namespace attribution available"
+            elif printf '%s' "$GCP_BQ_OUT" | grep -q 'gcp_billing_export_v1'; then
+              row "$GCP_INT" billing-export yes "${GCP_CRED_VAR:-none}" pass - "gcp_billing_export_v1_* (STANDARD) present in ${GCP_BQ_DS} — project/service/SKU spend available; per-resource and GKE namespace attribution needs the DETAILED export too"
             elif printf '%s' "$GCP_BQ_OUT" | grep -qiE 'denied|forbidden|not found|403|404'; then
               row "$GCP_INT" billing-export yes "${GCP_CRED_VAR:-none}" fail - "cannot read dataset ${GCP_BQ_DS}: enable bigquery.googleapis.com and grant roles/bigquery.jobUser plus roles/bigquery.dataViewer on that dataset to the audit identity"
             else
