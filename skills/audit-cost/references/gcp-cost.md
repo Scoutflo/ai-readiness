@@ -307,14 +307,15 @@ gcloud billing projects describe "$GCP_PROJECT" \
 
 ```bash
 set -eu
-GCP_PROJECT="your-project-id"          # gcp.project
 BILLING_DATASET="your_billing_dataset" # gcp.billing_bq_dataset — clearly-marked placeholder; the dataset holding the export
 # The export dataset often lives in a dedicated billing/admin project, NOT the
-# project being audited. gcp.billing_project names it; it defaults to gcp.project
-# when unset, so a single-project estate needs no extra config. This project both
-# HOSTS the dataset (the FROM clause) and RUNS the query job (--project_id), so it
-# is the one needing roles/bigquery.jobUser + dataViewer on the dataset.
-BILLING_PROJECT="your-project-id"      # gcp.billing_project when set, ELSE the same value as gcp.project
+# project being audited. Fill BILLING_PROJECT from gcp.billing_project; when that
+# key is UNSET, fill it with the same value as gcp.project. Nothing here implements
+# a default — the value must be substituted, exactly like every other placeholder.
+# This project both HOSTS the dataset (the FROM clause) and RUNS the query job
+# (--project_id), so it is the one needing bigquery.googleapis.com enabled plus
+# roles/bigquery.jobUser, with dataViewer on the dataset.
+BILLING_PROJECT="your-billing-project-id" # gcp.billing_project; when that key is UNSET, fill this with the same value as gcp.project
 # DISCOVER the table id; never hand-edit it. The standard-usage export is
 # gcp_billing_export_v1_*, the detailed resource-level export gcp_billing_export_resource_v1_*.
 # Prefer the detailed one: it is the only flavour carrying per-resource rows, and the only one
@@ -352,14 +353,15 @@ section 12 reads it for COST-K8S-008.
 
 ```bash
 set -eu
-GCP_PROJECT="your-project-id"          # gcp.project
 BILLING_DATASET="your_billing_dataset" # gcp.billing_bq_dataset
 # The export dataset often lives in a dedicated billing/admin project, NOT the
-# project being audited. gcp.billing_project names it; it defaults to gcp.project
-# when unset, so a single-project estate needs no extra config. This project both
-# HOSTS the dataset (the FROM clause) and RUNS the query job (--project_id), so it
-# is the one needing roles/bigquery.jobUser + dataViewer on the dataset.
-BILLING_PROJECT="your-project-id"      # gcp.billing_project when set, ELSE the same value as gcp.project
+# project being audited. Fill BILLING_PROJECT from gcp.billing_project; when that
+# key is UNSET, fill it with the same value as gcp.project. Nothing here implements
+# a default — the value must be substituted, exactly like every other placeholder.
+# This project both HOSTS the dataset (the FROM clause) and RUNS the query job
+# (--project_id), so it is the one needing bigquery.googleapis.com enabled plus
+# roles/bigquery.jobUser, with dataViewer on the dataset.
+BILLING_PROJECT="your-billing-project-id" # gcp.billing_project; when that key is UNSET, fill this with the same value as gcp.project
 # Discover the table here too: every block in this catalog runs alone in a fresh shell.
 BILLING_TABLE="$(bq ls --project_id="$BILLING_PROJECT" --format=json "$BILLING_DATASET" 2>/dev/null \
   | jq -r '[.[].tableReference.tableId] | (map(select(startswith("gcp_billing_export_resource_v1_"))) + map(select(startswith("gcp_billing_export_v1_")))) | .[0] // empty')"
@@ -412,14 +414,15 @@ resize, with no capacity risk.
 
 ```bash
 set -eu
-GCP_PROJECT="your-project-id"          # gcp.project (the project that can query the dataset)
 BILLING_DATASET="your_billing_dataset" # gcp.billing_bq_dataset
 # The export dataset often lives in a dedicated billing/admin project, NOT the
-# project being audited. gcp.billing_project names it; it defaults to gcp.project
-# when unset, so a single-project estate needs no extra config. This project both
-# HOSTS the dataset (the FROM clause) and RUNS the query job (--project_id), so it
-# is the one needing roles/bigquery.jobUser + dataViewer on the dataset.
-BILLING_PROJECT="your-project-id"      # gcp.billing_project when set, ELSE the same value as gcp.project
+# project being audited. Fill BILLING_PROJECT from gcp.billing_project; when that
+# key is UNSET, fill it with the same value as gcp.project. Nothing here implements
+# a default — the value must be substituted, exactly like every other placeholder.
+# This project both HOSTS the dataset (the FROM clause) and RUNS the query job
+# (--project_id), so it is the one needing bigquery.googleapis.com enabled plus
+# roles/bigquery.jobUser, with dataViewer on the dataset.
+BILLING_PROJECT="your-billing-project-id" # gcp.billing_project; when that key is UNSET, fill this with the same value as gcp.project
 BILLING_TABLE="$(bq ls --project_id="$BILLING_PROJECT" --format=json "$BILLING_DATASET" 2>/dev/null \
   | jq -r '[.[].tableReference.tableId] | (map(select(startswith("gcp_billing_export_resource_v1_"))) + map(select(startswith("gcp_billing_export_v1_")))) | .[0] // empty')"
 [ -n "$BILLING_TABLE" ] || { echo "COST-GCP-033 reports excluded, reason: no billing export table in ${BILLING_DATASET}"; exit 0; }
@@ -588,14 +591,15 @@ export rather than reporting "no recommendation" and stopping.
 
 ```bash
 set -eu
-GCP_PROJECT="your-project-id"          # gcp.project
 BILLING_DATASET="your_billing_dataset" # gcp.billing_bq_dataset
 # The export dataset often lives in a dedicated billing/admin project, NOT the
-# project being audited. gcp.billing_project names it; it defaults to gcp.project
-# when unset, so a single-project estate needs no extra config. This project both
-# HOSTS the dataset (the FROM clause) and RUNS the query job (--project_id), so it
-# is the one needing roles/bigquery.jobUser + dataViewer on the dataset.
-BILLING_PROJECT="your-project-id"      # gcp.billing_project when set, ELSE the same value as gcp.project
+# project being audited. Fill BILLING_PROJECT from gcp.billing_project; when that
+# key is UNSET, fill it with the same value as gcp.project. Nothing here implements
+# a default — the value must be substituted, exactly like every other placeholder.
+# This project both HOSTS the dataset (the FROM clause) and RUNS the query job
+# (--project_id), so it is the one needing bigquery.googleapis.com enabled plus
+# roles/bigquery.jobUser, with dataViewer on the dataset.
+BILLING_PROJECT="your-billing-project-id" # gcp.billing_project; when that key is UNSET, fill this with the same value as gcp.project
 TARGET_PROJECT="the-project-to-size"   # the project whose compute bill has no CUD recommendation
 BILLING_TABLE="$(bq ls --project_id="$BILLING_PROJECT" --format=json "$BILLING_DATASET" 2>/dev/null \
   | jq -r '[.[].tableReference.tableId] | (map(select(startswith("gcp_billing_export_resource_v1_"))) + map(select(startswith("gcp_billing_export_v1_")))) | .[0] // empty')"
@@ -657,14 +661,15 @@ and reporting it is what stops a clean report being mistaken for a clean estate.
 
 ```bash
 set -eu
-GCP_PROJECT="your-project-id"          # gcp.project
 BILLING_DATASET="your_billing_dataset" # gcp.billing_bq_dataset
 # The export dataset often lives in a dedicated billing/admin project, NOT the
-# project being audited. gcp.billing_project names it; it defaults to gcp.project
-# when unset, so a single-project estate needs no extra config. This project both
-# HOSTS the dataset (the FROM clause) and RUNS the query job (--project_id), so it
-# is the one needing roles/bigquery.jobUser + dataViewer on the dataset.
-BILLING_PROJECT="your-project-id"      # gcp.billing_project when set, ELSE the same value as gcp.project
+# project being audited. Fill BILLING_PROJECT from gcp.billing_project; when that
+# key is UNSET, fill it with the same value as gcp.project. Nothing here implements
+# a default — the value must be substituted, exactly like every other placeholder.
+# This project both HOSTS the dataset (the FROM clause) and RUNS the query job
+# (--project_id), so it is the one needing bigquery.googleapis.com enabled plus
+# roles/bigquery.jobUser, with dataViewer on the dataset.
+BILLING_PROJECT="your-billing-project-id" # gcp.billing_project; when that key is UNSET, fill this with the same value as gcp.project
 BILLING_TABLE="$(bq ls --project_id="$BILLING_PROJECT" --format=json "$BILLING_DATASET" 2>/dev/null \
   | jq -r '[.[].tableReference.tableId] | (map(select(startswith("gcp_billing_export_resource_v1_"))) + map(select(startswith("gcp_billing_export_v1_")))) | .[0] // empty')"
 [ -n "$BILLING_TABLE" ] || { echo "COST-GCP-034 reports excluded, reason: no export, so billed projects cannot be enumerated"; exit 0; }
@@ -703,14 +708,15 @@ is the rate effect, and the remainder is the usage effect.
 
 ```bash
 set -eu
-GCP_PROJECT="your-project-id"          # gcp.project
 BILLING_DATASET="your_billing_dataset" # gcp.billing_bq_dataset
 # The export dataset often lives in a dedicated billing/admin project, NOT the
-# project being audited. gcp.billing_project names it; it defaults to gcp.project
-# when unset, so a single-project estate needs no extra config. This project both
-# HOSTS the dataset (the FROM clause) and RUNS the query job (--project_id), so it
-# is the one needing roles/bigquery.jobUser + dataViewer on the dataset.
-BILLING_PROJECT="your-project-id"      # gcp.billing_project when set, ELSE the same value as gcp.project
+# project being audited. Fill BILLING_PROJECT from gcp.billing_project; when that
+# key is UNSET, fill it with the same value as gcp.project. Nothing here implements
+# a default — the value must be substituted, exactly like every other placeholder.
+# This project both HOSTS the dataset (the FROM clause) and RUNS the query job
+# (--project_id), so it is the one needing bigquery.googleapis.com enabled plus
+# roles/bigquery.jobUser, with dataViewer on the dataset.
+BILLING_PROJECT="your-billing-project-id" # gcp.billing_project; when that key is UNSET, fill this with the same value as gcp.project
 BILLING_TABLE="$(bq ls --project_id="$BILLING_PROJECT" --format=json "$BILLING_DATASET" 2>/dev/null \
   | jq -r '[.[].tableReference.tableId] | (map(select(startswith("gcp_billing_export_resource_v1_"))) + map(select(startswith("gcp_billing_export_v1_")))) | .[0] // empty')"
 [ -n "$BILLING_TABLE" ] || { echo "COST-GCP-028 reports excluded, reason: no billing export table"; exit 0; }
@@ -765,14 +771,15 @@ of it; a period-over-period **set difference** sees all of it immediately.
 
 ```bash
 set -eu
-GCP_PROJECT="your-project-id"          # gcp.project
 BILLING_DATASET="your_billing_dataset" # gcp.billing_bq_dataset
 # The export dataset often lives in a dedicated billing/admin project, NOT the
-# project being audited. gcp.billing_project names it; it defaults to gcp.project
-# when unset, so a single-project estate needs no extra config. This project both
-# HOSTS the dataset (the FROM clause) and RUNS the query job (--project_id), so it
-# is the one needing roles/bigquery.jobUser + dataViewer on the dataset.
-BILLING_PROJECT="your-project-id"      # gcp.billing_project when set, ELSE the same value as gcp.project
+# project being audited. Fill BILLING_PROJECT from gcp.billing_project; when that
+# key is UNSET, fill it with the same value as gcp.project. Nothing here implements
+# a default — the value must be substituted, exactly like every other placeholder.
+# This project both HOSTS the dataset (the FROM clause) and RUNS the query job
+# (--project_id), so it is the one needing bigquery.googleapis.com enabled plus
+# roles/bigquery.jobUser, with dataViewer on the dataset.
+BILLING_PROJECT="your-billing-project-id" # gcp.billing_project; when that key is UNSET, fill this with the same value as gcp.project
 BILLING_TABLE="$(bq ls --project_id="$BILLING_PROJECT" --format=json "$BILLING_DATASET" 2>/dev/null \
   | jq -r '[.[].tableReference.tableId] | (map(select(startswith("gcp_billing_export_resource_v1_"))) + map(select(startswith("gcp_billing_export_v1_")))) | .[0] // empty')"
 [ -n "$BILLING_TABLE" ] || { echo "COST-GCP-029 reports excluded, reason: no billing export table"; exit 0; }
@@ -820,14 +827,15 @@ new generation is a one-line change.
 
 ```bash
 set -eu
-GCP_PROJECT="your-project-id"          # gcp.project
 BILLING_DATASET="your_billing_dataset" # gcp.billing_bq_dataset
 # The export dataset often lives in a dedicated billing/admin project, NOT the
-# project being audited. gcp.billing_project names it; it defaults to gcp.project
-# when unset, so a single-project estate needs no extra config. This project both
-# HOSTS the dataset (the FROM clause) and RUNS the query job (--project_id), so it
-# is the one needing roles/bigquery.jobUser + dataViewer on the dataset.
-BILLING_PROJECT="your-project-id"      # gcp.billing_project when set, ELSE the same value as gcp.project
+# project being audited. Fill BILLING_PROJECT from gcp.billing_project; when that
+# key is UNSET, fill it with the same value as gcp.project. Nothing here implements
+# a default — the value must be substituted, exactly like every other placeholder.
+# This project both HOSTS the dataset (the FROM clause) and RUNS the query job
+# (--project_id), so it is the one needing bigquery.googleapis.com enabled plus
+# roles/bigquery.jobUser, with dataViewer on the dataset.
+BILLING_PROJECT="your-billing-project-id" # gcp.billing_project; when that key is UNSET, fill this with the same value as gcp.project
 BILLING_TABLE="$(bq ls --project_id="$BILLING_PROJECT" --format=json "$BILLING_DATASET" 2>/dev/null \
   | jq -r '[.[].tableReference.tableId] | (map(select(startswith("gcp_billing_export_resource_v1_"))) + map(select(startswith("gcp_billing_export_v1_")))) | .[0] // empty')"
 [ -n "$BILLING_TABLE" ] || { echo "COST-GCP-035..039 report excluded, reason: no billing export table"; exit 0; }

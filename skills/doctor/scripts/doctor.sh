@@ -1552,7 +1552,7 @@ else
             elif printf '%s' "$GCP_BQ_OUT" | grep -q 'gcp_billing_export_v1'; then
               row "$GCP_INT" billing-export yes "${GCP_CRED_VAR:-none}" pass - "gcp_billing_export_v1_* (STANDARD) present in ${GCP_BQ_PROJ}:${GCP_BQ_DS} — project/service/SKU spend available; per-resource and GKE namespace attribution needs the DETAILED export too"
             elif printf '%s' "$GCP_BQ_OUT" | grep -qiE 'denied|forbidden|not found|403|404'; then
-              row "$GCP_INT" billing-export yes "${GCP_CRED_VAR:-none}" fail - "cannot read dataset ${GCP_BQ_PROJ}:${GCP_BQ_DS}: if the export lives in another project set gcp.billing_project; otherwise enable bigquery.googleapis.com and grant roles/bigquery.jobUser plus roles/bigquery.dataViewer on that dataset to the audit identity"
+              row "$GCP_INT" billing-export yes "${GCP_CRED_VAR:-none}" fail - "cannot read dataset ${GCP_BQ_PROJ}:${GCP_BQ_DS}: if the export lives in another project set gcp.billing_project (that project is the one needing bigquery.googleapis.com ENABLED and roles/bigquery.jobUser); otherwise enable bigquery.googleapis.com and grant roles/bigquery.jobUser plus roles/bigquery.dataViewer on that dataset to the audit identity"
             else
               row "$GCP_INT" billing-export yes "${GCP_CRED_VAR:-none}" fail - "dataset ${GCP_BQ_PROJ}:${GCP_BQ_DS} is readable but holds no gcp_billing_export_* table (checked both the standard and detailed flavours); if the export lives in another project set gcp.billing_project: confirm the Cloud Billing export targets THIS dataset, and remember it needs a few days before the table appears and fills"
             fi

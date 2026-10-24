@@ -193,25 +193,29 @@ gcp:
   #                                         # enabled + roles/recommender.viewer. Recommender is the ONLY
   #                                         # source of a GCP savings dollar — see connect
   #                                         # references/providers.md "GCP cost prerequisites".
-  # billing_bq_dataset: my_billing_export   # BigQuery dataset holding the gcp_billing_export_v1_* tables.
-  # billing_project: my-billing-admin-project
-  #                                         # OPTIONAL. The project that HOSTS the export dataset above,
-  #                                         # when that is not `project`. A Cloud Billing export is often
-  #                                         # written to a dedicated billing/admin project; the audit
-  #                                         # addresses the table as <billing_project>.<dataset>.<table>
-  #                                         # and runs the query job there, so this is the project that
-  #                                         # needs roles/bigquery.jobUser plus dataViewer on the dataset.
-  #                                         # Defaults to `project` when unset — a single-project estate
-  #                                         # needs nothing here.
-
+  # billing_bq_dataset: my_billing_export   # BigQuery dataset holding the gcp_billing_export_* tables.
   #                                         # This is the ONLY source of your actual spend by SKU (the
   #                                         # denominator for every savings figure). It is a billing-account
   #                                         # level export that takes a few DAYS to accumulate data, so set
-  #                                         # it up well before the audit. Needs bigquery.googleapis.com,
-  #                                         # roles/bigquery.jobUser, roles/bigquery.dataViewer on the
-  #                                         # dataset, and the `bq` CLI. Omit it and COST-GCP-023 is
-  #                                         # excluded with that reason — savings are then a floor, with
-  #                                         # no total spend to measure them against.
+  #                                         # it up well before the audit. Prefer the DETAILED
+  #                                         # (resource-level) export: gcp_billing_export_resource_v1_* is
+  #                                         # the only flavour carrying per-resource rows, and the only one
+  #                                         # GKE cost allocation can attribute per cluster and namespace.
+  #                                         # Needs bigquery.googleapis.com, roles/bigquery.jobUser, and
+  #                                         # roles/bigquery.dataViewer on the dataset, plus the `bq` CLI.
+  #                                         # Omit it and COST-GCP-023 is excluded with that reason —
+  #                                         # savings are then a floor, with no total spend to measure
+  #                                         # them against.
+  # billing_project: my-billing-admin-project
+  #                                         # OPTIONAL, and only when the export dataset above lives in a
+  #                                         # DIFFERENT project from `project`. A Cloud Billing export is
+  #                                         # often written to a dedicated billing/admin project. The audit
+  #                                         # addresses the table as <billing_project>.<dataset>.<table> and
+  #                                         # runs the query job there, so the BigQuery grants and the
+  #                                         # bigquery.googleapis.com API belong to THIS project, while
+  #                                         # `project` keeps needing only the usual read-only GCP roles.
+  #                                         # Leave it commented out when the export lives in `project` —
+  #                                         # a single-project estate needs nothing here.
 
 azure:
   subscription_id: 00000000-0000-0000-0000-000000000000  # subscription the audits target (one per run); auth is `az login`

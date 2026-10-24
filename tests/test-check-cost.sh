@@ -181,7 +181,7 @@ GCPCOST="$ROOT/skills/audit-cost/references/gcp-cost.md"
 DOC="$ROOT/skills/doctor/scripts/doctor.sh"
 
 # Every billing block resolves the host project with the documented default.
-n_decl="$(grep -c 'BILLING_PROJECT="your-project-id"' "$GCPCOST" || true)"
+n_decl="$(grep -c 'BILLING_PROJECT="your-billing-project-id"' "$GCPCOST" || true)"
 [ "${n_decl:-0}" -ge 8 ] || fail "expected >=8 BILLING_PROJECT declarations in gcp-cost.md, got ${n_decl:-0}"
 # It must follow this file's convention: a literal placeholder the model fills from
 # config, NOT a shell fallback. A shell fallback would silently honour an inherited
@@ -190,7 +190,7 @@ n_decl="$(grep -c 'BILLING_PROJECT="your-project-id"' "$GCPCOST" || true)"
 grep -qF 'BILLING_PROJECT="${BILLING_PROJECT:-' "$GCPCOST" \
   && fail "BILLING_PROJECT uses a shell fallback instead of this file's placeholder convention"
 # Every declaration must name BOTH keys, so the fallback rule is unambiguous to the model.
-n_doc="$(grep -c 'gcp.billing_project when set, ELSE the same value as gcp.project' "$GCPCOST" || true)"
+n_doc="$(grep -c 'when that key is UNSET, fill this with the same value as gcp.project' "$GCPCOST" || true)"
 [ "${n_doc:-0}" -ge 8 ] || fail "only ${n_doc:-0} of the BILLING_PROJECT placeholders state the gcp.project fallback"
 
 # And no billing path still addresses the dataset through the audited project.
@@ -204,22 +204,59 @@ done
 grep -qF 'bq ls --project_id="$BILLING_PROJECT"' "$GCPCOST" || fail "the table lookup does not use BILLING_PROJECT"
 grep -qF '${BILLING_PROJECT}.${BILLING_DATASET}.${BILLING_TABLE}' "$GCPCOST" || fail "the FROM clause does not use BILLING_PROJECT"
 grep -qF 'bq query --project_id="$BILLING_PROJECT"' "$GCPCOST" || fail "the query job does not run in BILLING_PROJECT"
+# A billing block must carry exactly ONE project placeholder. Two variables holding
+# the same literal (the dead GCP_PROJECT this change orphaned) is a trap: a blanket
+# fill aims the query at the audited project and silently reproduces the bug.
+# Scoped PER BLOCK: non-billing blocks legitimately keep GCP_PROJECT. The defect is
+# a block that declares BOTH, because then two variables hold a project and a
+# blanket fill can aim the query at the wrong one.
+_collide="$(awk '
+  /^```bash$/ { inb=1; n++; hasB=0; hasG=0; next }
+  inb && /^```$/ { if (hasB && hasG) print n; inb=0; next }
+  inb && /^BILLING_PROJECT=/ { hasB=1 }
+  inb && /^GCP_PROJECT="your-project-id"/ { hasG=1 }
+' "$GCPCOST")"
+[ -z "$_collide" ] \
+  || fail "billing block(s) $_collide declare BOTH GCP_PROJECT and BILLING_PROJECT placeholders — a blanket fill can aim the query at the audited project" 
+grep -qF 'it defaults to gcp.project' "$GCPCOST" \
+  && fail "in-block prose still claims a default the published block does not implement"
 
 # Doctor probes the same project, and falls back the same way.
-grep -qF 'billing_project' "$DOC" || fail "doctor does not read gcp.billing_project"
+grep -qF '"$_gpi" billing_project' "$DOC" || fail "doctor does not READ gcp.billing_project from the config (a bare substring match is satisfied by the failure-hint strings alone)"
 grep -qF '[ -n "$GCP_BQ_PROJ" ] || GCP_BQ_PROJ="$GCP_PROJECT"' "$DOC" || fail "doctor does not default billing_project to gcp.project"
 grep -qF 'bq ls --project_id="$GCP_BQ_PROJ"' "$DOC" || fail "doctor still probes the dataset in the audited project"
 # A wrong-project mistake must be nameable from the row itself.
 grep -qF 'set gcp.billing_project' "$DOC" || fail "doctor never tells the operator about gcp.billing_project on a failure"
 
-# The doctor is where the fallback is EXECUTABLE, so assert it there rather than
-# re-implementing it: an unset key resolves to gcp.project, a set one wins.
-GCP_BQ_PROJ=""; GCP_PROJECT="audited-proj"
-[ -n "$GCP_BQ_PROJ" ] || GCP_BQ_PROJ="$GCP_PROJECT"
-[ "$GCP_BQ_PROJ" = "audited-proj" ] || fail "an unset billing_project did not fall back to gcp.project"
-GCP_BQ_PROJ="billing-admin-proj"
-[ -n "$GCP_BQ_PROJ" ] || GCP_BQ_PROJ="$GCP_PROJECT"
-[ "$GCP_BQ_PROJ" = "billing-admin-proj" ] || fail "a set billing_project did not win over gcp.project"
+# BEHAVIOURAL, not a re-implementation: extract each published billing block, give
+# every placeholder a DISTINCT sentinel, run it under a recording `bq` stub, and
+# assert every --project_id is the billing sentinel and none is the project
+# sentinel. This is the test that fails on a duplicate placeholder literal, which
+# the content greps above cannot see.
+BEH="$WORK/beh"; mkdir -p "$BEH/bin"
+printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "%s/bq.log"\nexit 1\n' "$BEH" > "$BEH/bin/bq"
+chmod +x "$BEH/bin/bq"
+: > "$BEH/bq.log"
+awk '/^```bash$/{n++; inb=1; next} inb && /^```$/{inb=0; next} inb{print > ("'"$BEH"'/blk." n ".sh")}' "$GCPCOST"
+nblk=0
+for b in "$BEH"/blk.*.sh; do
+  grep -q 'BILLING_PROJECT=' "$b" || continue
+  nblk=$((nblk+1))
+  sed -e 's/"your-billing-project-id"/"SENTINEL-BILLING"/g' \
+      -e 's/"your-project-id"/"SENTINEL-PROJECT"/g' \
+      -e 's/"your_billing_dataset"/"SENTINEL-DATASET"/g' "$b" > "$BEH/run.sh"
+  ( cd "$BEH" && PATH="$BEH/bin:$PATH" sh ./run.sh >/dev/null 2>&1 || true )
+done
+[ "$nblk" -ge 8 ] || fail "extracted only $nblk billing blocks for the behavioural check, expected >=8"
+[ -s "$BEH/bq.log" ] || fail "the behavioural check recorded no bq invocation at all"
+grep -q 'SENTINEL-BILLING' "$BEH/bq.log" \
+  || fail "no bq call targeted the billing-project sentinel: $(head -3 "$BEH/bq.log")"
+if grep -q 'project_id=SENTINEL-PROJECT' "$BEH/bq.log"; then
+  fail "a bq call ran in the AUDITED project instead of the billing project: $(grep -m2 'project_id=SENTINEL-PROJECT' "$BEH/bq.log")"
+fi
+if grep -q 'SENTINEL-PROJECT\.SENTINEL-DATASET' "$BEH/bq.log"; then
+  fail "a query addressed the dataset through the AUDITED project"
+fi
 echo "PASS"
 
 echo
