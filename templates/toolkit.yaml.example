@@ -194,6 +194,16 @@ gcp:
   #                                         # source of a GCP savings dollar — see connect
   #                                         # references/providers.md "GCP cost prerequisites".
   # billing_bq_dataset: my_billing_export   # BigQuery dataset holding the gcp_billing_export_v1_* tables.
+  # billing_project: my-billing-admin-project
+  #                                         # OPTIONAL. The project that HOSTS the export dataset above,
+  #                                         # when that is not `project`. A Cloud Billing export is often
+  #                                         # written to a dedicated billing/admin project; the audit
+  #                                         # addresses the table as <billing_project>.<dataset>.<table>
+  #                                         # and runs the query job there, so this is the project that
+  #                                         # needs roles/bigquery.jobUser plus dataViewer on the dataset.
+  #                                         # Defaults to `project` when unset — a single-project estate
+  #                                         # needs nothing here.
+
   #                                         # This is the ONLY source of your actual spend by SKU (the
   #                                         # denominator for every savings figure). It is a billing-account
   #                                         # level export that takes a few DAYS to accumulate data, so set

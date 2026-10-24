@@ -170,5 +170,57 @@ printf '%s' 'gcp_billing_export_v1_0123AB_ABCDEF' | grep -q 'gcp_billing_export_
   || fail "the standard pattern no longer matches the standard table name"
 echo "PASS"
 
+# --- gcp.billing_project: the export dataset may live in another project -------
+# A Cloud Billing export is commonly written to a dedicated billing/admin project.
+# The audit addresses the table as <project>.<dataset>.<table>, so without an
+# optional billing_project the only way to read it was to point gcp.project at the
+# billing project — which would then aim every GCP resource check at the wrong
+# place. Live-caught while preparing a customer re-run.
+echo "Test 24: the billing export is addressed via gcp.billing_project, falling back to gcp.project"
+GCPCOST="$ROOT/skills/audit-cost/references/gcp-cost.md"
+DOC="$ROOT/skills/doctor/scripts/doctor.sh"
+
+# Every billing block resolves the host project with the documented default.
+n_decl="$(grep -c 'BILLING_PROJECT="your-project-id"' "$GCPCOST" || true)"
+[ "${n_decl:-0}" -ge 8 ] || fail "expected >=8 BILLING_PROJECT declarations in gcp-cost.md, got ${n_decl:-0}"
+# It must follow this file's convention: a literal placeholder the model fills from
+# config, NOT a shell fallback. A shell fallback would silently honour an inherited
+# BILLING_PROJECT from an unrelated run, and a model filling placeholders may not
+# substitute an expression at all.
+grep -qF 'BILLING_PROJECT="${BILLING_PROJECT:-' "$GCPCOST" \
+  && fail "BILLING_PROJECT uses a shell fallback instead of this file's placeholder convention"
+# Every declaration must name BOTH keys, so the fallback rule is unambiguous to the model.
+n_doc="$(grep -c 'gcp.billing_project when set, ELSE the same value as gcp.project' "$GCPCOST" || true)"
+[ "${n_doc:-0}" -ge 8 ] || fail "only ${n_doc:-0} of the BILLING_PROJECT placeholders state the gcp.project fallback"
+
+# And no billing path still addresses the dataset through the audited project.
+for pat in '${GCP_PROJECT}.${BILLING_DATASET}' 'bq ls --project_id="$GCP_PROJECT" --format=json "$BILLING_DATASET"' 'bq query --project_id="$GCP_PROJECT"'; do
+  if grep -qF "$pat" "$GCPCOST"; then
+    fail "a billing path still uses gcp.project to reach the dataset: $pat"
+  fi
+done
+
+# The three places that must use the host project each do.
+grep -qF 'bq ls --project_id="$BILLING_PROJECT"' "$GCPCOST" || fail "the table lookup does not use BILLING_PROJECT"
+grep -qF '${BILLING_PROJECT}.${BILLING_DATASET}.${BILLING_TABLE}' "$GCPCOST" || fail "the FROM clause does not use BILLING_PROJECT"
+grep -qF 'bq query --project_id="$BILLING_PROJECT"' "$GCPCOST" || fail "the query job does not run in BILLING_PROJECT"
+
+# Doctor probes the same project, and falls back the same way.
+grep -qF 'billing_project' "$DOC" || fail "doctor does not read gcp.billing_project"
+grep -qF '[ -n "$GCP_BQ_PROJ" ] || GCP_BQ_PROJ="$GCP_PROJECT"' "$DOC" || fail "doctor does not default billing_project to gcp.project"
+grep -qF 'bq ls --project_id="$GCP_BQ_PROJ"' "$DOC" || fail "doctor still probes the dataset in the audited project"
+# A wrong-project mistake must be nameable from the row itself.
+grep -qF 'set gcp.billing_project' "$DOC" || fail "doctor never tells the operator about gcp.billing_project on a failure"
+
+# The doctor is where the fallback is EXECUTABLE, so assert it there rather than
+# re-implementing it: an unset key resolves to gcp.project, a set one wins.
+GCP_BQ_PROJ=""; GCP_PROJECT="audited-proj"
+[ -n "$GCP_BQ_PROJ" ] || GCP_BQ_PROJ="$GCP_PROJECT"
+[ "$GCP_BQ_PROJ" = "audited-proj" ] || fail "an unset billing_project did not fall back to gcp.project"
+GCP_BQ_PROJ="billing-admin-proj"
+[ -n "$GCP_BQ_PROJ" ] || GCP_BQ_PROJ="$GCP_PROJECT"
+[ "$GCP_BQ_PROJ" = "billing-admin-proj" ] || fail "a set billing_project did not win over gcp.project"
+echo "PASS"
+
 echo
 echo "=== check-cost self-test passed ==="

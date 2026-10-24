@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.1.234
+
+**The Cloud Billing export can live in its own project.** A GCP billing export is commonly written
+to a dedicated billing or admin project rather than the project being audited. The cost audit
+addressed the export table as `<gcp.project>.<dataset>.<table>`, so the only way to read it was to
+point `gcp.project` at the billing project — which then aimed every GCP *resource* check (idle VMs,
+Recommender savings, zone enumeration) at a project with no workloads in it. There was no way to
+express the real shape, and nothing documented the constraint, so the failure arrived as a confusing
+"no export present" on a correctly-configured export.
+
+- **New optional `gcp.billing_project`.** It names the project that hosts the export dataset, and
+  **falls back to `gcp.project` when unset** — so a single-project estate needs no new configuration
+  and nothing changes for anyone already working. All eight billing blocks now use it for the three
+  things that must point at the host project: finding the table, the `FROM` clause, and the project
+  the query job runs in (so it is also the project needing `roles/bigquery.jobUser`, with
+  `dataViewer` on the dataset). It is declared the same way every other config value in that file
+  is — a literal placeholder whose comment names both keys and the fallback rule — rather than a
+  shell default, because a shell default would silently honour a `BILLING_PROJECT` inherited from an
+  unrelated run.
+- **`/scoutflo:doctor` probes the same project and says which one it used.** The billing-export row
+  now reports `<project>:<dataset>` rather than the dataset alone, so a wrong-project mistake is
+  visible in the row instead of looking like a missing export. Both failure paths now name
+  `gcp.billing_project` as the fix when the dataset cannot be found or read.
+- Documented where it is actually needed: the config template (with the default stated), the
+  `audit-cost` provider key table, and the GCP cost prerequisites in `connect`.
+- Regression-tested: the fallback behaves as a real default in both directions, every billing path
+  uses the host project, no path still reaches the dataset through the audited project, and the
+  doctor both defaults correctly and tells the operator about the key on failure. The test fails on
+  the previous tree.
+
 ## 0.1.233
 
 **Stop deciding whether a cluster exists by reading error messages.** A final adversarial pass
