@@ -1,5 +1,63 @@
 # Changelog
 
+## 0.1.234
+
+**The Cloud Billing export can live in its own project.** A GCP billing export is commonly written
+to a dedicated billing or admin project rather than the project being audited. The cost audit
+addressed the export table as `<gcp.project>.<dataset>.<table>`, so the only way to read it was to
+point `gcp.project` at the billing project — which then aimed every GCP *resource* check (idle VMs,
+Recommender savings, zone enumeration) at a project with no workloads in it. There was no way to
+express the real shape, and nothing documented the constraint, so the failure arrived as a confusing
+"no export present" on a correctly-configured export.
+
+**The review round on this change said DO-NOT-SHIP, and it was right.** Four defects, all on the
+one path the next customer run exercises, all failing silently. Worth recording because three of
+them were introduced by the *fix* rather than present before it:
+
+- **Two placeholders held the same literal.** Moving the three billing usages onto the new key left
+  `GCP_PROJECT` dereferenced **zero** times in all eight blocks — dead, but still declared six lines
+  above `BILLING_PROJECT`, with an identical `your-project-id` value. Any blanket fill aimed the
+  query at the audited project and emitted the exact *"no export present"* line this release exists
+  to remove; leaving the new one unfilled did the same, which would have been a regression for
+  single-project users. Fixed at the root: the dead declaration is **removed** from the billing
+  blocks, so each has exactly one project to fill, under a distinct `your-billing-project-id`
+  literal. A per-block gate now fails if any billing block declares both.
+- **In-block prose promised a default the block does not implement.** It said the key *"defaults to
+  `gcp.project` when unset"*, which invites the reading that the code handles it. Nothing there
+  implements a default — the value is substituted, like every other placeholder — and the prose now
+  says exactly that.
+- **The config template contradicted itself about this key.** The insertion split the
+  `billing_bq_dataset` comment, so its explanation ("Omit it and COST-GCP-023 is excluded") ended up
+  attached to `billing_project` two lines below a sentence saying that key is optional. That is the
+  surface a customer reads before configuring. Each key's comment is contiguous again, and the
+  dataset's now also states the detailed-export preference.
+- **A test assertion was vacuous.** `grep -qF 'billing_project'` over `doctor.sh` was satisfied by
+  the two failure-hint strings, so the config read could be deleted and the suite stayed green —
+  proven by mutation. It now matches the actual read, and the fallback is asserted **behaviourally**:
+  each published block is extracted, every placeholder gets a distinct sentinel, and the block runs
+  under a recording `bq` stub asserting no call targets the audited project. Content greps cannot
+  see a duplicate-literal defect; that check can, and all three mutants are now caught.
+
+- **New optional `gcp.billing_project`.** It names the project that hosts the export dataset, and
+  **falls back to `gcp.project` when unset** — so a single-project estate needs no new configuration
+  and nothing changes for anyone already working. All eight billing blocks now use it for the three
+  things that must point at the host project: finding the table, the `FROM` clause, and the project
+  the query job runs in (so it is also the project needing `roles/bigquery.jobUser`, with
+  `dataViewer` on the dataset). It is declared the same way every other config value in that file
+  is — a literal placeholder whose comment names both keys and the fallback rule — rather than a
+  shell default, because a shell default would silently honour a `BILLING_PROJECT` inherited from an
+  unrelated run.
+- **`/scoutflo:doctor` probes the same project and says which one it used.** The billing-export row
+  now reports `<project>:<dataset>` rather than the dataset alone, so a wrong-project mistake is
+  visible in the row instead of looking like a missing export. Both failure paths now name
+  `gcp.billing_project` as the fix when the dataset cannot be found or read.
+- Documented where it is actually needed: the config template (with the default stated), the
+  `audit-cost` provider key table, and the GCP cost prerequisites in `connect`.
+- Regression-tested: the fallback behaves as a real default in both directions, every billing path
+  uses the host project, no path still reaches the dataset through the audited project, and the
+  doctor both defaults correctly and tells the operator about the key on failure. The test fails on
+  the previous tree.
+
 ## 0.1.233
 
 **Stop deciding whether a cluster exists by reading error messages.** A final adversarial pass

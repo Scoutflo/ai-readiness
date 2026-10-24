@@ -307,25 +307,32 @@ gcloud billing projects describe "$GCP_PROJECT" \
 
 ```bash
 set -eu
-GCP_PROJECT="your-project-id"          # gcp.project
 BILLING_DATASET="your_billing_dataset" # gcp.billing_bq_dataset — clearly-marked placeholder; the dataset holding the export
+# The export dataset often lives in a dedicated billing/admin project, NOT the
+# project being audited. Fill BILLING_PROJECT from gcp.billing_project; when that
+# key is UNSET, fill it with the same value as gcp.project. Nothing here implements
+# a default — the value must be substituted, exactly like every other placeholder.
+# This project both HOSTS the dataset (the FROM clause) and RUNS the query job
+# (--project_id), so it is the one needing bigquery.googleapis.com enabled plus
+# roles/bigquery.jobUser, with dataViewer on the dataset.
+BILLING_PROJECT="your-billing-project-id" # gcp.billing_project; when that key is UNSET, fill this with the same value as gcp.project
 # DISCOVER the table id; never hand-edit it. The standard-usage export is
 # gcp_billing_export_v1_*, the detailed resource-level export gcp_billing_export_resource_v1_*.
 # Prefer the detailed one: it is the only flavour carrying per-resource rows, and the only one
 # GKE cost allocation can attribute to a cluster/namespace (section 10b).
-BILLING_TABLE="$(bq ls --project_id="$GCP_PROJECT" --format=json "$BILLING_DATASET" 2>/dev/null \
+BILLING_TABLE="$(bq ls --project_id="$BILLING_PROJECT" --format=json "$BILLING_DATASET" 2>/dev/null \
   | jq -r '[.[].tableReference.tableId] | (map(select(startswith("gcp_billing_export_resource_v1_"))) + map(select(startswith("gcp_billing_export_v1_")))) | .[0] // empty')"
 [ -n "$BILLING_TABLE" ] || { echo "no gcp_billing_export_* table in ${BILLING_DATASET}: COST-GCP-023 reports excluded (no spend export). The export is billing-account level and takes a few DAYS to appear and fill."; exit 0; }
 # Last full month NET spend by project, service and SKU. `credits` is unnested because gross
 # cost overstates the bill wherever a discount, promotion or CUD applies — and this number is
 # the denominator every savings figure is read against, so it has to be the real one.
 # Read-only SELECT; no table is created or modified.
-bq query --project_id="$GCP_PROJECT" --use_legacy_sql=false --format=prettyjson \
+bq query --project_id="$BILLING_PROJECT" --use_legacy_sql=false --format=prettyjson \
 'SELECT project.id AS project, service.description AS service, sku.description AS sku,
         ROUND(SUM(cost), 2) AS gross_usd,
         ROUND(SUM(cost) + SUM(IFNULL((SELECT SUM(c.amount) FROM UNNEST(credits) c), 0)), 2) AS net_usd,
         currency
-   FROM `'"${GCP_PROJECT}.${BILLING_DATASET}.${BILLING_TABLE}"'`
+   FROM `'"${BILLING_PROJECT}.${BILLING_DATASET}.${BILLING_TABLE}"'`
   WHERE usage_start_time >= TIMESTAMP(DATE_TRUNC(DATE_SUB(CURRENT_DATE(), INTERVAL 1 MONTH), MONTH))
     AND usage_start_time <  TIMESTAMP(DATE_TRUNC(CURRENT_DATE(), MONTH))
   GROUP BY project, service, sku, currency
@@ -346,10 +353,17 @@ section 12 reads it for COST-K8S-008.
 
 ```bash
 set -eu
-GCP_PROJECT="your-project-id"          # gcp.project
 BILLING_DATASET="your_billing_dataset" # gcp.billing_bq_dataset
+# The export dataset often lives in a dedicated billing/admin project, NOT the
+# project being audited. Fill BILLING_PROJECT from gcp.billing_project; when that
+# key is UNSET, fill it with the same value as gcp.project. Nothing here implements
+# a default — the value must be substituted, exactly like every other placeholder.
+# This project both HOSTS the dataset (the FROM clause) and RUNS the query job
+# (--project_id), so it is the one needing bigquery.googleapis.com enabled plus
+# roles/bigquery.jobUser, with dataViewer on the dataset.
+BILLING_PROJECT="your-billing-project-id" # gcp.billing_project; when that key is UNSET, fill this with the same value as gcp.project
 # Discover the table here too: every block in this catalog runs alone in a fresh shell.
-BILLING_TABLE="$(bq ls --project_id="$GCP_PROJECT" --format=json "$BILLING_DATASET" 2>/dev/null \
+BILLING_TABLE="$(bq ls --project_id="$BILLING_PROJECT" --format=json "$BILLING_DATASET" 2>/dev/null \
   | jq -r '[.[].tableReference.tableId] | (map(select(startswith("gcp_billing_export_resource_v1_"))) + map(select(startswith("gcp_billing_export_v1_")))) | .[0] // empty')"
 [ -n "$BILLING_TABLE" ] || { echo "COST-GCP-024 reports excluded, reason: no gcp_billing_export_* table in ${BILLING_DATASET}"; exit 0; }
 # Requires the DETAILED export (gcp_billing_export_resource_v1_*).
@@ -357,13 +371,13 @@ case "$BILLING_TABLE" in
   gcp_billing_export_resource_v1_*) : ;;
   *) echo "COST-GCP-024 reports excluded, reason: only the standard-usage export (${BILLING_TABLE}) is configured; per-cluster and per-namespace attribution needs the detailed resource-level export plus GKE cost allocation on the cluster"; exit 0 ;;
 esac
-bq query --project_id="$GCP_PROJECT" --use_legacy_sql=false --format=prettyjson \
+bq query --project_id="$BILLING_PROJECT" --use_legacy_sql=false --format=prettyjson \
 'SELECT (SELECT value FROM UNNEST(labels) WHERE key = "goog-k8s-cluster-name")  AS cluster,
         (SELECT value FROM UNNEST(labels) WHERE key = "goog-k8s-namespace")     AS namespace,
         (SELECT value FROM UNNEST(labels) WHERE key = "goog-k8s-workload-name") AS workload,
         ROUND(SUM(cost) + SUM(IFNULL((SELECT SUM(c.amount) FROM UNNEST(credits) c), 0)), 2) AS net_usd,
         currency
-   FROM `'"${GCP_PROJECT}.${BILLING_DATASET}.${BILLING_TABLE}"'`
+   FROM `'"${BILLING_PROJECT}.${BILLING_DATASET}.${BILLING_TABLE}"'`
   WHERE usage_start_time >= TIMESTAMP(DATE_TRUNC(DATE_SUB(CURRENT_DATE(), INTERVAL 1 MONTH), MONTH))
     AND usage_start_time <  TIMESTAMP(DATE_TRUNC(CURRENT_DATE(), MONTH))
     AND EXISTS (SELECT 1 FROM UNNEST(labels) WHERE key = "goog-k8s-cluster-name")
@@ -400,21 +414,28 @@ resize, with no capacity risk.
 
 ```bash
 set -eu
-GCP_PROJECT="your-project-id"          # gcp.project (the project that can query the dataset)
 BILLING_DATASET="your_billing_dataset" # gcp.billing_bq_dataset
-BILLING_TABLE="$(bq ls --project_id="$GCP_PROJECT" --format=json "$BILLING_DATASET" 2>/dev/null \
+# The export dataset often lives in a dedicated billing/admin project, NOT the
+# project being audited. Fill BILLING_PROJECT from gcp.billing_project; when that
+# key is UNSET, fill it with the same value as gcp.project. Nothing here implements
+# a default — the value must be substituted, exactly like every other placeholder.
+# This project both HOSTS the dataset (the FROM clause) and RUNS the query job
+# (--project_id), so it is the one needing bigquery.googleapis.com enabled plus
+# roles/bigquery.jobUser, with dataViewer on the dataset.
+BILLING_PROJECT="your-billing-project-id" # gcp.billing_project; when that key is UNSET, fill this with the same value as gcp.project
+BILLING_TABLE="$(bq ls --project_id="$BILLING_PROJECT" --format=json "$BILLING_DATASET" 2>/dev/null \
   | jq -r '[.[].tableReference.tableId] | (map(select(startswith("gcp_billing_export_resource_v1_"))) + map(select(startswith("gcp_billing_export_v1_")))) | .[0] // empty')"
 [ -n "$BILLING_TABLE" ] || { echo "COST-GCP-033 reports excluded, reason: no billing export table in ${BILLING_DATASET}"; exit 0; }
 # Split every service's spend by the tier marker in its SKU name. Markers are matched
 # case-insensitively and kept in one list so a new tier name is a one-line change.
-bq query --project_id="$GCP_PROJECT" --use_legacy_sql=false --format=prettyjson \
+bq query --project_id="$BILLING_PROJECT" --use_legacy_sql=false --format=prettyjson \
 'SELECT project.id AS project, service.description AS service,
         CASE WHEN REGEXP_CONTAINS(LOWER(sku.description), r"priority|premium|provisioned throughput") THEN "premium"
              WHEN REGEXP_CONTAINS(LOWER(sku.description), r"batch|standard|flex") THEN "standard"
              ELSE "untiered" END AS tier,
         ROUND(SUM(cost) + SUM(IFNULL((SELECT SUM(c.amount) FROM UNNEST(credits) c), 0)), 2) AS net,
         currency, COUNT(DISTINCT sku.description) AS skus
-   FROM `'"${GCP_PROJECT}.${BILLING_DATASET}.${BILLING_TABLE}"'`
+   FROM `'"${BILLING_PROJECT}.${BILLING_DATASET}.${BILLING_TABLE}"'`
   WHERE usage_start_time >= TIMESTAMP(DATE_TRUNC(DATE_SUB(CURRENT_DATE(), INTERVAL 1 MONTH), MONTH))
     AND usage_start_time <  TIMESTAMP(DATE_TRUNC(CURRENT_DATE(), MONTH))
   GROUP BY project, service, tier, currency
@@ -570,19 +591,26 @@ export rather than reporting "no recommendation" and stopping.
 
 ```bash
 set -eu
-GCP_PROJECT="your-project-id"          # gcp.project
 BILLING_DATASET="your_billing_dataset" # gcp.billing_bq_dataset
+# The export dataset often lives in a dedicated billing/admin project, NOT the
+# project being audited. Fill BILLING_PROJECT from gcp.billing_project; when that
+# key is UNSET, fill it with the same value as gcp.project. Nothing here implements
+# a default — the value must be substituted, exactly like every other placeholder.
+# This project both HOSTS the dataset (the FROM clause) and RUNS the query job
+# (--project_id), so it is the one needing bigquery.googleapis.com enabled plus
+# roles/bigquery.jobUser, with dataViewer on the dataset.
+BILLING_PROJECT="your-billing-project-id" # gcp.billing_project; when that key is UNSET, fill this with the same value as gcp.project
 TARGET_PROJECT="the-project-to-size"   # the project whose compute bill has no CUD recommendation
-BILLING_TABLE="$(bq ls --project_id="$GCP_PROJECT" --format=json "$BILLING_DATASET" 2>/dev/null \
+BILLING_TABLE="$(bq ls --project_id="$BILLING_PROJECT" --format=json "$BILLING_DATASET" 2>/dev/null \
   | jq -r '[.[].tableReference.tableId] | (map(select(startswith("gcp_billing_export_resource_v1_"))) + map(select(startswith("gcp_billing_export_v1_")))) | .[0] // empty')"
 [ -n "$BILLING_TABLE" ] || { echo "COST-GCP-031 reports the no-recommendation fact only, reason: no export to compute a floor from"; exit 0; }
 # Daily net compute spend over 90 days. The MINIMUM and 5th-percentile days are the committable
 # floor: spend the estate never drops below, even at its quietest.
-bq query --project_id="$GCP_PROJECT" --use_legacy_sql=false --format=prettyjson \
+bq query --project_id="$BILLING_PROJECT" --use_legacy_sql=false --format=prettyjson \
 'WITH daily AS (
   SELECT DATE(usage_start_time) AS d,
          SUM(cost) + SUM(IFNULL((SELECT SUM(c.amount) FROM UNNEST(credits) c), 0)) AS net
-    FROM `'"${GCP_PROJECT}.${BILLING_DATASET}.${BILLING_TABLE}"'`
+    FROM `'"${BILLING_PROJECT}.${BILLING_DATASET}.${BILLING_TABLE}"'`
    WHERE service.description = "Compute Engine"
      AND project.id = "'"${TARGET_PROJECT}"'"
      AND usage_start_time >= TIMESTAMP(DATE_SUB(CURRENT_DATE(), INTERVAL 90 DAY))
@@ -633,16 +661,23 @@ and reporting it is what stops a clean report being mistaken for a clean estate.
 
 ```bash
 set -eu
-GCP_PROJECT="your-project-id"          # gcp.project
 BILLING_DATASET="your_billing_dataset" # gcp.billing_bq_dataset
-BILLING_TABLE="$(bq ls --project_id="$GCP_PROJECT" --format=json "$BILLING_DATASET" 2>/dev/null \
+# The export dataset often lives in a dedicated billing/admin project, NOT the
+# project being audited. Fill BILLING_PROJECT from gcp.billing_project; when that
+# key is UNSET, fill it with the same value as gcp.project. Nothing here implements
+# a default — the value must be substituted, exactly like every other placeholder.
+# This project both HOSTS the dataset (the FROM clause) and RUNS the query job
+# (--project_id), so it is the one needing bigquery.googleapis.com enabled plus
+# roles/bigquery.jobUser, with dataViewer on the dataset.
+BILLING_PROJECT="your-billing-project-id" # gcp.billing_project; when that key is UNSET, fill this with the same value as gcp.project
+BILLING_TABLE="$(bq ls --project_id="$BILLING_PROJECT" --format=json "$BILLING_DATASET" 2>/dev/null \
   | jq -r '[.[].tableReference.tableId] | (map(select(startswith("gcp_billing_export_resource_v1_"))) + map(select(startswith("gcp_billing_export_v1_")))) | .[0] // empty')"
 [ -n "$BILLING_TABLE" ] || { echo "COST-GCP-034 reports excluded, reason: no export, so billed projects cannot be enumerated"; exit 0; }
 # Every project that billed last month, largest first. Compare this set with the configured set.
-bq query --project_id="$GCP_PROJECT" --use_legacy_sql=false --format=prettyjson \
+bq query --project_id="$BILLING_PROJECT" --use_legacy_sql=false --format=prettyjson \
 'SELECT project.id AS project,
         ROUND(SUM(cost) + SUM(IFNULL((SELECT SUM(c.amount) FROM UNNEST(credits) c), 0)), 2) AS net, currency
-   FROM `'"${GCP_PROJECT}.${BILLING_DATASET}.${BILLING_TABLE}"'`
+   FROM `'"${BILLING_PROJECT}.${BILLING_DATASET}.${BILLING_TABLE}"'`
   WHERE usage_start_time >= TIMESTAMP(DATE_TRUNC(DATE_SUB(CURRENT_DATE(), INTERVAL 1 MONTH), MONTH))
     AND usage_start_time <  TIMESTAMP(DATE_TRUNC(CURRENT_DATE(), MONTH))
   GROUP BY project, currency
@@ -673,19 +708,26 @@ is the rate effect, and the remainder is the usage effect.
 
 ```bash
 set -eu
-GCP_PROJECT="your-project-id"          # gcp.project
 BILLING_DATASET="your_billing_dataset" # gcp.billing_bq_dataset
-BILLING_TABLE="$(bq ls --project_id="$GCP_PROJECT" --format=json "$BILLING_DATASET" 2>/dev/null \
+# The export dataset often lives in a dedicated billing/admin project, NOT the
+# project being audited. Fill BILLING_PROJECT from gcp.billing_project; when that
+# key is UNSET, fill it with the same value as gcp.project. Nothing here implements
+# a default — the value must be substituted, exactly like every other placeholder.
+# This project both HOSTS the dataset (the FROM clause) and RUNS the query job
+# (--project_id), so it is the one needing bigquery.googleapis.com enabled plus
+# roles/bigquery.jobUser, with dataViewer on the dataset.
+BILLING_PROJECT="your-billing-project-id" # gcp.billing_project; when that key is UNSET, fill this with the same value as gcp.project
+BILLING_TABLE="$(bq ls --project_id="$BILLING_PROJECT" --format=json "$BILLING_DATASET" 2>/dev/null \
   | jq -r '[.[].tableReference.tableId] | (map(select(startswith("gcp_billing_export_resource_v1_"))) + map(select(startswith("gcp_billing_export_v1_")))) | .[0] // empty')"
 [ -n "$BILLING_TABLE" ] || { echo "COST-GCP-028 reports excluded, reason: no billing export table"; exit 0; }
 # Effective unit rate = net cost / usage amount, per SKU, for two consecutive months.
-bq query --project_id="$GCP_PROJECT" --use_legacy_sql=false --format=prettyjson \
+bq query --project_id="$BILLING_PROJECT" --use_legacy_sql=false --format=prettyjson \
 'WITH m AS (
   SELECT FORMAT_DATE("%Y-%m", DATE(usage_start_time)) AS mon,
          service.description AS service, sku.description AS sku, usage.unit AS unit,
          SUM(cost) + SUM(IFNULL((SELECT SUM(c.amount) FROM UNNEST(credits) c), 0)) AS net,
          SUM(usage.amount) AS qty
-    FROM `'"${GCP_PROJECT}.${BILLING_DATASET}.${BILLING_TABLE}"'`
+    FROM `'"${BILLING_PROJECT}.${BILLING_DATASET}.${BILLING_TABLE}"'`
    WHERE usage_start_time >= TIMESTAMP(DATE_TRUNC(DATE_SUB(CURRENT_DATE(), INTERVAL 2 MONTH), MONTH))
      AND usage_start_time <  TIMESTAMP(DATE_TRUNC(CURRENT_DATE(), MONTH))
    GROUP BY mon, service, sku, unit),
@@ -729,18 +771,25 @@ of it; a period-over-period **set difference** sees all of it immediately.
 
 ```bash
 set -eu
-GCP_PROJECT="your-project-id"          # gcp.project
 BILLING_DATASET="your_billing_dataset" # gcp.billing_bq_dataset
-BILLING_TABLE="$(bq ls --project_id="$GCP_PROJECT" --format=json "$BILLING_DATASET" 2>/dev/null \
+# The export dataset often lives in a dedicated billing/admin project, NOT the
+# project being audited. Fill BILLING_PROJECT from gcp.billing_project; when that
+# key is UNSET, fill it with the same value as gcp.project. Nothing here implements
+# a default — the value must be substituted, exactly like every other placeholder.
+# This project both HOSTS the dataset (the FROM clause) and RUNS the query job
+# (--project_id), so it is the one needing bigquery.googleapis.com enabled plus
+# roles/bigquery.jobUser, with dataViewer on the dataset.
+BILLING_PROJECT="your-billing-project-id" # gcp.billing_project; when that key is UNSET, fill this with the same value as gcp.project
+BILLING_TABLE="$(bq ls --project_id="$BILLING_PROJECT" --format=json "$BILLING_DATASET" 2>/dev/null \
   | jq -r '[.[].tableReference.tableId] | (map(select(startswith("gcp_billing_export_resource_v1_"))) + map(select(startswith("gcp_billing_export_v1_")))) | .[0] // empty')"
 [ -n "$BILLING_TABLE" ] || { echo "COST-GCP-029 reports excluded, reason: no billing export table"; exit 0; }
 # SKUs and projects that bill THIS period and did not bill the previous one, largest first.
-bq query --project_id="$GCP_PROJECT" --use_legacy_sql=false --format=prettyjson \
+bq query --project_id="$BILLING_PROJECT" --use_legacy_sql=false --format=prettyjson \
 'WITH m AS (
   SELECT FORMAT_DATE("%Y-%m", DATE(usage_start_time)) AS mon, project.id AS project,
          service.description AS service, sku.description AS sku,
          SUM(cost) + SUM(IFNULL((SELECT SUM(c.amount) FROM UNNEST(credits) c), 0)) AS net
-    FROM `'"${GCP_PROJECT}.${BILLING_DATASET}.${BILLING_TABLE}"'`
+    FROM `'"${BILLING_PROJECT}.${BILLING_DATASET}.${BILLING_TABLE}"'`
    WHERE usage_start_time >= TIMESTAMP(DATE_TRUNC(DATE_SUB(CURRENT_DATE(), INTERVAL 2 MONTH), MONTH))
      AND usage_start_time <  TIMESTAMP(DATE_TRUNC(CURRENT_DATE(), MONTH))
    GROUP BY mon, project, service, sku)
@@ -778,13 +827,20 @@ new generation is a one-line change.
 
 ```bash
 set -eu
-GCP_PROJECT="your-project-id"          # gcp.project
 BILLING_DATASET="your_billing_dataset" # gcp.billing_bq_dataset
-BILLING_TABLE="$(bq ls --project_id="$GCP_PROJECT" --format=json "$BILLING_DATASET" 2>/dev/null \
+# The export dataset often lives in a dedicated billing/admin project, NOT the
+# project being audited. Fill BILLING_PROJECT from gcp.billing_project; when that
+# key is UNSET, fill it with the same value as gcp.project. Nothing here implements
+# a default — the value must be substituted, exactly like every other placeholder.
+# This project both HOSTS the dataset (the FROM clause) and RUNS the query job
+# (--project_id), so it is the one needing bigquery.googleapis.com enabled plus
+# roles/bigquery.jobUser, with dataViewer on the dataset.
+BILLING_PROJECT="your-billing-project-id" # gcp.billing_project; when that key is UNSET, fill this with the same value as gcp.project
+BILLING_TABLE="$(bq ls --project_id="$BILLING_PROJECT" --format=json "$BILLING_DATASET" 2>/dev/null \
   | jq -r '[.[].tableReference.tableId] | (map(select(startswith("gcp_billing_export_resource_v1_"))) + map(select(startswith("gcp_billing_export_v1_")))) | .[0] // empty')"
 [ -n "$BILLING_TABLE" ] || { echo "COST-GCP-035..039 report excluded, reason: no billing export table"; exit 0; }
 # One pass, classifying every inference SKU along the five axes the checks need.
-bq query --project_id="$GCP_PROJECT" --use_legacy_sql=false --format=prettyjson \
+bq query --project_id="$BILLING_PROJECT" --use_legacy_sql=false --format=prettyjson \
 'SELECT project.id AS project, sku.description AS sku, usage.unit AS unit,
         REGEXP_CONTAINS(LOWER(sku.description), r"provisioned throughput|provisioned capacity") AS is_provisioned,
         REGEXP_CONTAINS(LOWER(sku.description), r"batch")                                        AS is_batch,
@@ -794,7 +850,7 @@ bq query --project_id="$GCP_PROJECT" --use_legacy_sql=false --format=prettyjson 
         REGEXP_CONTAINS(LOWER(sku.description), r"\boutput\b")                                   AS is_output,
         ROUND(SUM(cost) + SUM(IFNULL((SELECT SUM(c.amount) FROM UNNEST(credits) c), 0)), 2)      AS net,
         ROUND(SUM(usage.amount), 0) AS qty
-   FROM `'"${GCP_PROJECT}.${BILLING_DATASET}.${BILLING_TABLE}"'`
+   FROM `'"${BILLING_PROJECT}.${BILLING_DATASET}.${BILLING_TABLE}"'`
   WHERE usage_start_time >= TIMESTAMP(DATE_TRUNC(DATE_SUB(CURRENT_DATE(), INTERVAL 1 MONTH), MONTH))
     AND usage_start_time <  TIMESTAMP(DATE_TRUNC(CURRENT_DATE(), MONTH))
     AND REGEXP_CONTAINS(LOWER(service.description), r"vertex|ai platform|generative|machine learning")
