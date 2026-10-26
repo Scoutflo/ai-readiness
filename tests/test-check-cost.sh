@@ -259,5 +259,35 @@ if grep -q 'SENTINEL-PROJECT\.SENTINEL-DATASET' "$BEH/bq.log"; then
 fi
 echo "PASS"
 
+# --- the Recommender preflight must test the call the AUDIT makes -------------
+# NOTE: numbered 26 deliberately. A parallel branch (fix/gcp-cost-multi-project)
+# adds its own Test 25; whichever merges second should keep both numbers unique.
+# Live-caught on a customer run: the doctor probed recommender.googleapis.com over
+# raw REST with only an Authorization header, which omits the quota project Google
+# requires for a USER credential. All four of their projects reported 403, the whole
+# native-dollar section was excluded, and the report carried $0 of priced savings on
+# an estate that had them — while `gcloud recommender recommendations list` read the
+# same recommendations fine. A preflight that exercises a different code path than
+# the thing it gates fails closed on a working setup.
+echo "Test 26: the Recommender preflight uses gcloud (the audit's own call), not raw REST"
+DOC="$ROOT/skills/doctor/scripts/doctor.sh"
+grep -qF 'recommender.googleapis.com/v1/projects' "$DOC" \
+  && fail "the doctor still probes the Recommender over raw REST, which 403s on a user credential (no quota project) while the audit's gcloud call succeeds"
+grep -qF 'gcloud recommender recommendations list' "$DOC" \
+  || fail "the doctor does not probe the Recommender with the same call audit-cost makes"
+# An API-disabled project PROMPTS to enable and WAITS unless prompts are off — a hang,
+# or a write, inside a read-only gate.
+_rec_line="$(grep -n 'gcloud recommender recommendations list' "$DOC" | head -1 | cut -d: -f1)"
+sed -n "$((_rec_line-1)),$((_rec_line))p" "$DOC" | grep -qF 'CLOUDSDK_CORE_DISABLE_PROMPTS=1' \
+  || fail "the Recommender probe can prompt to enable a disabled API (no CLOUDSDK_CORE_DISABLE_PROMPTS)"
+# Both families still probed: compute alone is a false green for committed-use savings.
+grep -qF 'google.compute.image.IdleResourceRecommender' "$DOC" || fail "the compute recommender family is no longer probed"
+grep -qF 'google.cloudbilling.commitment.SpendBasedCommitmentRecommender' "$DOC" || fail "the commitment (CUD) recommender family is no longer probed"
+# Each failure must name its own cause rather than a bare status code.
+for c in 'the Recommender API is not enabled on this project' 'lacks roles/recommender.viewer' 'gcloud is not installed'; do
+  grep -qF "$c" "$DOC" || fail "the probe cannot report the distinct cause: $c"
+done
+echo "PASS"
+
 echo
 echo "=== check-cost self-test passed ==="

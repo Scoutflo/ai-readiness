@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.1.235
+
+**A preflight that tested a different code path than the thing it gates, found by a customer run.**
+`/scoutflo:doctor`'s GCP `cost-permissions` row probed `recommender.googleapis.com` over raw REST
+with only an `Authorization` header. Google requires a **quota project** for a user credential, and
+the probe sent none — so it returned `403` while `gcloud recommender recommendations list`, which is
+what `audit-cost` actually calls, read the very same recommendations fine.
+
+The consequence was not a cosmetic row. The Recommender API is the **only** source of a GCP
+provider-native savings dollar, so a false `403` excluded `COST-GCP-001..010` wholesale. On a live
+customer estate all four projects reported `403`, and the delivered report carried **$0 of priced
+savings on an estate that had them** — while that same run proved the read worked by querying
+recommendations directly and said so in its own `providers_excluded` note.
+
+- **The probe now makes the audit's own call**: `gcloud recommender recommendations list` for both
+  the compute family and the commitment (committed-use discount) family. `gcloud` resolves auth,
+  quota project and ADC-vs-service-account itself, so the preflight and the thing it gates can no
+  longer disagree. Empty output with a zero exit is a **pass** — readable, nothing to recommend.
+- **`CLOUDSDK_CORE_DISABLE_PROMPTS=1` on the probe**, because a project with the API switched off
+  otherwise makes `gcloud` ask *"enable and retry?"* and **wait** — a hang, or a write, inside a
+  read-only gate. Same class as the v0.1.228 live-smoke fix.
+- **Each failure names its own cause** rather than a bare status code: API not enabled, identity
+  lacking `roles/recommender.viewer`, or `gcloud` not installed — so the printed unlock is the right
+  one. Verified across all five paths (reads fine, API disabled, role missing, unresolved error, no
+  CLI), with the real CLI provably unreachable from the harness.
+- Regression-tested: the raw-REST probe cannot come back, both recommender families stay probed,
+  prompts stay disabled, and every distinct cause stays reportable.
+
+**The general lesson, which is the reason this is written up at length:** a preflight is only worth
+having if it exercises the same path as the operation it clears. This one tested a different HTTP
+surface with different auth semantics, so it failed closed on a working setup and silently removed
+the most valuable section of the report. Prefer probing *with the tool the audit uses*.
+
 ## 0.1.234
 
 **The Cloud Billing export can live in its own project.** A GCP billing export is commonly written
