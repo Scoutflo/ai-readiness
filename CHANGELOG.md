@@ -1,5 +1,94 @@
 # Changelog
 
+## 0.1.235
+
+**A multi-project GCP estate, and a preflight that tested the wrong thing.** Both found by the same
+live customer run: an estate whose `gcp:` block lists six projects, and whose delivered report
+carried **$0 of priced savings on an estate that had them**.
+
+### The GCP cost lane is per target, and refuses to guess
+
+`audit-cost` assumed a single `gcp.project`. Against a `gcp:` block listing several projects there
+was no single project to audit, and nothing said so — the lane simply had no answer. It now resolves
+its target through the shared enumerator (`report-standard/toolkit-targets.sh`), reading `project`,
+`billing_bq_dataset` and `billing_project` **from the config** rather than from a placeholder a
+model fills — which removes the duplicate-literal trap v0.1.234's review round caught, at its root.
+
+**On a multi-project list with no `SCOUTFLO_TARGET` the lane stops and lists the labels**, because
+cloud spend is per project and picking one silently would attribute a bill to the wrong place. The
+`billing_project` fallback to the target's own `project` is preserved.
+
+- **Per-target output, so same-day runs cannot overwrite each other.** A multi-project estate now
+  necessarily runs this skill once per target, and the flat `cost/<date>/` path would have made the
+  second run of the day **silently overwrite the first** — a whole project's findings lost with no
+  error. Output nests as `cost/<target>/<date>/`, the same `<integration>/<label>/<date>` shape every
+  other own-block audit uses. A single-target estate is unchanged.
+- The `multi-target-parity` exemption for `audit-cost` still stands, but its stated reason ("no own
+  connection block") was factually wrong once this landed and now describes the real one.
+
+### What the review round caught before this shipped
+
+It returned **DO-NOT-SHIP** with four must-fix defects, three of them on exactly the multi-project
+configuration this release exists for:
+
+- **The lane's own doctor gate matched zero rows on a multi-project list.** `doctor` writes the
+  integration as `gcp` for a single block but **`gcp (<label>)`** once `gcp:` lists more than one
+  target; the cost lane matched only the bare form. So on a six-project estate the gate controlling
+  **COST-GCP-001..010 — the entire provider-native-dollar section** — had no verdict to read. The
+  same section whose absence produced the $0 report. It now matches both forms, selects this target,
+  and **fails loudly** rather than printing nothing, because a missing row must never read as
+  permission to skip.
+- **The commitment probe called a recommender the audit never makes.** It probed
+  `google.cloudbilling.commitment.SpendBasedCommitmentRecommender`; `COST-GCP-007` actually reads
+  `google.compute.commitment.UsageCommitmentRecommender`. This release's own headline — *the
+  preflight makes the audit's call* — was therefore half false, and **the test pinned the wrong ID**,
+  which would have rejected the correct fix.
+- **The PARTIAL row named the wrong finding**, telling operators `COST-GCP-005` (idle disks, compute
+  family) was excluded in the same sentence that said the compute family reads fine. The
+  committed-use check is `COST-GCP-007`.
+- **`cost/history.jsonl` was still flat.** `findings.json` nests per target; the ledger did not, and
+  it replaces the line for the same date — six targets audited today would leave one line and
+  **silently lose five targets' totals**. The same data-loss class this release fixes for findings,
+  left one artifact over.
+
+Also fixed from that round: the trend/dedup seed still pointed at a flat `cost/<date>/` path; a
+one-entry list was refused with wording about "several projects"; the predictable `$$` temp path
+became `mktemp`; the config template still said "one project per run"; and `findings.json`'s
+`target` field is now documented as staying the literal `cost`, because `audit-all` skips the cost
+lane on exactly that value and a per-target label there would leak non-scored findings into the
+reliability roll-up.
+
+### The Recommender preflight made the audit's own call
+
+`/scoutflo:doctor`'s GCP `cost-permissions` row probed `recommender.googleapis.com` over raw REST
+with only an `Authorization` header. Google requires a **quota project** for a user credential and
+the probe sent none, so it returned `403` while `gcloud recommender recommendations list` — what
+`audit-cost` actually calls — read the same recommendations fine.
+
+Recommender is the **only** source of a GCP provider-native savings dollar, so a false `403`
+excluded `COST-GCP-001..010` wholesale. On the live estate all four projects reported `403` and the
+report shipped with no priced savings, while that same run proved the read worked by querying
+recommendations directly and said so in its own `providers_excluded` note.
+
+- The probe now makes the audit's own call, for the compute family **and** the commitment
+  (committed-use discount) family. `gcloud` resolves auth, quota project and
+  ADC-vs-service-account itself, so the preflight and the thing it gates can no longer disagree.
+  Empty output with a zero exit is a **pass** — readable, nothing to recommend.
+- **`CLOUDSDK_CORE_DISABLE_PROMPTS=1`**, because a project with the API off otherwise makes `gcloud`
+  ask *"enable and retry?"* and **wait** — a hang, or a write, inside a read-only gate. Same class as
+  the v0.1.228 live-smoke fix.
+- Each failure names its own cause rather than a bare status code — API not enabled, identity
+  lacking `roles/recommender.viewer`, or `gcloud` not installed — so the printed unlock is the right
+  one. Verified across the reachable paths with the real CLI provably unreachable from the
+  harness. (An earlier draft said "all five paths"; the review showed the *gcloud-missing* arm is
+  unreachable — the enclosing branch has already proved `command -v gcloud` succeeds — so that arm
+  is removed rather than left as dead code, and the test no longer asserts it: the assertion was
+  satisfied by doctor's own `binary-gcloud` hint text.)
+
+**The lesson worth keeping:** a preflight is only worth having if it exercises the same path as the
+operation it clears. This one tested a different HTTP surface with different auth semantics, so it
+failed closed on a working setup and silently removed the most valuable section of the report.
+
 ## 0.1.234
 
 **The Cloud Billing export can live in its own project.** A GCP billing export is commonly written

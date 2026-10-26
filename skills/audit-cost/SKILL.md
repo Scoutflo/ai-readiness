@@ -17,9 +17,10 @@ A cost report ranks opportunities by dollars; it is deliberately **not** folded 
 
 ## Outputs
 
-- `./scoutflo-audits/cost/<YYYY-MM-DD>/findings.json` per the [cost schema](../../report-standard/cost-schema.md) (`scoutflo-cost/v1`), finding IDs `COST-<PROV>-NNN`.
-- `./scoutflo-audits/cost/<YYYY-MM-DD>/report.md` — leads with the savings summary line, then per-provider ranked tables, then top-opportunity detail.
-- One history line appended to `./scoutflo-audits/cost/history.jsonl` (date, opportunity counts, native monthly savings identified).
+- `./scoutflo-audits/cost/<YYYY-MM-DD>/findings.json` — or `cost/<target>/<YYYY-MM-DD>/` when `SCOUTFLO_TARGET` selects one of several configured targets — per the [cost schema](../../report-standard/cost-schema.md) (`scoutflo-cost/v1`), finding IDs `COST-<PROV>-NNN`.
+- `./scoutflo-audits/cost/<YYYY-MM-DD>/report.md` (same per-target nesting) — leads with the savings summary line, then per-provider ranked tables, then top-opportunity detail.
+- `target` in `findings.json` stays the literal string **`cost`**, even for a per-target run. `audit-all` skips the cost lane by `.target == "cost"`; setting it to the selected label would leak non-scored cost findings into the reliability roll-up. The target lives in the output path, not in that field.
+- One history line appended to `$(dirname "$OUT")/history.jsonl` — i.e. `cost/history.jsonl`, or `cost/<target>/history.jsonl` when a target is selected (date, opportunity counts, native monthly savings identified). **It nests with the findings on purpose:** a flat ledger replaces the line for the same date, so six targets audited today would leave one line and silently lose five targets' totals.
 
 ## Doctor gate
 
@@ -141,7 +142,7 @@ On the large/xlarge path, per-provider phases run against the **scoped** set in 
 
 ## Phase 1: Load context and prior-run cross-reference
 
-Read `~/.scoutflo/topology.json` `business_context` (environment, cost_sensitivity, critical_dependencies) and any saved `audit_scope`. Read the previous `cost/<date>/findings.json` and `scoutflo-audits/correlation.json` if present — these seed the `deduplicated` annotation and the trend, and nothing else. If none exist, proceed with safe defaults (production / medium sensitivity); state it.
+Read `~/.scoutflo/topology.json` `business_context` (environment, cost_sensitivity, critical_dependencies) and any saved `audit_scope`. Read the previous run's `findings.json` **from this target's own directory** (`$(dirname "$OUT")/<previous-date>/findings.json`) — under per-target nesting a flat `cost/<date>/` path finds nothing for a selected target, silently losing the trend and dedup seedscoutflo-audits/correlation.json` if present — these seed the `deduplicated` annotation and the trend, and nothing else. If none exist, proceed with safe defaults (production / medium sensitivity); state it.
 
 ## Phase 2: Per-provider deep cost checks
 
@@ -191,7 +192,14 @@ them, so a point-in-time reading is never read as a sustained trend.
 
 ```bash
 set -eu
-OUT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/cost/$(date -u +%Y-%m-%d)"
+# Nest per target when one was selected. The GCP lane now STOPS on a multi-project
+# `gcp:` list unless SCOUTFLO_TARGET names which project to cost, so a multi-project
+# estate necessarily runs this skill once per target — and a flat `cost/<date>/`
+# would make the second run of the day silently OVERWRITE the first, losing a whole
+# project's findings with no error. Same `<integration>/<label>/<date>` shape every
+# own-block audit uses. A single-target estate is unchanged.
+COST_SEG="cost${SCOUTFLO_TARGET:+/${SCOUTFLO_TARGET}}"
+OUT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${COST_SEG}/$(date -u +%Y-%m-%d)"
 mkdir -p "$OUT"
 # ... write findings.json (scoutflo-cost/v1) and report.md per the standard, then verify:
 jq -e '.schema=="scoutflo-cost/v1" and (.findings|type=="array") and .summary' "$OUT/findings.json" >/dev/null && echo "findings.json valid"
@@ -200,7 +208,7 @@ grep -q '^# ' "$OUT/report.md" && echo "report.md present"
 sh "${CLAUDE_PLUGIN_ROOT}/report-standard/check-cost.sh" "$OUT/findings.json"
 ```
 
-Append one line to `cost/history.jsonl` (date, `opportunities_total`, `monthly_savings_identified_usd`), replacing any line for the same date.
+Append one line to `$(dirname "$OUT")/history.jsonl` (date, `opportunities_total`, `monthly_savings_identified_usd`), replacing any line for the same date **within that target's ledger**. Never a single flat `cost/history.jsonl` across targets: same-date replacement would keep only the last target audited and drop the rest without an error.
 
 ## Phase 5: Run-completion message
 

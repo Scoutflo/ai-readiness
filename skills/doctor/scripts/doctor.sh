@@ -1512,17 +1512,55 @@ else
             # discounts). A pass on one family while another is disabled is a false green: the
             # operator is told dollars are available, then the audit silently finds none.
             GCP_REC_REGION="$(tv gcp "$GCP_KIND" "$_gpi" region)"; [ -n "$GCP_REC_REGION" ] || GCP_REC_REGION="us-central1"
-            # status-probe-ok: informational cost-permissions probes on googleapis.com (fixed JSON API), skipped either way — never a pass/fail gate.
-            GCP_REC_CODE="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 -H "Authorization: Bearer ${GCP_TOKEN}" "https://recommender.googleapis.com/v1/projects/${GCP_PROJECT}/locations/global/recommenders/google.compute.image.IdleResourceRecommender/recommendations?pageSize=1" 2>/dev/null || echo 000)"
-            # status-probe-ok: same informational probe, commitment (committed-use discount) family.
-            GCP_CUD_CODE="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 -H "Authorization: Bearer ${GCP_TOKEN}" "https://recommender.googleapis.com/v1/projects/${GCP_PROJECT}/locations/${GCP_REC_REGION}/recommenders/google.compute.commitment.UsageCommitmentRecommender/recommendations?pageSize=1" 2>/dev/null || echo 000)"
-            GCP_REC_UNLOCK="Unlock: gcloud services enable recommender.googleapis.com --project ${GCP_PROJECT} ; then grant your audit identity: gcloud projects add-iam-policy-binding ${GCP_PROJECT} --member='serviceAccount:<your-audit-SA>@${GCP_PROJECT}.iam.gserviceaccount.com' --role=roles/recommender.viewer . audit-cost also reads the Cloud SQL, GKE/container and Cloud Run recommender families; each needs its own API enabled to contribute a figure."
-            if [ "$GCP_REC_CODE" = "200" ] && [ "$GCP_CUD_CODE" = "200" ]; then
-              row "$GCP_INT" cost-permissions yes "${GCP_CRED_VAR:-none}" pass "$GCP_REC_CODE" "compute + commitment families readable; Cloud SQL / GKE / Cloud Run families are read per-check and reported excluded individually if their API is off"
-            elif [ "$GCP_REC_CODE" = "200" ]; then
-              row "$GCP_INT" cost-permissions yes "${GCP_CRED_VAR:-none}" skipped "$GCP_CUD_CODE" "PARTIAL: compute family reads (HTTP 200) but the commitment/committed-use-discount family does not (HTTP ${GCP_CUD_CODE} in ${GCP_REC_REGION}) — committed-use savings are usually the largest single line, so a cost run now will understate. ${GCP_REC_UNLOCK}"
+            # Probe with the SAME call the audit makes. This row used to probe
+            # recommender.googleapis.com over raw REST with only an Authorization
+            # header, which omits the quota project that Google requires for a USER
+            # credential — so it returned 403 while `gcloud recommender
+            # recommendations list` read the very same recommendations fine. A live
+            # customer run hit exactly that: all four projects reported 403, the
+            # entire native-dollar section was excluded, and the report carried $0 of
+            # priced savings on an estate that had them. A preflight that tests a
+            # different code path than the thing it gates is worse than no preflight,
+            # because it fails closed on a working setup.
+            #
+            # gcloud handles auth, quota project and ADC-vs-service-account itself, so
+            # this probes reachability AND the role in one go. CLOUDSDK_CORE_DISABLE_PROMPTS
+            # is mandatory: on a project where the API is off, gcloud otherwise asks
+            # "enable and retry?" and WAITS — a hang, or a write, inside a read-only gate.
+            # Empty output with exit 0 is a PASS: readable, nothing to recommend.
+            _grec() {  # $1 location, $2 recommender id -> prints exit status, stderr on fd 3
+              CLOUDSDK_CORE_DISABLE_PROMPTS=1 gcloud recommender recommendations list \
+                --project="$GCP_PROJECT" --location="$1" --recommender="$2" \
+                --limit=1 --format='value(name)' 2>"$GCP_REC_ERRF" >/dev/null
+            }
+            GCP_REC_ERRF="$(mktemp "${TMPDIR:-/tmp}/scoutflo-doctor-rec.XXXXXX")"  # mktemp, not $$: a predictable path in a shared tmpdir is a symlink target
+            if command -v gcloud >/dev/null 2>&1; then
+              _grec global google.compute.image.IdleResourceRecommender && GCP_REC_RC=0 || GCP_REC_RC=$?
+              GCP_REC_ERR="$(cat "$GCP_REC_ERRF" 2>/dev/null || true)"
+              _grec "$GCP_REC_REGION" google.compute.commitment.UsageCommitmentRecommender && GCP_CUD_RC=0 || GCP_CUD_RC=$?
+              GCP_CUD_ERR="$(cat "$GCP_REC_ERRF" 2>/dev/null || true)"
+              rm -f "$GCP_REC_ERRF"
+            fi
+            # NOTE: no "gcloud missing" arm. The enclosing branch has already proved
+            # `command -v gcloud` succeeds (doctor reports that as its own binary-gcloud
+            # row), so such an arm would be dead code — and a test asserting it would
+            # pass on the binary-gcloud hint text alone rather than on anything here.
+            # Name the actual blocker rather than a bare status, so the unlock is the right one.
+            _gcause() {  # $1 stderr text
+              case "$1" in
+                *"has not been used"*|*"is disabled"*|*SERVICE_DISABLED*) echo "the Recommender API is not enabled on this project" ;;
+                *PERMISSION_DENIED*|*"does not have permission"*|*403*)  echo "the audit identity lacks roles/recommender.viewer here" ;;
+                *"not installed"*)                                        echo "gcloud is not installed" ;;
+                *)                                                        echo "unresolved" ;;
+              esac
+            }
+            GCP_REC_UNLOCK="Unlock: gcloud services enable recommender.googleapis.com --project ${GCP_PROJECT} ; then grant your audit identity: gcloud projects add-iam-policy-binding ${GCP_PROJECT} --member='<your-audit-identity>' --role='roles/recommender.viewer'"
+            if [ "$GCP_REC_RC" -eq 0 ] && [ "$GCP_CUD_RC" -eq 0 ]; then
+              row "$GCP_INT" cost-permissions yes "${GCP_CRED_VAR:-none}" pass - "compute + commitment families readable via gcloud recommender (the same call audit-cost makes); Cloud SQL / GKE / Cloud Run families are read per-check and reported excluded individually if denied"
+            elif [ "$GCP_REC_RC" -eq 0 ]; then
+              row "$GCP_INT" cost-permissions yes "${GCP_CRED_VAR:-none}" skipped - "PARTIAL: compute family reads but the commitment/committed-use-discount family does not ($(_gcause "$GCP_CUD_ERR")) in ${GCP_REC_REGION}; audit-cost reports COST-GCP-007 (committed-use discounts) excluded with that reason. ${GCP_REC_UNLOCK}"
             else
-              row "$GCP_INT" cost-permissions yes "${GCP_CRED_VAR:-none}" skipped "$GCP_REC_CODE" "Recommender API/viewer role not confirmed (HTTP ${GCP_REC_CODE}); audit-cost will report GCP native-dollar checks excluded with this reason, presence-fact checks still run. ${GCP_REC_UNLOCK}"
+              row "$GCP_INT" cost-permissions yes "${GCP_CRED_VAR:-none}" skipped - "Recommender not readable: $(_gcause "$GCP_REC_ERR"); audit-cost will report GCP native-dollar checks (COST-GCP-001..010) excluded with that reason. ${GCP_REC_UNLOCK}"
             fi
           fi
           # Spend denominator: the Cloud Billing BigQuery export is the ONLY source of actual

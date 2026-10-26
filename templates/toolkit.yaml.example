@@ -182,7 +182,10 @@ digitalocean:
   # team: personal                         # your team UUID, or personal; required by setup-digitalocean
 
 gcp:
-  project: your-project-id                  # GCP project ID the audits target (one project per run)
+  project: your-project-id                  # GCP project ID the audits target. For several projects make
+  #                                         # `gcp:` a labeled LIST and select one per run with
+  #                                         # SCOUTFLO_TARGET — cloud spend is per project, so the cost
+  #                                         # lane stops rather than choosing an entry for you.
   # region: us-central1                     # example; only needed for regional load balancer checks
   # credentials_env: GOOGLE_APPLICATION_CREDENTIALS  # optional; names the variable holding a service
   #                                         # account key file path. Omit to use your active gcloud login.

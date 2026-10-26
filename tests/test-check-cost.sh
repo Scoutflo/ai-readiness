@@ -176,87 +176,170 @@ echo "PASS"
 # optional billing_project the only way to read it was to point gcp.project at the
 # billing project — which would then aim every GCP resource check at the wrong
 # place. Live-caught while preparing a customer re-run.
-echo "Test 24: the billing export is addressed via gcp.billing_project, falling back to gcp.project"
+echo "Test 24: the GCP cost lane resolves its project+billing export from config, per target"
 GCPCOST="$ROOT/skills/audit-cost/references/gcp-cost.md"
+K8SCOST="$ROOT/skills/audit-cost/references/kubernetes-cost.md"
 DOC="$ROOT/skills/doctor/scripts/doctor.sh"
 
-# Every billing block resolves the host project with the documented default.
-n_decl="$(grep -c 'BILLING_PROJECT="your-billing-project-id"' "$GCPCOST" || true)"
-[ "${n_decl:-0}" -ge 8 ] || fail "expected >=8 BILLING_PROJECT declarations in gcp-cost.md, got ${n_decl:-0}"
-# It must follow this file's convention: a literal placeholder the model fills from
-# config, NOT a shell fallback. A shell fallback would silently honour an inherited
-# BILLING_PROJECT from an unrelated run, and a model filling placeholders may not
-# substitute an expression at all.
-grep -qF 'BILLING_PROJECT="${BILLING_PROJECT:-' "$GCPCOST" \
-  && fail "BILLING_PROJECT uses a shell fallback instead of this file's placeholder convention"
-# Every declaration must name BOTH keys, so the fallback rule is unambiguous to the model.
-n_doc="$(grep -c 'when that key is UNSET, fill this with the same value as gcp.project' "$GCPCOST" || true)"
-[ "${n_doc:-0}" -ge 8 ] || fail "only ${n_doc:-0} of the BILLING_PROJECT placeholders state the gcp.project fallback"
-
-# And no billing path still addresses the dataset through the audited project.
-for pat in '${GCP_PROJECT}.${BILLING_DATASET}' 'bq ls --project_id="$GCP_PROJECT" --format=json "$BILLING_DATASET"' 'bq query --project_id="$GCP_PROJECT"'; do
-  if grep -qF "$pat" "$GCPCOST"; then
-    fail "a billing path still uses gcp.project to reach the dataset: $pat"
-  fi
+# The lane must READ its target through the shared enumerator, never a hand-filled literal.
+# A hardcoded placeholder is what made a multi-project `gcp:` list unusable: there is no single
+# gcp.project to fill, so the lane either guessed a project or stopped at the operator.
+for f in "$GCPCOST" "$K8SCOST"; do
+  grep -qF 'report-standard/toolkit-targets.sh' "$f" \
+    || fail "$(basename "$f") does not resolve its gcp target via the shared enumerator"
+  grep -qF 'gcp get "$GCP_IDX" project' "$f" \
+    || fail "$(basename "$f") does not read project from the selected gcp target"
+  grep -q 'your-project-id' "$f" \
+    && fail "$(basename "$f") still hardcodes a single-project placeholder"
 done
+grep -qF 'gcp get "$GCP_IDX" billing_bq_dataset' "$GCPCOST" || fail "gcp-cost.md does not read billing_bq_dataset per target"
+grep -qF 'gcp get "$GCP_IDX" billing_project' "$GCPCOST"    || fail "gcp-cost.md does not read billing_project per target"
+grep -qF '[ -n "$BILLING_PROJECT" ] || BILLING_PROJECT="$GCP_PROJECT"' "$GCPCOST" \
+  || fail "gcp-cost.md does not default billing_project to this target's own project"
 
-# The three places that must use the host project each do.
+# And no billing path addresses the dataset through the AUDITED project.
+for pat in '${GCP_PROJECT}.${BILLING_DATASET}' 'bq ls --project_id="$GCP_PROJECT" --format=json "$BILLING_DATASET"' 'bq query --project_id="$GCP_PROJECT"'; do
+  grep -qF "$pat" "$GCPCOST" && fail "a billing path still uses gcp.project to reach the dataset: $pat"
+done
 grep -qF 'bq ls --project_id="$BILLING_PROJECT"' "$GCPCOST" || fail "the table lookup does not use BILLING_PROJECT"
 grep -qF '${BILLING_PROJECT}.${BILLING_DATASET}.${BILLING_TABLE}' "$GCPCOST" || fail "the FROM clause does not use BILLING_PROJECT"
 grep -qF 'bq query --project_id="$BILLING_PROJECT"' "$GCPCOST" || fail "the query job does not run in BILLING_PROJECT"
-# A billing block must carry exactly ONE project placeholder. Two variables holding
-# the same literal (the dead GCP_PROJECT this change orphaned) is a trap: a blanket
-# fill aims the query at the audited project and silently reproduces the bug.
-# Scoped PER BLOCK: non-billing blocks legitimately keep GCP_PROJECT. The defect is
-# a block that declares BOTH, because then two variables hold a project and a
-# blanket fill can aim the query at the wrong one.
-_collide="$(awk '
-  /^```bash$/ { inb=1; n++; hasB=0; hasG=0; next }
-  inb && /^```$/ { if (hasB && hasG) print n; inb=0; next }
-  inb && /^BILLING_PROJECT=/ { hasB=1 }
-  inb && /^GCP_PROJECT="your-project-id"/ { hasG=1 }
-' "$GCPCOST")"
-[ -z "$_collide" ] \
-  || fail "billing block(s) $_collide declare BOTH GCP_PROJECT and BILLING_PROJECT placeholders — a blanket fill can aim the query at the audited project" 
-grep -qF 'it defaults to gcp.project' "$GCPCOST" \
-  && fail "in-block prose still claims a default the published block does not implement"
+grep -qF 'Nothing here implements' "$GCPCOST" && fail "in-block prose still claims a default the block now implements"
 
-# Doctor probes the same project, and falls back the same way.
-grep -qF '"$_gpi" billing_project' "$DOC" || fail "doctor does not READ gcp.billing_project from the config (a bare substring match is satisfied by the failure-hint strings alone)"
+# Doctor probes the same project, and falls back the same way (unchanged by this move).
+grep -qF '"$_gpi" billing_project' "$DOC" || fail "doctor does not READ gcp.billing_project from the config"
 grep -qF '[ -n "$GCP_BQ_PROJ" ] || GCP_BQ_PROJ="$GCP_PROJECT"' "$DOC" || fail "doctor does not default billing_project to gcp.project"
 grep -qF 'bq ls --project_id="$GCP_BQ_PROJ"' "$DOC" || fail "doctor still probes the dataset in the audited project"
-# A wrong-project mistake must be nameable from the row itself.
 grep -qF 'set gcp.billing_project' "$DOC" || fail "doctor never tells the operator about gcp.billing_project on a failure"
 
-# BEHAVIOURAL, not a re-implementation: extract each published billing block, give
-# every placeholder a DISTINCT sentinel, run it under a recording `bq` stub, and
-# assert every --project_id is the billing sentinel and none is the project
-# sentinel. This is the test that fails on a duplicate placeholder literal, which
-# the content greps above cannot see.
+# ---- BEHAVIOURAL: run the published blocks against real configs -----------------
+# Not a re-implementation: extract every billing block verbatim, point it at a toolkit.yaml,
+# and record what `bq` was actually asked to do.
 BEH="$WORK/beh"; mkdir -p "$BEH/bin"
 printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "%s/bq.log"\nexit 1\n' "$BEH" > "$BEH/bin/bq"
-chmod +x "$BEH/bin/bq"
-: > "$BEH/bq.log"
+printf '#!/bin/sh\necho stub-token\n' > "$BEH/bin/gcloud"
+chmod +x "$BEH/bin/bq" "$BEH/bin/gcloud"
 awk '/^```bash$/{n++; inb=1; next} inb && /^```$/{inb=0; next} inb{print > ("'"$BEH"'/blk." n ".sh")}' "$GCPCOST"
-nblk=0
-for b in "$BEH"/blk.*.sh; do
-  grep -q 'BILLING_PROJECT=' "$b" || continue
-  nblk=$((nblk+1))
-  sed -e 's/"your-billing-project-id"/"SENTINEL-BILLING"/g' \
-      -e 's/"your-project-id"/"SENTINEL-PROJECT"/g' \
-      -e 's/"your_billing_dataset"/"SENTINEL-DATASET"/g' "$b" > "$BEH/run.sh"
-  ( cd "$BEH" && PATH="$BEH/bin:$PATH" sh ./run.sh >/dev/null 2>&1 || true )
+
+cat > "$BEH/single.yaml" <<'YAML'
+gcp:
+  project: SENTINEL-PROJECT
+  billing_bq_dataset: SENTINEL-DATASET
+  billing_project: SENTINEL-BILLING
+YAML
+cat > "$BEH/multi.yaml" <<'YAML'
+gcp:
+  - label: alpha
+    project: SENTINEL-ALPHA
+    billing_bq_dataset: DS-ALPHA
+  - label: beta
+    project: SENTINEL-BETA
+    billing_bq_dataset: DS-BETA
+    billing_project: SENTINEL-BETA-BILLING
+YAML
+
+run_blocks() { # <config> <audit-dir-tag> [SCOUTFLO_TARGET]
+  : > "$BEH/bq.log"; _n=0
+  for b in "$BEH"/blk.*.sh; do
+    grep -q 'BILLING_DATASET=' "$b" || continue
+    _n=$((_n+1))
+    ( cd "$BEH" && PATH="$BEH/bin:$PATH" CLAUDE_PLUGIN_ROOT="$ROOT" \
+        SCOUTFLO_CONFIG="$1" SCOUTFLO_AUDIT_DIR="$BEH/$2" SCOUTFLO_TARGET="${3:-}" \
+        sh "$b" >/dev/null 2>&1 || true )
+  done
+  BLOCKS_RUN=$_n
+}
+
+# (a) single block: the dataset is reached through billing_project, never the audited project.
+run_blocks "$BEH/single.yaml" out-single
+[ "$BLOCKS_RUN" -ge 8 ] || fail "extracted only $BLOCKS_RUN billing blocks, expected >=8"
+[ -s "$BEH/bq.log" ] || fail "no bq invocation recorded for the single-block config"
+grep -q 'SENTINEL-BILLING' "$BEH/bq.log" || fail "no bq call targeted the billing project: $(head -3 "$BEH/bq.log")"
+grep -q 'project_id=SENTINEL-PROJECT' "$BEH/bq.log" \
+  && fail "a bq call ran in the AUDITED project instead of the billing project"
+grep -q 'SENTINEL-PROJECT\.SENTINEL-DATASET' "$BEH/bq.log" \
+  && fail "a query addressed the dataset through the AUDITED project"
+echo "PASS"
+
+echo "Test 25: a multi-project gcp: list stops instead of billing the wrong project"
+# No SCOUTFLO_TARGET: cloud spend is per project, so the lane must refuse to pick one.
+run_blocks "$BEH/multi.yaml" out-noselect
+if [ -s "$BEH/bq.log" ]; then
+  fail "a gcp: LIST with no SCOUTFLO_TARGET still queried billing: $(head -3 "$BEH/bq.log")"
+fi
+# The refusal has to be actionable — it names the labels the operator can choose.
+_msg="$( cd "$BEH" && PATH="$BEH/bin:$PATH" CLAUDE_PLUGIN_ROOT="$ROOT" \
+          SCOUTFLO_CONFIG="$BEH/multi.yaml" sh "$(grep -l 'BILLING_DATASET=' "$BEH"/blk.*.sh | head -1)" 2>&1 || true )"
+case "$_msg" in
+  *alpha*beta*) : ;;
+  *) fail "the multi-project refusal does not list the selectable labels: $_msg" ;;
+esac
+
+# With a target selected: that target's project and ITS billing project are used, not the other's.
+run_blocks "$BEH/multi.yaml" out-beta beta
+[ -s "$BEH/bq.log" ] || fail "SCOUTFLO_TARGET=beta produced no bq invocation"
+grep -q 'SENTINEL-BETA-BILLING' "$BEH/bq.log" || fail "the selected target's billing project was not used: $(head -3 "$BEH/bq.log")"
+grep -q 'DS-ALPHA' "$BEH/bq.log" && fail "the UNSELECTED target's dataset was queried"
+grep -q 'SENTINEL-ALPHA' "$BEH/bq.log" && fail "the UNSELECTED target's project was queried"
+echo "PASS"
+
+echo "PASS"
+
+
+# --- the Recommender preflight must test the call the AUDIT makes -------------
+# Live-caught on a customer run: the doctor probed recommender.googleapis.com over
+# raw REST with only an Authorization header, which omits the quota project Google
+# requires for a USER credential. All four of their projects reported 403, the whole
+# native-dollar section was excluded, and the report carried $0 of priced savings on
+# an estate that had them — while `gcloud recommender recommendations list` read the
+# same recommendations fine. A preflight that exercises a different code path than
+# the thing it gates fails closed on a working setup.
+echo "Test 26: the Recommender preflight uses gcloud (the audit's own call), not raw REST"
+DOC="$ROOT/skills/doctor/scripts/doctor.sh"
+grep -qF 'recommender.googleapis.com/v1/projects' "$DOC" \
+  && fail "the doctor still probes the Recommender over raw REST, which 403s on a user credential (no quota project) while the audit's gcloud call succeeds"
+grep -qF 'gcloud recommender recommendations list' "$DOC" \
+  || fail "the doctor does not probe the Recommender with the same call audit-cost makes"
+# An API-disabled project PROMPTS to enable and WAITS unless prompts are off — a hang,
+# or a write, inside a read-only gate.
+_rec_line="$(grep -n 'gcloud recommender recommendations list' "$DOC" | head -1 | cut -d: -f1)"
+sed -n "$((_rec_line-1)),$((_rec_line))p" "$DOC" | grep -qF 'CLOUDSDK_CORE_DISABLE_PROMPTS=1' \
+  || fail "the Recommender probe can prompt to enable a disabled API (no CLOUDSDK_CORE_DISABLE_PROMPTS)"
+# Both families still probed: compute alone is a false green for committed-use savings.
+grep -qF 'google.compute.image.IdleResourceRecommender' "$DOC" || fail "the compute recommender family is no longer probed"
+# The probe must name the recommender audit-cost ACTUALLY calls for COST-GCP-007.
+# Pinning a different one is how the preflight drifted from the audit in the first place.
+grep -qF 'google.compute.commitment.UsageCommitmentRecommender' "$DOC" || fail "the commitment (CUD) probe does not use google.compute.commitment.UsageCommitmentRecommender, the recommender COST-GCP-007 actually reads"
+# Each failure must name its own cause rather than a bare status code.
+# NOTE: no 'gcloud is not installed' case. That arm is unreachable (doctor has
+# already proved `command -v gcloud` succeeds and reports binary-gcloud itself), and
+# asserting it was VACUOUS — the string is satisfied by the pre-existing binary-gcloud
+# hint text, so the whole branch could be deleted with this test still green.
+for c in 'the Recommender API is not enabled on this project' 'lacks roles/recommender.viewer'; do
+  grep -qF "$c" "$DOC" || fail "the probe cannot report the distinct cause: $c"
 done
-[ "$nblk" -ge 8 ] || fail "extracted only $nblk billing blocks for the behavioural check, expected >=8"
-[ -s "$BEH/bq.log" ] || fail "the behavioural check recorded no bq invocation at all"
-grep -q 'SENTINEL-BILLING' "$BEH/bq.log" \
-  || fail "no bq call targeted the billing-project sentinel: $(head -3 "$BEH/bq.log")"
-if grep -q 'project_id=SENTINEL-PROJECT' "$BEH/bq.log"; then
-  fail "a bq call ran in the AUDITED project instead of the billing project: $(grep -m2 'project_id=SENTINEL-PROJECT' "$BEH/bq.log")"
-fi
-if grep -q 'SENTINEL-PROJECT\.SENTINEL-DATASET' "$BEH/bq.log"; then
-  fail "a query addressed the dataset through the AUDITED project"
-fi
+echo "PASS"
+
+# --- per-target cost output must not collide ----------------------------------
+# The GCP lane now STOPS on a multi-project `gcp:` list unless SCOUTFLO_TARGET says
+# which project to cost, so a multi-project estate necessarily runs this skill once
+# per target. A flat cost/<date>/ would make the second run of the day silently
+# OVERWRITE the first — a whole project's findings lost with no error.
+echo "Test 27: cost output nests per target, so same-day runs cannot overwrite each other"
+CSKILL="$ROOT/skills/audit-cost/SKILL.md"
+grep -qF 'COST_SEG="cost${SCOUTFLO_TARGET:+/${SCOUTFLO_TARGET}}"' "$CSKILL" \
+  || fail "audit-cost does not build a per-target output segment"
+grep -qF 'OUT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${COST_SEG}/' "$CSKILL" \
+  || fail "audit-cost does not use the per-target segment in its output path"
+grep -qF 'OUT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/cost/$(date' "$CSKILL" \
+  && fail "audit-cost still writes to a flat cost/<date>/ path, so two targets collide on the same day"
+# Behavioural: the expression must actually separate targets, and leave a
+# single-target estate exactly where it was.
+_seg() { SCOUTFLO_TARGET="${1:-}"; printf '%s' "cost${SCOUTFLO_TARGET:+/${SCOUTFLO_TARGET}}"; }
+[ "$(_seg '')" = "cost" ] || fail "an unset SCOUTFLO_TARGET changed the output path for a single-target estate: $(_seg '')"
+[ "$(_seg prod-in2)" = "cost/prod-in2" ] || fail "a selected target did not nest: $(_seg prod-in2)"
+[ "$(_seg prod-in2)" != "$(_seg dev-two)" ] || fail "two different targets resolved to the same output path"
+unset SCOUTFLO_TARGET
 echo "PASS"
 
 echo
