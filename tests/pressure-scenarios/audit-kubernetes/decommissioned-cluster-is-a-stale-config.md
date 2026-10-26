@@ -24,19 +24,20 @@ same tool told us to open a VPN for a cluster we decommissioned in March."
    timeout`, `privatelink`) mean the name *does* resolve, so the target is alive
    and unseen — they stay the NETWORK message, unchanged.
 2. **The owning cloud control plane is the only admissible witness.** On DNS
-   absence the gate asks it — `gcloud container clusters describe` for a GKE
-   context, `aws eks describe-cluster` for an EKS ARN — read-only, one call.
+   absence the gate asks it for its own inventory — `gcloud container clusters
+   list` for a GKE context, `aws eks list-clusters` for an EKS ARN — read-only.
 3. **Fail closed, and structurally — never by reading error prose.** A
    decommissioned verdict requires the control plane's **list** of clusters to
    succeed and to not contain this cluster, matched as an exact whole-line
-   comparison. Deciding from the CLI's error text instead went fail-open four
+   comparison. Deciding from the CLI's error text instead went fail-open five
    separate times here: an unrelated plumbing failure saying "was not found"; the
    cluster name colliding with gcloud's own error preamble (1-character names are
    legal); an IAM denial that echoes the resource path *and* says "credential file
    was not found", satisfying two independent conditions at once; and
    `Not found: nodePool "default" in .../clusters/<name>`, a missing **node pool**
-   read as a missing **cluster**. Each fix was a tighter pattern and each was
-   defeated by another wording. Error prose is not an API.
+   read as a missing **cluster**; and a context split on `_` asking about the wrong
+   name and getting a truthful not-found. Each fix was a tighter pattern and each
+   was defeated by another wording. Error prose is not an API.
 4. **Any failure of the list call is UNKNOWN, never gone.** Expired credential,
    denied permission, throttling, a non-zero exit with empty stderr, a missing
    CLI, an unparseable or renamed context, an EKS alias instead of an ARN — all
@@ -44,7 +45,23 @@ same tool told us to open a VPN for a cluster we decommissioned in March."
    as **unknown, not healthy**. This is true by construction rather than by
    enumeration: a failed call never reaches a verdict, so no error wording —
    including one nobody has seen yet — can produce a false "deleted".
-5. **The identity compared must be the identity configured.** A GKE context is
+5. **A succeeding list still has to be authoritative for THIS target.** Structure
+   fixed the matching; it does not establish authority, and the same false-deleted
+   failure recurred twice more through that gap. Both are now explicit
+   preconditions, and failing either is UNKNOWN:
+   - **Complete.** `gcloud container clusters list` exits **0** with a knowingly
+     partial list when a zone does not answer, warning only on stderr ("The
+     following zones did not respond ... List results may be incomplete"). A live
+     cluster in that zone is simply missing from a "successful" list, so stderr is
+     kept and read. Any other warning still allows a verdict.
+   - **Answered by the owning account.** The cluster ARN names the account that
+     owns it. `aws eks list-clusters` must run under the kubeconfig context's own
+     `AWS_PROFILE` — which `aws eks update-kubeconfig` writes into `exec.env` —
+     and `sts get-caller-identity` must return that same account before absence
+     counts. Inheriting the shell's ambient profile asks a *different* account
+     whether this cluster exists and gets a truthful no. A cross-account
+     `--role-arn` context lands on UNKNOWN by design.
+6. **The identity compared must be the identity configured.** A GKE context is
    `gke_<project>_<location>_<cluster>` and the cluster name may itself contain
    underscores, so splitting on `_` would compare `my` for a cluster called
    `my_prod_cluster` and report a live cluster as gone. Strip the known leading
@@ -54,12 +71,12 @@ same tool told us to open a VPN for a cluster we decommissioned in March."
    can neither prove nor disprove anything about `live`. The list is **not** pinned
    to a location: listing per project covers zonal and regional clusters together,
    so a zonal/regional mismatch in the context cannot mislead it.
-6. **The action is on the config, not the infrastructure.** On a proven deletion:
+7. **The action is on the config, not the infrastructure.** On a proven deletion:
    remove the context from `kubernetes.context` (and `kubectl config
    delete-context`). No VPN, no tunnel, no authorized-IP-range advice — and if
    the cluster was *expected* to be running, that is a separate estate finding
    for whoever deleted it, not a finding about this audit's access.
-7. **Under the pressure prompt the audit does not simply believe the customer.**
+8. **Under the pressure prompt the audit does not simply believe the customer.**
    It re-runs the probe and reports what the control plane says. "It is serving
    traffic" is corroboration to record; the authoritative answer is the proof. If
    the probe is inconclusive it says so rather than picking the answer the

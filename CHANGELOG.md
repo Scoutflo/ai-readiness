@@ -1,5 +1,80 @@
 # Changelog
 
+## 0.1.236
+
+**Maintainer rubric reviews on the skills changed in 0.1.229-235.** Five reviews, run independently
+against the rubric. They found defects in the fixes themselves, which is what the review is for.
+
+### The cluster-existence guard went fail-open twice more
+
+0.1.233 replaced error-text matching with a structural question — ask the control plane for its
+**list** of clusters, match the name exactly — because pattern-matching had gone fail-open five
+times. The rewrite is sound: no error wording defeats it. But a *succeeding* list is not
+automatically authoritative about the target you asked about, and the same false
+**"your production cluster has been deleted"** verdict came back through that gap:
+
+- **An incomplete list still exits 0.** `gcloud container clusters list` warns "The following zones
+  did not respond ... List results may be incomplete" on **stderr** and returns success. The branch
+  discarded stderr, so a live cluster in an unreachable zone was simply absent from a "successful"
+  list. stderr is now read, and a partial list is `UNKNOWN`; any other warning still allows a verdict.
+- **The list was answered by whichever AWS account happened to be ambient.** `aws eks list-clusters`
+  ran under the shell's credentials, not the kubeconfig context's — and `aws eks update-kubeconfig`
+  writes the profile it was run with into `exec.env`. On a normal multi-account kubeconfig the probe
+  asked a *different* account whether this cluster exists and got a truthful no. It now runs under
+  the context's own `AWS_PROFILE` and requires `sts get-caller-identity` to match the account in the
+  cluster ARN before absence counts for anything.
+
+Both are locked by new cases in `skills/audit-kubernetes/tests/test-cluster-gone-probe.sh`, each
+verified to fail without its fix. The probe's coverage is now stated outright: GKE and
+commercial-partition EKS reach a deletion verdict; GovCloud, China and AKS contexts never do.
+
+### A denied read could still render as "nothing found"
+
+Twelve `audit-cost` GCP checks piped a cloud read straight into `jq`. `jq` exits **0** on empty
+stdin, so a permission denial produced no rows, no error, and a section that reads exactly like a
+clean project — and the trailing `|| echo "... excluded"` those checks carried could never run.
+Three had no handler at all. Each now captures the read's own status first, so "denied" and "none
+found" stop being the same output. The idiom is documented where the next check will be added.
+
+### A multi-target doctor row matched nothing, everywhere except GCP
+
+`/scoutflo:doctor` writes its matrix row as the bare block name for one target and
+`<block> (<label>)` for several. Every consumer of that matrix matched the bare form only, so on a
+multi-target config the gate deciding whether a provider's cost checks may run matched **zero
+rows** — and these sites printed the row with no empty-guard, so zero rows printed nothing and read
+like a clean gate. 0.1.235 fixed this for GCP; the other nine sites (AWS ×2, Azure ×2, Datadog,
+DigitalOcean, Kubernetes ×3) still had it. All nine now match either form, and **stop** on zero
+matches or on several rather than attributing one target's answer to another.
+`tests/test-doctor-matrix-consumers.sh` locks all three behaviours against the shipped docs, and the
+labeled form is now documented in doctor's own matrix contract.
+
+### Three `audit-cost` GCP checks audited a hand-typed target
+
+The 0.1.235 enumerator conversion missed three: a CUD check scoped to a literal
+`"the-project-to-size"`, a nonprod comparison scoped to `"your-nonprod-project-id"`, and a
+recommender sweep pinned to one hardcoded region while the file's own section 5 already enumerates
+the project's locations. All three now resolve from the config; the nonprod comparison takes its
+target by label through `SCOUTFLO_NONPROD_TARGET` and reports itself excluded when none is named.
+`CLOUDSDK_CORE_DISABLE_PROMPTS=1` — declared mandatory, set on 2 of 22 call sites — is now on every
+`gcloud` call, so a disabled API cannot hang a non-interactive audit on a prompt.
+
+### Also
+
+- **Grafana ruler enumeration** (`audit-grafana`): a 403 on the datasource read fell through to an
+  empty enumeration instead of blocking; the block also lacked `set -eu` and a token guard, and
+  omitted VictoriaMetrics/Thanos ruler types.
+- **Business context**: the placeholder filter was anchored to the start of the value, so a
+  half-edited template row (`owner: [team]`) parsed as a real declaration. It now rejects a
+  placeholder anywhere in the value, and `intent:` is matched case-insensitively.
+- **Doctor**: the billing-export probe reported `fail` where the correct verdict is `skipped` —
+  a missing optional export is not a broken one — and its unresolved branch asserted an unlock that
+  would not have helped.
+- **GCP cost permissions block**: the multi-project resolution shipped in 0.1.235 was not applied to
+  one awk comparison, which therefore matched zero rows — reintroducing the bug it was meant to fix.
+
+Open from the same reviews, tracked rather than fixed here: `audit-kubernetes` has no target profile
+and no worklist/resume on its declared large-estate path.
+
 ## 0.1.235
 
 **A multi-project GCP estate, and a preflight that tested the wrong thing.** Both found by the same

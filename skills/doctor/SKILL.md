@@ -113,7 +113,7 @@ Judgment step: read the JSON lines and decide what to fix first. Each line has s
 
 | Field | Meaning |
 | --- | --- |
-| `integration` | Template-order row: toolkit, grafana, sentry, pagerduty, datadog, elk, jsm, zenduty, groundcover, lgtm, prometheus, alertmanager, loki, tempo, mimir, victoriametrics, vmalert, digitalocean, gcp, aws, kubernetes, slack |
+| `integration` | Template-order row: toolkit, grafana, sentry, pagerduty, datadog, elk, jsm, zenduty, groundcover, lgtm, prometheus, alertmanager, loki, tempo, mimir, victoriametrics, vmalert, digitalocean, gcp, aws, kubernetes, slack | **When a block configures SEVERAL targets the value is `<block> (<label>)`, not the bare block name** — so a consumer matching the bare form alone silently matches zero rows on a multi-target config. Match `$1 == b || substr($1, 1, length(b) + 2) == b " ("`, and treat zero matches as a stop, never as a pass |
 | `check` | What was checked: `env` (variable presence), a live endpoint (e.g. `health`, `identity`, `org`, `abilities`, `analytics`, `validate`, `monitors-read`, `cloudwatch-read`, `cost-permissions`, `kibana-status`, `alerting-health`, `alerts-read`, `teams-read`, `spaces`, `query`, `status`, `config`, `ready`, `rbac`, `account`, `vmalert-health`, `monitoring-api`, `webhook-post`), `binary-*`, or `configured` for unconfigured rows |
 | `configured` | `yes` when the block exists with a non-empty `url`, `host`, `token_env`, `project`, `account_id`, or `context`. Unconfigured rows are informational, never failures |
 | `env_var` | The `*_env` variable name, `none` when the block names no token, `-` when not applicable. Names only; values never |

@@ -49,7 +49,10 @@ set -eu
 RUN_DATE="$(date -u +%Y-%m-%d)"
 MATRIX="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/doctor/${RUN_DATE}/matrix.tsv"   # written by the doctor gate this run, or the most recent doctor run
 [ -f "$MATRIX" ] || { echo "no doctor matrix found; run the doctor gate before the Datadog cost phase"; exit 1; }
-awk -F'\t' '$1 == "datadog" && $2 == "cost-permissions" {print $5, $7}' "$MATRIX"
+awk -F'\t' -v b="datadog" -v c="cost-permissions" '
+  ($1 == b || substr($1, 1, length(b) + 2) == b " (") && $2 == c { n++; print $1, $5, $7 }
+  END { if (!n)    { print "no " b " " c " row in this matrix — re-run /scoutflo:doctor against this config before the cost phase; a missing row is NOT permission to skip the checks it gates" > "/dev/stderr"; exit 1 }
+        if (n > 1) { print "several " b " targets carry a " c " row — set SCOUTFLO_TARGET so this gate reads the one this run audits" > "/dev/stderr"; exit 1 } }' "$MATRIX"
 ```
 
 Expected: `pass -` when cost checks can run, or `skipped <reason>` when they cannot. A `skipped` result means the section renders exactly one line: "Datadog Cost & Resource Optimization: excluded, reason: `<the exact hint from the matrix row>`", and none of COST-DD-001 through COST-DD-009 runs this cycle.

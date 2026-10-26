@@ -38,7 +38,10 @@ set -eu
 RUN_DATE="$(date -u +%Y-%m-%d)"
 MATRIX="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/doctor/${RUN_DATE}/matrix.tsv"   # written by the doctor gate this run, or the most recent doctor run
 [ -f "$MATRIX" ] || { echo "no doctor matrix found; run the doctor gate before the DigitalOcean cost phase"; exit 1; }
-awk -F'\t' '$1 == "digitalocean" && $2 == "cost-permissions" {print $5, $7}' "$MATRIX"
+awk -F'\t' -v b="digitalocean" -v c="cost-permissions" '
+  ($1 == b || substr($1, 1, length(b) + 2) == b " (") && $2 == c { n++; print $1, $5, $7 }
+  END { if (!n)    { print "no " b " " c " row in this matrix — re-run /scoutflo:doctor against this config before the cost phase; a missing row is NOT permission to skip the checks it gates" > "/dev/stderr"; exit 1 }
+        if (n > 1) { print "several " b " targets carry a " c " row — set SCOUTFLO_TARGET so this gate reads the one this run audits" > "/dev/stderr"; exit 1 } }' "$MATRIX"
 ```
 
 Expected: `pass -` when the DigitalOcean cost checks can run, or `skipped <reason>` when the token is absent. DigitalOcean personal-access tokens can be scoped (custom read scopes) or full-access; the check-to-scope map below means a partially-scoped token blocks only part of the catalog, not all of it. State the split explicitly rather than excluding the whole provider when only one scope is missing:

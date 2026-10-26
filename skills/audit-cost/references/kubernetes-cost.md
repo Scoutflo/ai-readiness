@@ -47,9 +47,18 @@ RUN_DATE="$(date -u +%Y-%m-%d)"
 MATRIX="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/doctor/${RUN_DATE}/matrix.tsv"   # written by the doctor gate this run, or the most recent doctor run
 [ -f "$MATRIX" ] || { echo "no doctor matrix found; run the doctor gate before the Kubernetes cost phase"; exit 1; }
 # Base reachability (must pass before anything runs) and the two optional cost scopes.
-awk -F'\t' '$1 == "kubernetes" && $2 == "reachability"   {print "reachability:", $5, $7}' "$MATRIX"
-awk -F'\t' '$1 == "kubernetes" && $2 == "cost-metrics"    {print "metrics:",      $5, $7}' "$MATRIX"
-awk -F'\t' '$1 == "kubernetes" && $2 == "cost-integration" {print "kubecost:",     $5, $7}' "$MATRIX"
+awk -F'\t' -v b="kubernetes" -v c="reachability" '
+  ($1 == b || substr($1, 1, length(b) + 2) == b " (") && $2 == c { n++; print "reachability:", $1, $5, $7 }
+  END { if (!n)    { print "no " b " " c " row in this matrix — re-run /scoutflo:doctor against this config before the cost phase; a missing row is NOT permission to skip the checks it gates" > "/dev/stderr"; exit 1 }
+        if (n > 1) { print "several " b " targets carry a " c " row — set SCOUTFLO_TARGET so this gate reads the one this run audits" > "/dev/stderr"; exit 1 } }' "$MATRIX"
+awk -F'\t' -v b="kubernetes" -v c="cost-metrics" '
+  ($1 == b || substr($1, 1, length(b) + 2) == b " (") && $2 == c { n++; print "metrics:", $1, $5, $7 }
+  END { if (!n)    { print "no " b " " c " row in this matrix — re-run /scoutflo:doctor against this config before the cost phase; a missing row is NOT permission to skip the checks it gates" > "/dev/stderr"; exit 1 }
+        if (n > 1) { print "several " b " targets carry a " c " row — set SCOUTFLO_TARGET so this gate reads the one this run audits" > "/dev/stderr"; exit 1 } }' "$MATRIX"
+awk -F'\t' -v b="kubernetes" -v c="cost-integration" '
+  ($1 == b || substr($1, 1, length(b) + 2) == b " (") && $2 == c { n++; print "kubecost:", $1, $5, $7 }
+  END { if (!n)    { print "no " b " " c " row in this matrix — re-run /scoutflo:doctor against this config before the cost phase; a missing row is NOT permission to skip the checks it gates" > "/dev/stderr"; exit 1 }
+        if (n > 1) { print "several " b " targets carry a " c " row — set SCOUTFLO_TARGET so this gate reads the one this run audits" > "/dev/stderr"; exit 1 } }' "$MATRIX"
 ```
 
 Expected: `reachability: pass -`. A `skipped <reason>` on `metrics` renders the ratio checks as `excluded` with that exact reason and runs only the presence checks. A `skipped <reason>` on `kubecost` excludes only COST-K8S-008. If base `reachability` is `skipped`, the entire Kubernetes provider section reports `excluded` with the doctor's reason and no check runs this cycle.

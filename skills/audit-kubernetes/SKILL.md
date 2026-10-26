@@ -115,19 +115,36 @@ if [ "$K_RC" -ne 0 ]; then
       # clusters proves absence: ask for the list and look for an exact match.
       #
       # Deliberately NOT by pattern-matching the CLI's error text. That approach
-      # went fail-open four separate times here — a plumbing error saying "was not
+      # went fail-open five separate times here — a plumbing error saying "was not
       # found"; the cluster name colliding with gcloud's own error preamble; an IAM
-      # denial that echoes the resource path and also says "was not found"; and
+      # denial that echoes the resource path and also says "was not found";
       # `Not found: nodePool "default" in .../clusters/<name>`, a missing NODE POOL
-      # read as a missing CLUSTER. Each time the fix was a tighter pattern, and each
-      # time another wording defeated it. Error prose is not an API.
+      # read as a missing CLUSTER; and a context split on `_` asking about the wrong
+      # name and getting a truthful not-found. Each time the fix was a tighter
+      # pattern, and each time another wording defeated it. Error prose is not an API.
+      #
+      # Coverage, stated because silence here reads as "checked and fine": this probe
+      # reaches a deletion verdict for GKE and commercial-partition EKS only. GovCloud
+      # (arn:aws-us-gov:) and China (arn:aws-cn:) ARNs and every AKS context fall
+      # through to "unknown" and the private-endpoint message below.
       #
       # A list call separates the two things that matter with no parsing at all: if
-      # the call SUCCEEDS, its output is authoritative about what exists; if it
-      # fails for any reason (denied, expired, missing CLI, throttled, no network),
-      # we simply do not know and fall through to the private-endpoint message
-      # below. An exact whole-line match also removes every name-collision case —
-      # 1-character names, prefixes, underscores, substrings — by construction.
+      # it fails for any reason (denied, expired, missing CLI, throttled, no
+      # network), we simply do not know and fall through to the private-endpoint
+      # message below. An exact whole-line match also removes every name-collision
+      # case — 1-character names, prefixes, underscores, substrings — by construction.
+      #
+      # But a SUCCEEDING list is not automatically authoritative about THIS target,
+      # and that is where the same failure recurred twice more after the rewrite.
+      # Absence is only evidence when the list is BOTH complete AND answered by the
+      # account that owns the cluster, so each branch below proves that first:
+      #   - GKE: gcloud exits 0 with a knowingly INCOMPLETE list when a zone does
+      #     not answer, warning on stderr. A live cluster in that zone is simply
+      #     missing from a "successful" list.
+      #   - EKS: the kubeconfig context carries its own identity, but the CLI run
+      #     here would otherwise use the shell's AMBIENT credentials — routinely a
+      #     different account, which legitimately does not list this cluster.
+      # Either way the answer is "unknown", never "deleted".
       GONE=""
       case "$EXEC_CMD" in
         *gke-gcloud-auth-plugin*)
@@ -138,29 +155,59 @@ if [ "$K_RC" -ne 0 ]; then
           # in the context cannot cause a false verdict.
           G_PROJ="$(printf '%s' "$KUBE_CONTEXT" | sed -n 's#^gke_\([^_]*\)_.*#\1#p')"
           G_NAME="$(printf '%s' "$KUBE_CONTEXT" | sed -n 's#^gke_[^_]*_[^_]*_##p')"
-          if [ -n "$G_PROJ" ] && [ -n "$G_NAME" ] && command -v gcloud >/dev/null 2>&1; then
+          G_ERR="$(mktemp 2>/dev/null)" || G_ERR=""
+          if [ -n "$G_PROJ" ] && [ -n "$G_NAME" ] && [ -n "$G_ERR" ] && command -v gcloud >/dev/null 2>&1; then
             # Only a SUCCEEDING list is evidence. On any failure the `if` is false and
             # GONE stays empty, so the verdict is "unknown", never "deleted".
+            # Keep stderr: gcloud reports a PARTIAL list there while still exiting 0.
             if G_LIST="$(CLOUDSDK_CORE_DISABLE_PROMPTS=1 gcloud container clusters list \
-                 --project "$G_PROJ" --format='value(name)' 2>/dev/null)"; then
-              # Trim each line before the exact match: if the CLI ever padded its
-              # output, an exact-line compare would miss a cluster that IS there and
-              # report it deleted — the one failure this whole branch exists to avoid.
-              printf '%s\n' "$G_LIST" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | grep -qxF "$G_NAME" \
-                || GONE="gcloud container clusters list --project $G_PROJ succeeded and does not list cluster '$G_NAME'"
+                 --project "$G_PROJ" --format='value(name)' 2>"$G_ERR")"; then
+              # An incomplete list cannot prove absence. gcloud warns "The following
+              # zones did not respond ... List results may be incomplete" and exits 0,
+              # so a live cluster in an unreachable zone is simply missing from it.
+              # Any other warning (deprecation, update nag) still allows a verdict.
+              if grep -qiE 'did not respond|results may be incomplete' "$G_ERR"; then
+                :
+              else
+                # Trim each line before the exact match: if the CLI ever padded its
+                # output, an exact-line compare would miss a cluster that IS there and
+                # report it deleted — the one failure this whole branch exists to avoid.
+                printf '%s\n' "$G_LIST" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | grep -qxF "$G_NAME" \
+                  || GONE="gcloud container clusters list --project $G_PROJ returned a complete list and does not include cluster '$G_NAME'"
+              fi
             fi
-          fi ;;
+          fi
+          [ -z "$G_ERR" ] || rm -f "$G_ERR" ;;
         *aws*)
           # Context is usually the cluster ARN: arn:aws:eks:<region>:<acct>:cluster/<name>
           E_REGION="$(printf '%s' "$KUBE_CONTEXT" | awk -F: '/^arn:aws:eks:/{print $4}')"
+          E_ACCT="$(printf '%s' "$KUBE_CONTEXT" | awk -F: '/^arn:aws:eks:/{print $5}')"
           E_NAME="$(printf '%s' "$KUBE_CONTEXT" | sed -n 's#^arn:aws:eks:.*:cluster/##p')"
-          if [ -n "$E_REGION" ] && [ -n "$E_NAME" ] && command -v aws >/dev/null 2>&1; then
-            # Uses whatever AWS credentials this kubeconfig context already authenticates
-            # with. Same rule: only a succeeding list is evidence.
-            if E_LIST="$(aws eks list-clusters --region "$E_REGION" \
-                 --query 'clusters[]' --output text 2>/dev/null)"; then
-              printf '%s\n' "$E_LIST" | tr '\t' '\n' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | grep -qxF "$E_NAME" \
-                || GONE="aws eks list-clusters --region $E_REGION succeeded and does not list cluster '$E_NAME'"
+          # The context's OWN identity, not the shell's. `aws eks update-kubeconfig`
+          # writes the profile it was run with into exec.env as AWS_PROFILE; inheriting
+          # the ambient profile instead is how a multi-account kubeconfig asks the wrong
+          # account whether this cluster exists.
+          E_PROFILE="$(kubectl config view --minify --context "$KUBE_CONTEXT" \
+            -o jsonpath='{.users[*].user.exec.env[?(@.name=="AWS_PROFILE")].value}' 2>/dev/null)"
+          if [ -n "$E_REGION" ] && [ -n "$E_ACCT" ] && [ -n "$E_NAME" ] && command -v aws >/dev/null 2>&1; then
+            # PROVE the account before absence may count. The ARN names the account that
+            # owns the cluster (field 5); a list answered by any other account omits it
+            # for a reason that has nothing to do with deletion. A failed, mismatched or
+            # unreadable identity leaves GONE empty, so the verdict is "unknown".
+            # A cross-account `--role-arn` context also lands here as unknown, by design.
+            E_SEEN="$(
+              if [ -n "$E_PROFILE" ]; then AWS_PROFILE="$E_PROFILE"; export AWS_PROFILE; fi
+              aws sts get-caller-identity --query Account --output text 2>/dev/null
+            )"
+            if [ -n "$E_SEEN" ] && [ "$E_SEEN" = "$E_ACCT" ]; then
+              # Same rule: only a succeeding list is evidence.
+              if E_LIST="$(
+                   if [ -n "$E_PROFILE" ]; then AWS_PROFILE="$E_PROFILE"; export AWS_PROFILE; fi
+                   aws eks list-clusters --region "$E_REGION" --query 'clusters[]' --output text 2>/dev/null
+                 )"; then
+                printf '%s\n' "$E_LIST" | tr '\t' '\n' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | grep -qxF "$E_NAME" \
+                  || GONE="aws eks list-clusters --region $E_REGION, answered by the cluster's own account $E_ACCT, does not list cluster '$E_NAME'"
+              fi
             fi
           fi ;;
       esac
@@ -606,7 +653,8 @@ When context is available, apply it per [BUSINESS-CONTEXT-INTEGRATION-v0168.md](
 | A single replica with a PDB flagged as unresilient | K8S-005 fails only when single-replica AND no PDB; either replicas>1 or a PDB present is a pass |
 | Entra-integrated AKS context failing with a cryptic exec-plugin error | The doctor gate detects a `kubelogin` exec context and stops with `az aks install-cli` guidance before any check runs; cert/local-account AKS and EKS/GKE contexts skip the probe |
 | A GKE/EKS exec-plugin credential expiry mis-reported as an RBAC gap | On a failed `auth can-i`, the doctor gate branches on the exec command first: `gke-gcloud-auth-plugin` → `gcloud auth login` / token refresh, `aws` → `aws sso login` / credential refresh; only a non-exec context falls through to the "bind the view ClusterRole" RBAC message |
-| A private/unreachable AKS/EKS/GKE API server mis-reported as an RBAC or credential gap | The doctor gate captures `auth can-i` **stderr** (`K_ERR`) and matches transport signatures (`no such host`, `dial tcp`, `i/o timeout`, `connection refused`, `Unable to connect`, `TLS handshake timeout`, `privatelink`) BEFORE the exec-plugin/RBAC branches — a private API server is named as a NETWORK problem (run from inside the VNet, add your IP to the authorized ranges, or `az aks command invoke`), never "run az login" or "bind the view ClusterRole"; it also points at `/scoutflo:audit-azure` (ARM, no cluster network access) for the cluster's monitoring posture |
+| A private/unreachable AKS/EKS/GKE API server mis-reported as an RBAC or credential gap | The doctor gate captures `auth can-i` **stderr** (`K_ERR`) and matches transport signatures (`no such host`, `dial tcp`, `i/o timeout`, `connection refused`, `Unable to connect`, `TLS handshake timeout`, `privatelink`) BEFORE the exec-plugin/RBAC branches — a private API server is named as a NETWORK problem (run from inside the VNet, add your IP to the authorized ranges, or open a tunnel/JIT session), never "run az login" or "bind the view ClusterRole"; `az aks command invoke` is NOT offered — its 512 KB output cap truncates the inventory pull. It also points at `/scoutflo:audit-azure` (ARM, no cluster network access) for the cluster's monitoring posture |
+| A running cluster reported as decommissioned because its DNS is private | "Gone" is decided only by the cloud control plane's own cluster **list** plus an exact whole-line match — never by parsing error text, which defeated five successive patterns. A succeeding list also has to be authoritative for *this* target before absence counts: a gcloud list carrying "zones did not respond" is incomplete, and an `aws eks list-clusters` is only trusted when `sts get-caller-identity` under the context's own `AWS_PROFILE` matches the account in the cluster ARN. Anything short of that is UNKNOWN and routes to the private-endpoint message |
 | A live crash-loop dropped into the scorecard | K8SRT findings are a parallel non-scored section: `area: live-runtime` never appears in `score.categories` or `score.excluded`, severity is always `info`, `points_recoverable` is always 0; the scored posture finding (e.g. K8S-004) carries the points, the snapshot carries the proof |
 | Unavailable live probes faked, or scored as a failure | `le_can_probe` gates the section; without kubectl/context/RBAC/reachability it renders `skipped, reason: <exact reason>` — never a finding, never invented output, and the scored audit completes without it. `top` without metrics-server is skipped with that reason, never estimated |
 | A snapshot probe mutating the cluster | Every Phase 8 probe routes through the guarded `le_kubectl` wrapper (allowlisted read verbs only, pinned `--context`, bounded `--request-timeout`), mechanically enforced by `ci/liveness-readonly-check.sh`; no mutating verb exists on the allowlist |

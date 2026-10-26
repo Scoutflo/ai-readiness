@@ -1491,7 +1491,7 @@ else
           fi
         else
           row "$GCP_INT" env yes none pass - -
-          GCP_TOKEN="$(gcloud auth print-access-token 2>/dev/null || true)"
+          GCP_TOKEN="$(CLOUDSDK_CORE_DISABLE_PROMPTS=1 gcloud auth print-access-token 2>/dev/null || true)"
         fi
         if [ "$GCP_BLOCKED" -eq 1 ]; then
           row "$GCP_INT" identity yes "${GCP_CRED_VAR:-none}" skipped - "blocked: credentials not resolved — see the ${GCP_CRED_VAR:-none} env row above, then rerun"
@@ -1516,8 +1516,8 @@ else
             # recommender.googleapis.com over raw REST with only an Authorization
             # header, which omits the quota project that Google requires for a USER
             # credential — so it returned 403 while `gcloud recommender
-            # recommendations list` read the very same recommendations fine. A live
-            # customer run hit exactly that: all four projects reported 403, the
+            # recommendations list` read the very same recommendations fine. A live run on a real
+            # estate hit exactly that: all four projects reported 403, the
             # entire native-dollar section was excluded, and the report carried $0 of
             # priced savings on an estate that had them. A preflight that tests a
             # different code path than the thing it gates is worse than no preflight,
@@ -1560,9 +1560,25 @@ else
             elif [ "$GCP_REC_RC" -eq 0 ]; then
               row "$GCP_INT" cost-permissions yes "${GCP_CRED_VAR:-none}" skipped - "PARTIAL: compute family reads but the commitment/committed-use-discount family does not ($(_gcause "$GCP_CUD_ERR")) in ${GCP_REC_REGION}; audit-cost reports COST-GCP-007 (committed-use discounts) excluded with that reason. ${GCP_REC_UNLOCK}"
             else
-              row "$GCP_INT" cost-permissions yes "${GCP_CRED_VAR:-none}" skipped - "Recommender not readable: $(_gcause "$GCP_REC_ERR"); audit-cost will report GCP native-dollar checks (COST-GCP-001..010) excluded with that reason. ${GCP_REC_UNLOCK}"
+              GCP_REC_CAUSE="$(_gcause "$GCP_REC_ERR")"
+              # Only assert the enable/grant unlock for a cause we actually identified.
+              # On an unrecognised stderr the right next step is to re-run the call by
+              # hand and read it — asserting "enable the API, grant the role" there sends
+              # the operator at the wrong fix for a quota error, a wrong project id or a
+              # network failure.
+              if [ "$GCP_REC_CAUSE" = "unresolved" ]; then
+                row "$GCP_INT" cost-permissions yes "${GCP_CRED_VAR:-none}" skipped - "Recommender not readable and the cause was not recognised; audit-cost will report GCP native-dollar checks (COST-GCP-001..010) excluded. Re-run this by hand and read the error: CLOUDSDK_CORE_DISABLE_PROMPTS=1 gcloud recommender recommendations list --project=${GCP_PROJECT} --location=global --recommender=google.compute.image.IdleResourceRecommender --limit=1"
+              else
+                row "$GCP_INT" cost-permissions yes "${GCP_CRED_VAR:-none}" skipped - "Recommender not readable: ${GCP_REC_CAUSE}; audit-cost will report GCP native-dollar checks (COST-GCP-001..010) excluded with that reason. ${GCP_REC_UNLOCK}"
+              fi
             fi
           fi
+          # NEVER `fail` here. A `fail` sets ANY_FAIL and doctor exits 3, which tells the
+          # operator to run NO audit at all — so a missing BigQuery billing export would
+          # block audit-grafana, audit-sentry and everything else that has nothing to do
+          # with cost. It is an OPTIONAL, cost-only dependency: its absence costs one
+          # context row (COST-GCP-023 reports excluded), exactly as the sibling
+          # cost-permissions row above is deliberately never a failure.
           # Spend denominator: the Cloud Billing BigQuery export is the ONLY source of actual
           # spend by SKU. Without it every savings figure is a floor with nothing to measure it
           # against, so preflight it explicitly instead of discovering it mid-audit.
@@ -1575,9 +1591,9 @@ else
           if [ -z "$GCP_BQ_DS" ]; then
             row "$GCP_INT" billing-export yes "${GCP_CRED_VAR:-none}" skipped - "no gcp.billing_bq_dataset in toolkit.yaml: COST-GCP-023 (spend by SKU) will be excluded, so savings have no total-spend denominator. The export is billing-account level and takes a few DAYS to accumulate data — start it early. Setup: connect references/providers.md 'GCP cost prerequisites'"
           elif ! command -v bq >/dev/null 2>&1; then
-            row "$GCP_INT" billing-export yes "${GCP_CRED_VAR:-none}" fail - "gcp.billing_bq_dataset is set (${GCP_BQ_DS}) but the bq CLI is not installed; it ships with the Google Cloud SDK (gcloud components install bq)"
+            row "$GCP_INT" billing-export yes "${GCP_CRED_VAR:-none}" skipped - "gcp.billing_bq_dataset is set (${GCP_BQ_DS}) but the bq CLI is not installed; it ships with the Google Cloud SDK (gcloud components install bq)"
           else
-            GCP_BQ_OUT="$(bq ls --project_id="$GCP_BQ_PROJ" --format=json "$GCP_BQ_DS" 2>&1 || true)"
+            GCP_BQ_OUT="$(CLOUDSDK_CORE_DISABLE_PROMPTS=1 bq ls --project_id="$GCP_BQ_PROJ" --format=json "$GCP_BQ_DS" 2>&1 || true)"
             # Match BOTH flavours. The detailed, resource-level export is named
             # gcp_billing_export_RESOURCE_v1_* and therefore does NOT contain the
             # substring "gcp_billing_export_v1" — so a grep for the standard name
@@ -1590,9 +1606,9 @@ else
             elif printf '%s' "$GCP_BQ_OUT" | grep -q 'gcp_billing_export_v1'; then
               row "$GCP_INT" billing-export yes "${GCP_CRED_VAR:-none}" pass - "gcp_billing_export_v1_* (STANDARD) present in ${GCP_BQ_PROJ}:${GCP_BQ_DS} — project/service/SKU spend available; per-resource and GKE namespace attribution needs the DETAILED export too"
             elif printf '%s' "$GCP_BQ_OUT" | grep -qiE 'denied|forbidden|not found|403|404'; then
-              row "$GCP_INT" billing-export yes "${GCP_CRED_VAR:-none}" fail - "cannot read dataset ${GCP_BQ_PROJ}:${GCP_BQ_DS}: if the export lives in another project set gcp.billing_project (that project is the one needing bigquery.googleapis.com ENABLED and roles/bigquery.jobUser); otherwise enable bigquery.googleapis.com and grant roles/bigquery.jobUser plus roles/bigquery.dataViewer on that dataset to the audit identity"
+              row "$GCP_INT" billing-export yes "${GCP_CRED_VAR:-none}" skipped - "cannot read dataset ${GCP_BQ_PROJ}:${GCP_BQ_DS}: if the export lives in another project set gcp.billing_project (that project is the one needing bigquery.googleapis.com ENABLED and roles/bigquery.jobUser); otherwise enable bigquery.googleapis.com and grant roles/bigquery.jobUser plus roles/bigquery.dataViewer on that dataset to the audit identity"
             else
-              row "$GCP_INT" billing-export yes "${GCP_CRED_VAR:-none}" fail - "dataset ${GCP_BQ_PROJ}:${GCP_BQ_DS} is readable but holds no gcp_billing_export_* table (checked both the standard and detailed flavours); if the export lives in another project set gcp.billing_project: confirm the Cloud Billing export targets THIS dataset, and remember it needs a few days before the table appears and fills"
+              row "$GCP_INT" billing-export yes "${GCP_CRED_VAR:-none}" skipped - "dataset ${GCP_BQ_PROJ}:${GCP_BQ_DS} is readable but holds no gcp_billing_export_* table (checked both the standard and detailed flavours); if the export lives in another project set gcp.billing_project: confirm the Cloud Billing export targets THIS dataset, and remember it needs a few days before the table appears and fills"
             fi
           fi
         fi
