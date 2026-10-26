@@ -95,7 +95,7 @@ GCP_KIND=$(sh "$TT" "$CFG" gcp kind); GCP_N=$(sh "$TT" "$CFG" gcp count)
 [ "${GCP_N:-0}" -ge 1 ] || { echo "no gcp target configured in $CFG; run /scoutflo:connect"; exit 1; }
 GCP_IDX=0
 if [ "$GCP_KIND" = seq ]; then
-  [ -n "${SCOUTFLO_TARGET:-}" ] || { echo "gcp in $CFG lists several projects, and cloud spend is per project, so this lane will not choose one for you: re-run it once per project with SCOUTFLO_TARGET=<label> set and its own SCOUTFLO_AUDIT_DIR. Labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
+  [ -n "${SCOUTFLO_TARGET:-}" ] || { echo "gcp in $CFG is a labeled list and cloud spend is per project, so this lane will not choose an entry for you: re-run it once per project with SCOUTFLO_TARGET=<label> set and its own SCOUTFLO_AUDIT_DIR. Labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
   _i=0; GCP_IDX=-1
   while [ "$_i" -lt "$GCP_N" ]; do [ "$(sh "$TT" "$CFG" gcp label "$_i")" = "$SCOUTFLO_TARGET" ] && { GCP_IDX=$_i; break; }; _i=$((_i+1)); done
   [ "$GCP_IDX" -ge 0 ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no gcp target in $CFG; labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
@@ -146,7 +146,16 @@ set -eu
 RUN_DATE="$(date -u +%Y-%m-%d)"
 MATRIX="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/doctor/${RUN_DATE}/matrix.tsv"   # written by the doctor gate this run, or the most recent doctor run
 [ -f "$MATRIX" ] || { echo "no doctor matrix found; run the doctor gate before the GCP cost phase"; exit 1; }
-awk -F'\t' '$1 == "gcp" && $2 == "cost-permissions" {print $5, $7}' "$MATRIX"
+# doctor writes the integration as `gcp` for a single block but `gcp (<label>)` once
+# `gcp:` lists more than one target (doctor.sh tint()). Matching only the bare form
+# found ZERO rows on a multi-project estate — so the gate controlling COST-GCP-001..010,
+# the entire provider-native-dollar section, silently had no verdict to read on exactly
+# the configuration this lane exists for. Match both forms, select THIS target, and say
+# so loudly when no row matches rather than printing nothing.
+GCP_ROW="$(awk -F'\t' -v t="${GCP_LABEL:-}" '
+  ($1 == "gcp" || $1 == "gcp (" t ")") && $2 == "cost-permissions" {print $5, $7}' "$MATRIX")"
+[ -n "$GCP_ROW" ] || { echo "no gcp cost-permissions row for target '${GCP_LABEL:-<single>}' in ${MATRIX}: re-run /scoutflo:doctor against this config before the cost lane, and do not treat a missing row as permission to skip COST-GCP-001..010"; exit 1; }
+printf '%s\n' "$GCP_ROW"
 ```
 
 Expected: `pass -` when the Recommender checks can run, or `skipped <reason>` when they cannot. A `skipped` result means COST-GCP-001 through COST-GCP-010 render exactly one line: "GCP Recommender cost checks: excluded, reason: `<the exact hint from the matrix row>`", and none of them runs this cycle. The **presence-fact** checks — COST-GCP-020 (snapshots), COST-GCP-021 (static IPs), COST-GCP-022 (unattached disks) — need only plain `compute.*.list` permissions already covered by the reliability doctor probe, so they may still run even when the Recommender scope is missing; state that split explicitly rather than excluding the whole section when only the native-dollar part is blocked. COST-GCP-023 (billing context) depends separately on a configured Cloud Billing BigQuery export and BigQuery read access; a missing export excludes just that one context row with its reason.
@@ -168,7 +177,7 @@ GCP_KIND=$(sh "$TT" "$CFG" gcp kind); GCP_N=$(sh "$TT" "$CFG" gcp count)
 [ "${GCP_N:-0}" -ge 1 ] || { echo "no gcp target configured in $CFG; run /scoutflo:connect"; exit 1; }
 GCP_IDX=0
 if [ "$GCP_KIND" = seq ]; then
-  [ -n "${SCOUTFLO_TARGET:-}" ] || { echo "gcp in $CFG lists several projects, and cloud spend is per project, so this lane will not choose one for you: re-run it once per project with SCOUTFLO_TARGET=<label> set and its own SCOUTFLO_AUDIT_DIR. Labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
+  [ -n "${SCOUTFLO_TARGET:-}" ] || { echo "gcp in $CFG is a labeled list and cloud spend is per project, so this lane will not choose an entry for you: re-run it once per project with SCOUTFLO_TARGET=<label> set and its own SCOUTFLO_AUDIT_DIR. Labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
   _i=0; GCP_IDX=-1
   while [ "$_i" -lt "$GCP_N" ]; do [ "$(sh "$TT" "$CFG" gcp label "$_i")" = "$SCOUTFLO_TARGET" ] && { GCP_IDX=$_i; break; }; _i=$((_i+1)); done
   [ "$GCP_IDX" -ge 0 ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no gcp target in $CFG; labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
@@ -233,7 +242,7 @@ GCP_KIND=$(sh "$TT" "$CFG" gcp kind); GCP_N=$(sh "$TT" "$CFG" gcp count)
 [ "${GCP_N:-0}" -ge 1 ] || { echo "no gcp target configured in $CFG; run /scoutflo:connect"; exit 1; }
 GCP_IDX=0
 if [ "$GCP_KIND" = seq ]; then
-  [ -n "${SCOUTFLO_TARGET:-}" ] || { echo "gcp in $CFG lists several projects, and cloud spend is per project, so this lane will not choose one for you: re-run it once per project with SCOUTFLO_TARGET=<label> set and its own SCOUTFLO_AUDIT_DIR. Labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
+  [ -n "${SCOUTFLO_TARGET:-}" ] || { echo "gcp in $CFG is a labeled list and cloud spend is per project, so this lane will not choose an entry for you: re-run it once per project with SCOUTFLO_TARGET=<label> set and its own SCOUTFLO_AUDIT_DIR. Labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
   _i=0; GCP_IDX=-1
   while [ "$_i" -lt "$GCP_N" ]; do [ "$(sh "$TT" "$CFG" gcp label "$_i")" = "$SCOUTFLO_TARGET" ] && { GCP_IDX=$_i; break; }; _i=$((_i+1)); done
   [ "$GCP_IDX" -ge 0 ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no gcp target in $CFG; labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
@@ -279,7 +288,7 @@ GCP_KIND=$(sh "$TT" "$CFG" gcp kind); GCP_N=$(sh "$TT" "$CFG" gcp count)
 [ "${GCP_N:-0}" -ge 1 ] || { echo "no gcp target configured in $CFG; run /scoutflo:connect"; exit 1; }
 GCP_IDX=0
 if [ "$GCP_KIND" = seq ]; then
-  [ -n "${SCOUTFLO_TARGET:-}" ] || { echo "gcp in $CFG lists several projects, and cloud spend is per project, so this lane will not choose one for you: re-run it once per project with SCOUTFLO_TARGET=<label> set and its own SCOUTFLO_AUDIT_DIR. Labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
+  [ -n "${SCOUTFLO_TARGET:-}" ] || { echo "gcp in $CFG is a labeled list and cloud spend is per project, so this lane will not choose an entry for you: re-run it once per project with SCOUTFLO_TARGET=<label> set and its own SCOUTFLO_AUDIT_DIR. Labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
   _i=0; GCP_IDX=-1
   while [ "$_i" -lt "$GCP_N" ]; do [ "$(sh "$TT" "$CFG" gcp label "$_i")" = "$SCOUTFLO_TARGET" ] && { GCP_IDX=$_i; break; }; _i=$((_i+1)); done
   [ "$GCP_IDX" -ge 0 ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no gcp target in $CFG; labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
@@ -323,7 +332,7 @@ GCP_KIND=$(sh "$TT" "$CFG" gcp kind); GCP_N=$(sh "$TT" "$CFG" gcp count)
 [ "${GCP_N:-0}" -ge 1 ] || { echo "no gcp target configured in $CFG; run /scoutflo:connect"; exit 1; }
 GCP_IDX=0
 if [ "$GCP_KIND" = seq ]; then
-  [ -n "${SCOUTFLO_TARGET:-}" ] || { echo "gcp in $CFG lists several projects, and cloud spend is per project, so this lane will not choose one for you: re-run it once per project with SCOUTFLO_TARGET=<label> set and its own SCOUTFLO_AUDIT_DIR. Labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
+  [ -n "${SCOUTFLO_TARGET:-}" ] || { echo "gcp in $CFG is a labeled list and cloud spend is per project, so this lane will not choose an entry for you: re-run it once per project with SCOUTFLO_TARGET=<label> set and its own SCOUTFLO_AUDIT_DIR. Labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
   _i=0; GCP_IDX=-1
   while [ "$_i" -lt "$GCP_N" ]; do [ "$(sh "$TT" "$CFG" gcp label "$_i")" = "$SCOUTFLO_TARGET" ] && { GCP_IDX=$_i; break; }; _i=$((_i+1)); done
   [ "$GCP_IDX" -ge 0 ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no gcp target in $CFG; labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
@@ -367,7 +376,7 @@ GCP_KIND=$(sh "$TT" "$CFG" gcp kind); GCP_N=$(sh "$TT" "$CFG" gcp count)
 [ "${GCP_N:-0}" -ge 1 ] || { echo "no gcp target configured in $CFG; run /scoutflo:connect"; exit 1; }
 GCP_IDX=0
 if [ "$GCP_KIND" = seq ]; then
-  [ -n "${SCOUTFLO_TARGET:-}" ] || { echo "gcp in $CFG lists several projects, and cloud spend is per project, so this lane will not choose one for you: re-run it once per project with SCOUTFLO_TARGET=<label> set and its own SCOUTFLO_AUDIT_DIR. Labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
+  [ -n "${SCOUTFLO_TARGET:-}" ] || { echo "gcp in $CFG is a labeled list and cloud spend is per project, so this lane will not choose an entry for you: re-run it once per project with SCOUTFLO_TARGET=<label> set and its own SCOUTFLO_AUDIT_DIR. Labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
   _i=0; GCP_IDX=-1
   while [ "$_i" -lt "$GCP_N" ]; do [ "$(sh "$TT" "$CFG" gcp label "$_i")" = "$SCOUTFLO_TARGET" ] && { GCP_IDX=$_i; break; }; _i=$((_i+1)); done
   [ "$GCP_IDX" -ge 0 ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no gcp target in $CFG; labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
@@ -411,7 +420,7 @@ GCP_KIND=$(sh "$TT" "$CFG" gcp kind); GCP_N=$(sh "$TT" "$CFG" gcp count)
 [ "${GCP_N:-0}" -ge 1 ] || { echo "no gcp target configured in $CFG; run /scoutflo:connect"; exit 1; }
 GCP_IDX=0
 if [ "$GCP_KIND" = seq ]; then
-  [ -n "${SCOUTFLO_TARGET:-}" ] || { echo "gcp in $CFG lists several projects, and cloud spend is per project, so this lane will not choose one for you: re-run it once per project with SCOUTFLO_TARGET=<label> set and its own SCOUTFLO_AUDIT_DIR. Labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
+  [ -n "${SCOUTFLO_TARGET:-}" ] || { echo "gcp in $CFG is a labeled list and cloud spend is per project, so this lane will not choose an entry for you: re-run it once per project with SCOUTFLO_TARGET=<label> set and its own SCOUTFLO_AUDIT_DIR. Labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
   _i=0; GCP_IDX=-1
   while [ "$_i" -lt "$GCP_N" ]; do [ "$(sh "$TT" "$CFG" gcp label "$_i")" = "$SCOUTFLO_TARGET" ] && { GCP_IDX=$_i; break; }; _i=$((_i+1)); done
   [ "$GCP_IDX" -ge 0 ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no gcp target in $CFG; labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
@@ -437,7 +446,7 @@ GCP_KIND=$(sh "$TT" "$CFG" gcp kind); GCP_N=$(sh "$TT" "$CFG" gcp count)
 [ "${GCP_N:-0}" -ge 1 ] || { echo "no gcp target configured in $CFG; run /scoutflo:connect"; exit 1; }
 GCP_IDX=0
 if [ "$GCP_KIND" = seq ]; then
-  [ -n "${SCOUTFLO_TARGET:-}" ] || { echo "gcp in $CFG lists several projects, and cloud spend is per project, so this lane will not choose one for you: re-run it once per project with SCOUTFLO_TARGET=<label> set and its own SCOUTFLO_AUDIT_DIR. Labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
+  [ -n "${SCOUTFLO_TARGET:-}" ] || { echo "gcp in $CFG is a labeled list and cloud spend is per project, so this lane will not choose an entry for you: re-run it once per project with SCOUTFLO_TARGET=<label> set and its own SCOUTFLO_AUDIT_DIR. Labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
   _i=0; GCP_IDX=-1
   while [ "$_i" -lt "$GCP_N" ]; do [ "$(sh "$TT" "$CFG" gcp label "$_i")" = "$SCOUTFLO_TARGET" ] && { GCP_IDX=$_i; break; }; _i=$((_i+1)); done
   [ "$GCP_IDX" -ge 0 ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no gcp target in $CFG; labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
@@ -502,7 +511,7 @@ GCP_KIND=$(sh "$TT" "$CFG" gcp kind); GCP_N=$(sh "$TT" "$CFG" gcp count)
 [ "${GCP_N:-0}" -ge 1 ] || { echo "no gcp target configured in $CFG; run /scoutflo:connect"; exit 1; }
 GCP_IDX=0
 if [ "$GCP_KIND" = seq ]; then
-  [ -n "${SCOUTFLO_TARGET:-}" ] || { echo "gcp in $CFG lists several projects, and cloud spend is per project, so this lane will not choose one for you: re-run it once per project with SCOUTFLO_TARGET=<label> set and its own SCOUTFLO_AUDIT_DIR. Labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
+  [ -n "${SCOUTFLO_TARGET:-}" ] || { echo "gcp in $CFG is a labeled list and cloud spend is per project, so this lane will not choose an entry for you: re-run it once per project with SCOUTFLO_TARGET=<label> set and its own SCOUTFLO_AUDIT_DIR. Labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
   _i=0; GCP_IDX=-1
   while [ "$_i" -lt "$GCP_N" ]; do [ "$(sh "$TT" "$CFG" gcp label "$_i")" = "$SCOUTFLO_TARGET" ] && { GCP_IDX=$_i; break; }; _i=$((_i+1)); done
   [ "$GCP_IDX" -ge 0 ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no gcp target in $CFG; labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
@@ -582,7 +591,7 @@ GCP_KIND=$(sh "$TT" "$CFG" gcp kind); GCP_N=$(sh "$TT" "$CFG" gcp count)
 [ "${GCP_N:-0}" -ge 1 ] || { echo "no gcp target configured in $CFG; run /scoutflo:connect"; exit 1; }
 GCP_IDX=0
 if [ "$GCP_KIND" = seq ]; then
-  [ -n "${SCOUTFLO_TARGET:-}" ] || { echo "gcp in $CFG lists several projects, and cloud spend is per project, so this lane will not choose one for you: re-run it once per project with SCOUTFLO_TARGET=<label> set and its own SCOUTFLO_AUDIT_DIR. Labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
+  [ -n "${SCOUTFLO_TARGET:-}" ] || { echo "gcp in $CFG is a labeled list and cloud spend is per project, so this lane will not choose an entry for you: re-run it once per project with SCOUTFLO_TARGET=<label> set and its own SCOUTFLO_AUDIT_DIR. Labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
   _i=0; GCP_IDX=-1
   while [ "$_i" -lt "$GCP_N" ]; do [ "$(sh "$TT" "$CFG" gcp label "$_i")" = "$SCOUTFLO_TARGET" ] && { GCP_IDX=$_i; break; }; _i=$((_i+1)); done
   [ "$GCP_IDX" -ge 0 ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no gcp target in $CFG; labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
@@ -650,7 +659,7 @@ GCP_KIND=$(sh "$TT" "$CFG" gcp kind); GCP_N=$(sh "$TT" "$CFG" gcp count)
 [ "${GCP_N:-0}" -ge 1 ] || { echo "no gcp target configured in $CFG; run /scoutflo:connect"; exit 1; }
 GCP_IDX=0
 if [ "$GCP_KIND" = seq ]; then
-  [ -n "${SCOUTFLO_TARGET:-}" ] || { echo "gcp in $CFG lists several projects, and cloud spend is per project, so this lane will not choose one for you: re-run it once per project with SCOUTFLO_TARGET=<label> set and its own SCOUTFLO_AUDIT_DIR. Labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
+  [ -n "${SCOUTFLO_TARGET:-}" ] || { echo "gcp in $CFG is a labeled list and cloud spend is per project, so this lane will not choose an entry for you: re-run it once per project with SCOUTFLO_TARGET=<label> set and its own SCOUTFLO_AUDIT_DIR. Labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
   _i=0; GCP_IDX=-1
   while [ "$_i" -lt "$GCP_N" ]; do [ "$(sh "$TT" "$CFG" gcp label "$_i")" = "$SCOUTFLO_TARGET" ] && { GCP_IDX=$_i; break; }; _i=$((_i+1)); done
   [ "$GCP_IDX" -ge 0 ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no gcp target in $CFG; labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
@@ -695,7 +704,7 @@ GCP_KIND=$(sh "$TT" "$CFG" gcp kind); GCP_N=$(sh "$TT" "$CFG" gcp count)
 [ "${GCP_N:-0}" -ge 1 ] || { echo "no gcp target configured in $CFG; run /scoutflo:connect"; exit 1; }
 GCP_IDX=0
 if [ "$GCP_KIND" = seq ]; then
-  [ -n "${SCOUTFLO_TARGET:-}" ] || { echo "gcp in $CFG lists several projects, and cloud spend is per project, so this lane will not choose one for you: re-run it once per project with SCOUTFLO_TARGET=<label> set and its own SCOUTFLO_AUDIT_DIR. Labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
+  [ -n "${SCOUTFLO_TARGET:-}" ] || { echo "gcp in $CFG is a labeled list and cloud spend is per project, so this lane will not choose an entry for you: re-run it once per project with SCOUTFLO_TARGET=<label> set and its own SCOUTFLO_AUDIT_DIR. Labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
   _i=0; GCP_IDX=-1
   while [ "$_i" -lt "$GCP_N" ]; do [ "$(sh "$TT" "$CFG" gcp label "$_i")" = "$SCOUTFLO_TARGET" ] && { GCP_IDX=$_i; break; }; _i=$((_i+1)); done
   [ "$GCP_IDX" -ge 0 ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no gcp target in $CFG; labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
@@ -747,7 +756,7 @@ GCP_KIND=$(sh "$TT" "$CFG" gcp kind); GCP_N=$(sh "$TT" "$CFG" gcp count)
 [ "${GCP_N:-0}" -ge 1 ] || { echo "no gcp target configured in $CFG; run /scoutflo:connect"; exit 1; }
 GCP_IDX=0
 if [ "$GCP_KIND" = seq ]; then
-  [ -n "${SCOUTFLO_TARGET:-}" ] || { echo "gcp in $CFG lists several projects, and cloud spend is per project, so this lane will not choose one for you: re-run it once per project with SCOUTFLO_TARGET=<label> set and its own SCOUTFLO_AUDIT_DIR. Labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
+  [ -n "${SCOUTFLO_TARGET:-}" ] || { echo "gcp in $CFG is a labeled list and cloud spend is per project, so this lane will not choose an entry for you: re-run it once per project with SCOUTFLO_TARGET=<label> set and its own SCOUTFLO_AUDIT_DIR. Labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
   _i=0; GCP_IDX=-1
   while [ "$_i" -lt "$GCP_N" ]; do [ "$(sh "$TT" "$CFG" gcp label "$_i")" = "$SCOUTFLO_TARGET" ] && { GCP_IDX=$_i; break; }; _i=$((_i+1)); done
   [ "$GCP_IDX" -ge 0 ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no gcp target in $CFG; labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
@@ -790,7 +799,7 @@ GCP_KIND=$(sh "$TT" "$CFG" gcp kind); GCP_N=$(sh "$TT" "$CFG" gcp count)
 [ "${GCP_N:-0}" -ge 1 ] || { echo "no gcp target configured in $CFG; run /scoutflo:connect"; exit 1; }
 GCP_IDX=0
 if [ "$GCP_KIND" = seq ]; then
-  [ -n "${SCOUTFLO_TARGET:-}" ] || { echo "gcp in $CFG lists several projects, and cloud spend is per project, so this lane will not choose one for you: re-run it once per project with SCOUTFLO_TARGET=<label> set and its own SCOUTFLO_AUDIT_DIR. Labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
+  [ -n "${SCOUTFLO_TARGET:-}" ] || { echo "gcp in $CFG is a labeled list and cloud spend is per project, so this lane will not choose an entry for you: re-run it once per project with SCOUTFLO_TARGET=<label> set and its own SCOUTFLO_AUDIT_DIR. Labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
   _i=0; GCP_IDX=-1
   while [ "$_i" -lt "$GCP_N" ]; do [ "$(sh "$TT" "$CFG" gcp label "$_i")" = "$SCOUTFLO_TARGET" ] && { GCP_IDX=$_i; break; }; _i=$((_i+1)); done
   [ "$GCP_IDX" -ge 0 ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no gcp target in $CFG; labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
@@ -846,7 +855,7 @@ GCP_KIND=$(sh "$TT" "$CFG" gcp kind); GCP_N=$(sh "$TT" "$CFG" gcp count)
 [ "${GCP_N:-0}" -ge 1 ] || { echo "no gcp target configured in $CFG; run /scoutflo:connect"; exit 1; }
 GCP_IDX=0
 if [ "$GCP_KIND" = seq ]; then
-  [ -n "${SCOUTFLO_TARGET:-}" ] || { echo "gcp in $CFG lists several projects, and cloud spend is per project, so this lane will not choose one for you: re-run it once per project with SCOUTFLO_TARGET=<label> set and its own SCOUTFLO_AUDIT_DIR. Labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
+  [ -n "${SCOUTFLO_TARGET:-}" ] || { echo "gcp in $CFG is a labeled list and cloud spend is per project, so this lane will not choose an entry for you: re-run it once per project with SCOUTFLO_TARGET=<label> set and its own SCOUTFLO_AUDIT_DIR. Labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
   _i=0; GCP_IDX=-1
   while [ "$_i" -lt "$GCP_N" ]; do [ "$(sh "$TT" "$CFG" gcp label "$_i")" = "$SCOUTFLO_TARGET" ] && { GCP_IDX=$_i; break; }; _i=$((_i+1)); done
   [ "$GCP_IDX" -ge 0 ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no gcp target in $CFG; labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
@@ -915,7 +924,7 @@ GCP_KIND=$(sh "$TT" "$CFG" gcp kind); GCP_N=$(sh "$TT" "$CFG" gcp count)
 [ "${GCP_N:-0}" -ge 1 ] || { echo "no gcp target configured in $CFG; run /scoutflo:connect"; exit 1; }
 GCP_IDX=0
 if [ "$GCP_KIND" = seq ]; then
-  [ -n "${SCOUTFLO_TARGET:-}" ] || { echo "gcp in $CFG lists several projects, and cloud spend is per project, so this lane will not choose one for you: re-run it once per project with SCOUTFLO_TARGET=<label> set and its own SCOUTFLO_AUDIT_DIR. Labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
+  [ -n "${SCOUTFLO_TARGET:-}" ] || { echo "gcp in $CFG is a labeled list and cloud spend is per project, so this lane will not choose an entry for you: re-run it once per project with SCOUTFLO_TARGET=<label> set and its own SCOUTFLO_AUDIT_DIR. Labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
   _i=0; GCP_IDX=-1
   while [ "$_i" -lt "$GCP_N" ]; do [ "$(sh "$TT" "$CFG" gcp label "$_i")" = "$SCOUTFLO_TARGET" ] && { GCP_IDX=$_i; break; }; _i=$((_i+1)); done
   [ "$GCP_IDX" -ge 0 ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no gcp target in $CFG; labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
@@ -952,7 +961,7 @@ GCP_KIND=$(sh "$TT" "$CFG" gcp kind); GCP_N=$(sh "$TT" "$CFG" gcp count)
 [ "${GCP_N:-0}" -ge 1 ] || { echo "no gcp target configured in $CFG; run /scoutflo:connect"; exit 1; }
 GCP_IDX=0
 if [ "$GCP_KIND" = seq ]; then
-  [ -n "${SCOUTFLO_TARGET:-}" ] || { echo "gcp in $CFG lists several projects, and cloud spend is per project, so this lane will not choose one for you: re-run it once per project with SCOUTFLO_TARGET=<label> set and its own SCOUTFLO_AUDIT_DIR. Labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
+  [ -n "${SCOUTFLO_TARGET:-}" ] || { echo "gcp in $CFG is a labeled list and cloud spend is per project, so this lane will not choose an entry for you: re-run it once per project with SCOUTFLO_TARGET=<label> set and its own SCOUTFLO_AUDIT_DIR. Labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
   _i=0; GCP_IDX=-1
   while [ "$_i" -lt "$GCP_N" ]; do [ "$(sh "$TT" "$CFG" gcp label "$_i")" = "$SCOUTFLO_TARGET" ] && { GCP_IDX=$_i; break; }; _i=$((_i+1)); done
   [ "$GCP_IDX" -ge 0 ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no gcp target in $CFG; labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
@@ -1018,7 +1027,7 @@ GCP_KIND=$(sh "$TT" "$CFG" gcp kind); GCP_N=$(sh "$TT" "$CFG" gcp count)
 [ "${GCP_N:-0}" -ge 1 ] || { echo "no gcp target configured in $CFG; run /scoutflo:connect"; exit 1; }
 GCP_IDX=0
 if [ "$GCP_KIND" = seq ]; then
-  [ -n "${SCOUTFLO_TARGET:-}" ] || { echo "gcp in $CFG lists several projects, and cloud spend is per project, so this lane will not choose one for you: re-run it once per project with SCOUTFLO_TARGET=<label> set and its own SCOUTFLO_AUDIT_DIR. Labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
+  [ -n "${SCOUTFLO_TARGET:-}" ] || { echo "gcp in $CFG is a labeled list and cloud spend is per project, so this lane will not choose an entry for you: re-run it once per project with SCOUTFLO_TARGET=<label> set and its own SCOUTFLO_AUDIT_DIR. Labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
   _i=0; GCP_IDX=-1
   while [ "$_i" -lt "$GCP_N" ]; do [ "$(sh "$TT" "$CFG" gcp label "$_i")" = "$SCOUTFLO_TARGET" ] && { GCP_IDX=$_i; break; }; _i=$((_i+1)); done
   [ "$GCP_IDX" -ge 0 ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no gcp target in $CFG; labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
@@ -1100,7 +1109,7 @@ GCP_KIND=$(sh "$TT" "$CFG" gcp kind); GCP_N=$(sh "$TT" "$CFG" gcp count)
 [ "${GCP_N:-0}" -ge 1 ] || { echo "no gcp target configured in $CFG; run /scoutflo:connect"; exit 1; }
 GCP_IDX=0
 if [ "$GCP_KIND" = seq ]; then
-  [ -n "${SCOUTFLO_TARGET:-}" ] || { echo "gcp in $CFG lists several projects, and cloud spend is per project, so this lane will not choose one for you: re-run it once per project with SCOUTFLO_TARGET=<label> set and its own SCOUTFLO_AUDIT_DIR. Labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
+  [ -n "${SCOUTFLO_TARGET:-}" ] || { echo "gcp in $CFG is a labeled list and cloud spend is per project, so this lane will not choose an entry for you: re-run it once per project with SCOUTFLO_TARGET=<label> set and its own SCOUTFLO_AUDIT_DIR. Labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
   _i=0; GCP_IDX=-1
   while [ "$_i" -lt "$GCP_N" ]; do [ "$(sh "$TT" "$CFG" gcp label "$_i")" = "$SCOUTFLO_TARGET" ] && { GCP_IDX=$_i; break; }; _i=$((_i+1)); done
   [ "$GCP_IDX" -ge 0 ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no gcp target in $CFG; labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
@@ -1175,7 +1184,7 @@ GCP_KIND=$(sh "$TT" "$CFG" gcp kind); GCP_N=$(sh "$TT" "$CFG" gcp count)
 [ "${GCP_N:-0}" -ge 1 ] || { echo "no gcp target configured in $CFG; run /scoutflo:connect"; exit 1; }
 GCP_IDX=0
 if [ "$GCP_KIND" = seq ]; then
-  [ -n "${SCOUTFLO_TARGET:-}" ] || { echo "gcp in $CFG lists several projects, and cloud spend is per project, so this lane will not choose one for you: re-run it once per project with SCOUTFLO_TARGET=<label> set and its own SCOUTFLO_AUDIT_DIR. Labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
+  [ -n "${SCOUTFLO_TARGET:-}" ] || { echo "gcp in $CFG is a labeled list and cloud spend is per project, so this lane will not choose an entry for you: re-run it once per project with SCOUTFLO_TARGET=<label> set and its own SCOUTFLO_AUDIT_DIR. Labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
   _i=0; GCP_IDX=-1
   while [ "$_i" -lt "$GCP_N" ]; do [ "$(sh "$TT" "$CFG" gcp label "$_i")" = "$SCOUTFLO_TARGET" ] && { GCP_IDX=$_i; break; }; _i=$((_i+1)); done
   [ "$GCP_IDX" -ge 0 ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no gcp target in $CFG; labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
@@ -1312,7 +1321,7 @@ GCP_KIND=$(sh "$TT" "$CFG" gcp kind); GCP_N=$(sh "$TT" "$CFG" gcp count)
 [ "${GCP_N:-0}" -ge 1 ] || { echo "no gcp target configured in $CFG; run /scoutflo:connect"; exit 1; }
 GCP_IDX=0
 if [ "$GCP_KIND" = seq ]; then
-  [ -n "${SCOUTFLO_TARGET:-}" ] || { echo "gcp in $CFG lists several projects, and cloud spend is per project, so this lane will not choose one for you: re-run it once per project with SCOUTFLO_TARGET=<label> set and its own SCOUTFLO_AUDIT_DIR. Labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
+  [ -n "${SCOUTFLO_TARGET:-}" ] || { echo "gcp in $CFG is a labeled list and cloud spend is per project, so this lane will not choose an entry for you: re-run it once per project with SCOUTFLO_TARGET=<label> set and its own SCOUTFLO_AUDIT_DIR. Labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
   _i=0; GCP_IDX=-1
   while [ "$_i" -lt "$GCP_N" ]; do [ "$(sh "$TT" "$CFG" gcp label "$_i")" = "$SCOUTFLO_TARGET" ] && { GCP_IDX=$_i; break; }; _i=$((_i+1)); done
   [ "$GCP_IDX" -ge 0 ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no gcp target in $CFG; labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }

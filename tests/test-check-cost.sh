@@ -307,9 +307,15 @@ sed -n "$((_rec_line-1)),$((_rec_line))p" "$DOC" | grep -qF 'CLOUDSDK_CORE_DISAB
   || fail "the Recommender probe can prompt to enable a disabled API (no CLOUDSDK_CORE_DISABLE_PROMPTS)"
 # Both families still probed: compute alone is a false green for committed-use savings.
 grep -qF 'google.compute.image.IdleResourceRecommender' "$DOC" || fail "the compute recommender family is no longer probed"
-grep -qF 'google.cloudbilling.commitment.SpendBasedCommitmentRecommender' "$DOC" || fail "the commitment (CUD) recommender family is no longer probed"
+# The probe must name the recommender audit-cost ACTUALLY calls for COST-GCP-007.
+# Pinning a different one is how the preflight drifted from the audit in the first place.
+grep -qF 'google.compute.commitment.UsageCommitmentRecommender' "$DOC" || fail "the commitment (CUD) probe does not use google.compute.commitment.UsageCommitmentRecommender, the recommender COST-GCP-007 actually reads"
 # Each failure must name its own cause rather than a bare status code.
-for c in 'the Recommender API is not enabled on this project' 'lacks roles/recommender.viewer' 'gcloud is not installed'; do
+# NOTE: no 'gcloud is not installed' case. That arm is unreachable (doctor has
+# already proved `command -v gcloud` succeeds and reports binary-gcloud itself), and
+# asserting it was VACUOUS — the string is satisfied by the pre-existing binary-gcloud
+# hint text, so the whole branch could be deleted with this test still green.
+for c in 'the Recommender API is not enabled on this project' 'lacks roles/recommender.viewer'; do
   grep -qF "$c" "$DOC" || fail "the probe cannot report the distinct cause: $c"
 done
 echo "PASS"

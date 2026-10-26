@@ -1533,17 +1533,18 @@ else
                 --project="$GCP_PROJECT" --location="$1" --recommender="$2" \
                 --limit=1 --format='value(name)' 2>"$GCP_REC_ERRF" >/dev/null
             }
-            GCP_REC_ERRF="${TMPDIR:-/tmp}/scoutflo-doctor-rec.$$"
+            GCP_REC_ERRF="$(mktemp "${TMPDIR:-/tmp}/scoutflo-doctor-rec.XXXXXX")"  # mktemp, not $$: a predictable path in a shared tmpdir is a symlink target
             if command -v gcloud >/dev/null 2>&1; then
               _grec global google.compute.image.IdleResourceRecommender && GCP_REC_RC=0 || GCP_REC_RC=$?
               GCP_REC_ERR="$(cat "$GCP_REC_ERRF" 2>/dev/null || true)"
-              _grec "$GCP_REC_REGION" google.cloudbilling.commitment.SpendBasedCommitmentRecommender && GCP_CUD_RC=0 || GCP_CUD_RC=$?
+              _grec "$GCP_REC_REGION" google.compute.commitment.UsageCommitmentRecommender && GCP_CUD_RC=0 || GCP_CUD_RC=$?
               GCP_CUD_ERR="$(cat "$GCP_REC_ERRF" 2>/dev/null || true)"
               rm -f "$GCP_REC_ERRF"
-            else
-              GCP_REC_RC=127; GCP_CUD_RC=127
-              GCP_REC_ERR="gcloud not installed"; GCP_CUD_ERR="$GCP_REC_ERR"
             fi
+            # NOTE: no "gcloud missing" arm. The enclosing branch has already proved
+            # `command -v gcloud` succeeds (doctor reports that as its own binary-gcloud
+            # row), so such an arm would be dead code — and a test asserting it would
+            # pass on the binary-gcloud hint text alone rather than on anything here.
             # Name the actual blocker rather than a bare status, so the unlock is the right one.
             _gcause() {  # $1 stderr text
               case "$1" in
@@ -1557,7 +1558,7 @@ else
             if [ "$GCP_REC_RC" -eq 0 ] && [ "$GCP_CUD_RC" -eq 0 ]; then
               row "$GCP_INT" cost-permissions yes "${GCP_CRED_VAR:-none}" pass - "compute + commitment families readable via gcloud recommender (the same call audit-cost makes); Cloud SQL / GKE / Cloud Run families are read per-check and reported excluded individually if denied"
             elif [ "$GCP_REC_RC" -eq 0 ]; then
-              row "$GCP_INT" cost-permissions yes "${GCP_CRED_VAR:-none}" skipped - "PARTIAL: compute family reads but the commitment/committed-use-discount family does not ($(_gcause "$GCP_CUD_ERR")) in ${GCP_REC_REGION}; audit-cost reports COST-GCP-005 excluded with that reason. ${GCP_REC_UNLOCK}"
+              row "$GCP_INT" cost-permissions yes "${GCP_CRED_VAR:-none}" skipped - "PARTIAL: compute family reads but the commitment/committed-use-discount family does not ($(_gcause "$GCP_CUD_ERR")) in ${GCP_REC_REGION}; audit-cost reports COST-GCP-007 (committed-use discounts) excluded with that reason. ${GCP_REC_UNLOCK}"
             else
               row "$GCP_INT" cost-permissions yes "${GCP_CRED_VAR:-none}" skipped - "Recommender not readable: $(_gcause "$GCP_REC_ERR"); audit-cost will report GCP native-dollar checks (COST-GCP-001..010) excluded with that reason. ${GCP_REC_UNLOCK}"
             fi
