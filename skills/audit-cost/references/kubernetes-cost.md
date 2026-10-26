@@ -115,7 +115,23 @@ identity preamble and the same `timeSeries` GET shape as
 
 ```bash
 set -eu
-GCP_PROJECT="your-project-id"      # gcp.project
+# Resolve the CURRENT gcp target through the shared enumerator — a single block, or the
+# SCOUTFLO_TARGET-selected item of a labeled list. A list with no target selected STOPS: these
+# utilisation windows anchor per-namespace cost, so the wrong project would misattribute spend.
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+[ -f "$CFG" ] || { echo "missing $CFG; run /scoutflo:connect"; exit 1; }
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+GCP_KIND=$(sh "$TT" "$CFG" gcp kind); GCP_N=$(sh "$TT" "$CFG" gcp count)
+[ "${GCP_N:-0}" -ge 1 ] || { echo "no gcp target configured in $CFG; run /scoutflo:connect"; exit 1; }
+GCP_IDX=0
+if [ "$GCP_KIND" = seq ]; then
+  [ -n "${SCOUTFLO_TARGET:-}" ] || { echo "gcp in $CFG lists several projects, and cloud spend is per project, so this lane will not choose one for you: re-run it once per project with SCOUTFLO_TARGET=<label> set and its own SCOUTFLO_AUDIT_DIR. Labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
+  _i=0; GCP_IDX=-1
+  while [ "$_i" -lt "$GCP_N" ]; do [ "$(sh "$TT" "$CFG" gcp label "$_i")" = "$SCOUTFLO_TARGET" ] && { GCP_IDX=$_i; break; }; _i=$((_i+1)); done
+  [ "$GCP_IDX" -ge 0 ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no gcp target in $CFG; labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
+fi
+GCP_PROJECT=$(sh "$TT" "$CFG" gcp get "$GCP_IDX" project)
+[ -n "$GCP_PROJECT" ] || { echo "the selected gcp target names no project in $CFG; run /scoutflo:connect"; exit 1; }
 MON_API="https://monitoring.googleapis.com/v3"
 if [ -n "${GOOGLE_APPLICATION_CREDENTIALS:-}" ]; then TOKEN="$(gcloud auth application-default print-access-token)"; export CLOUDSDK_AUTH_ACCESS_TOKEN="$TOKEN"; else TOKEN="$(gcloud auth print-access-token)"; fi
 # Portable 7-day window: BSD date first, GNU fallback; both labeled.

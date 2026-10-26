@@ -8,7 +8,10 @@
 #
 # Exemptions (documented, not silent):
 #   - audit-all: orchestrator; it aggregates the per-target dirs (two-level glob), not a target.
-#   - audit-cost: cross-provider aggregator; no own connection block.
+#   - audit-cost: cross-provider aggregator. It DOES resolve its own gcp/kubernetes
+#     targets through the enumerator and nests output as cost/<target>/<date>, but it
+#     emits scoutflo-cost/v1 (not the scored v2 ledger) and the rollup consumers skip
+#     */cost/* by design, so the two markers this gate asserts do not apply verbatim.
 #   - audit-alertmanager, audit-prometheus: these read the SHARED top-level backend block(s)
 #     (prometheus/alertmanager) as a single mapping, not a labeled own block — a labeled list
 #     under prometheus: would break doctor/audit-alertmanager, which read `cfg prometheus url`.

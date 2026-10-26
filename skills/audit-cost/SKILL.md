@@ -17,8 +17,8 @@ A cost report ranks opportunities by dollars; it is deliberately **not** folded 
 
 ## Outputs
 
-- `./scoutflo-audits/cost/<YYYY-MM-DD>/findings.json` per the [cost schema](../../report-standard/cost-schema.md) (`scoutflo-cost/v1`), finding IDs `COST-<PROV>-NNN`.
-- `./scoutflo-audits/cost/<YYYY-MM-DD>/report.md` — leads with the savings summary line, then per-provider ranked tables, then top-opportunity detail.
+- `./scoutflo-audits/cost/<YYYY-MM-DD>/findings.json` — or `cost/<target>/<YYYY-MM-DD>/` when `SCOUTFLO_TARGET` selects one of several configured targets — per the [cost schema](../../report-standard/cost-schema.md) (`scoutflo-cost/v1`), finding IDs `COST-<PROV>-NNN`.
+- `./scoutflo-audits/cost/<YYYY-MM-DD>/report.md` (same per-target nesting) — leads with the savings summary line, then per-provider ranked tables, then top-opportunity detail.
 - One history line appended to `./scoutflo-audits/cost/history.jsonl` (date, opportunity counts, native monthly savings identified).
 
 ## Doctor gate
@@ -191,7 +191,14 @@ them, so a point-in-time reading is never read as a sustained trend.
 
 ```bash
 set -eu
-OUT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/cost/$(date -u +%Y-%m-%d)"
+# Nest per target when one was selected. The GCP lane now STOPS on a multi-project
+# `gcp:` list unless SCOUTFLO_TARGET names which project to cost, so a multi-project
+# estate necessarily runs this skill once per target — and a flat `cost/<date>/`
+# would make the second run of the day silently OVERWRITE the first, losing a whole
+# project's findings with no error. Same `<integration>/<label>/<date>` shape every
+# own-block audit uses. A single-target estate is unchanged.
+COST_SEG="cost${SCOUTFLO_TARGET:+/${SCOUTFLO_TARGET}}"
+OUT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${COST_SEG}/$(date -u +%Y-%m-%d)"
 mkdir -p "$OUT"
 # ... write findings.json (scoutflo-cost/v1) and report.md per the standard, then verify:
 jq -e '.schema=="scoutflo-cost/v1" and (.findings|type=="array") and .summary' "$OUT/findings.json" >/dev/null && echo "findings.json valid"

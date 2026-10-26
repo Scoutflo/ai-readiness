@@ -84,7 +84,24 @@ One permanent ID per check; IDs never change or get reused. "Savings figure" is 
 - **Identity preamble.** Every block that talks to a Google API declares its own project and mints its own identity, so each block runs alone in a fresh shell and the run holds exactly one identity with no silent fallback:
 
 ```bash
-GCP_PROJECT="your-project-id"   # gcp.project — clearly-marked config placeholder, never a hardcoded account
+# Resolve the CURRENT gcp target from toolkit.yaml through the shared enumerator — a single block,
+# or the SCOUTFLO_TARGET-selected item of a labeled list (no yq required). Never hand-typed: when
+# gcp: lists several projects there is no single gcp.project, and cloud spend belongs to exactly one
+# project, so picking one silently would attribute another project's bill to this report.
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+[ -f "$CFG" ] || { echo "missing $CFG; run /scoutflo:connect"; exit 1; }
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+GCP_KIND=$(sh "$TT" "$CFG" gcp kind); GCP_N=$(sh "$TT" "$CFG" gcp count)
+[ "${GCP_N:-0}" -ge 1 ] || { echo "no gcp target configured in $CFG; run /scoutflo:connect"; exit 1; }
+GCP_IDX=0
+if [ "$GCP_KIND" = seq ]; then
+  [ -n "${SCOUTFLO_TARGET:-}" ] || { echo "gcp in $CFG lists several projects, and cloud spend is per project, so this lane will not choose one for you: re-run it once per project with SCOUTFLO_TARGET=<label> set and its own SCOUTFLO_AUDIT_DIR. Labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
+  _i=0; GCP_IDX=-1
+  while [ "$_i" -lt "$GCP_N" ]; do [ "$(sh "$TT" "$CFG" gcp label "$_i")" = "$SCOUTFLO_TARGET" ] && { GCP_IDX=$_i; break; }; _i=$((_i+1)); done
+  [ "$GCP_IDX" -ge 0 ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no gcp target in $CFG; labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
+fi
+GCP_LABEL=$(sh "$TT" "$CFG" gcp label "$GCP_IDX"); GCP_PROJECT=$(sh "$TT" "$CFG" gcp get "$GCP_IDX" project)
+[ -n "$GCP_PROJECT" ] || { echo "gcp target '${GCP_LABEL:-?}' names no project in $CFG; run /scoutflo:connect"; exit 1; }
 # gcp.credentials_env (optional) names GOOGLE_APPLICATION_CREDENTIALS, the key-file path variable.
 # Set: the key file is the identity for gcloud and REST alike. Unset: your active gcloud login is.
 export CLOUDSDK_CORE_DISABLE_PROMPTS=1   # MANDATORY — see below; never let gcloud ask a question
@@ -140,7 +157,24 @@ Every native-dollar check pulls one recommender and extracts the verbatim cost f
 
 ```bash
 set -eu
-GCP_PROJECT="your-project-id"       # gcp.project
+# Resolve the CURRENT gcp target from toolkit.yaml through the shared enumerator — a single block,
+# or the SCOUTFLO_TARGET-selected item of a labeled list (no yq required). Never hand-typed: when
+# gcp: lists several projects there is no single gcp.project, and cloud spend belongs to exactly one
+# project, so picking one silently would attribute another project's bill to this report.
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+[ -f "$CFG" ] || { echo "missing $CFG; run /scoutflo:connect"; exit 1; }
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+GCP_KIND=$(sh "$TT" "$CFG" gcp kind); GCP_N=$(sh "$TT" "$CFG" gcp count)
+[ "${GCP_N:-0}" -ge 1 ] || { echo "no gcp target configured in $CFG; run /scoutflo:connect"; exit 1; }
+GCP_IDX=0
+if [ "$GCP_KIND" = seq ]; then
+  [ -n "${SCOUTFLO_TARGET:-}" ] || { echo "gcp in $CFG lists several projects, and cloud spend is per project, so this lane will not choose one for you: re-run it once per project with SCOUTFLO_TARGET=<label> set and its own SCOUTFLO_AUDIT_DIR. Labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
+  _i=0; GCP_IDX=-1
+  while [ "$_i" -lt "$GCP_N" ]; do [ "$(sh "$TT" "$CFG" gcp label "$_i")" = "$SCOUTFLO_TARGET" ] && { GCP_IDX=$_i; break; }; _i=$((_i+1)); done
+  [ "$GCP_IDX" -ge 0 ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no gcp target in $CFG; labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
+fi
+GCP_LABEL=$(sh "$TT" "$CFG" gcp label "$GCP_IDX"); GCP_PROJECT=$(sh "$TT" "$CFG" gcp get "$GCP_IDX" project)
+[ -n "$GCP_PROJECT" ] || { echo "gcp target '${GCP_LABEL:-?}' names no project in $CFG; run /scoutflo:connect"; exit 1; }
 RECOMMENDER="google.compute.instance.IdleResourceRecommender"   # the flag changes per check; location kind must match (see section 3)
 # Zonal recommenders (instances, disks) loop over zones; regional ones (addresses, MIGs, commitments, Cloud SQL) over regions; images use global.
 LOCATIONS="$(gcloud compute zones list --project "$GCP_PROJECT" --filter='status=UP' --format='value(name)')"
@@ -188,7 +222,24 @@ Run the section 5 extraction with each recommender and its correct location kind
 
 ```bash
 set -eu
-GCP_PROJECT="your-project-id"   # gcp.project
+# Resolve the CURRENT gcp target from toolkit.yaml through the shared enumerator — a single block,
+# or the SCOUTFLO_TARGET-selected item of a labeled list (no yq required). Never hand-typed: when
+# gcp: lists several projects there is no single gcp.project, and cloud spend belongs to exactly one
+# project, so picking one silently would attribute another project's bill to this report.
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+[ -f "$CFG" ] || { echo "missing $CFG; run /scoutflo:connect"; exit 1; }
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+GCP_KIND=$(sh "$TT" "$CFG" gcp kind); GCP_N=$(sh "$TT" "$CFG" gcp count)
+[ "${GCP_N:-0}" -ge 1 ] || { echo "no gcp target configured in $CFG; run /scoutflo:connect"; exit 1; }
+GCP_IDX=0
+if [ "$GCP_KIND" = seq ]; then
+  [ -n "${SCOUTFLO_TARGET:-}" ] || { echo "gcp in $CFG lists several projects, and cloud spend is per project, so this lane will not choose one for you: re-run it once per project with SCOUTFLO_TARGET=<label> set and its own SCOUTFLO_AUDIT_DIR. Labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
+  _i=0; GCP_IDX=-1
+  while [ "$_i" -lt "$GCP_N" ]; do [ "$(sh "$TT" "$CFG" gcp label "$_i")" = "$SCOUTFLO_TARGET" ] && { GCP_IDX=$_i; break; }; _i=$((_i+1)); done
+  [ "$GCP_IDX" -ge 0 ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no gcp target in $CFG; labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
+fi
+GCP_LABEL=$(sh "$TT" "$CFG" gcp label "$GCP_IDX"); GCP_PROJECT=$(sh "$TT" "$CFG" gcp get "$GCP_IDX" project)
+[ -n "$GCP_PROJECT" ] || { echo "gcp target '${GCP_LABEL:-?}' names no project in $CFG; run /scoutflo:connect"; exit 1; }
 ZONES="$(gcloud compute zones list --project "$GCP_PROJECT" --filter='status=UP' --format='value(name)')"
 [ -n "$ZONES" ] || { echo "GCP cost: could not enumerate zones for ${GCP_PROJECT} — BLOCKER, not an empty result (the loops below would run zero times and look clean). Report this phase excluded. Unlock: enable compute.googleapis.com and grant roles/compute.viewer."; exit 1; }
 REGIONS="$(gcloud compute regions list --project "$GCP_PROJECT" --filter='status=UP' --format='value(name)')"
@@ -217,7 +268,24 @@ Expected: each recommendation names one instance or MIG, its current and recomme
 
 ```bash
 set -eu
-GCP_PROJECT="your-project-id"   # gcp.project
+# Resolve the CURRENT gcp target from toolkit.yaml through the shared enumerator — a single block,
+# or the SCOUTFLO_TARGET-selected item of a labeled list (no yq required). Never hand-typed: when
+# gcp: lists several projects there is no single gcp.project, and cloud spend belongs to exactly one
+# project, so picking one silently would attribute another project's bill to this report.
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+[ -f "$CFG" ] || { echo "missing $CFG; run /scoutflo:connect"; exit 1; }
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+GCP_KIND=$(sh "$TT" "$CFG" gcp kind); GCP_N=$(sh "$TT" "$CFG" gcp count)
+[ "${GCP_N:-0}" -ge 1 ] || { echo "no gcp target configured in $CFG; run /scoutflo:connect"; exit 1; }
+GCP_IDX=0
+if [ "$GCP_KIND" = seq ]; then
+  [ -n "${SCOUTFLO_TARGET:-}" ] || { echo "gcp in $CFG lists several projects, and cloud spend is per project, so this lane will not choose one for you: re-run it once per project with SCOUTFLO_TARGET=<label> set and its own SCOUTFLO_AUDIT_DIR. Labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
+  _i=0; GCP_IDX=-1
+  while [ "$_i" -lt "$GCP_N" ]; do [ "$(sh "$TT" "$CFG" gcp label "$_i")" = "$SCOUTFLO_TARGET" ] && { GCP_IDX=$_i; break; }; _i=$((_i+1)); done
+  [ "$GCP_IDX" -ge 0 ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no gcp target in $CFG; labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
+fi
+GCP_LABEL=$(sh "$TT" "$CFG" gcp label "$GCP_IDX"); GCP_PROJECT=$(sh "$TT" "$CFG" gcp get "$GCP_IDX" project)
+[ -n "$GCP_PROJECT" ] || { echo "gcp target '${GCP_LABEL:-?}' names no project in $CFG; run /scoutflo:connect"; exit 1; }
 ZONES="$(gcloud compute zones list --project "$GCP_PROJECT" --filter='status=UP' --format='value(name)')"
 [ -n "$ZONES" ] || { echo "GCP cost: could not enumerate zones for ${GCP_PROJECT} — BLOCKER, not an empty result (the loops below would run zero times and look clean). Report this phase excluded. Unlock: enable compute.googleapis.com and grant roles/compute.viewer."; exit 1; }
 REGIONS="$(gcloud compute regions list --project "$GCP_PROJECT" --filter='status=UP' --format='value(name)')"
@@ -244,7 +312,24 @@ Expected: each recommendation names one address (with its region), disk (with it
 
 ```bash
 set -eu
-GCP_PROJECT="your-project-id"   # gcp.project
+# Resolve the CURRENT gcp target from toolkit.yaml through the shared enumerator — a single block,
+# or the SCOUTFLO_TARGET-selected item of a labeled list (no yq required). Never hand-typed: when
+# gcp: lists several projects there is no single gcp.project, and cloud spend belongs to exactly one
+# project, so picking one silently would attribute another project's bill to this report.
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+[ -f "$CFG" ] || { echo "missing $CFG; run /scoutflo:connect"; exit 1; }
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+GCP_KIND=$(sh "$TT" "$CFG" gcp kind); GCP_N=$(sh "$TT" "$CFG" gcp count)
+[ "${GCP_N:-0}" -ge 1 ] || { echo "no gcp target configured in $CFG; run /scoutflo:connect"; exit 1; }
+GCP_IDX=0
+if [ "$GCP_KIND" = seq ]; then
+  [ -n "${SCOUTFLO_TARGET:-}" ] || { echo "gcp in $CFG lists several projects, and cloud spend is per project, so this lane will not choose one for you: re-run it once per project with SCOUTFLO_TARGET=<label> set and its own SCOUTFLO_AUDIT_DIR. Labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
+  _i=0; GCP_IDX=-1
+  while [ "$_i" -lt "$GCP_N" ]; do [ "$(sh "$TT" "$CFG" gcp label "$_i")" = "$SCOUTFLO_TARGET" ] && { GCP_IDX=$_i; break; }; _i=$((_i+1)); done
+  [ "$GCP_IDX" -ge 0 ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no gcp target in $CFG; labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
+fi
+GCP_LABEL=$(sh "$TT" "$CFG" gcp label "$GCP_IDX"); GCP_PROJECT=$(sh "$TT" "$CFG" gcp get "$GCP_IDX" project)
+[ -n "$GCP_PROJECT" ] || { echo "gcp target '${GCP_LABEL:-?}' names no project in $CFG; run /scoutflo:connect"; exit 1; }
 REGIONS="$(gcloud compute regions list --project "$GCP_PROJECT" --filter='status=UP' --format='value(name)')"
 [ -n "$REGIONS" ] || { echo "GCP cost: could not enumerate regions for ${GCP_PROJECT} — BLOCKER, not an empty result (the loops below would run zero times and look clean). Report this phase excluded. Unlock: enable compute.googleapis.com and grant roles/compute.viewer."; exit 1; }
 
@@ -271,7 +356,24 @@ New COST-category recommenders appear over time (GKE cost optimization, Cloud Ru
 
 ```bash
 set -eu
-GCP_PROJECT="your-project-id"   # gcp.project
+# Resolve the CURRENT gcp target from toolkit.yaml through the shared enumerator — a single block,
+# or the SCOUTFLO_TARGET-selected item of a labeled list (no yq required). Never hand-typed: when
+# gcp: lists several projects there is no single gcp.project, and cloud spend belongs to exactly one
+# project, so picking one silently would attribute another project's bill to this report.
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+[ -f "$CFG" ] || { echo "missing $CFG; run /scoutflo:connect"; exit 1; }
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+GCP_KIND=$(sh "$TT" "$CFG" gcp kind); GCP_N=$(sh "$TT" "$CFG" gcp count)
+[ "${GCP_N:-0}" -ge 1 ] || { echo "no gcp target configured in $CFG; run /scoutflo:connect"; exit 1; }
+GCP_IDX=0
+if [ "$GCP_KIND" = seq ]; then
+  [ -n "${SCOUTFLO_TARGET:-}" ] || { echo "gcp in $CFG lists several projects, and cloud spend is per project, so this lane will not choose one for you: re-run it once per project with SCOUTFLO_TARGET=<label> set and its own SCOUTFLO_AUDIT_DIR. Labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
+  _i=0; GCP_IDX=-1
+  while [ "$_i" -lt "$GCP_N" ]; do [ "$(sh "$TT" "$CFG" gcp label "$_i")" = "$SCOUTFLO_TARGET" ] && { GCP_IDX=$_i; break; }; _i=$((_i+1)); done
+  [ "$GCP_IDX" -ge 0 ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no gcp target in $CFG; labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
+fi
+GCP_LABEL=$(sh "$TT" "$CFG" gcp label "$GCP_IDX"); GCP_PROJECT=$(sh "$TT" "$CFG" gcp get "$GCP_IDX" project)
+[ -n "$GCP_PROJECT" ] || { echo "gcp target '${GCP_LABEL:-?}' names no project in $CFG; run /scoutflo:connect"; exit 1; }
 LOC="asia-south1"   # gcp region/zone for the recommender's location kind; sweep the ones you use
 # There is NO `gcloud recommender recommenders list` subcommand (it errors "Invalid choice") — the
 # Recommender API has no discovery endpoint, so sweep an EXPLICIT list of the COST-category
@@ -298,7 +400,24 @@ This is **context, not a savings figure**: it shows where the money actually goe
 
 ```bash
 set -eu
-GCP_PROJECT="your-project-id"   # gcp.project
+# Resolve the CURRENT gcp target from toolkit.yaml through the shared enumerator — a single block,
+# or the SCOUTFLO_TARGET-selected item of a labeled list (no yq required). Never hand-typed: when
+# gcp: lists several projects there is no single gcp.project, and cloud spend belongs to exactly one
+# project, so picking one silently would attribute another project's bill to this report.
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+[ -f "$CFG" ] || { echo "missing $CFG; run /scoutflo:connect"; exit 1; }
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+GCP_KIND=$(sh "$TT" "$CFG" gcp kind); GCP_N=$(sh "$TT" "$CFG" gcp count)
+[ "${GCP_N:-0}" -ge 1 ] || { echo "no gcp target configured in $CFG; run /scoutflo:connect"; exit 1; }
+GCP_IDX=0
+if [ "$GCP_KIND" = seq ]; then
+  [ -n "${SCOUTFLO_TARGET:-}" ] || { echo "gcp in $CFG lists several projects, and cloud spend is per project, so this lane will not choose one for you: re-run it once per project with SCOUTFLO_TARGET=<label> set and its own SCOUTFLO_AUDIT_DIR. Labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
+  _i=0; GCP_IDX=-1
+  while [ "$_i" -lt "$GCP_N" ]; do [ "$(sh "$TT" "$CFG" gcp label "$_i")" = "$SCOUTFLO_TARGET" ] && { GCP_IDX=$_i; break; }; _i=$((_i+1)); done
+  [ "$GCP_IDX" -ge 0 ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no gcp target in $CFG; labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
+fi
+GCP_LABEL=$(sh "$TT" "$CFG" gcp label "$GCP_IDX"); GCP_PROJECT=$(sh "$TT" "$CFG" gcp get "$GCP_IDX" project)
+[ -n "$GCP_PROJECT" ] || { echo "gcp target '${GCP_LABEL:-?}' names no project in $CFG; run /scoutflo:connect"; exit 1; }
 # Read-only: which billing account is this project linked to, and is billing enabled.
 gcloud billing projects describe "$GCP_PROJECT" \
   --format='value(billingAccountName,billingEnabled)' 2>/dev/null \
@@ -307,15 +426,34 @@ gcloud billing projects describe "$GCP_PROJECT" \
 
 ```bash
 set -eu
-BILLING_DATASET="your_billing_dataset" # gcp.billing_bq_dataset — clearly-marked placeholder; the dataset holding the export
-# The export dataset often lives in a dedicated billing/admin project, NOT the
-# project being audited. Fill BILLING_PROJECT from gcp.billing_project; when that
-# key is UNSET, fill it with the same value as gcp.project. Nothing here implements
-# a default — the value must be substituted, exactly like every other placeholder.
-# This project both HOSTS the dataset (the FROM clause) and RUNS the query job
-# (--project_id), so it is the one needing bigquery.googleapis.com enabled plus
-# roles/bigquery.jobUser, with dataViewer on the dataset.
-BILLING_PROJECT="your-billing-project-id" # gcp.billing_project; when that key is UNSET, fill this with the same value as gcp.project
+# Resolve the CURRENT gcp target from toolkit.yaml through the shared enumerator — a single block,
+# or the SCOUTFLO_TARGET-selected item of a labeled list (no yq required). Never hand-typed: when
+# gcp: lists several projects there is no single gcp.project, and cloud spend belongs to exactly one
+# project, so picking one silently would attribute another project's bill to this report.
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+[ -f "$CFG" ] || { echo "missing $CFG; run /scoutflo:connect"; exit 1; }
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+GCP_KIND=$(sh "$TT" "$CFG" gcp kind); GCP_N=$(sh "$TT" "$CFG" gcp count)
+[ "${GCP_N:-0}" -ge 1 ] || { echo "no gcp target configured in $CFG; run /scoutflo:connect"; exit 1; }
+GCP_IDX=0
+if [ "$GCP_KIND" = seq ]; then
+  [ -n "${SCOUTFLO_TARGET:-}" ] || { echo "gcp in $CFG lists several projects, and cloud spend is per project, so this lane will not choose one for you: re-run it once per project with SCOUTFLO_TARGET=<label> set and its own SCOUTFLO_AUDIT_DIR. Labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
+  _i=0; GCP_IDX=-1
+  while [ "$_i" -lt "$GCP_N" ]; do [ "$(sh "$TT" "$CFG" gcp label "$_i")" = "$SCOUTFLO_TARGET" ] && { GCP_IDX=$_i; break; }; _i=$((_i+1)); done
+  [ "$GCP_IDX" -ge 0 ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no gcp target in $CFG; labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
+fi
+GCP_LABEL=$(sh "$TT" "$CFG" gcp label "$GCP_IDX"); GCP_PROJECT=$(sh "$TT" "$CFG" gcp get "$GCP_IDX" project)
+[ -n "$GCP_PROJECT" ] || { echo "gcp target '${GCP_LABEL:-?}' names no project in $CFG; run /scoutflo:connect"; exit 1; }
+# The Cloud Billing export is read from THIS target, never a global default: the dataset, and the
+# project hosting it (gcp.billing_project, defaulting to this target's own project when the export
+# lives alongside it). An unset dataset excludes the check with its reason, never a $0 line.
+BILLING_DATASET=$(sh "$TT" "$CFG" gcp get "$GCP_IDX" billing_bq_dataset)
+BILLING_PROJECT=$(sh "$TT" "$CFG" gcp get "$GCP_IDX" billing_project); [ -n "$BILLING_PROJECT" ] || BILLING_PROJECT="$GCP_PROJECT"
+[ -n "$BILLING_DATASET" ] || { echo "excluded: gcp target '${GCP_LABEL}' has no billing_bq_dataset in $CFG, so actual spend by SKU is unavailable and savings would have no denominator"; exit 0; }
+# BILLING_PROJECT both HOSTS the dataset (the FROM clause) and RUNS the query job
+# (--project_id), so it is the project needing bigquery.googleapis.com enabled plus
+# roles/bigquery.jobUser, with dataViewer on the dataset. It is resolved above from
+# this target's gcp.billing_project, falling back to its own gcp.project.
 # DISCOVER the table id; never hand-edit it. The standard-usage export is
 # gcp_billing_export_v1_*, the detailed resource-level export gcp_billing_export_resource_v1_*.
 # Prefer the detailed one: it is the only flavour carrying per-resource rows, and the only one
@@ -353,15 +491,34 @@ section 12 reads it for COST-K8S-008.
 
 ```bash
 set -eu
-BILLING_DATASET="your_billing_dataset" # gcp.billing_bq_dataset
-# The export dataset often lives in a dedicated billing/admin project, NOT the
-# project being audited. Fill BILLING_PROJECT from gcp.billing_project; when that
-# key is UNSET, fill it with the same value as gcp.project. Nothing here implements
-# a default — the value must be substituted, exactly like every other placeholder.
-# This project both HOSTS the dataset (the FROM clause) and RUNS the query job
-# (--project_id), so it is the one needing bigquery.googleapis.com enabled plus
-# roles/bigquery.jobUser, with dataViewer on the dataset.
-BILLING_PROJECT="your-billing-project-id" # gcp.billing_project; when that key is UNSET, fill this with the same value as gcp.project
+# Resolve the CURRENT gcp target from toolkit.yaml through the shared enumerator — a single block,
+# or the SCOUTFLO_TARGET-selected item of a labeled list (no yq required). Never hand-typed: when
+# gcp: lists several projects there is no single gcp.project, and cloud spend belongs to exactly one
+# project, so picking one silently would attribute another project's bill to this report.
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+[ -f "$CFG" ] || { echo "missing $CFG; run /scoutflo:connect"; exit 1; }
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+GCP_KIND=$(sh "$TT" "$CFG" gcp kind); GCP_N=$(sh "$TT" "$CFG" gcp count)
+[ "${GCP_N:-0}" -ge 1 ] || { echo "no gcp target configured in $CFG; run /scoutflo:connect"; exit 1; }
+GCP_IDX=0
+if [ "$GCP_KIND" = seq ]; then
+  [ -n "${SCOUTFLO_TARGET:-}" ] || { echo "gcp in $CFG lists several projects, and cloud spend is per project, so this lane will not choose one for you: re-run it once per project with SCOUTFLO_TARGET=<label> set and its own SCOUTFLO_AUDIT_DIR. Labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
+  _i=0; GCP_IDX=-1
+  while [ "$_i" -lt "$GCP_N" ]; do [ "$(sh "$TT" "$CFG" gcp label "$_i")" = "$SCOUTFLO_TARGET" ] && { GCP_IDX=$_i; break; }; _i=$((_i+1)); done
+  [ "$GCP_IDX" -ge 0 ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no gcp target in $CFG; labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
+fi
+GCP_LABEL=$(sh "$TT" "$CFG" gcp label "$GCP_IDX"); GCP_PROJECT=$(sh "$TT" "$CFG" gcp get "$GCP_IDX" project)
+[ -n "$GCP_PROJECT" ] || { echo "gcp target '${GCP_LABEL:-?}' names no project in $CFG; run /scoutflo:connect"; exit 1; }
+# The Cloud Billing export is read from THIS target, never a global default: the dataset, and the
+# project hosting it (gcp.billing_project, defaulting to this target's own project when the export
+# lives alongside it). An unset dataset excludes the check with its reason, never a $0 line.
+BILLING_DATASET=$(sh "$TT" "$CFG" gcp get "$GCP_IDX" billing_bq_dataset)
+BILLING_PROJECT=$(sh "$TT" "$CFG" gcp get "$GCP_IDX" billing_project); [ -n "$BILLING_PROJECT" ] || BILLING_PROJECT="$GCP_PROJECT"
+[ -n "$BILLING_DATASET" ] || { echo "excluded: gcp target '${GCP_LABEL}' has no billing_bq_dataset in $CFG, so actual spend by SKU is unavailable and savings would have no denominator"; exit 0; }
+# BILLING_PROJECT both HOSTS the dataset (the FROM clause) and RUNS the query job
+# (--project_id), so it is the project needing bigquery.googleapis.com enabled plus
+# roles/bigquery.jobUser, with dataViewer on the dataset. It is resolved above from
+# this target's gcp.billing_project, falling back to its own gcp.project.
 # Discover the table here too: every block in this catalog runs alone in a fresh shell.
 BILLING_TABLE="$(bq ls --project_id="$BILLING_PROJECT" --format=json "$BILLING_DATASET" 2>/dev/null \
   | jq -r '[.[].tableReference.tableId] | (map(select(startswith("gcp_billing_export_resource_v1_"))) + map(select(startswith("gcp_billing_export_v1_")))) | .[0] // empty')"
@@ -414,15 +571,34 @@ resize, with no capacity risk.
 
 ```bash
 set -eu
-BILLING_DATASET="your_billing_dataset" # gcp.billing_bq_dataset
-# The export dataset often lives in a dedicated billing/admin project, NOT the
-# project being audited. Fill BILLING_PROJECT from gcp.billing_project; when that
-# key is UNSET, fill it with the same value as gcp.project. Nothing here implements
-# a default — the value must be substituted, exactly like every other placeholder.
-# This project both HOSTS the dataset (the FROM clause) and RUNS the query job
-# (--project_id), so it is the one needing bigquery.googleapis.com enabled plus
-# roles/bigquery.jobUser, with dataViewer on the dataset.
-BILLING_PROJECT="your-billing-project-id" # gcp.billing_project; when that key is UNSET, fill this with the same value as gcp.project
+# Resolve the CURRENT gcp target from toolkit.yaml through the shared enumerator — a single block,
+# or the SCOUTFLO_TARGET-selected item of a labeled list (no yq required). Never hand-typed: when
+# gcp: lists several projects there is no single gcp.project, and cloud spend belongs to exactly one
+# project, so picking one silently would attribute another project's bill to this report.
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+[ -f "$CFG" ] || { echo "missing $CFG; run /scoutflo:connect"; exit 1; }
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+GCP_KIND=$(sh "$TT" "$CFG" gcp kind); GCP_N=$(sh "$TT" "$CFG" gcp count)
+[ "${GCP_N:-0}" -ge 1 ] || { echo "no gcp target configured in $CFG; run /scoutflo:connect"; exit 1; }
+GCP_IDX=0
+if [ "$GCP_KIND" = seq ]; then
+  [ -n "${SCOUTFLO_TARGET:-}" ] || { echo "gcp in $CFG lists several projects, and cloud spend is per project, so this lane will not choose one for you: re-run it once per project with SCOUTFLO_TARGET=<label> set and its own SCOUTFLO_AUDIT_DIR. Labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
+  _i=0; GCP_IDX=-1
+  while [ "$_i" -lt "$GCP_N" ]; do [ "$(sh "$TT" "$CFG" gcp label "$_i")" = "$SCOUTFLO_TARGET" ] && { GCP_IDX=$_i; break; }; _i=$((_i+1)); done
+  [ "$GCP_IDX" -ge 0 ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no gcp target in $CFG; labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
+fi
+GCP_LABEL=$(sh "$TT" "$CFG" gcp label "$GCP_IDX"); GCP_PROJECT=$(sh "$TT" "$CFG" gcp get "$GCP_IDX" project)
+[ -n "$GCP_PROJECT" ] || { echo "gcp target '${GCP_LABEL:-?}' names no project in $CFG; run /scoutflo:connect"; exit 1; }
+# The Cloud Billing export is read from THIS target, never a global default: the dataset, and the
+# project hosting it (gcp.billing_project, defaulting to this target's own project when the export
+# lives alongside it). An unset dataset excludes the check with its reason, never a $0 line.
+BILLING_DATASET=$(sh "$TT" "$CFG" gcp get "$GCP_IDX" billing_bq_dataset)
+BILLING_PROJECT=$(sh "$TT" "$CFG" gcp get "$GCP_IDX" billing_project); [ -n "$BILLING_PROJECT" ] || BILLING_PROJECT="$GCP_PROJECT"
+[ -n "$BILLING_DATASET" ] || { echo "excluded: gcp target '${GCP_LABEL}' has no billing_bq_dataset in $CFG, so actual spend by SKU is unavailable and savings would have no denominator"; exit 0; }
+# BILLING_PROJECT both HOSTS the dataset (the FROM clause) and RUNS the query job
+# (--project_id), so it is the project needing bigquery.googleapis.com enabled plus
+# roles/bigquery.jobUser, with dataViewer on the dataset. It is resolved above from
+# this target's gcp.billing_project, falling back to its own gcp.project.
 BILLING_TABLE="$(bq ls --project_id="$BILLING_PROJECT" --format=json "$BILLING_DATASET" 2>/dev/null \
   | jq -r '[.[].tableReference.tableId] | (map(select(startswith("gcp_billing_export_resource_v1_"))) + map(select(startswith("gcp_billing_export_v1_")))) | .[0] // empty')"
 [ -n "$BILLING_TABLE" ] || { echo "COST-GCP-033 reports excluded, reason: no billing export table in ${BILLING_DATASET}"; exit 0; }
@@ -463,7 +639,24 @@ bill at full class rate and are invisible in a bucket listing.
 
 ```bash
 set -eu
-GCP_PROJECT="your-project-id"   # gcp.project
+# Resolve the CURRENT gcp target from toolkit.yaml through the shared enumerator — a single block,
+# or the SCOUTFLO_TARGET-selected item of a labeled list (no yq required). Never hand-typed: when
+# gcp: lists several projects there is no single gcp.project, and cloud spend belongs to exactly one
+# project, so picking one silently would attribute another project's bill to this report.
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+[ -f "$CFG" ] || { echo "missing $CFG; run /scoutflo:connect"; exit 1; }
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+GCP_KIND=$(sh "$TT" "$CFG" gcp kind); GCP_N=$(sh "$TT" "$CFG" gcp count)
+[ "${GCP_N:-0}" -ge 1 ] || { echo "no gcp target configured in $CFG; run /scoutflo:connect"; exit 1; }
+GCP_IDX=0
+if [ "$GCP_KIND" = seq ]; then
+  [ -n "${SCOUTFLO_TARGET:-}" ] || { echo "gcp in $CFG lists several projects, and cloud spend is per project, so this lane will not choose one for you: re-run it once per project with SCOUTFLO_TARGET=<label> set and its own SCOUTFLO_AUDIT_DIR. Labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
+  _i=0; GCP_IDX=-1
+  while [ "$_i" -lt "$GCP_N" ]; do [ "$(sh "$TT" "$CFG" gcp label "$_i")" = "$SCOUTFLO_TARGET" ] && { GCP_IDX=$_i; break; }; _i=$((_i+1)); done
+  [ "$GCP_IDX" -ge 0 ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no gcp target in $CFG; labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
+fi
+GCP_LABEL=$(sh "$TT" "$CFG" gcp label "$GCP_IDX"); GCP_PROJECT=$(sh "$TT" "$CFG" gcp get "$GCP_IDX" project)
+[ -n "$GCP_PROJECT" ] || { echo "gcp target '${GCP_LABEL:-?}' names no project in $CFG; run /scoutflo:connect"; exit 1; }
 # Bucket shape: default class, location type, lifecycle rule count, versioning, soft-delete.
 gcloud storage buckets list --project "$GCP_PROJECT" --format=json 2>/dev/null \
   | jq -r '.[] | {name: .name, class: .default_storage_class, location: .location_type,
@@ -491,7 +684,24 @@ read-only.
 
 ```bash
 set -eu
-GCP_PROJECT="your-project-id"   # gcp.project
+# Resolve the CURRENT gcp target from toolkit.yaml through the shared enumerator — a single block,
+# or the SCOUTFLO_TARGET-selected item of a labeled list (no yq required). Never hand-typed: when
+# gcp: lists several projects there is no single gcp.project, and cloud spend belongs to exactly one
+# project, so picking one silently would attribute another project's bill to this report.
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+[ -f "$CFG" ] || { echo "missing $CFG; run /scoutflo:connect"; exit 1; }
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+GCP_KIND=$(sh "$TT" "$CFG" gcp kind); GCP_N=$(sh "$TT" "$CFG" gcp count)
+[ "${GCP_N:-0}" -ge 1 ] || { echo "no gcp target configured in $CFG; run /scoutflo:connect"; exit 1; }
+GCP_IDX=0
+if [ "$GCP_KIND" = seq ]; then
+  [ -n "${SCOUTFLO_TARGET:-}" ] || { echo "gcp in $CFG lists several projects, and cloud spend is per project, so this lane will not choose one for you: re-run it once per project with SCOUTFLO_TARGET=<label> set and its own SCOUTFLO_AUDIT_DIR. Labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
+  _i=0; GCP_IDX=-1
+  while [ "$_i" -lt "$GCP_N" ]; do [ "$(sh "$TT" "$CFG" gcp label "$_i")" = "$SCOUTFLO_TARGET" ] && { GCP_IDX=$_i; break; }; _i=$((_i+1)); done
+  [ "$GCP_IDX" -ge 0 ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no gcp target in $CFG; labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
+fi
+GCP_LABEL=$(sh "$TT" "$CFG" gcp label "$GCP_IDX"); GCP_PROJECT=$(sh "$TT" "$CFG" gcp get "$GCP_IDX" project)
+[ -n "$GCP_PROJECT" ] || { echo "gcp target '${GCP_LABEL:-?}' names no project in $CFG; run /scoutflo:connect"; exit 1; }
 # 1. Default network service tier for the project (PREMIUM routes over Google's backbone; STANDARD
 #    exits closer to the user and bills less — a real trade-off, not free money).
 gcloud compute project-info describe --project "$GCP_PROJECT" --format='value(defaultNetworkTier)' 2>/dev/null \
@@ -526,7 +736,24 @@ cut most of the cost.
 
 ```bash
 set -eu
-GCP_PROJECT="your-project-id"   # gcp.project
+# Resolve the CURRENT gcp target from toolkit.yaml through the shared enumerator — a single block,
+# or the SCOUTFLO_TARGET-selected item of a labeled list (no yq required). Never hand-typed: when
+# gcp: lists several projects there is no single gcp.project, and cloud spend belongs to exactly one
+# project, so picking one silently would attribute another project's bill to this report.
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+[ -f "$CFG" ] || { echo "missing $CFG; run /scoutflo:connect"; exit 1; }
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+GCP_KIND=$(sh "$TT" "$CFG" gcp kind); GCP_N=$(sh "$TT" "$CFG" gcp count)
+[ "${GCP_N:-0}" -ge 1 ] || { echo "no gcp target configured in $CFG; run /scoutflo:connect"; exit 1; }
+GCP_IDX=0
+if [ "$GCP_KIND" = seq ]; then
+  [ -n "${SCOUTFLO_TARGET:-}" ] || { echo "gcp in $CFG lists several projects, and cloud spend is per project, so this lane will not choose one for you: re-run it once per project with SCOUTFLO_TARGET=<label> set and its own SCOUTFLO_AUDIT_DIR. Labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
+  _i=0; GCP_IDX=-1
+  while [ "$_i" -lt "$GCP_N" ]; do [ "$(sh "$TT" "$CFG" gcp label "$_i")" = "$SCOUTFLO_TARGET" ] && { GCP_IDX=$_i; break; }; _i=$((_i+1)); done
+  [ "$GCP_IDX" -ge 0 ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no gcp target in $CFG; labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
+fi
+GCP_LABEL=$(sh "$TT" "$CFG" gcp label "$GCP_IDX"); GCP_PROJECT=$(sh "$TT" "$CFG" gcp get "$GCP_IDX" project)
+[ -n "$GCP_PROJECT" ] || { echo "gcp target '${GCP_LABEL:-?}' names no project in $CFG; run /scoutflo:connect"; exit 1; }
 # Log buckets and their retention (the default _Default/_Required buckets included).
 gcloud logging buckets list --project "$GCP_PROJECT" --location=global --format=json 2>/dev/null \
   | jq -r '.[] | "\(.name)\tretention_days=\(.retentionDays // "-")\tlocked=\(.locked // false)"' \
@@ -552,7 +779,24 @@ recommender for these, which is exactly why they survive years of review.
 
 ```bash
 set -eu
-GCP_PROJECT="your-project-id"   # gcp.project
+# Resolve the CURRENT gcp target from toolkit.yaml through the shared enumerator — a single block,
+# or the SCOUTFLO_TARGET-selected item of a labeled list (no yq required). Never hand-typed: when
+# gcp: lists several projects there is no single gcp.project, and cloud spend belongs to exactly one
+# project, so picking one silently would attribute another project's bill to this report.
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+[ -f "$CFG" ] || { echo "missing $CFG; run /scoutflo:connect"; exit 1; }
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+GCP_KIND=$(sh "$TT" "$CFG" gcp kind); GCP_N=$(sh "$TT" "$CFG" gcp count)
+[ "${GCP_N:-0}" -ge 1 ] || { echo "no gcp target configured in $CFG; run /scoutflo:connect"; exit 1; }
+GCP_IDX=0
+if [ "$GCP_KIND" = seq ]; then
+  [ -n "${SCOUTFLO_TARGET:-}" ] || { echo "gcp in $CFG lists several projects, and cloud spend is per project, so this lane will not choose one for you: re-run it once per project with SCOUTFLO_TARGET=<label> set and its own SCOUTFLO_AUDIT_DIR. Labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
+  _i=0; GCP_IDX=-1
+  while [ "$_i" -lt "$GCP_N" ]; do [ "$(sh "$TT" "$CFG" gcp label "$_i")" = "$SCOUTFLO_TARGET" ] && { GCP_IDX=$_i; break; }; _i=$((_i+1)); done
+  [ "$GCP_IDX" -ge 0 ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no gcp target in $CFG; labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
+fi
+GCP_LABEL=$(sh "$TT" "$CFG" gcp label "$GCP_IDX"); GCP_PROJECT=$(sh "$TT" "$CFG" gcp get "$GCP_IDX" project)
+[ -n "$GCP_PROJECT" ] || { echo "gcp target '${GCP_LABEL:-?}' names no project in $CFG; run /scoutflo:connect"; exit 1; }
 MON_API="https://monitoring.googleapis.com/v3"
 if [ -n "${GOOGLE_APPLICATION_CREDENTIALS:-}" ]; then TOKEN="$(gcloud auth application-default print-access-token)"; export CLOUDSDK_AUTH_ACCESS_TOKEN="$TOKEN"; else TOKEN="$(gcloud auth print-access-token)"; fi
 START="$(date -u -v-7d +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d '7 days ago' +%Y-%m-%dT%H:%M:%SZ)"
@@ -591,15 +835,34 @@ export rather than reporting "no recommendation" and stopping.
 
 ```bash
 set -eu
-BILLING_DATASET="your_billing_dataset" # gcp.billing_bq_dataset
-# The export dataset often lives in a dedicated billing/admin project, NOT the
-# project being audited. Fill BILLING_PROJECT from gcp.billing_project; when that
-# key is UNSET, fill it with the same value as gcp.project. Nothing here implements
-# a default — the value must be substituted, exactly like every other placeholder.
-# This project both HOSTS the dataset (the FROM clause) and RUNS the query job
-# (--project_id), so it is the one needing bigquery.googleapis.com enabled plus
-# roles/bigquery.jobUser, with dataViewer on the dataset.
-BILLING_PROJECT="your-billing-project-id" # gcp.billing_project; when that key is UNSET, fill this with the same value as gcp.project
+# Resolve the CURRENT gcp target from toolkit.yaml through the shared enumerator — a single block,
+# or the SCOUTFLO_TARGET-selected item of a labeled list (no yq required). Never hand-typed: when
+# gcp: lists several projects there is no single gcp.project, and cloud spend belongs to exactly one
+# project, so picking one silently would attribute another project's bill to this report.
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+[ -f "$CFG" ] || { echo "missing $CFG; run /scoutflo:connect"; exit 1; }
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+GCP_KIND=$(sh "$TT" "$CFG" gcp kind); GCP_N=$(sh "$TT" "$CFG" gcp count)
+[ "${GCP_N:-0}" -ge 1 ] || { echo "no gcp target configured in $CFG; run /scoutflo:connect"; exit 1; }
+GCP_IDX=0
+if [ "$GCP_KIND" = seq ]; then
+  [ -n "${SCOUTFLO_TARGET:-}" ] || { echo "gcp in $CFG lists several projects, and cloud spend is per project, so this lane will not choose one for you: re-run it once per project with SCOUTFLO_TARGET=<label> set and its own SCOUTFLO_AUDIT_DIR. Labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
+  _i=0; GCP_IDX=-1
+  while [ "$_i" -lt "$GCP_N" ]; do [ "$(sh "$TT" "$CFG" gcp label "$_i")" = "$SCOUTFLO_TARGET" ] && { GCP_IDX=$_i; break; }; _i=$((_i+1)); done
+  [ "$GCP_IDX" -ge 0 ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no gcp target in $CFG; labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
+fi
+GCP_LABEL=$(sh "$TT" "$CFG" gcp label "$GCP_IDX"); GCP_PROJECT=$(sh "$TT" "$CFG" gcp get "$GCP_IDX" project)
+[ -n "$GCP_PROJECT" ] || { echo "gcp target '${GCP_LABEL:-?}' names no project in $CFG; run /scoutflo:connect"; exit 1; }
+# The Cloud Billing export is read from THIS target, never a global default: the dataset, and the
+# project hosting it (gcp.billing_project, defaulting to this target's own project when the export
+# lives alongside it). An unset dataset excludes the check with its reason, never a $0 line.
+BILLING_DATASET=$(sh "$TT" "$CFG" gcp get "$GCP_IDX" billing_bq_dataset)
+BILLING_PROJECT=$(sh "$TT" "$CFG" gcp get "$GCP_IDX" billing_project); [ -n "$BILLING_PROJECT" ] || BILLING_PROJECT="$GCP_PROJECT"
+[ -n "$BILLING_DATASET" ] || { echo "excluded: gcp target '${GCP_LABEL}' has no billing_bq_dataset in $CFG, so actual spend by SKU is unavailable and savings would have no denominator"; exit 0; }
+# BILLING_PROJECT both HOSTS the dataset (the FROM clause) and RUNS the query job
+# (--project_id), so it is the project needing bigquery.googleapis.com enabled plus
+# roles/bigquery.jobUser, with dataViewer on the dataset. It is resolved above from
+# this target's gcp.billing_project, falling back to its own gcp.project.
 TARGET_PROJECT="the-project-to-size"   # the project whose compute bill has no CUD recommendation
 BILLING_TABLE="$(bq ls --project_id="$BILLING_PROJECT" --format=json "$BILLING_DATASET" 2>/dev/null \
   | jq -r '[.[].tableReference.tableId] | (map(select(startswith("gcp_billing_export_resource_v1_"))) + map(select(startswith("gcp_billing_export_v1_")))) | .[0] // empty')"
@@ -641,7 +904,24 @@ ceiling: the disk's own billed cost.
 
 ```bash
 set -eu
-GCP_PROJECT="your-project-id"   # gcp.project
+# Resolve the CURRENT gcp target from toolkit.yaml through the shared enumerator — a single block,
+# or the SCOUTFLO_TARGET-selected item of a labeled list (no yq required). Never hand-typed: when
+# gcp: lists several projects there is no single gcp.project, and cloud spend belongs to exactly one
+# project, so picking one silently would attribute another project's bill to this report.
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+[ -f "$CFG" ] || { echo "missing $CFG; run /scoutflo:connect"; exit 1; }
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+GCP_KIND=$(sh "$TT" "$CFG" gcp kind); GCP_N=$(sh "$TT" "$CFG" gcp count)
+[ "${GCP_N:-0}" -ge 1 ] || { echo "no gcp target configured in $CFG; run /scoutflo:connect"; exit 1; }
+GCP_IDX=0
+if [ "$GCP_KIND" = seq ]; then
+  [ -n "${SCOUTFLO_TARGET:-}" ] || { echo "gcp in $CFG lists several projects, and cloud spend is per project, so this lane will not choose one for you: re-run it once per project with SCOUTFLO_TARGET=<label> set and its own SCOUTFLO_AUDIT_DIR. Labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
+  _i=0; GCP_IDX=-1
+  while [ "$_i" -lt "$GCP_N" ]; do [ "$(sh "$TT" "$CFG" gcp label "$_i")" = "$SCOUTFLO_TARGET" ] && { GCP_IDX=$_i; break; }; _i=$((_i+1)); done
+  [ "$GCP_IDX" -ge 0 ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no gcp target in $CFG; labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
+fi
+GCP_LABEL=$(sh "$TT" "$CFG" gcp label "$GCP_IDX"); GCP_PROJECT=$(sh "$TT" "$CFG" gcp get "$GCP_IDX" project)
+[ -n "$GCP_PROJECT" ] || { echo "gcp target '${GCP_LABEL:-?}' names no project in $CFG; run /scoutflo:connect"; exit 1; }
 gcloud compute instances list --project "$GCP_PROJECT" --filter='status=TERMINATED' --format=json 2>/dev/null \
   | jq -r '.[] | "\(.zone | sub(".*/"; ""))/\(.name)\ttype=\(.machineType | sub(".*/"; ""))\tstopped=\(.lastStopTimestamp // "unknown")\tdisks=\([(.disks // [])[] | .diskSizeGb] | add // 0)GB"' \
   || echo "COST-GCP-032 reports excluded, reason: compute.instances.list denied"
@@ -661,15 +941,34 @@ and reporting it is what stops a clean report being mistaken for a clean estate.
 
 ```bash
 set -eu
-BILLING_DATASET="your_billing_dataset" # gcp.billing_bq_dataset
-# The export dataset often lives in a dedicated billing/admin project, NOT the
-# project being audited. Fill BILLING_PROJECT from gcp.billing_project; when that
-# key is UNSET, fill it with the same value as gcp.project. Nothing here implements
-# a default — the value must be substituted, exactly like every other placeholder.
-# This project both HOSTS the dataset (the FROM clause) and RUNS the query job
-# (--project_id), so it is the one needing bigquery.googleapis.com enabled plus
-# roles/bigquery.jobUser, with dataViewer on the dataset.
-BILLING_PROJECT="your-billing-project-id" # gcp.billing_project; when that key is UNSET, fill this with the same value as gcp.project
+# Resolve the CURRENT gcp target from toolkit.yaml through the shared enumerator — a single block,
+# or the SCOUTFLO_TARGET-selected item of a labeled list (no yq required). Never hand-typed: when
+# gcp: lists several projects there is no single gcp.project, and cloud spend belongs to exactly one
+# project, so picking one silently would attribute another project's bill to this report.
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+[ -f "$CFG" ] || { echo "missing $CFG; run /scoutflo:connect"; exit 1; }
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+GCP_KIND=$(sh "$TT" "$CFG" gcp kind); GCP_N=$(sh "$TT" "$CFG" gcp count)
+[ "${GCP_N:-0}" -ge 1 ] || { echo "no gcp target configured in $CFG; run /scoutflo:connect"; exit 1; }
+GCP_IDX=0
+if [ "$GCP_KIND" = seq ]; then
+  [ -n "${SCOUTFLO_TARGET:-}" ] || { echo "gcp in $CFG lists several projects, and cloud spend is per project, so this lane will not choose one for you: re-run it once per project with SCOUTFLO_TARGET=<label> set and its own SCOUTFLO_AUDIT_DIR. Labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
+  _i=0; GCP_IDX=-1
+  while [ "$_i" -lt "$GCP_N" ]; do [ "$(sh "$TT" "$CFG" gcp label "$_i")" = "$SCOUTFLO_TARGET" ] && { GCP_IDX=$_i; break; }; _i=$((_i+1)); done
+  [ "$GCP_IDX" -ge 0 ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no gcp target in $CFG; labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
+fi
+GCP_LABEL=$(sh "$TT" "$CFG" gcp label "$GCP_IDX"); GCP_PROJECT=$(sh "$TT" "$CFG" gcp get "$GCP_IDX" project)
+[ -n "$GCP_PROJECT" ] || { echo "gcp target '${GCP_LABEL:-?}' names no project in $CFG; run /scoutflo:connect"; exit 1; }
+# The Cloud Billing export is read from THIS target, never a global default: the dataset, and the
+# project hosting it (gcp.billing_project, defaulting to this target's own project when the export
+# lives alongside it). An unset dataset excludes the check with its reason, never a $0 line.
+BILLING_DATASET=$(sh "$TT" "$CFG" gcp get "$GCP_IDX" billing_bq_dataset)
+BILLING_PROJECT=$(sh "$TT" "$CFG" gcp get "$GCP_IDX" billing_project); [ -n "$BILLING_PROJECT" ] || BILLING_PROJECT="$GCP_PROJECT"
+[ -n "$BILLING_DATASET" ] || { echo "excluded: gcp target '${GCP_LABEL}' has no billing_bq_dataset in $CFG, so actual spend by SKU is unavailable and savings would have no denominator"; exit 0; }
+# BILLING_PROJECT both HOSTS the dataset (the FROM clause) and RUNS the query job
+# (--project_id), so it is the project needing bigquery.googleapis.com enabled plus
+# roles/bigquery.jobUser, with dataViewer on the dataset. It is resolved above from
+# this target's gcp.billing_project, falling back to its own gcp.project.
 BILLING_TABLE="$(bq ls --project_id="$BILLING_PROJECT" --format=json "$BILLING_DATASET" 2>/dev/null \
   | jq -r '[.[].tableReference.tableId] | (map(select(startswith("gcp_billing_export_resource_v1_"))) + map(select(startswith("gcp_billing_export_v1_")))) | .[0] // empty')"
 [ -n "$BILLING_TABLE" ] || { echo "COST-GCP-034 reports excluded, reason: no export, so billed projects cannot be enumerated"; exit 0; }
@@ -708,15 +1007,34 @@ is the rate effect, and the remainder is the usage effect.
 
 ```bash
 set -eu
-BILLING_DATASET="your_billing_dataset" # gcp.billing_bq_dataset
-# The export dataset often lives in a dedicated billing/admin project, NOT the
-# project being audited. Fill BILLING_PROJECT from gcp.billing_project; when that
-# key is UNSET, fill it with the same value as gcp.project. Nothing here implements
-# a default — the value must be substituted, exactly like every other placeholder.
-# This project both HOSTS the dataset (the FROM clause) and RUNS the query job
-# (--project_id), so it is the one needing bigquery.googleapis.com enabled plus
-# roles/bigquery.jobUser, with dataViewer on the dataset.
-BILLING_PROJECT="your-billing-project-id" # gcp.billing_project; when that key is UNSET, fill this with the same value as gcp.project
+# Resolve the CURRENT gcp target from toolkit.yaml through the shared enumerator — a single block,
+# or the SCOUTFLO_TARGET-selected item of a labeled list (no yq required). Never hand-typed: when
+# gcp: lists several projects there is no single gcp.project, and cloud spend belongs to exactly one
+# project, so picking one silently would attribute another project's bill to this report.
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+[ -f "$CFG" ] || { echo "missing $CFG; run /scoutflo:connect"; exit 1; }
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+GCP_KIND=$(sh "$TT" "$CFG" gcp kind); GCP_N=$(sh "$TT" "$CFG" gcp count)
+[ "${GCP_N:-0}" -ge 1 ] || { echo "no gcp target configured in $CFG; run /scoutflo:connect"; exit 1; }
+GCP_IDX=0
+if [ "$GCP_KIND" = seq ]; then
+  [ -n "${SCOUTFLO_TARGET:-}" ] || { echo "gcp in $CFG lists several projects, and cloud spend is per project, so this lane will not choose one for you: re-run it once per project with SCOUTFLO_TARGET=<label> set and its own SCOUTFLO_AUDIT_DIR. Labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
+  _i=0; GCP_IDX=-1
+  while [ "$_i" -lt "$GCP_N" ]; do [ "$(sh "$TT" "$CFG" gcp label "$_i")" = "$SCOUTFLO_TARGET" ] && { GCP_IDX=$_i; break; }; _i=$((_i+1)); done
+  [ "$GCP_IDX" -ge 0 ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no gcp target in $CFG; labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
+fi
+GCP_LABEL=$(sh "$TT" "$CFG" gcp label "$GCP_IDX"); GCP_PROJECT=$(sh "$TT" "$CFG" gcp get "$GCP_IDX" project)
+[ -n "$GCP_PROJECT" ] || { echo "gcp target '${GCP_LABEL:-?}' names no project in $CFG; run /scoutflo:connect"; exit 1; }
+# The Cloud Billing export is read from THIS target, never a global default: the dataset, and the
+# project hosting it (gcp.billing_project, defaulting to this target's own project when the export
+# lives alongside it). An unset dataset excludes the check with its reason, never a $0 line.
+BILLING_DATASET=$(sh "$TT" "$CFG" gcp get "$GCP_IDX" billing_bq_dataset)
+BILLING_PROJECT=$(sh "$TT" "$CFG" gcp get "$GCP_IDX" billing_project); [ -n "$BILLING_PROJECT" ] || BILLING_PROJECT="$GCP_PROJECT"
+[ -n "$BILLING_DATASET" ] || { echo "excluded: gcp target '${GCP_LABEL}' has no billing_bq_dataset in $CFG, so actual spend by SKU is unavailable and savings would have no denominator"; exit 0; }
+# BILLING_PROJECT both HOSTS the dataset (the FROM clause) and RUNS the query job
+# (--project_id), so it is the project needing bigquery.googleapis.com enabled plus
+# roles/bigquery.jobUser, with dataViewer on the dataset. It is resolved above from
+# this target's gcp.billing_project, falling back to its own gcp.project.
 BILLING_TABLE="$(bq ls --project_id="$BILLING_PROJECT" --format=json "$BILLING_DATASET" 2>/dev/null \
   | jq -r '[.[].tableReference.tableId] | (map(select(startswith("gcp_billing_export_resource_v1_"))) + map(select(startswith("gcp_billing_export_v1_")))) | .[0] // empty')"
 [ -n "$BILLING_TABLE" ] || { echo "COST-GCP-028 reports excluded, reason: no billing export table"; exit 0; }
@@ -771,15 +1089,34 @@ of it; a period-over-period **set difference** sees all of it immediately.
 
 ```bash
 set -eu
-BILLING_DATASET="your_billing_dataset" # gcp.billing_bq_dataset
-# The export dataset often lives in a dedicated billing/admin project, NOT the
-# project being audited. Fill BILLING_PROJECT from gcp.billing_project; when that
-# key is UNSET, fill it with the same value as gcp.project. Nothing here implements
-# a default — the value must be substituted, exactly like every other placeholder.
-# This project both HOSTS the dataset (the FROM clause) and RUNS the query job
-# (--project_id), so it is the one needing bigquery.googleapis.com enabled plus
-# roles/bigquery.jobUser, with dataViewer on the dataset.
-BILLING_PROJECT="your-billing-project-id" # gcp.billing_project; when that key is UNSET, fill this with the same value as gcp.project
+# Resolve the CURRENT gcp target from toolkit.yaml through the shared enumerator — a single block,
+# or the SCOUTFLO_TARGET-selected item of a labeled list (no yq required). Never hand-typed: when
+# gcp: lists several projects there is no single gcp.project, and cloud spend belongs to exactly one
+# project, so picking one silently would attribute another project's bill to this report.
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+[ -f "$CFG" ] || { echo "missing $CFG; run /scoutflo:connect"; exit 1; }
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+GCP_KIND=$(sh "$TT" "$CFG" gcp kind); GCP_N=$(sh "$TT" "$CFG" gcp count)
+[ "${GCP_N:-0}" -ge 1 ] || { echo "no gcp target configured in $CFG; run /scoutflo:connect"; exit 1; }
+GCP_IDX=0
+if [ "$GCP_KIND" = seq ]; then
+  [ -n "${SCOUTFLO_TARGET:-}" ] || { echo "gcp in $CFG lists several projects, and cloud spend is per project, so this lane will not choose one for you: re-run it once per project with SCOUTFLO_TARGET=<label> set and its own SCOUTFLO_AUDIT_DIR. Labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
+  _i=0; GCP_IDX=-1
+  while [ "$_i" -lt "$GCP_N" ]; do [ "$(sh "$TT" "$CFG" gcp label "$_i")" = "$SCOUTFLO_TARGET" ] && { GCP_IDX=$_i; break; }; _i=$((_i+1)); done
+  [ "$GCP_IDX" -ge 0 ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no gcp target in $CFG; labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
+fi
+GCP_LABEL=$(sh "$TT" "$CFG" gcp label "$GCP_IDX"); GCP_PROJECT=$(sh "$TT" "$CFG" gcp get "$GCP_IDX" project)
+[ -n "$GCP_PROJECT" ] || { echo "gcp target '${GCP_LABEL:-?}' names no project in $CFG; run /scoutflo:connect"; exit 1; }
+# The Cloud Billing export is read from THIS target, never a global default: the dataset, and the
+# project hosting it (gcp.billing_project, defaulting to this target's own project when the export
+# lives alongside it). An unset dataset excludes the check with its reason, never a $0 line.
+BILLING_DATASET=$(sh "$TT" "$CFG" gcp get "$GCP_IDX" billing_bq_dataset)
+BILLING_PROJECT=$(sh "$TT" "$CFG" gcp get "$GCP_IDX" billing_project); [ -n "$BILLING_PROJECT" ] || BILLING_PROJECT="$GCP_PROJECT"
+[ -n "$BILLING_DATASET" ] || { echo "excluded: gcp target '${GCP_LABEL}' has no billing_bq_dataset in $CFG, so actual spend by SKU is unavailable and savings would have no denominator"; exit 0; }
+# BILLING_PROJECT both HOSTS the dataset (the FROM clause) and RUNS the query job
+# (--project_id), so it is the project needing bigquery.googleapis.com enabled plus
+# roles/bigquery.jobUser, with dataViewer on the dataset. It is resolved above from
+# this target's gcp.billing_project, falling back to its own gcp.project.
 BILLING_TABLE="$(bq ls --project_id="$BILLING_PROJECT" --format=json "$BILLING_DATASET" 2>/dev/null \
   | jq -r '[.[].tableReference.tableId] | (map(select(startswith("gcp_billing_export_resource_v1_"))) + map(select(startswith("gcp_billing_export_v1_")))) | .[0] // empty')"
 [ -n "$BILLING_TABLE" ] || { echo "COST-GCP-029 reports excluded, reason: no billing export table"; exit 0; }
@@ -827,15 +1164,34 @@ new generation is a one-line change.
 
 ```bash
 set -eu
-BILLING_DATASET="your_billing_dataset" # gcp.billing_bq_dataset
-# The export dataset often lives in a dedicated billing/admin project, NOT the
-# project being audited. Fill BILLING_PROJECT from gcp.billing_project; when that
-# key is UNSET, fill it with the same value as gcp.project. Nothing here implements
-# a default — the value must be substituted, exactly like every other placeholder.
-# This project both HOSTS the dataset (the FROM clause) and RUNS the query job
-# (--project_id), so it is the one needing bigquery.googleapis.com enabled plus
-# roles/bigquery.jobUser, with dataViewer on the dataset.
-BILLING_PROJECT="your-billing-project-id" # gcp.billing_project; when that key is UNSET, fill this with the same value as gcp.project
+# Resolve the CURRENT gcp target from toolkit.yaml through the shared enumerator — a single block,
+# or the SCOUTFLO_TARGET-selected item of a labeled list (no yq required). Never hand-typed: when
+# gcp: lists several projects there is no single gcp.project, and cloud spend belongs to exactly one
+# project, so picking one silently would attribute another project's bill to this report.
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+[ -f "$CFG" ] || { echo "missing $CFG; run /scoutflo:connect"; exit 1; }
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+GCP_KIND=$(sh "$TT" "$CFG" gcp kind); GCP_N=$(sh "$TT" "$CFG" gcp count)
+[ "${GCP_N:-0}" -ge 1 ] || { echo "no gcp target configured in $CFG; run /scoutflo:connect"; exit 1; }
+GCP_IDX=0
+if [ "$GCP_KIND" = seq ]; then
+  [ -n "${SCOUTFLO_TARGET:-}" ] || { echo "gcp in $CFG lists several projects, and cloud spend is per project, so this lane will not choose one for you: re-run it once per project with SCOUTFLO_TARGET=<label> set and its own SCOUTFLO_AUDIT_DIR. Labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
+  _i=0; GCP_IDX=-1
+  while [ "$_i" -lt "$GCP_N" ]; do [ "$(sh "$TT" "$CFG" gcp label "$_i")" = "$SCOUTFLO_TARGET" ] && { GCP_IDX=$_i; break; }; _i=$((_i+1)); done
+  [ "$GCP_IDX" -ge 0 ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no gcp target in $CFG; labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
+fi
+GCP_LABEL=$(sh "$TT" "$CFG" gcp label "$GCP_IDX"); GCP_PROJECT=$(sh "$TT" "$CFG" gcp get "$GCP_IDX" project)
+[ -n "$GCP_PROJECT" ] || { echo "gcp target '${GCP_LABEL:-?}' names no project in $CFG; run /scoutflo:connect"; exit 1; }
+# The Cloud Billing export is read from THIS target, never a global default: the dataset, and the
+# project hosting it (gcp.billing_project, defaulting to this target's own project when the export
+# lives alongside it). An unset dataset excludes the check with its reason, never a $0 line.
+BILLING_DATASET=$(sh "$TT" "$CFG" gcp get "$GCP_IDX" billing_bq_dataset)
+BILLING_PROJECT=$(sh "$TT" "$CFG" gcp get "$GCP_IDX" billing_project); [ -n "$BILLING_PROJECT" ] || BILLING_PROJECT="$GCP_PROJECT"
+[ -n "$BILLING_DATASET" ] || { echo "excluded: gcp target '${GCP_LABEL}' has no billing_bq_dataset in $CFG, so actual spend by SKU is unavailable and savings would have no denominator"; exit 0; }
+# BILLING_PROJECT both HOSTS the dataset (the FROM clause) and RUNS the query job
+# (--project_id), so it is the project needing bigquery.googleapis.com enabled plus
+# roles/bigquery.jobUser, with dataViewer on the dataset. It is resolved above from
+# this target's gcp.billing_project, falling back to its own gcp.project.
 BILLING_TABLE="$(bq ls --project_id="$BILLING_PROJECT" --format=json "$BILLING_DATASET" 2>/dev/null \
   | jq -r '[.[].tableReference.tableId] | (map(select(startswith("gcp_billing_export_resource_v1_"))) + map(select(startswith("gcp_billing_export_v1_")))) | .[0] // empty')"
 [ -n "$BILLING_TABLE" ] || { echo "COST-GCP-035..039 report excluded, reason: no billing export table"; exit 0; }
@@ -945,7 +1301,24 @@ These run from plain `compute.*.list` reads (already covered by the reliability 
 
 ```bash
 set -eu
-GCP_PROJECT="your-project-id"   # gcp.project
+# Resolve the CURRENT gcp target from toolkit.yaml through the shared enumerator — a single block,
+# or the SCOUTFLO_TARGET-selected item of a labeled list (no yq required). Never hand-typed: when
+# gcp: lists several projects there is no single gcp.project, and cloud spend belongs to exactly one
+# project, so picking one silently would attribute another project's bill to this report.
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+[ -f "$CFG" ] || { echo "missing $CFG; run /scoutflo:connect"; exit 1; }
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+GCP_KIND=$(sh "$TT" "$CFG" gcp kind); GCP_N=$(sh "$TT" "$CFG" gcp count)
+[ "${GCP_N:-0}" -ge 1 ] || { echo "no gcp target configured in $CFG; run /scoutflo:connect"; exit 1; }
+GCP_IDX=0
+if [ "$GCP_KIND" = seq ]; then
+  [ -n "${SCOUTFLO_TARGET:-}" ] || { echo "gcp in $CFG lists several projects, and cloud spend is per project, so this lane will not choose one for you: re-run it once per project with SCOUTFLO_TARGET=<label> set and its own SCOUTFLO_AUDIT_DIR. Labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
+  _i=0; GCP_IDX=-1
+  while [ "$_i" -lt "$GCP_N" ]; do [ "$(sh "$TT" "$CFG" gcp label "$_i")" = "$SCOUTFLO_TARGET" ] && { GCP_IDX=$_i; break; }; _i=$((_i+1)); done
+  [ "$GCP_IDX" -ge 0 ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no gcp target in $CFG; labels: $(sh "$TT" "$CFG" gcp labels | tr '\n' ' ')"; exit 1; }
+fi
+GCP_LABEL=$(sh "$TT" "$CFG" gcp label "$GCP_IDX"); GCP_PROJECT=$(sh "$TT" "$CFG" gcp get "$GCP_IDX" project)
+[ -n "$GCP_PROJECT" ] || { echo "gcp target '${GCP_LABEL:-?}' names no project in $CFG; run /scoutflo:connect"; exit 1; }
 
 # COST-GCP-020: aged snapshots vs the team's stated retention. Report age; do NOT assume a default retention.
 gcloud compute snapshots list --project "$GCP_PROJECT" --format=json \
