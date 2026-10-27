@@ -34,7 +34,10 @@ set -eu
 RUN_DATE="$(date -u +%Y-%m-%d)"
 MATRIX="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/doctor/${RUN_DATE}/matrix.tsv"   # written by the doctor gate this run, or the most recent doctor run
 [ -f "$MATRIX" ] || { echo "no doctor matrix found; run the doctor gate before Phase 10"; exit 1; }
-awk -F'\t' '$1 == "aws" && $2 == "cost-permissions" {print $5, $7}' "$MATRIX"
+awk -F'\t' -v b="aws" -v c="cost-permissions" '
+  ($1 == b || substr($1, 1, length(b) + 2) == b " (") && $2 == c { n++; print $1, $5, $7 }
+  END { if (!n)    { print "no " b " " c " row in this matrix — re-run /scoutflo:doctor against this config before the cost phase; a missing row is NOT permission to skip the checks it gates" > "/dev/stderr"; exit 1 }
+        if (n > 1) { print "several " b " targets carry a " c " row — set SCOUTFLO_TARGET so this gate reads the one this run audits" > "/dev/stderr"; exit 1 } }' "$MATRIX"
 ```
 
 Expected: `pass -` when cost checks can run, or `skipped <reason>` when they cannot. A `skipped` result means Phase 10 renders exactly one line: "Cost & Resource Optimization: excluded, reason: <the exact hint from the matrix row>", and none of AWSOPT-001 through AWSOPT-010 runs this cycle. AWSOPT-002, AWSOPT-003, AWSOPT-005, AWSOPT-009, and AWSOPT-010 need only plain `Describe*`/`Get*`/`List*` permissions already covered by the reliability doctor probe, so they may still run even when the Compute Optimizer/Cost Explorer/Trusted Advisor scopes are missing; state that split explicitly rather than excluding the whole section when only part of it is blocked.

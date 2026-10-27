@@ -97,6 +97,12 @@ Green = read-only (safe, changes nothing) · amber = write, gated behind your co
 
 ## What's new (latest release)
 
+- **A running cluster can no longer be reported as deleted.** When a cluster's API server does not resolve, audits ask your cloud for its own list of clusters before deciding whether the thing is gone or merely private. Two ways that answer could be wrong are now closed: Google returns a **partial** cluster list (and still reports success) when one of its zones is not answering, and the AWS check was asking whichever account your shell happened to be pointed at rather than the one in your cluster's ARN. Either could produce "this cluster no longer exists, remove it from your config" about a cluster serving production traffic. Both now have to prove the answer is complete and came from the right account before saying anything is gone.
+
+- **A permission denial no longer reads as "nothing found".** Twelve GCP cost checks printed nothing when a read was refused — which looks exactly like a clean project with no waste. Each one now says it was excluded and why, so a blocked check never gets counted as a passed one.
+
+- **Multi-project configs no longer skip their own cost checks.** The gate that decides whether a provider's cost checks may run was looking for a single-target name and finding nothing when a config listed several, which silently skipped the checks on AWS, Azure, Datadog, DigitalOcean and Kubernetes. All of them now find the right row, and stop and ask which target you mean rather than guessing.
+
 - **GCP savings figures are no longer skipped by a faulty permission check.** Our preflight asked Google whether it could read cost recommendations in a way that fails for an ordinary user login, so on some accounts it decided it had no access and quietly left the entire priced-savings section out of the report — on estates that had savings sitting there. It now asks the same way the audit itself does. If you have ever seen a cost report with findings but no dollar figures, this is why; re-run and they appear.
 
 - **Several GCP projects in one config, audited one at a time.** If your `gcp:` block lists more than one project, the cost audit now picks the one you name with `SCOUTFLO_TARGET` and **stops and lists your project labels** if you do not name one — because cloud spend is per project, and guessing would attribute a bill to the wrong place. Each project's report is written to its own folder, so auditing several on the same day no longer has the later run overwrite the earlier one.

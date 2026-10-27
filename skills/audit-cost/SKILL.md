@@ -142,7 +142,7 @@ On the large/xlarge path, per-provider phases run against the **scoped** set in 
 
 ## Phase 1: Load context and prior-run cross-reference
 
-Read `~/.scoutflo/topology.json` `business_context` (environment, cost_sensitivity, critical_dependencies) and any saved `audit_scope`. Read the previous run's `findings.json` **from this target's own directory** (`$(dirname "$OUT")/<previous-date>/findings.json`) — under per-target nesting a flat `cost/<date>/` path finds nothing for a selected target, silently losing the trend and dedup seedscoutflo-audits/correlation.json` if present — these seed the `deduplicated` annotation and the trend, and nothing else. If none exist, proceed with safe defaults (production / medium sensitivity); state it.
+Read `~/.scoutflo/topology.json` `business_context` (environment, cost_sensitivity, critical_dependencies) and any saved `audit_scope`. Read the previous run's `findings.json` **from this target's own directory** (`$(dirname "$OUT")/<previous-date>/findings.json`) — under per-target nesting a flat `cost/<date>/` path finds nothing for a selected target, silently losing the trend and dedup seed. Read `./scoutflo-audits/correlation.json` if present — these seed the `deduplicated` annotation and the trend, and nothing else. If none exist, proceed with safe defaults (production / medium sensitivity); state it.
 
 ## Phase 2: Per-provider deep cost checks
 

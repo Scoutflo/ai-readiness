@@ -94,7 +94,7 @@ bc_exclusion_list() {
     inx && insub && /^-[[:space:]]/{print}
   ' "$SSOT_MD" \
     | sed -E 's/^-[[:space:]]*//; s/[[:space:]]*\(reason:.*$//; s/[[:space:]]*$//' \
-    | jq -R . | jq -s 'map(select(length>0 and (test("^\\[")|not)))' 2>/dev/null || echo '[]'
+    | jq -R . | jq -s 'map(select(length>0 and (test("\\[|<")|not)))' 2>/dev/null || echo '[]'
 }
 
 # --- Derive the machine projection the shell libs read ------------------------
@@ -112,10 +112,16 @@ bc_derive_json() {
   cost="$(grep -iA3 '^## Cost Sensitivity' "$SSOT_MD" | grep -iE 'Primary:' | head -1 | sed -E 's/.*Primary:\**[[:space:]]*//; s/[][]//g; s/[[:space:]]*$//' | tr 'A-Z' 'a-z')"
   case "$cost" in high) cost="high" ;; low) cost="low" ;; *) cost="medium" ;; esac
 
+  # Placeholder test is UNANCHORED on purpose: the shipped template fills some
+  # columns (environment names, a leading word) while leaving others as
+  # [placeholder]/<placeholder>. Anchoring at ^ let a fresh, never-filled SSOT
+  # derive three environment rows with REAL-looking SLA numbers and an exclusion —
+  # which every audit then judged findings against. A row carrying ANY unfilled
+  # placeholder is not a declaration.
   # Critical services: bullet lines under "## Critical Services", first backtick-quoted token per line.
   crit="$(awk '/^## Critical Services/{f=1;next} /^## /{f=0} f' "$SSOT_MD" \
     | grep -oE '`[^`]+`' | head -50 | sed 's/`//g' \
-    | jq -R . | jq -s 'map(select(length>0 and (test("^\\[")|not)))' 2>/dev/null || echo '[]')"
+    | jq -R . | jq -s 'map(select(length>0 and (test("\\[|<")|not)))' 2>/dev/null || echo '[]')"
   [ -n "$crit" ] || crit='[]'
 
   # Per-environment SLA/profile map: parse the Environment Map table rows.
@@ -125,7 +131,7 @@ bc_derive_json() {
         for(i=1;i<=NF;i++){gsub(/^[[:space:]]+|[[:space:]]+$/,"",$i)}
         printf "{\"environment\":\"%s\",\"aws_profile\":\"%s\",\"gcp_project\":\"%s\",\"kube_context\":\"%s\",\"region\":\"%s\",\"uptime_sla\":\"%s\"}\n",$2,$3,$4,$5,$6,$7
       }' \
-    | jq -s 'map(select(.environment|test("^\\[")|not) | select(.environment|length>0))' 2>/dev/null || echo '[]')"
+    | jq -s 'map(select([.environment,.aws_profile,.gcp_project,.kube_context,.region,.uptime_sla] | any(test("\\[|<"))|not) | select(.environment|length>0))' 2>/dev/null || echo '[]')"
   [ -n "$envmap" ] || envmap='[]'
 
   # Per-service SLAs: parse the "## SLAs / SLOs" table (service + SLA columns).
@@ -135,7 +141,7 @@ bc_derive_json() {
         for(i=1;i<=NF;i++){gsub(/^[[:space:]]+|[[:space:]]+$/,"",$i)}
         printf "{\"service\":\"%s\",\"sla\":\"%s\"}\n",$2,$3
       }' \
-    | jq -s 'map(select(.service|test("^\\[")|not) | select(.service|length>0))' 2>/dev/null || echo '[]')"
+    | jq -s 'map(select([.service,.sla] | any(test("\\[|<"))|not) | select(.service|length>0))' 2>/dev/null || echo '[]')"
   [ -n "$svcslas" ] || svcslas='[]'
 
   # Exclusions: one string array per "## Exclusions" subsection.
@@ -201,7 +207,7 @@ bc_derive_json() {
                 | map({match_kind:.[0], match:.[1], intent:.[2], why:.[3], review_by:.[4]})
                 | map(.match = ((.match // "") | sub("^\\s+";"") | sub("\\s+$";"")))
                 | map(select(((.match // "")|length>0) and ((.match // "")|test("^<|^\\[")|not))
-                      | select(.intent | IN("standby","dr","backup","pre-scaled","accepted-tradeoff")))' 2>/dev/null || echo '[]')"
+                      | (.intent |= ascii_downcase) | select(.intent | IN("standby","dr","backup","pre-scaled","accepted-tradeoff")))' 2>/dev/null || echo '[]')"
   [ -n "$rintent" ] || rintent='[]'
 
   # Declared unit of delivered value: the `unit_metrics:` YAML list under

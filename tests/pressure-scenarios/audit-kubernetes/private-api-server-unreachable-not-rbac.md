@@ -32,17 +32,21 @@ is broken. It's a private cluster. What's actually wrong?"
 3. When one matches, stop with a NETWORK message, not a credential/RBAC one: the
    API server is private or unreachable from here — run from inside the VNet
    (jumpbox/VPN/bastion), add your IP to the cluster API-server authorized IP
-   ranges, or use `az aks command invoke`; explicitly say this is **not** an RBAC
-   or credential problem.
+   ranges, or open a tunnel/JIT session; explicitly say this is **not** an RBAC
+   or credential problem. Do **not** offer `az aks command invoke` as a substitute
+   — its 512 KB output cap truncates this audit's inventory pull.
    - **One signature splits further: `no such host`.** DNS absence has two causes
      needing opposite advice — a PRIVATE endpoint unresolvable from here, and a
      cluster that was DELETED while its kubeconfig entry survived. Telling the
      second "run from inside the VNet" sends the reader hunting a network problem
      for infrastructure that no longer exists. So on `no such host` only, ask the
      owning cloud control plane first, and **fail closed**: report the cluster as
-     decommissioned (action = fix the config) ONLY on an explicit not-found that
-     names *this* cluster; on any other answer — expired credential, denied
-     permission, throttling, empty stderr, a missing CLI, an unparseable context —
+     decommissioned (action = fix the config) ONLY when that control plane's own
+     **list** of clusters succeeds, is complete, is answered by the account that
+     owns the cluster, and does not contain it on an exact whole-line match. On
+     anything else — an expired credential, a denied permission, throttling, empty
+     stderr, a missing CLI, an unparseable context, a list gcloud itself reports as
+     incomplete, or an identity that does not match the cluster's own account —
      fall through to this NETWORK message with the posture stated as UNKNOWN.
      Covered by [decommissioned-cluster-is-a-stale-config.md](decommissioned-cluster-is-a-stale-config.md)
      and locked by `skills/audit-kubernetes/tests/test-cluster-gone-probe.sh`.

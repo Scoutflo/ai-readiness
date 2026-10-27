@@ -108,7 +108,7 @@ export CLOUDSDK_CORE_DISABLE_PROMPTS=1   # MANDATORY — see below; never let gc
 if [ -n "${GOOGLE_APPLICATION_CREDENTIALS:-}" ]; then
   TOKEN="$(gcloud auth application-default print-access-token)"; export CLOUDSDK_AUTH_ACCESS_TOKEN="$TOKEN"
 else
-  TOKEN="$(gcloud auth print-access-token)"   # plain gcloud login is the identity
+  TOKEN="$(CLOUDSDK_CORE_DISABLE_PROMPTS=1 gcloud auth print-access-token)"   # plain gcloud login is the identity
 fi
 ```
 
@@ -146,6 +146,19 @@ set -eu
 RUN_DATE="$(date -u +%Y-%m-%d)"
 MATRIX="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/doctor/${RUN_DATE}/matrix.tsv"   # written by the doctor gate this run, or the most recent doctor run
 [ -f "$MATRIX" ] || { echo "no doctor matrix found; run the doctor gate before the GCP cost phase"; exit 1; }
+# Resolve THIS target's label the same way every other block in this file does. Reading
+# ${GCP_LABEL:-} without assigning it compares against the literal string "gcp ()", which
+# matches nothing — reintroducing the very zero-row bug the match below exists to fix,
+# silently skipping COST-GCP-001..010 on a multi-project estate.
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+GCP_KIND=$(sh "$TT" "$CFG" gcp kind 2>/dev/null || echo map)
+if [ "$GCP_KIND" = seq ]; then
+  [ -n "${SCOUTFLO_TARGET:-}" ] || { echo "gcp in $CFG is a labeled list and cloud spend is per project, so this lane will not choose an entry for you: re-run with SCOUTFLO_TARGET set to one of: $(sh "$TT" "$CFG" gcp labels 2>/dev/null | tr '\n' ' ')"; exit 1; }
+  GCP_LABEL="$SCOUTFLO_TARGET"
+else
+  GCP_LABEL=""
+fi
 # doctor writes the integration as `gcp` for a single block but `gcp (<label>)` once
 # `gcp:` lists more than one target (doctor.sh tint()). Matching only the bare form
 # found ZERO rows on a multi-project estate — so the gate controlling COST-GCP-001..010,
@@ -186,7 +199,7 @@ GCP_LABEL=$(sh "$TT" "$CFG" gcp label "$GCP_IDX"); GCP_PROJECT=$(sh "$TT" "$CFG"
 [ -n "$GCP_PROJECT" ] || { echo "gcp target '${GCP_LABEL:-?}' names no project in $CFG; run /scoutflo:connect"; exit 1; }
 RECOMMENDER="google.compute.instance.IdleResourceRecommender"   # the flag changes per check; location kind must match (see section 3)
 # Zonal recommenders (instances, disks) loop over zones; regional ones (addresses, MIGs, commitments, Cloud SQL) over regions; images use global.
-LOCATIONS="$(gcloud compute zones list --project "$GCP_PROJECT" --filter='status=UP' --format='value(name)')"
+LOCATIONS="$(CLOUDSDK_CORE_DISABLE_PROMPTS=1 gcloud compute zones list --project "$GCP_PROJECT" --filter='status=UP' --format='value(name)')"
 # FAIL CLOSED. Every Recommender loop below iterates this list, and each gcloud call inside
 # is `2>/dev/null`. So an empty list runs the loop ZERO times and produces no findings and no
 # error — indistinguishable from "this project has no savings". A denied compute.viewer must
@@ -194,7 +207,7 @@ LOCATIONS="$(gcloud compute zones list --project "$GCP_PROJECT" --filter='status
 [ -n "$LOCATIONS" ] || { echo "GCP cost: could not enumerate zones for ${GCP_PROJECT}. This is a BLOCKER, not an empty result — report the GCP Recommender phase as excluded with this reason, never as 'no savings found'. Unlock: gcloud services enable compute.googleapis.com --project ${GCP_PROJECT} and grant roles/compute.viewer to the audit identity."; exit 1; }
 
 for LOC in $LOCATIONS; do
-  gcloud recommender recommendations list \
+  CLOUDSDK_CORE_DISABLE_PROMPTS=1 gcloud recommender recommendations list \
     --project="$GCP_PROJECT" --location="$LOC" \
     --recommender="$RECOMMENDER" --format=json 2>/dev/null \
   | jq -r --arg loc "$LOC" '
@@ -249,24 +262,24 @@ if [ "$GCP_KIND" = seq ]; then
 fi
 GCP_LABEL=$(sh "$TT" "$CFG" gcp label "$GCP_IDX"); GCP_PROJECT=$(sh "$TT" "$CFG" gcp get "$GCP_IDX" project)
 [ -n "$GCP_PROJECT" ] || { echo "gcp target '${GCP_LABEL:-?}' names no project in $CFG; run /scoutflo:connect"; exit 1; }
-ZONES="$(gcloud compute zones list --project "$GCP_PROJECT" --filter='status=UP' --format='value(name)')"
+ZONES="$(CLOUDSDK_CORE_DISABLE_PROMPTS=1 gcloud compute zones list --project "$GCP_PROJECT" --filter='status=UP' --format='value(name)')"
 [ -n "$ZONES" ] || { echo "GCP cost: could not enumerate zones for ${GCP_PROJECT} — BLOCKER, not an empty result (the loops below would run zero times and look clean). Report this phase excluded. Unlock: enable compute.googleapis.com and grant roles/compute.viewer."; exit 1; }
-REGIONS="$(gcloud compute regions list --project "$GCP_PROJECT" --filter='status=UP' --format='value(name)')"
+REGIONS="$(CLOUDSDK_CORE_DISABLE_PROMPTS=1 gcloud compute regions list --project "$GCP_PROJECT" --filter='status=UP' --format='value(name)')"
 [ -n "$REGIONS" ] || { echo "GCP cost: could not enumerate regions for ${GCP_PROJECT} — BLOCKER, not an empty result (the loops below would run zero times and look clean). Report this phase excluded. Unlock: enable compute.googleapis.com and grant roles/compute.viewer."; exit 1; }
 
 # COST-GCP-001: idle VMs — zonal. Subtypes STOP_VM / SNAPSHOT_AND_DELETE / DELETE_VM.
 for Z in $ZONES; do
-  gcloud recommender recommendations list --project="$GCP_PROJECT" --location="$Z" \
+  CLOUDSDK_CORE_DISABLE_PROMPTS=1 gcloud recommender recommendations list --project="$GCP_PROJECT" --location="$Z" \
     --recommender="google.compute.instance.IdleResourceRecommender" --format=json 2>/dev/null
 done
 # COST-GCP-002: VM machine-type right-sizing — zonal. Subtype CHANGE_MACHINE_TYPE.
 for Z in $ZONES; do
-  gcloud recommender recommendations list --project="$GCP_PROJECT" --location="$Z" \
+  CLOUDSDK_CORE_DISABLE_PROMPTS=1 gcloud recommender recommendations list --project="$GCP_PROJECT" --location="$Z" \
     --recommender="google.compute.instance.MachineTypeRecommender" --format=json 2>/dev/null
 done
 # COST-GCP-003: MIG right-sizing — regional (regional MIGs) and zonal (zonal MIGs); check both.
 for R in $REGIONS; do
-  gcloud recommender recommendations list --project="$GCP_PROJECT" --location="$R" \
+  CLOUDSDK_CORE_DISABLE_PROMPTS=1 gcloud recommender recommendations list --project="$GCP_PROJECT" --location="$R" \
     --recommender="google.compute.instanceGroupManager.MachineTypeRecommender" --format=json 2>/dev/null
 done
 ```
@@ -295,23 +308,23 @@ if [ "$GCP_KIND" = seq ]; then
 fi
 GCP_LABEL=$(sh "$TT" "$CFG" gcp label "$GCP_IDX"); GCP_PROJECT=$(sh "$TT" "$CFG" gcp get "$GCP_IDX" project)
 [ -n "$GCP_PROJECT" ] || { echo "gcp target '${GCP_LABEL:-?}' names no project in $CFG; run /scoutflo:connect"; exit 1; }
-ZONES="$(gcloud compute zones list --project "$GCP_PROJECT" --filter='status=UP' --format='value(name)')"
+ZONES="$(CLOUDSDK_CORE_DISABLE_PROMPTS=1 gcloud compute zones list --project "$GCP_PROJECT" --filter='status=UP' --format='value(name)')"
 [ -n "$ZONES" ] || { echo "GCP cost: could not enumerate zones for ${GCP_PROJECT} — BLOCKER, not an empty result (the loops below would run zero times and look clean). Report this phase excluded. Unlock: enable compute.googleapis.com and grant roles/compute.viewer."; exit 1; }
-REGIONS="$(gcloud compute regions list --project "$GCP_PROJECT" --filter='status=UP' --format='value(name)')"
+REGIONS="$(CLOUDSDK_CORE_DISABLE_PROMPTS=1 gcloud compute regions list --project "$GCP_PROJECT" --filter='status=UP' --format='value(name)')"
 [ -n "$REGIONS" ] || { echo "GCP cost: could not enumerate regions for ${GCP_PROJECT} — BLOCKER, not an empty result (the loops below would run zero times and look clean). Report this phase excluded. Unlock: enable compute.googleapis.com and grant roles/compute.viewer."; exit 1; }
 
 # COST-GCP-004: idle reserved external IPs — regional. Subtype DELETE_ADDRESS.
 for R in $REGIONS; do
-  gcloud recommender recommendations list --project="$GCP_PROJECT" --location="$R" \
+  CLOUDSDK_CORE_DISABLE_PROMPTS=1 gcloud recommender recommendations list --project="$GCP_PROJECT" --location="$R" \
     --recommender="google.compute.address.IdleResourceRecommender" --format=json 2>/dev/null
 done
 # COST-GCP-005: idle persistent disks — zonal. Subtype SNAPSHOT_AND_DELETE_DISK / DELETE_DISK.
 for Z in $ZONES; do
-  gcloud recommender recommendations list --project="$GCP_PROJECT" --location="$Z" \
+  CLOUDSDK_CORE_DISABLE_PROMPTS=1 gcloud recommender recommendations list --project="$GCP_PROJECT" --location="$Z" \
     --recommender="google.compute.disk.IdleResourceRecommender" --format=json 2>/dev/null
 done
 # COST-GCP-006: idle custom images — global.
-gcloud recommender recommendations list --project="$GCP_PROJECT" --location="global" \
+CLOUDSDK_CORE_DISABLE_PROMPTS=1 gcloud recommender recommendations list --project="$GCP_PROJECT" --location="global" \
   --recommender="google.compute.image.IdleResourceRecommender" --format=json 2>/dev/null
 ```
 
@@ -339,20 +352,20 @@ if [ "$GCP_KIND" = seq ]; then
 fi
 GCP_LABEL=$(sh "$TT" "$CFG" gcp label "$GCP_IDX"); GCP_PROJECT=$(sh "$TT" "$CFG" gcp get "$GCP_IDX" project)
 [ -n "$GCP_PROJECT" ] || { echo "gcp target '${GCP_LABEL:-?}' names no project in $CFG; run /scoutflo:connect"; exit 1; }
-REGIONS="$(gcloud compute regions list --project "$GCP_PROJECT" --filter='status=UP' --format='value(name)')"
+REGIONS="$(CLOUDSDK_CORE_DISABLE_PROMPTS=1 gcloud compute regions list --project "$GCP_PROJECT" --filter='status=UP' --format='value(name)')"
 [ -n "$REGIONS" ] || { echo "GCP cost: could not enumerate regions for ${GCP_PROJECT} — BLOCKER, not an empty result (the loops below would run zero times and look clean). Report this phase excluded. Unlock: enable compute.googleapis.com and grant roles/compute.viewer."; exit 1; }
 
 # COST-GCP-007: committed-use discount purchase opportunities — regional. Subtype PURCHASE_COMMITMENT.
 # The cost figure is the projected SAVING from committing to steady-state usage — read verbatim, do not model it yourself.
 for R in $REGIONS; do
-  gcloud recommender recommendations list --project="$GCP_PROJECT" --location="$R" \
+  CLOUDSDK_CORE_DISABLE_PROMPTS=1 gcloud recommender recommendations list --project="$GCP_PROJECT" --location="$R" \
     --recommender="google.compute.commitment.UsageCommitmentRecommender" --format=json 2>/dev/null
 done
 # COST-GCP-008 / COST-GCP-009: Cloud SQL idle and over-provisioned — regional.
 for R in $REGIONS; do
-  gcloud recommender recommendations list --project="$GCP_PROJECT" --location="$R" \
+  CLOUDSDK_CORE_DISABLE_PROMPTS=1 gcloud recommender recommendations list --project="$GCP_PROJECT" --location="$R" \
     --recommender="google.cloudsql.instance.IdleRecommender" --format=json 2>/dev/null
-  gcloud recommender recommendations list --project="$GCP_PROJECT" --location="$R" \
+  CLOUDSDK_CORE_DISABLE_PROMPTS=1 gcloud recommender recommendations list --project="$GCP_PROJECT" --location="$R" \
     --recommender="google.cloudsql.instance.OverprovisionedRecommender" --format=json 2>/dev/null
 done
 ```
@@ -383,7 +396,11 @@ if [ "$GCP_KIND" = seq ]; then
 fi
 GCP_LABEL=$(sh "$TT" "$CFG" gcp label "$GCP_IDX"); GCP_PROJECT=$(sh "$TT" "$CFG" gcp get "$GCP_IDX" project)
 [ -n "$GCP_PROJECT" ] || { echo "gcp target '${GCP_LABEL:-?}' names no project in $CFG; run /scoutflo:connect"; exit 1; }
-LOC="asia-south1"   # gcp region/zone for the recommender's location kind; sweep the ones you use
+# Sweep the project's OWN locations, never a hand-typed one: a single literal region
+# audits one location and reports silence for every other, which reads as "no savings".
+# Regional recommenders take regions; the zonal ones in section 5 take zones.
+LOCATIONS="$(CLOUDSDK_CORE_DISABLE_PROMPTS=1 gcloud compute regions list --project "$GCP_PROJECT" --filter='status=UP' --format='value(name)')"
+[ -n "$LOCATIONS" ] || { echo "GCP cost: could not enumerate regions for ${GCP_PROJECT}. This is a BLOCKER, not an empty result — report these recommenders as excluded with this reason, never as 'no savings found'. Unlock: gcloud services enable compute.googleapis.com --project ${GCP_PROJECT} and grant roles/compute.viewer to the audit identity."; exit 1; }
 # There is NO `gcloud recommender recommenders list` subcommand (it errors "Invalid choice") — the
 # Recommender API has no discovery endpoint, so sweep an EXPLICIT list of the COST-category
 # recommenders section 5 did not already cover (GKE, Cloud Run, BigQuery, etc.). Each has its own
@@ -394,10 +411,12 @@ for R in \
   google.cloudsql.instance.IdleRecommender \
   google.cloudsql.instance.OverprovisionedRecommender \
   google.bigquery.capacityCommitments.Recommender ; do
-  gcloud recommender recommendations list \
-    --project="$GCP_PROJECT" --location="$LOC" --recommender="$R" \
-    --filter='stateInfo.state=ACTIVE' --format=json 2>/dev/null \
-    | jq -e 'length > 0' >/dev/null 2>&1 && echo "ACTIVE cost recs from $R (extract per section 5)" || true
+  for LOC in $LOCATIONS; do
+    CLOUDSDK_CORE_DISABLE_PROMPTS=1 gcloud recommender recommendations list \
+      --project="$GCP_PROJECT" --location="$LOC" --recommender="$R" \
+      --filter='stateInfo.state=ACTIVE' --format=json 2>/dev/null \
+      | jq -e 'length > 0' >/dev/null 2>&1 && echo "ACTIVE cost recs from $R in $LOC (extract per section 5)" || true
+  done
 done
 ```
 
@@ -428,7 +447,7 @@ fi
 GCP_LABEL=$(sh "$TT" "$CFG" gcp label "$GCP_IDX"); GCP_PROJECT=$(sh "$TT" "$CFG" gcp get "$GCP_IDX" project)
 [ -n "$GCP_PROJECT" ] || { echo "gcp target '${GCP_LABEL:-?}' names no project in $CFG; run /scoutflo:connect"; exit 1; }
 # Read-only: which billing account is this project linked to, and is billing enabled.
-gcloud billing projects describe "$GCP_PROJECT" \
+CLOUDSDK_CORE_DISABLE_PROMPTS=1 gcloud billing projects describe "$GCP_PROJECT" \
   --format='value(billingAccountName,billingEnabled)' 2>/dev/null \
   || echo "billing.projects.get denied or Cloud Billing API off; COST-GCP-023 reports excluded (no billing scope)"
 ```
@@ -667,12 +686,12 @@ fi
 GCP_LABEL=$(sh "$TT" "$CFG" gcp label "$GCP_IDX"); GCP_PROJECT=$(sh "$TT" "$CFG" gcp get "$GCP_IDX" project)
 [ -n "$GCP_PROJECT" ] || { echo "gcp target '${GCP_LABEL:-?}' names no project in $CFG; run /scoutflo:connect"; exit 1; }
 # Bucket shape: default class, location type, lifecycle rule count, versioning, soft-delete.
-gcloud storage buckets list --project "$GCP_PROJECT" --format=json 2>/dev/null \
+RAW="$(CLOUDSDK_CORE_DISABLE_PROMPTS=1 gcloud storage buckets list --project "$GCP_PROJECT" --format=json 2>/dev/null)" || { echo "COST-GCP-025 reports excluded, reason: storage.buckets.list denied or Cloud Storage API off"; RAW=""; }
+[ -z "$RAW" ] || printf '%s\n' "$RAW" \
   | jq -r '.[] | {name: .name, class: .default_storage_class, location: .location_type,
                   lifecycle_rules: ((.lifecycle_config.rule // []) | length),
                   versioning: (.versioning_enabled // false)}
-           | "\(.name)\tclass=\(.class)\tlocation=\(.location)\trules=\(.lifecycle_rules)\tversioning=\(.versioning)"' \
-  || echo "COST-GCP-025 reports excluded, reason: storage.buckets.list denied or Cloud Storage API off"
+           | "\(.name)\tclass=\(.class)\tlocation=\(.location)\trules=\(.lifecycle_rules)\tversioning=\(.versioning)"'
 ```
 
 Expected: one line per bucket. The finding fires on a bucket that is **STANDARD class with zero
@@ -713,17 +732,17 @@ GCP_LABEL=$(sh "$TT" "$CFG" gcp label "$GCP_IDX"); GCP_PROJECT=$(sh "$TT" "$CFG"
 [ -n "$GCP_PROJECT" ] || { echo "gcp target '${GCP_LABEL:-?}' names no project in $CFG; run /scoutflo:connect"; exit 1; }
 # 1. Default network service tier for the project (PREMIUM routes over Google's backbone; STANDARD
 #    exits closer to the user and bills less — a real trade-off, not free money).
-gcloud compute project-info describe --project "$GCP_PROJECT" --format='value(defaultNetworkTier)' 2>/dev/null \
+CLOUDSDK_CORE_DISABLE_PROMPTS=1 gcloud compute project-info describe --project "$GCP_PROJECT" --format='value(defaultNetworkTier)' 2>/dev/null \
   || echo "COST-GCP-026: project-info denied"
 # 2. Cloud NAT gateways. NAT bills a gateway-hour per gateway AND per-GiB data processing, so a
 #    gateway per zone or per cluster multiplies the fixed half.
-gcloud compute routers list --project "$GCP_PROJECT" --format=json 2>/dev/null \
-  | jq -r '.[] | . as $r | ($r.nats // [])[] | "\($r.region | sub(".*/"; ""))/\($r.name)\tnat=\(.name)\tips=\((.natIps // []) | length)\tsubnets=\((.subnetworks // []) | length)"' \
-  || echo "COST-GCP-026: routers.list denied"
+RAW="$(CLOUDSDK_CORE_DISABLE_PROMPTS=1 gcloud compute routers list --project "$GCP_PROJECT" --format=json 2>/dev/null)" || { echo "COST-GCP-026: routers.list denied"; RAW=""; }
+[ -z "$RAW" ] || printf '%s\n' "$RAW" \
+  | jq -r '.[] | . as $r | ($r.nats // [])[] | "\($r.region | sub(".*/"; ""))/\($r.name)\tnat=\(.name)\tips=\((.natIps // []) | length)\tsubnets=\((.subnetworks // []) | length)"'
 # 3. Forwarding rules with no backend traffic are an idle load-balancer charge.
-gcloud compute forwarding-rules list --project "$GCP_PROJECT" --format=json 2>/dev/null \
-  | jq -r '.[] | "\((.region // "global") | sub(".*/"; ""))/\(.name)\tIP=\(.IPAddress)\ttier=\(.networkTier // "-")\ttarget=\((.target // .backendService // "-") | sub(".*/"; ""))"' \
-  || echo "COST-GCP-026: forwarding-rules.list denied"
+RAW="$(CLOUDSDK_CORE_DISABLE_PROMPTS=1 gcloud compute forwarding-rules list --project "$GCP_PROJECT" --format=json 2>/dev/null)" || { echo "COST-GCP-026: forwarding-rules.list denied"; RAW=""; }
+[ -z "$RAW" ] || printf '%s\n' "$RAW" \
+  | jq -r '.[] | "\((.region // "global") | sub(".*/"; ""))/\(.name)\tIP=\(.IPAddress)\ttier=\(.networkTier // "-")\ttarget=\((.target // .backendService // "-") | sub(".*/"; ""))"'
 ```
 
 Expected: the project's default tier, every NAT gateway with its IP and subnet count, and every
@@ -764,13 +783,13 @@ fi
 GCP_LABEL=$(sh "$TT" "$CFG" gcp label "$GCP_IDX"); GCP_PROJECT=$(sh "$TT" "$CFG" gcp get "$GCP_IDX" project)
 [ -n "$GCP_PROJECT" ] || { echo "gcp target '${GCP_LABEL:-?}' names no project in $CFG; run /scoutflo:connect"; exit 1; }
 # Log buckets and their retention (the default _Default/_Required buckets included).
-gcloud logging buckets list --project "$GCP_PROJECT" --location=global --format=json 2>/dev/null \
-  | jq -r '.[] | "\(.name)\tretention_days=\(.retentionDays // "-")\tlocked=\(.locked // false)"' \
-  || echo "COST-GCP-027: logging.buckets.list denied or API off"
+RAW="$(CLOUDSDK_CORE_DISABLE_PROMPTS=1 gcloud logging buckets list --project "$GCP_PROJECT" --location=global --format=json 2>/dev/null)" || { echo "COST-GCP-027: logging.buckets.list denied or API off"; RAW=""; }
+[ -z "$RAW" ] || printf '%s\n' "$RAW" \
+  | jq -r '.[] | "\(.name)\tretention_days=\(.retentionDays // "-")\tlocked=\(.locked // false)"'
 # Sinks and, critically, whether any exclusion filter exists on the _Default sink.
-gcloud logging sinks list --project "$GCP_PROJECT" --format=json 2>/dev/null \
-  | jq -r '.[] | "\(.name)\tdest=\((.destination // "-") | sub(".*/"; ""))\texclusions=\((.exclusions // []) | length)"' \
-  || echo "COST-GCP-027: logging.sinks.list denied"
+RAW="$(CLOUDSDK_CORE_DISABLE_PROMPTS=1 gcloud logging sinks list --project "$GCP_PROJECT" --format=json 2>/dev/null)" || { echo "COST-GCP-027: logging.sinks.list denied"; RAW=""; }
+[ -z "$RAW" ] || printf '%s\n' "$RAW" \
+  | jq -r '.[] | "\(.name)\tdest=\((.destination // "-") | sub(".*/"; ""))\texclusions=\((.exclusions // []) | length)"'
 ```
 
 Expected: retention per bucket and exclusion count per sink. The finding fires when Cloud Logging
@@ -807,22 +826,22 @@ fi
 GCP_LABEL=$(sh "$TT" "$CFG" gcp label "$GCP_IDX"); GCP_PROJECT=$(sh "$TT" "$CFG" gcp get "$GCP_IDX" project)
 [ -n "$GCP_PROJECT" ] || { echo "gcp target '${GCP_LABEL:-?}' names no project in $CFG; run /scoutflo:connect"; exit 1; }
 MON_API="https://monitoring.googleapis.com/v3"
-if [ -n "${GOOGLE_APPLICATION_CREDENTIALS:-}" ]; then TOKEN="$(gcloud auth application-default print-access-token)"; export CLOUDSDK_AUTH_ACCESS_TOKEN="$TOKEN"; else TOKEN="$(gcloud auth print-access-token)"; fi
+if [ -n "${GOOGLE_APPLICATION_CREDENTIALS:-}" ]; then TOKEN="$(gcloud auth application-default print-access-token)"; export CLOUDSDK_AUTH_ACCESS_TOKEN="$TOKEN"; else TOKEN="$(CLOUDSDK_CORE_DISABLE_PROMPTS=1 gcloud auth print-access-token)"; fi
 START="$(date -u -v-7d +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d '7 days ago' +%Y-%m-%dT%H:%M:%SZ)"
 END="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 # Inventory: tier and provisioned capacity per share.
-gcloud filestore instances list --project "$GCP_PROJECT" --format=json 2>/dev/null \
-  | jq -r '.[] | "\(.name | sub(".*/"; ""))\ttier=\(.tier)\tgb=\((.fileShares // [])[0].capacityGb // "-")\tcreated=\(.createTime // "-")"' \
-  || echo "COST-GCP-030 reports excluded, reason: filestore.instances.list denied or API off"
+RAW="$(CLOUDSDK_CORE_DISABLE_PROMPTS=1 gcloud filestore instances list --project "$GCP_PROJECT" --format=json 2>/dev/null)" || { echo "COST-GCP-030 reports excluded, reason: filestore.instances.list denied or API off"; RAW=""; }
+[ -z "$RAW" ] || printf '%s\n' "$RAW" \
+  | jq -r '.[] | "\(.name | sub(".*/"; ""))\ttier=\(.tier)\tgb=\((.fileShares // [])[0].capacityGb // "-")\tcreated=\(.createTime // "-")"'
 # Peak utilisation over a real window — ALIGN_MAX, because a mean hides the peak that sized it.
-curl -fsSG --max-time 60 -H "Authorization: Bearer ${TOKEN}" \
+RAW="$(curl -fsSG --max-time 60 -H "Authorization: Bearer ${TOKEN}" \
   "${MON_API}/projects/${GCP_PROJECT}/timeSeries" \
   --data-urlencode 'filter=metric.type = "file.googleapis.com/nfs/server/used_bytes_percent"' \
   --data-urlencode "interval.startTime=${START}" --data-urlencode "interval.endTime=${END}" \
   --data-urlencode 'aggregation.alignmentPeriod=3600s' \
-  --data-urlencode 'aggregation.perSeriesAligner=ALIGN_MAX' \
-  | jq -r '.timeSeries[]? | "\(.resource.labels.instance_name)\tmax_used_pct=\([.points[].value.doubleValue] | max)"' \
-  || echo "COST-GCP-030: monitoring timeSeries denied"
+  --data-urlencode 'aggregation.perSeriesAligner=ALIGN_MAX')" || { echo "COST-GCP-030: monitoring timeSeries denied"; RAW=""; }
+[ -z "$RAW" ] || printf '%s\n' "$RAW" \
+  | jq -r '.timeSeries[]? | "\(.resource.labels.instance_name)\tmax_used_pct=\([.points[].value.doubleValue] | max)"'
 ```
 
 Expected: tier, provisioned size and 7-day peak utilisation per share, joined to its billed cost
@@ -872,7 +891,7 @@ BILLING_PROJECT=$(sh "$TT" "$CFG" gcp get "$GCP_IDX" billing_project); [ -n "$BI
 # (--project_id), so it is the project needing bigquery.googleapis.com enabled plus
 # roles/bigquery.jobUser, with dataViewer on the dataset. It is resolved above from
 # this target's gcp.billing_project, falling back to its own gcp.project.
-TARGET_PROJECT="the-project-to-size"   # the project whose compute bill has no CUD recommendation
+TARGET_PROJECT="$GCP_PROJECT"   # the project whose compute bill has no CUD recommendation — this target's, resolved above
 BILLING_TABLE="$(bq ls --project_id="$BILLING_PROJECT" --format=json "$BILLING_DATASET" 2>/dev/null \
   | jq -r '[.[].tableReference.tableId] | (map(select(startswith("gcp_billing_export_resource_v1_"))) + map(select(startswith("gcp_billing_export_v1_")))) | .[0] // empty')"
 [ -n "$BILLING_TABLE" ] || { echo "COST-GCP-031 reports the no-recommendation fact only, reason: no export to compute a floor from"; exit 0; }
@@ -931,9 +950,9 @@ if [ "$GCP_KIND" = seq ]; then
 fi
 GCP_LABEL=$(sh "$TT" "$CFG" gcp label "$GCP_IDX"); GCP_PROJECT=$(sh "$TT" "$CFG" gcp get "$GCP_IDX" project)
 [ -n "$GCP_PROJECT" ] || { echo "gcp target '${GCP_LABEL:-?}' names no project in $CFG; run /scoutflo:connect"; exit 1; }
-gcloud compute instances list --project "$GCP_PROJECT" --filter='status=TERMINATED' --format=json 2>/dev/null \
-  | jq -r '.[] | "\(.zone | sub(".*/"; ""))/\(.name)\ttype=\(.machineType | sub(".*/"; ""))\tstopped=\(.lastStopTimestamp // "unknown")\tdisks=\([(.disks // [])[] | .diskSizeGb] | add // 0)GB"' \
-  || echo "COST-GCP-032 reports excluded, reason: compute.instances.list denied"
+RAW="$(CLOUDSDK_CORE_DISABLE_PROMPTS=1 gcloud compute instances list --project "$GCP_PROJECT" --filter='status=TERMINATED' --format=json 2>/dev/null)" || { echo "COST-GCP-032 reports excluded, reason: compute.instances.list denied"; RAW=""; }
+[ -z "$RAW" ] || printf '%s\n' "$RAW" \
+  | jq -r '.[] | "\(.zone | sub(".*/"; ""))/\(.name)\ttype=\(.machineType | sub(".*/"; ""))\tstopped=\(.lastStopTimestamp // "unknown")\tdisks=\([(.disks // [])[] | .diskSizeGb] | add // 0)GB"'
 ```
 
 Expected: every TERMINATED instance with how long it has been stopped and how much disk it still
@@ -1276,14 +1295,24 @@ against its own prod twin:
 
 ```bash
 set -eu
-GCP_PROJECT="your-nonprod-project-id"   # gcp.project of a NON-PRODUCTION config
+# The nonprod project to compare against. It is a DIFFERENT target from the one under
+# audit, so it is named explicitly — but resolved from the config, never hand-typed:
+# SCOUTFLO_NONPROD_TARGET picks it out of the same gcp: list by label.
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done
+[ -f "$CFG" ] || { echo "missing $CFG; run /scoutflo:connect"; exit 1; }
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+NP="${SCOUTFLO_NONPROD_TARGET:-}"
+[ -n "$NP" ] || { echo "COST-GCP-040 reports excluded, reason: no nonprod target named. Set SCOUTFLO_NONPROD_TARGET to one of the gcp labels in $CFG: $(sh "$TT" "$CFG" gcp labels 2>/dev/null | tr '\n' ' ')"; exit 0; }
+GCP_PROJECT=""; _i=0; _n=$(sh "$TT" "$CFG" gcp count)
+while [ "$_i" -lt "${_n:-0}" ]; do [ "$(sh "$TT" "$CFG" gcp label "$_i")" = "$NP" ] && { GCP_PROJECT=$(sh "$TT" "$CFG" gcp get "$_i" project); break; }; _i=$((_i+1)); done
+[ -n "$GCP_PROJECT" ] || { echo "COST-GCP-040 reports excluded, reason: SCOUTFLO_NONPROD_TARGET=$NP matches no gcp target in $CFG"; exit 0; }
 # Shape of nonprod compute: are machine types and counts the same as production's?
-gcloud compute instances list --project "$GCP_PROJECT" --format=json 2>/dev/null \
+RAW="$(CLOUDSDK_CORE_DISABLE_PROMPTS=1 gcloud compute instances list --project "$GCP_PROJECT" --format=json 2>/dev/null)" || { echo "COST-GCP-040 reports excluded, reason: compute.instances.list denied"; RAW=""; }
+[ -z "$RAW" ] || printf '%s\n' "$RAW" \
   | jq -r '[.[] | {type: (.machineType | sub(".*/"; "")), status: .status}]
            | group_by(.type) | map({type: .[0].type, n: length,
                running: (map(select(.status=="RUNNING")) | length)})[]
-           | "\(.type)\tcount=\(.n)\trunning=\(.running)"' \
-  || echo "COST-GCP-040 reports excluded, reason: compute.instances.list denied"
+           | "\(.type)\tcount=\(.n)\trunning=\(.running)"'
 ```
 
 **Round-the-clock running.** A non-production estate that bills 24×7 for a team working business
@@ -1329,19 +1358,28 @@ fi
 GCP_LABEL=$(sh "$TT" "$CFG" gcp label "$GCP_IDX"); GCP_PROJECT=$(sh "$TT" "$CFG" gcp get "$GCP_IDX" project)
 [ -n "$GCP_PROJECT" ] || { echo "gcp target '${GCP_LABEL:-?}' names no project in $CFG; run /scoutflo:connect"; exit 1; }
 
+# ⚠️ IDIOM, read before adding a check here. `gcloud ... | jq ... || echo "excluded"`
+# does NOT work: jq exits 0 on empty stdin, so a DENIED read produces no output, the
+# `||` never fires, and the check renders as "nothing found" — indistinguishable from a
+# clean project. That is the exact failure `tests/pressure-scenarios/audit-cost/
+# blocked-scope-never-reads-as-no-waste.md` forbids. Capture the command's own status
+# FIRST (as the three blocks below do), then decide.
 # COST-GCP-020: aged snapshots vs the team's stated retention. Report age; do NOT assume a default retention.
-gcloud compute snapshots list --project "$GCP_PROJECT" --format=json \
-  | jq -r 'sort_by(.creationTimestamp) | .[]
+SNAP="$(CLOUDSDK_CORE_DISABLE_PROMPTS=1 gcloud compute snapshots list --project "$GCP_PROJECT" --format=json 2>&1)" \
+  || { echo "COST-GCP-020 reports excluded, reason: snapshots list denied or failed: ${SNAP}"; SNAP=""; }
+[ -z "$SNAP" ] || printf '%s' "$SNAP" | jq -r 'sort_by(.creationTimestamp) | .[]
       | "\(.name)\tsrc=\(.sourceDisk // "?" | sub(".*/"; ""))\tGB=\(.diskSizeGb // "?")\tcreated=\(.creationTimestamp)\tstatus=\(.status)"'
 
 # COST-GCP-021: reserved static external IPs not IN_USE (each is billed while idle).
-gcloud compute addresses list --project "$GCP_PROJECT" --format=json \
-  | jq -r '.[] | select(.status == "RESERVED")
+ADDR="$(CLOUDSDK_CORE_DISABLE_PROMPTS=1 gcloud compute addresses list --project "$GCP_PROJECT" --format=json 2>&1)" \
+  || { echo "COST-GCP-021 reports excluded, reason: addresses list denied or failed: ${ADDR}"; ADDR=""; }
+[ -z "$ADDR" ] || printf '%s' "$ADDR" | jq -r '.[] | select(.status == "RESERVED")
       | "\(.name)\tregion=\((.region // "global") | sub(".*/"; ""))\taddress=\(.address)\ttype=\(.addressType // "EXTERNAL")"'
 
 # COST-GCP-022: persistent disks with no attached user (users field empty/absent).
-gcloud compute disks list --project "$GCP_PROJECT" --format=json \
-  | jq -r '.[] | select((.users // []) | length == 0)
+DISKS="$(CLOUDSDK_CORE_DISABLE_PROMPTS=1 gcloud compute disks list --project "$GCP_PROJECT" --format=json 2>&1)" \
+  || { echo "COST-GCP-022 reports excluded, reason: disks list denied or failed: ${DISKS}"; DISKS=""; }
+[ -z "$DISKS" ] || printf '%s' "$DISKS" | jq -r '.[] | select((.users // []) | length == 0)
       | "\(.name)\tzone=\((.zone // .region) | sub(".*/"; ""))\tGB=\(.sizeGb)\ttype=\((.type // "?") | sub(".*/"; ""))\tcreated=\(.creationTimestamp)"'
 ```
 

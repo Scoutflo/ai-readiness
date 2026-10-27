@@ -361,17 +361,33 @@ produce: it is confident, specific, names real services, and is completely
 wrong. Probe the other plane before concluding anything about coverage.
 
 ```bash
+set -eu
 # Read-only. Enumerate the rule planes Grafana knows about, then ask each
 # datasource's ruler whether it holds rules. A 404/501 means that datasource has
 # no ruler API (normal for most types) — not an error, and not an empty ruler.
+GRAFANA_URL="https://grafana.example.com"   # grafana.url — clearly-marked config placeholder
 SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.scoutflo/env" ]; then SCOUTFLO_ENV="./.scoutflo/env"; else SCOUTFLO_ENV="$HOME/.scoutflo/env"; fi; }
 _SF_CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$_SF_CFG" ] || for _sf_c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_sf_c" ] && { _SF_CFG="$_sf_c"; break; }; done
 _SF_TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 if [ "$(sh "$_SF_TT" "$_SF_CFG" grafana kind 2>/dev/null || true)" = seq ]; then _sf_i=0; while [ "$_sf_i" -lt "$(sh "$_SF_TT" "$_SF_CFG" grafana count 2>/dev/null || echo 0)" ]; do [ -z "$(sh "$_SF_TT" "$_SF_CFG" grafana get "$_sf_i" token_env 2>/dev/null || true)" ] || { echo "grafana in ${_SF_CFG} is a list of targets that each name their own token_env, and this step reads GRAFANA_TOKEN by its default name, so it cannot tell which target's value to use. It stops instead of guessing: give that target a config of its own where grafana is a single block, and run with SCOUTFLO_CONFIG set to that file (and SCOUTFLO_AUDIT_DIR to its own folder)."; exit 1; }; _sf_i=$((_sf_i+1)); done; fi
 _sf_tv="$(sh "$_SF_TT" "$_SF_CFG" grafana get 0 token_env 2>/dev/null || true)"; if [ -n "$_sf_tv" ] && [ "$(sh "$_SF_TT" "$_SF_CFG" grafana kind 2>/dev/null || true)" != seq ]; then _sf_v="$(sh -c '( [ -f "$1" ] && . "$1" >/dev/null 2>&1; printenv -- "$2" ) 2>/dev/null || printenv -- "$2"' _ "$SCOUTFLO_ENV" "$_sf_tv" 2>/dev/null || true)"; if [ -n "$_sf_v" ]; then GRAFANA_TOKEN="$_sf_v"; export GRAFANA_TOKEN; else unset GRAFANA_TOKEN; echo "note: ${_sf_tv} (named by grafana.token_env) is not set in the secret store or the shell" >&2; fi; fi
-DS_JSON="$(curl -fsS --max-time 15 -H "Authorization: Bearer ${GRAFANA_TOKEN}" \
-  "${GRAFANA_URL}/api/datasources" 2>/dev/null || echo '[]')"
-printf '%s' "$DS_JSON" | jq -r '.[]? | select(.type | test("prometheus|loki|mimir|cortex|alertmanager"))
+[ -n "${GRAFANA_TOKEN:-}" ] || { echo "GRAFANA_TOKEN is not set; run /scoutflo:connect — without it this read is unauthenticated and its result is meaningless"; exit 1; }
+# Capture the STATUS. `|| echo '[]'` would turn a refusal into an empty list, which is
+# byte-identical to "this estate has no ruler plane" — and that routes GRAF-091 to `fail`,
+# the exact wrong verdict this whole section exists to prevent. /api/datasources needs
+# Org Admin (see the RBAC note above), so a correct least-privilege audit token hits 403
+# ROUTINELY. A refusal must block the coverage verdict, never silently clear it.
+trap 'rm -f "${TMPDIR:-/tmp}"/graf-ds-$$.json "${TMPDIR:-/tmp}"/graf-ruler-$$-*.json' EXIT INT TERM
+DS_FILE="${TMPDIR:-/tmp}/graf-ds-$$.json"
+DS_CODE="$(curl -sS -o "$DS_FILE" -w '%{http_code}' --max-time 15 \
+  -H "Authorization: Bearer ${GRAFANA_TOKEN}" "${GRAFANA_URL}/api/datasources" 2>/dev/null || echo 000)"
+if [ "$DS_CODE" != "200" ]; then
+  rm -f "$DS_FILE"
+  echo "datasource enumeration returned HTTP ${DS_CODE} — the ruler plane could NOT be enumerated. GRAF-091 is BLOCKED for every critical service (never fail): this run cannot tell a datasource-managed ruler from the absence of one. Unlock: a token with datasources:read (Org Admin on basic roles)."
+  exit 0
+fi
+DS_JSON="$(cat "$DS_FILE")"; rm -f "$DS_FILE"
+printf '%s' "$DS_JSON" | jq -r '.[]? | select(.type | test("prometheus|loki|mimir|cortex|alertmanager|victoriametrics|victorialogs|thanos"))
   | "\(.uid)\t\(.type)\t\(.name)"' | while IFS="$(printf '\t')" read -r DS_UID DS_TYPE DS_NAME; do
   [ -n "$DS_UID" ] || continue
   R_CODE="$(curl -sS -o "${TMPDIR:-/tmp}/graf-ruler-$$-$DS_UID.json" -w '%{http_code}' --max-time 20 \
@@ -394,10 +410,10 @@ printf '%s' "$DS_JSON" | jq -r '.[]? | select(.type | test("prometheus|loki|mimi
       N_ALERT="$(jq '[.[]?[]?.rules[]? | select(has("alert"))] | length' "${TMPDIR:-/tmp}/graf-ruler-$$-$DS_UID.json" 2>/dev/null || echo 0)"
       N_REC="$(jq '[.[]?[]?.rules[]? | select(has("record"))] | length' "${TMPDIR:-/tmp}/graf-ruler-$$-$DS_UID.json" 2>/dev/null || echo 0)"
       echo "ruler ${DS_NAME} (${DS_TYPE}, uid=${DS_UID}): HTTP 200, alerting rules=${N_ALERT}, recording rules=${N_REC} (only alerting rules count toward GRAF-091)"
-      [ "${N_ALERT:-0}" -gt 0 ] && jq -r '[.[]?[]?.rules[]? | select(has("alert"))
+      if [ "${N_ALERT:-0}" -gt 0 ]; then jq -r '[.[]?[]?.rules[]? | select(has("alert"))
           | "\(.labels.service // "-"):\(.alert)\(if (.labels.severity // "") == "" then " [NO severity label]" else "" end)"]
         | unique | "  alerting rules here (service:rule): " + (join(", ") | .[0:400])' \
-        "${TMPDIR:-/tmp}/graf-ruler-$$-$DS_UID.json" 2>/dev/null ;;
+        "${TMPDIR:-/tmp}/graf-ruler-$$-$DS_UID.json" 2>/dev/null; fi ;;
     404|501) echo "ruler ${DS_NAME} (${DS_TYPE}): no ruler API (HTTP ${R_CODE}) — this datasource holds no rules; NOT an empty ruler" ;;
     401|403) echo "ruler ${DS_NAME} (${DS_TYPE}): HTTP ${R_CODE} — the token cannot read this ruler. GRAF-091 is BLOCKED for its services, never passed or failed" ;;
     *)       echo "ruler ${DS_NAME} (${DS_TYPE}): HTTP ${R_CODE} — unresolved; treat as unknown, not as empty" ;;

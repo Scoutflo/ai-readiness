@@ -82,7 +82,10 @@ set -eu
 RUN_DATE="$(date -u +%Y-%m-%d)"
 MATRIX="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/doctor/${RUN_DATE}/matrix.tsv"   # this run's doctor gate, or most recent
 [ -f "$MATRIX" ] || { echo "no doctor matrix; run the doctor gate before the AWS cost phase"; exit 1; }
-awk -F'\t' '$1 == "aws" && $2 == "cost-permissions" {print $5, $7}' "$MATRIX"   # e.g. "pass -" or "skipped <reason>"
+awk -F'\t' -v b="aws" -v c="cost-permissions" '
+  ($1 == b || substr($1, 1, length(b) + 2) == b " (") && $2 == c { n++; print $1, $5, $7 }
+  END { if (!n)    { print "no " b " " c " row in this matrix — re-run /scoutflo:doctor against this config before the cost phase; a missing row is NOT permission to skip the checks it gates" > "/dev/stderr"; exit 1 }
+        if (n > 1) { print "several " b " targets carry a " c " row — set SCOUTFLO_TARGET so this gate reads the one this run audits" > "/dev/stderr"; exit 1 } }' "$MATRIX"
 ```
 
 The scope split, so a partial block excludes only what it must rather than the whole AWS phase:

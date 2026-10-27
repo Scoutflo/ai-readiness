@@ -18,11 +18,27 @@
 #   3. an IAM denial that echoes the resource path AND says "credential file was not
 #      found", satisfying two independent conditions at once;
 #   4. `Not found: nodePool "default" in .../clusters/<name>` — a missing NODE POOL
-#      read as a missing CLUSTER.
+#      read as a missing CLUSTER;
+#   5. a context split on `_` asking about the wrong name and getting a truthful
+#      not-found.
 # Each fix was a tighter pattern and each was defeated by another wording. Error
 # prose is not an API. The branch now asks the control plane for its LIST of clusters
 # and does an exact whole-line match, so absence is a structured fact rather than a
 # string guess, and every name-collision case dies by construction.
+#
+# THE REWRITE WAS NOT THE END OF IT. A maintainer rubric review then defeated the
+# list twice more — not its matching, but its AUTHORITY, which is the part a
+# structured call does not establish for free:
+#   6. gcloud exits 0 with a knowingly INCOMPLETE list when a zone does not answer
+#      (`list.py`: warns "The following zones did not respond ... List results may
+#      be incomplete" on stderr, status 0). The branch sent stderr to /dev/null, so
+#      a live cluster in that zone was simply absent from a "successful" list.
+#   7. `aws eks list-clusters` ran under the shell's AMBIENT credentials, not the
+#      kubeconfig context's. `aws eks update-kubeconfig` writes the profile into
+#      exec.env (AWS_PROFILE); a multi-account kubeconfig therefore asked the wrong
+#      account whether this cluster exists, and got a truthful no.
+# Absence is evidence only when the list is BOTH complete AND answered by the account
+# that owns the cluster. Tests 10 and 11 hold that line.
 #
 # The branch is extracted from SKILL.md so this test cannot drift from the shipped
 # text. Runs under /bin/sh. No network: gcloud/aws are stand-ins, and one case
@@ -48,6 +64,8 @@ awk '
 grep -q 'GONE=' "$WORK/branch-body.sh" || fail "extracted branch never sets GONE — extraction is wrong"
 grep -q 'clusters list' "$WORK/branch-body.sh" || fail "extracted branch does not use the structured list call"
 grep -q 'grep -qxF' "$WORK/branch-body.sh" || fail "extracted branch does not do an exact whole-line match"
+grep -q 'did not respond' "$WORK/branch-body.sh" || fail "extracted branch does not reject an incomplete (partial-zone) list"
+grep -q 'get-caller-identity' "$WORK/branch-body.sh" || fail "extracted branch does not prove which AWS account answered the list"
 
 { echo '#!/bin/sh'
   echo 'KUBE_CONTEXT="$1"; EXEC_CMD="$2"'
@@ -56,12 +74,34 @@ grep -q 'grep -qxF' "$WORK/branch-body.sh" || fail "extracted branch does not do
 } > "$WORK/probe.sh"
 sh -n "$WORK/probe.sh" || fail "extracted branch is not valid POSIX sh"
 
-# Stand-in CLI: STUB_OUT on stdout, STUB_ERR on stderr, STUB_RC as exit status.
+# Stand-in CLIs. The list call answers with STUB_OUT / STUB_ERR / STUB_RC. `aws sts
+# get-caller-identity` is a separate call with its own knobs, because the EKS branch
+# must prove WHICH ACCOUNT is answering before absence counts: STUB_ACCT (default
+# 1234, the account in $EKS) and STUB_STS_RC. The stub also records the AWS_PROFILE
+# it was invoked with, so Test 11 can prove the context's profile is really used.
 mkcli() {
-  printf '#!/bin/sh\n[ -n "${STUB_OUT:-}" ] && printf "%%s\\n" "$STUB_OUT"\n[ -n "${STUB_ERR:-}" ] && printf "%%s\\n" "$STUB_ERR" >&2\nexit ${STUB_RC:-0}\n' > "$WORK/bin/$1"
+  cat > "$WORK/bin/$1" <<STUB
+#!/bin/sh
+case "\$*" in
+  *get-caller-identity*)
+    printf '%s\n' "\${AWS_PROFILE:-<none>}" >> "$WORK/profile.log"
+    [ "\${STUB_STS_RC:-0}" -eq 0 ] && printf '%s\n' "\${STUB_ACCT-1234}"
+    exit \${STUB_STS_RC:-0} ;;
+esac
+[ -n "\${STUB_OUT:-}" ] && printf '%s\n' "\$STUB_OUT"
+[ -n "\${STUB_ERR:-}" ] && printf '%s\n' "\$STUB_ERR" >&2
+exit \${STUB_RC:-0}
+STUB
   chmod +x "$WORK/bin/$1"
 }
 mkcli gcloud; mkcli aws
+# kubectl is read locally (kubeconfig only, no cluster call): hand back STUB_PROFILE.
+cat > "$WORK/bin/kubectl" <<'KSTUB'
+#!/bin/sh
+printf '%s' "${STUB_PROFILE:-}"
+KSTUB
+chmod +x "$WORK/bin/kubectl"
+: > "$WORK/profile.log"
 
 GKE="gke_myproj_us-central1_live"
 EKS="arn:aws:eks:eu-west-1:1234:cluster/prod"
@@ -78,7 +118,7 @@ echo "Test 2: a cluster present in the list is NOT gone (it is a private endpoin
 [ "$(v "$GKE" gke-gcloud-auth-plugin 'live
 other' '' 0)" = "UNKNOWN" ] || fail "a cluster present in the list was reported deleted"
 [ "$(v "$GKE" gke-gcloud-auth-plugin '  live  ' '' 0)" = "UNKNOWN" ] || fail "a padded list entry made a live cluster read as deleted"
-[ "$(v "$GKE" gke-gcloud-auth-plugin 'live' 'WARNING: API deprecated' 0)" = "UNKNOWN" ] || fail "a stderr warning on a successful list flipped the verdict"
+[ "$(v "$GKE" gke-gcloud-auth-plugin 'live' 'WARNING: API deprecated' 0)" = "UNKNOWN" ] || fail "a benign stderr warning on a successful list flipped the verdict"
 echo "PASS"
 
 echo "Test 3: name collisions cannot fake presence"
@@ -151,7 +191,12 @@ echo "PASS"
 echo "Test 9: no cloud CLI is invoked with an ambient target, and none pins a location"
 : > "$WORK/argv.log"
 for c in gcloud aws; do
-  printf '#!/bin/sh\nprintf "%%s %%s\\n" "%s" "$*" >> "%s"\nexit 1\n' "$c" "$WORK/argv.log" > "$WORK/bin/$c"
+  cat > "$WORK/bin/$c" <<LOG
+#!/bin/sh
+printf '%s %s\n' "$c" "\$*" >> "$WORK/argv.log"
+case "\$*" in *get-caller-identity*) echo 1234; exit 0 ;; esac
+exit 1
+LOG
   chmod +x "$WORK/bin/$c"
 done
 v "$GKE" gke-gcloud-auth-plugin >/dev/null
@@ -160,13 +205,49 @@ v "renamed-by-user" gke-gcloud-auth-plugin >/dev/null
 v "my-eks-alias" aws >/dev/null
 grep -qE -- '--project +(--|$)|--region +(--|$)' "$WORK/argv.log" \
   && fail "a cloud CLI was invoked with an empty target flag: $(cat "$WORK/argv.log")"
-[ "$(grep -c . "$WORK/argv.log")" -eq 2 ] \
-  || fail "expected exactly 2 cloud calls (one per well-formed context), got: $(cat "$WORK/argv.log")"
+# 3 = the GKE list, plus the EKS identity proof and its list. The two malformed
+# contexts must contribute nothing.
+[ "$(grep -c . "$WORK/argv.log")" -eq 3 ] \
+  || fail "expected exactly 3 cloud calls (GKE list; EKS sts + list), got: $(cat "$WORK/argv.log")"
 # Listing per project covers zonal AND regional clusters, so pinning a location
 # would reintroduce the zonal/regional mismatch class.
 grep -q -- '--location' "$WORK/argv.log" \
   && fail "the list call pins a location, which reintroduces the zonal/regional mismatch class"
 mkcli gcloud; mkcli aws
+echo "PASS"
+
+echo "Test 10: an INCOMPLETE list cannot prove absence (gcloud exits 0 on a dead zone)"
+# gcloud warns on stderr and still exits 0; the cluster it cannot see is simply
+# missing from the output. Absence stops being evidence.
+for w in \
+  'WARNING: The following zones did not respond: us-central1-b. List results may be incomplete.' \
+  'WARNING: The following zones did not respond: europe-west1-c, us-east1-d.' \
+  'WARNING: List results may be incomplete.'
+do
+  [ "$(v "$GKE" gke-gcloud-auth-plugin 'other-a' "$w" 0)" = "UNKNOWN" ] \
+    || fail "a knowingly incomplete list produced a gone verdict for: '$w'"
+done
+# A benign warning must still allow one, or the probe becomes useless in practice.
+[ "$(v "$GKE" gke-gcloud-auth-plugin 'other-a' 'WARNING: gcloud update available' 0)" = "GONE" ] \
+  || fail "a benign warning suppressed a legitimate target-gone verdict"
+echo "PASS"
+
+echo "Test 11: only the cluster's OWN account may answer for it"
+# $EKS is owned by account 1234. A list answered by any other account omits the
+# cluster for a reason that has nothing to do with deletion.
+[ "$(STUB_ACCT=9999 v "$EKS" aws 'staging' '' 0)" = "UNKNOWN" ] \
+  || fail "a list answered by a DIFFERENT AWS account produced a gone verdict"
+[ "$(STUB_STS_RC=1 v "$EKS" aws 'staging' '' 0)" = "UNKNOWN" ] \
+  || fail "an unreadable caller identity produced a gone verdict"
+[ "$(STUB_ACCT='' v "$EKS" aws 'staging' '' 0)" = "UNKNOWN" ] \
+  || fail "an empty caller identity produced a gone verdict"
+[ "$(STUB_ACCT=1234 v "$EKS" aws 'staging' '' 0)" = "GONE" ] \
+  || fail "the owning account's own list omitting the cluster did not register as target-gone"
+# ...and the identity must be proven under the CONTEXT's profile, not the shell's.
+: > "$WORK/profile.log"
+STUB_PROFILE=prod-eks STUB_ACCT=1234 v "$EKS" aws 'staging' '' 0 >/dev/null
+grep -qx 'prod-eks' "$WORK/profile.log" \
+  || fail "the identity check ignored the kubeconfig context's AWS_PROFILE (saw: $(cat "$WORK/profile.log"))"
 echo "PASS"
 
 echo
