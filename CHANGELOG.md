@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.1.237
+
+**Two GCP coverage statements promised more than the audit delivers.** Both are fixes to what
+the report says about its own limits. No check changes, no score moves, no `check_set` change.
+
+### Uncovered serverless surfaces are declared, not assumed
+
+`audit-gcp` has never audited Cloud Run, Cloud Functions or App Engine, and the skill said so —
+then told the auditor to "say so in the report as unaudited surface" with nothing behind it: no
+step that looks, no required place in the report, and no answer for the case where the API is
+simply switched off. On a project whose request path runs mostly on those services, a high score
+could read as a verdict on the whole estate.
+
+The declaration is now a chain. Phase 2 resolves each surface to **present**, **none** or
+**unknown** with read-only `list` calls; a disabled or denied API is `unknown`, never `none`,
+because an absent answer is not a clean one. Phase 11 requires the scope statement to name
+anything that came back `present` or `unknown` and say it was not assessed. It emits no `GCP-*`
+row and moves no score — a `present` result is never a failure.
+
+### Managed Prometheus is a state check, and now says so
+
+`GCP-032` asks one question: is Managed Prometheus on where the alerting plan expects workload
+metrics to come from. Nothing inspects a managed backend the way `/scoutflo:audit-prometheus`
+inspects a self-hosted server — scrape-target health and per-service `up`, TSDB cardinality and
+churn, rule load and evaluation. On an estate that splits planes, some metrics managed and some
+self-hosted, the two sides are not assessed to the same depth and the audits cannot produce a
+like-for-like comparison between them. Both skills state that now rather than implying parity.
+
+`audit-prometheus` additionally marks vendor-managed backends an **unverified target**: a managed
+service advertising a Prometheus-compatible API generally exposes the query surface while
+withholding the server-administration surfaces these checks read. That is recorded as untested
+rather than asserted — this audit has not been run against one.
+
 ## 0.1.236
 
 **Maintainer rubric reviews on the skills changed in 0.1.229-235.** Five reviews, run independently

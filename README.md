@@ -97,6 +97,10 @@ Green = read-only (safe, changes nothing) · amber = write, gated behind your co
 
 ## What's new (latest release)
 
+- **A GCP score now tells you which parts of your estate it does not cover.** The GCP audit has never covered Cloud Run, Cloud Functions or App Engine. It now looks for them, and when any are running — or when it cannot tell because the API is switched off — the report names them and says plainly that they were not assessed. None of this changes your score. It stops a high score on a narrow surface from reading as a verdict on everything you run.
+
+- **Managed and self-hosted Prometheus are not graded to the same depth, and the report says so.** For Google Managed Prometheus the GCP audit answers one question: is it switched on where your alerting expects workload metrics to come from. The deep checks — scrape-target health, TSDB cardinality and churn, rule evaluation — only run against a Prometheus server the audit can reach directly. If you run both, the two sides are not comparable, and the reports no longer leave that implicit.
+
 - **A running cluster can no longer be reported as deleted.** When a cluster's API server does not resolve, audits ask your cloud for its own list of clusters before deciding whether the thing is gone or merely private. Two ways that answer could be wrong are now closed: Google returns a **partial** cluster list (and still reports success) when one of its zones is not answering, and the AWS check was asking whichever account your shell happened to be pointed at rather than the one in your cluster's ARN. Either could produce "this cluster no longer exists, remove it from your config" about a cluster serving production traffic. Both now have to prove the answer is complete and came from the right account before saying anything is gone.
 
 - **A permission denial no longer reads as "nothing found".** Twelve GCP cost checks printed nothing when a read was refused — which looks exactly like a clean project with no waste. Each one now says it was excluded and why, so a blocked check never gets counted as a passed one.
