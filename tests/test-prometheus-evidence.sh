@@ -50,6 +50,7 @@ if [ "$query" = 'query=vector(1)' ] && [ "$authed" = no ]; then
 fi
 if [ -n "$dst" ]; then printf '%s' "$body" > "$dst"; else printf '%s' "$body"; fi
 if [ -n "$fmt" ]; then printf '%s' "$fmt" | sed "s/%{http_code}/$code/g;s|%{content_type}|$ct|g"; fi
+[ "$CASE" != partial ] || exit 22
 ''')
     stub.chmod(0o755)
     env = dict(os.environ, HOME=str(work/'home'), PATH=str(work/'bin')+':'+os.environ['PATH'],
@@ -64,7 +65,7 @@ if [ -n "$fmt" ]; then printf '%s' "$fmt" | sed "s/%{http_code}/$code/g;s|%{cont
         cases += 1
         return result.returncode, result.stdout + result.stderr
     sizing = block(skill,'## Estate sizing')
-    for mode in ['denied','malformed']:
+    for mode in ['denied','malformed','partial']:
         rc,out = run(sizing,mode)
         assert rc != 0 and 'blocked' in out and 'sizing-path=small' not in out, out
     rc,out = run(sizing,'empty')
@@ -105,8 +106,9 @@ if [ -n "$fmt" ]; then printf '%s' "$fmt" | sed "s/%{http_code}/$code/g;s|%{cont
         if re.search(r'\bpqq?(?:_json)?\s+[\'\"]', recipe):
             assert '/scripts/prometheus-http.sh"' in recipe, recipe
         if re.search(r'^\s*RESPONSE=\$\(pqq?_json ', recipe, re.M):
-            rc,out = run(recipe,'denied')
-            assert rc != 0 and 'blocked' in out, (recipe, out)
+            for mode in ['denied','partial']:
+                rc,out = run(recipe,mode)
+                assert rc != 0 and 'blocked' in out, (recipe, out)
     previous = work/'previous.json'; current = work/'current.json'
     previous.write_text(json.dumps({'findings':[{'id':'PROM-001'},{'id':'PROM-002'}]}))
     for result, expected in [('pass','1'),('blocked','0'),('not-in-scope','0')]:

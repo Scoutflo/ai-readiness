@@ -104,18 +104,23 @@ case "$ACTION" in
     trap 'rm -rf "$TASK_TMP"' EXIT
     trap 'exit 1' HUP INT TERM
     # No raw Pod spec is written: the pipe emits only names, kinds and namespaces.
-    # Save kubectl's OWN status; jq returning 0 on empty input is not evidence.
-    (
+    # Save both statuses. Slurp validates the entire response before projecting,
+    # so a valid prefix followed by malformed JSON cannot leave usable evidence.
+    if (
       rc=0
       k8s_cli --context "$CONTEXT" --request-timeout=30s get \
         pods,deployments,statefulsets,daemonsets,services,ingresses,networkpolicies,poddisruptionbudgets,resourcequotas,limitranges,namespaces,roles,rolebindings,clusterroles,clusterrolebindings,serviceaccounts \
         -A -o json 2>"$TASK_TMP/read.err" || rc=$?
       printf '%s\n' "$rc" > "$TASK_TMP/read.rc"
-    ) | jq -e 'if (.items|type)=="array" then
-      [.items[] | {kind:.kind, namespace:(.metadata.namespace // ""), name:.metadata.name}]
+    ) | jq -e -s 'if length==1 and (.[0]|type)=="object" and (.[0].items|type)=="array" then
+      [.[0].items[] | {kind:.kind, namespace:(.metadata.namespace // ""), name:.metadata.name}]
       | if all(.[]; (.kind|type)=="string" and (.namespace|type)=="string" and (.name|type)=="string" and (.name|length)>0) then . else error("invalid identity row") end
-      else error("not a Kubernetes List") end' > "$TASK_TMP/items.json" 2>/dev/null || true
-    if [ "$(cat "$TASK_TMP/read.rc" 2>/dev/null || true)" != 0 ] || ! jq -e 'type=="array"' "$TASK_TMP/items.json" >/dev/null 2>&1; then
+      else error("expected one Kubernetes List") end' > "$TASK_TMP/items.json" 2>/dev/null; then
+      PROJECTION_OK=1
+    else
+      PROJECTION_OK=0
+    fi
+    if [ "$PROJECTION_OK" != 1 ] || [ "$(cat "$TASK_TMP/read.rc" 2>/dev/null || true)" != 0 ] || ! jq -e 'type=="array"' "$TASK_TMP/items.json" >/dev/null 2>&1; then
       jq -n --arg c "$CONTEXT" --arg t "$SEG" '{status:"blocked",context:$c,target:$t,reason:"Kubernetes sizing read failed or returned invalid JSON; count is unknown"}' > "$TASK_TMP/sizing.json"
       mv "$TASK_TMP/sizing.json" "$SIZE"
       fail 'Kubernetes sizing blocked; count is unknown. Check the selected context, reachability and list permissions; no zero count was saved.'

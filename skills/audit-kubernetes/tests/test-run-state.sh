@@ -62,6 +62,19 @@ STUB_RC=0
 printf '{"items":' > "$STUB_FIXTURE"
 reject run size
 reject run sizing
+# A successful first JSON object must not hide trailing corruption or a second
+# response. No prefix may become the measured estate after a parse failure.
+printf '%s\n' '{"items":[{"kind":"Pod","metadata":{"name":"web","namespace":"app"}}]}' > "$WORK/valid-list.json"
+for tail in '{broken' '{"items":[]}'; do
+  cat "$WORK/valid-list.json" > "$STUB_FIXTURE"
+  printf '%s\n' "$tail" >> "$STUB_FIXTURE"
+  if run size > "$WORK/rejected.log" 2>&1; then fail "sizing accepted trailing JSON: $tail"; fi
+  jq -e '.status=="blocked" and (has("objects")|not)' "$BASE/sizing.json" >/dev/null || fail 'invalid trailing response saved a usable count'
+  reject run sizing
+done
+cp "$WORK/valid-list.json" "$STUB_FIXTURE"
+run size >/dev/null
+jq -e '.status=="ok" and .objects==1 and (.items|length)==1' "$BASE/sizing.json" >/dev/null || fail 'single valid List control rejected'
 echo PASS
 
 echo 'Test 3: large checkpoint requires confirmation, persists namespace scope, and claims bounded batches'

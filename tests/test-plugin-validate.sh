@@ -19,6 +19,7 @@ case "$3" in
   */marketplace.json) [ "${REJECT:-}" != marketplace ] ;;
   */plugin.json)
     [ -f "$(dirname "$3")/icon.svg" ]
+    [ -f "$(dirname "$(dirname "$3")")/README.md" ]
     [ ! -f "$(dirname "$(dirname "$3")")/CLAUDE.md" ]
     [ "${REJECT:-}" != plugin ] ;;
   *) exit 99 ;;
