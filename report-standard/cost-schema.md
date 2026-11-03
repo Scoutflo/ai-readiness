@@ -113,6 +113,38 @@ Schema identifier: `scoutflo-cost/v1`.
 | `unit_economics` | array | One entry per **declared** unit of delivered value (`[]` when none declared — then `COST-UNIT-004` must be present). Each: `{unit_name, per, unit_cost, unit_cost_prev, trend_pct, spend, spend_prev, volume, volume_prev, currency, spend_source, volume_source, basis}` — or `{unit_name, excluded_reason}` when the alignment contract in `unit-economics.md` §5 rejected it. **Both raw inputs for both periods are mandatory**: a unit cost whose numerator and denominator are not shown cannot be recomputed by the reader, and is therefore not auditable. Never annualised, never compared across customers, and never carrying a savings or indicative figure — it is the measure savings are judged *against*, not a saving |
 | `deduplicated_overlaps` | integer | Findings annotated as overlapping a prior audit's cost finding via correlation.json |
 
+### Validation and historical compatibility
+
+The schema identifier remains `scoutflo-cost/v1`. Reports emitted by toolkit
+`0.1.238` or later must explicitly include `observed_monthly_spend`,
+`savings_pct_of_spend`, `unassessed_monthly_spend`, and `unit_economics`.
+Earlier reports may omit those later additions; whenever a field is present,
+its shape and arithmetic are validated regardless of version. An invalid or
+missing `toolkit_version` cannot select the historical compatibility path.
+
+Spend objects require a non-negative finite amount, a three-letter currency,
+and their stated evidence fields. `observed_monthly_spend` requires `period`
+and `source`; `unassessed_monthly_spend` requires non-empty `projects_or_targets`
+and `reason`. Unknown amounts stay null; zero means measured zero.
+
+For a positive USD spend denominator, `savings_pct_of_spend` must equal
+`monthly_savings_identified_usd / observed_monthly_spend.amount * 100` to
+0.01 percentage points. If spend is unknown, zero, or still in another currency,
+the percentage is null. To report a converted denominator, state it in USD and
+cite the billing export's conversion basis in `source`; never use an unstated
+exchange rate. The validator can reconcile arithmetic, not authenticate a source.
+
+Each assessed unit entry requires positive `per`, positive volumes, non-negative
+spends and unit costs, both source strings, and the shared period/scope `basis`.
+Both unit costs must reconcile with `spend / volume * per` (relative tolerance
+one part per million); the signed trend reconciles to 0.01 percentage points.
+A zero previous unit cost has a null trend rather than division by zero.
+An excluded entry names `unit_name` and `excluded_reason` and carries no computed
+cost/volume/spend values. An empty array requires the `COST-UNIT-004` enablement
+finding. Neither unit entries nor `COST-UNIT-*` findings carry native or indicative
+savings. A valid shape cannot prove that two live measurement windows align;
+the auditor must verify the alignment rules in `unit-economics.md` before emitting.
+
 The two counts (`_with_native_figure` vs `presence_fact_`) MUST be reported
 separately so the reader never mistakes the summed dollar figure for the whole
 story when many opportunities have no number.

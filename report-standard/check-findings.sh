@@ -38,6 +38,65 @@ case "$sch" in
   *) fail "schema is '$sch', expected 'scoutflo-findings/v1' or 'scoutflo-findings/v2'" ;;
 esac
 
+# Exact catalog membership is version-bound: today's catalog cannot certify an
+# older run or a future release. Historical files retain arithmetic/schema checks.
+CATALOG_ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)"
+local_version="$(jq -er '.version' "$CATALOG_ROOT/.claude-plugin/plugin.json")"
+artifact_version="$(jq -r '.toolkit_version // ""' "$F")"
+if ! jq -e '.toolkit_version | type == "string" and test("^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$")' "$F" >/dev/null 2>&1; then
+  fail "toolkit_version must be a numeric major.minor.patch version without leading zeroes for catalog compatibility"
+elif [ "$artifact_version" != "$local_version" ]; then
+  if jq -en --arg a "$artifact_version" --arg b "$local_version" \
+    '($a|split(".")|map(tonumber)) < ($b|split(".")|map(tonumber))' >/dev/null; then
+    echo "FINDINGS-CATALOG-SKIP: historical toolkit_version=$artifact_version; local catalog=$local_version. Schema/scoring checks still run; use the producing version for exact catalog validation."
+  else
+    fail "artifact toolkit_version=$artifact_version is newer than catalog=$local_version; use a matching or newer validator"
+  fi
+else
+  owner="$(jq -r '.skill // ""' "$F")"
+  if ! jq -e '.skill | type == "string" and test("^audit-[a-z0-9]+(-[a-z0-9]+)*$")' "$F" >/dev/null 2>&1; then
+    fail "skill must name one audit catalog (no paths or traversal)"
+  elif [ ! -f "$CATALOG_ROOT/skills/$owner/SKILL.md" ] || \
+       [ "$(CDPATH= cd -- "$CATALOG_ROOT/skills/$owner" && pwd -P)" != "$CATALOG_ROOT/skills/$owner" ]; then
+    fail "skill has no shipped catalog in this plugin version"
+  else
+    # Only explicit, complete IDs below an ID table header count.
+    # Never expand ranges or infer a check from prose, examples or cross-references.
+    catalog_ids="$(
+      for catalog_file in "$CATALOG_ROOT/skills/$owner/SKILL.md" "$CATALOG_ROOT/skills/$owner"/references/*.md; do
+        [ -f "$catalog_file" ] || continue
+        awk -F '|' '
+          FNR==1 {fence=""; catalog=0}
+          /^[[:space:]]*(```|~~~)/ {
+            line=$0; sub(/^[[:space:]]*/,"",line); mark=substr(line,1,3)
+            if (fence=="") fence=mark; else if (fence==mark) fence=""
+            catalog=0; next
+          }
+          fence!="" {next}
+          !/^[[:space:]]*\|/ {catalog=0; next}
+          {
+            id=$2; gsub(/[[:space:]`*]/,"",id)
+            if (id=="ID") catalog=1
+            else if (catalog && id ~ /^[A-Z][A-Z0-9]+-[0-9]+$/) print id
+          }' "$catalog_file"
+      done | LC_ALL=C sort -u
+    )"
+    if [ -z "$catalog_ids" ]; then
+      fail "skill has no explicit ID table catalog; cannot certify emitted IDs"
+    else
+      unknown_ids="$(jq -r --arg ids "$catalog_ids" '
+        ($ids|split("\n")) as $known
+        | ([.checks[]?.id] + [.findings[]?
+            | select(((.id // "")|tostring|startswith("TOPO-")) and .scoring_scope=="non-scored"
+                and .area=="topology-readiness" and .points_recoverable==0 | not)
+            | .id]) | unique[]
+        | select(. as $id | ($known|index($id)) == null)
+      ' "$F")"
+      [ -z "$unknown_ids" ] || fail "IDs absent from $owner catalog at $local_version: $(printf '%s' "$unknown_ids" | tr '\n' ' ')"
+    fi
+  fi
+fi
+
 # 2. severity_counts must equal the actual histogram of NON-SUPPRESSED
 #    findings[].severity. Suppressed findings (lifecycle=="suppressed") move to the
 #    report's Suppressed appendix and are excluded from the severity counts (per

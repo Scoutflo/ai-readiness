@@ -219,6 +219,10 @@ BEH="$WORK/beh"; mkdir -p "$BEH/bin"
 printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "%s/bq.log"\nexit 1\n' "$BEH" > "$BEH/bin/bq"
 printf '#!/bin/sh\necho stub-token\n' > "$BEH/bin/gcloud"
 chmod +x "$BEH/bin/bq" "$BEH/bin/gcloud"
+for binary in curl aws az kubectl doctl; do
+  printf '#!/bin/sh\nexit 97\n' > "$BEH/bin/$binary"
+  chmod +x "$BEH/bin/$binary"
+done
 awk '/^```bash$/{n++; inb=1; next} inb && /^```$/{inb=0; next} inb{print > ("'"$BEH"'/blk." n ".sh")}' "$GCPCOST"
 
 cat > "$BEH/single.yaml" <<'YAML'
@@ -343,4 +347,237 @@ unset SCOUTFLO_TARGET
 echo "PASS"
 
 echo
+
+# Current v1 envelope contract, while archived versions remain readable.
+echo "Test 28: current summaries require explicit evidence fields; legacy omission stays valid"
+modern() {
+  good | jq '.toolkit_version="0.1.238" |
+    .summary.observed_monthly_spend={amount:3400,currency:"USD",period:"2026-10",source:"billing export"} |
+    .summary.savings_pct_of_spend=10 | .summary.unassessed_monthly_spend=null |
+    .summary.unit_economics=[{unit_name:"orders",excluded_reason:"volume unavailable"}]'
+}
+modern > "$WORK/f.json"; expect_ok "current summary rejected"
+for field in observed_monthly_spend savings_pct_of_spend unassessed_monthly_spend unit_economics; do
+  modern | jq --arg f "$field" 'del(.summary[$f])' > "$WORK/f.json"
+  expect_fail "missing current $field accepted"
+done
+mutate '.'; expect_ok "archived v1 report no longer accepted"
+mutate '.toolkit_version="unknown"'; expect_fail "invalid version bypasses current fields"
+modern | jq '.toolkit_version="0.2.0" | del(.summary.unit_economics)' > "$WORK/f.json"
+expect_fail "new minor version bypasses current fields"
+echo "PASS"
+
+echo "Test 29: spend percentage must reconcile and unknown spend is explicit"
+for mutation in '.summary.savings_pct_of_spend=99' '.summary.observed_monthly_spend.amount=-1' \
+  '.summary.observed_monthly_spend.source=""' '.summary.observed_monthly_spend=null' \
+  '.summary.observed_monthly_spend.currency="EUR"' '.summary.observed_monthly_spend.amount=0'; do
+  modern | jq "$mutation" > "$WORK/f.json"; expect_fail "invalid spend context accepted: $mutation"
+done
+modern | jq '.summary.observed_monthly_spend=null | .summary.savings_pct_of_spend=null' > "$WORK/f.json"
+expect_ok "honest unknown spend rejected"
+modern | jq '.summary.unassessed_monthly_spend={amount:400,currency:"USD",projects_or_targets:["unread-project"],reason:"inventory denied"}' > "$WORK/f.json"
+expect_ok "valid unassessed spend rejected"
+modern | jq '.summary.unassessed_monthly_spend={amount:400,currency:"USD",projects_or_targets:[],reason:""}' > "$WORK/f.json"
+expect_fail "unassessed spend hides targets or cause"
+echo "PASS"
+
+echo "Test 30: unit economics is auditable arithmetic, never savings"
+units() {
+  modern | jq '.summary.unit_economics=[{unit_name:"orders",per:1000,
+    spend:100,spend_prev:120,volume:10000,volume_prev:10000,
+    unit_cost:10,unit_cost_prev:12,trend_pct:-16.666667,currency:"USD",
+    spend_source:"billing export",volume_source:"declared PromQL",basis:"Oct vs Sep closed periods, same scope"}]'
+}
+units > "$WORK/f.json"; expect_ok "valid unit arithmetic rejected"
+for mutation in 'del(.summary.unit_economics[0].volume_prev)' '.summary.unit_economics[0].volume=0' \
+  '.summary.unit_economics[0].unit_cost=11' '.summary.unit_economics[0].trend_pct=10' \
+  '.summary.unit_economics[0].volume_source=""' '.summary.unit_economics[0].estimated_monthly_savings_usd=5' \
+  '.summary.unit_economics[0].excluded_reason="misaligned windows"'; do
+  units | jq "$mutation" > "$WORK/f.json"; expect_fail "invalid unit arithmetic accepted: $mutation"
+done
+modern | jq '.summary.unit_economics=[]' > "$WORK/f.json"
+expect_fail "missing unit declaration is silent (no COST-UNIT-004)"
+modern | jq '.summary.unit_economics=[] | .findings += [.findings[1] | .id="COST-UNIT-004" | .title="No unit declared"] | .summary.opportunities_total=3 | .summary.presence_fact_opportunities=2' > "$WORK/f.json"
+expect_ok "unit enablement finding rejected"
+echo "PASS"
+
+echo "Test 31: every AWS/Azure block selects the configured target before any provider call"
+BIND="$WORK/bind"; mkdir -p "$BIND/bin" "$BIND/home"
+export BIND_LOG="$BIND/calls"
+for binary in aws az curl gcloud bq kubectl doctl; do
+  printf '#!/bin/sh\necho "unexpected %s" >> "$BIND_LOG"\nexit 97\n' "$binary" > "$BIND/bin/$binary"
+done
+cat > "$BIND/bin/aws" <<'STUB'
+#!/bin/sh
+printf 'aws %s\n' "$*" >> "$BIND_LOG"
+case " $* " in
+  *' sts get-caller-identity '*) printf '%s\n' '{"Account":"SENTINEL-ACCOUNT","Arn":"test-principal"}' ;;
+  *' get-enrollment-status '*) printf '%s\n' '{"status":"Active"}' ;;
+  *) printf '%s\n' '{"Reservations":[],"Volumes":[],"Addresses":[],"Snapshots":[],"DBInstances":[],"DBSnapshots":[],"LoadBalancers":[],"AutoScalingGroups":[],"Functions":[],"items":[],"checks":[],"SavingsPlansCoverages":[],"Recommendations":[],"Anomalies":[],"Datapoints":[]}' ;;
+esac
+STUB
+cat > "$BIND/bin/az" <<'STUB'
+#!/bin/sh
+printf 'az %s\n' "$*" >> "$BIND_LOG"
+case " $* " in
+  *' account show '*) printf '%s\n' '{"id":"SENTINEL-BETA","tenantId":"SENTINEL-TENANT"}' ;;
+  *' account get-access-token '*) echo stub-token ;;
+  *' advisor recommendation list '*) echo '[]' ;;
+  *' resource list '*)
+    [ "${SIZE_FAIL:-0}" = 0 ] || exit 33
+    jq -cn --argjson n "${SIZE_COUNT:-0}" '[range(0;$n) | {id:("resource-"+tostring)}]' ;;
+  *) exit 97 ;;
+esac
+STUB
+cat > "$BIND/bin/curl" <<'STUB'
+#!/bin/sh
+printf 'curl %s\n' "$*" >> "$BIND_LOG"
+printf '%s\n200' '{"data":[],"count":0,"properties":{"columns":[],"rows":[]}}'
+STUB
+chmod +x "$BIND/bin/"*
+cat > "$BIND/config.yaml" <<'YAML'
+aws:
+  - label: alpha
+    profile: SENTINEL-ALPHA
+    region: REGION-ALPHA
+  - label: beta
+    profile: SENTINEL-BETA
+    account_id: SENTINEL-ACCOUNT
+    region: REGION-BETA
+azure:
+  - label: alpha
+    subscription_id: SENTINEL-ALPHA
+  - label: beta
+    subscription_id: SENTINEL-BETA
+YAML
+for provider in aws azure; do
+  mkdir -p "$BIND/$provider"
+  awk '/^```bash$/{n++; inb=1; next} inb && /^```$/{inb=0; next} inb{print > ("'"$BIND/$provider"'/block." n ".sh")}' "$ROOT/skills/audit-cost/references/$provider-cost.md"
+  : > "$BIND_LOG"
+  for block in "$BIND/$provider"/*.sh; do
+    (cd "$BIND" && HOME="$BIND/home" PATH="$BIND/bin:$PATH" CLAUDE_PLUGIN_ROOT="$ROOT" SCOUTFLO_CONFIG="$BIND/config.yaml" SCOUTFLO_TARGET= sh "$block" > /dev/null 2>&1) && fail "unselected $provider list did not stop: $block"
+  done
+  [ ! -s "$BIND_LOG" ] || fail "$provider queried before selecting a target"
+  for block in "$BIND/$provider"/*.sh; do
+    # Doctor-matrix block is target-bound too, but not a provider query.
+    grep -q 'MATRIX=' "$block" && continue
+    (cd "$BIND" && HOME="$BIND/home" PATH="$BIND/bin:$PATH" CLAUDE_PLUGIN_ROOT="$ROOT" SCOUTFLO_CONFIG="$BIND/config.yaml" SCOUTFLO_TARGET=beta sh "$block" >/dev/null 2>&1) || fail "selected $provider block failed: $block"
+  done
+  [ -s "$BIND_LOG" ] || fail "no selected $provider calls observed"
+  grep -q 'SENTINEL-ALPHA\|REGION-ALPHA' "$BIND_LOG" && fail "unselected $provider target leaked into calls"
+  if [ "$provider" = aws ]; then
+    awk '/^aws / && $0 !~ /--profile SENTINEL-BETA/ {bad=1} END{exit bad}' "$BIND_LOG" || fail "AWS call used ambient profile"
+    awk '/^aws / && $0 !~ /--region / {bad=1} END{exit bad}' "$BIND_LOG" || fail "AWS call used ambient region"
+  else
+    awk '/^az / && $0 !~ /--subscription SENTINEL-BETA/ {bad=1} END{exit bad}' "$BIND_LOG" || fail "Azure call used ambient subscription"
+  fi
+done
+echo "PASS"
+
+
+echo "Test 32: real sizing counts cross the checkpoint; denied reads are unknown"
+SCOPE="$BIND/scope"; mkdir -p "$SCOPE"
+awk '/^```bash$/{n++; inb=1; next} inb && /^```$/{inb=0; next} inb{print > ("'"$SCOPE"'/block." n ".sh")}' "$ROOT/skills/audit-cost/references/estate-scope.md"
+awk '/^```bash$/{n++; inb=1; next} inb && /^```$/{inb=0; next} inb{print > ("'"$SCOPE"'/skill." n ".sh")}' "$ROOT/skills/audit-cost/SKILL.md"
+cat > "$SCOPE/config.yaml" <<'YAML'
+azure:
+  subscription_id: SENTINEL-BETA
+YAML
+cost_scope_run() {
+  (cd "$BIND" && HOME="$BIND/home" PATH="$BIND/bin:$PATH" CLAUDE_PLUGIN_ROOT="$ROOT" \
+    SCOUTFLO_CONFIG="${COST_SCOPE_CONFIG:-$SCOPE/config.yaml}" SCOUTFLO_AUDIT_DIR="$SCOPE/audits" SCOUTFLO_TARGET="${COST_SCOPE_TARGET:-}" \
+    SIZE_COUNT="${SIZE_COUNT:-0}" SIZE_FAIL="${SIZE_FAIL:-0}" COST_RUN_ID="${COST_RUN_ID:-}" \
+    COST_RUN_DIR="${COST_RUN_DIR:-}" COST_BATCH_ID="${COST_BATCH_ID:-}" sh "$1")
+}
+CHECKPOINT=$(grep -l 'TOTAL=$(jq' "$SCOPE"/skill.*.sh)
+SIZE_COUNT=600; cost_scope_run "$SCOPE/block.1.sh" > "$SCOPE/collect.out"
+jq -e '(.objects|length)==600 and (.unknown|length)==0' "$SCOPE/audits/cost/sizing.json" >/dev/null || fail "sizing did not count provider objects"
+printf 'n\n' | cost_scope_run "$CHECKPOINT" > "$SCOPE/checkpoint.out"
+grep -q 'Proceed?' "$SCOPE/checkpoint.out" || fail "600 objects skipped the scope confirmation"
+SIZE_COUNT=5; cost_scope_run "$SCOPE/block.1.sh" > /dev/null
+cost_scope_run "$CHECKPOINT" > "$SCOPE/small.out"
+grep -q 'Proceed?' "$SCOPE/small.out" && fail "five objects got large-estate ceremony"
+SIZE_FAIL=1; cost_scope_run "$SCOPE/block.1.sh" > /dev/null
+jq -e '(.objects|length)==0 and (.unknown|length)==1' "$SCOPE/audits/cost/sizing.json" >/dev/null || fail "denied inventory became known empty"
+printf 'n\n' | cost_scope_run "$CHECKPOINT" > "$SCOPE/unknown.out"
+grep -q 'Proceed?' "$SCOPE/unknown.out" || fail "unknown count skipped scope decision"
+SIZE_FAIL=0; SIZE_COUNT=3; cost_scope_run "$SCOPE/block.1.sh" > /dev/null
+echo "PASS"
+
+echo "Test 33: cost worklist resumes, locks and accepts only owned evidence"
+COST_RUN_ID=20260101T000000Z
+cost_scope_run "$SCOPE/block.2.sh" > "$SCOPE/run.out"
+COST_RUN_DIR="$SCOPE/audits/cost/runs/$COST_RUN_ID"
+[ "$(wc -l < "$COST_RUN_DIR/worklist.tsv" | tr -d ' ')" = 3 ] || fail "worklist lost sizing rows"
+if cost_scope_run "$SCOPE/block.3.sh" > /dev/null 2>&1; then fail "unapproved scope claimed a batch"; fi
+printf '%s\n' '{"approved":true,"included":["azure"],"excluded":[]}' > "$COST_RUN_DIR/scope.json"
+cost_scope_run "$SCOPE/block.3.sh" > "$SCOPE/claim.out"
+COST_BATCH_ID=$(cat "$COST_RUN_DIR/worklist.lock/batch-id")
+if cost_scope_run "$SCOPE/block.3.sh" > /dev/null 2>&1; then fail "parallel claimant acquired a held batch"; fi
+jq -cn --arg batch "$COST_BATCH_ID" '{batch_id:$batch,state:"done",reason:"read captured",checks:[{command:"stub resource read",observed:"resource exists"}]}' > "$COST_RUN_DIR/evidence/$COST_BATCH_ID/0.json"
+jq -cn --arg batch "$COST_BATCH_ID" '{batch_id:$batch,state:"blocked",reason:"permission denied",checks:[]}' > "$COST_RUN_DIR/evidence/$COST_BATCH_ID/1.json"
+_saved_batch=$COST_BATCH_ID; COST_BATCH_ID=wrong-batch
+if cost_scope_run "$SCOPE/block.4.sh" > /dev/null 2>&1; then fail "foreign batch modified worklist"; fi
+COST_BATCH_ID=$_saved_batch
+cost_scope_run "$SCOPE/block.4.sh" > "$SCOPE/complete.out"
+grep -q 'done=1 blocked=1 excluded=0 pending=1' "$SCOPE/complete.out" || fail "unread row was marked done or blocked evidence lost"
+[ ! -d "$COST_RUN_DIR/worklist.lock" ] || fail "completed batch retained lock"
+COST_RUN_ID=
+if cost_scope_run "$SCOPE/block.2.sh" > "$SCOPE/resume.out" 2>&1; then fail "fresh run started over pending rows"; fi
+grep -q 'unfinished run:' "$SCOPE/resume.out" || fail "resume offer missing"
+PUBLISH=$(grep -l 'cost batch is still locked' "$SCOPE"/skill.*.sh)
+if cost_scope_run "$PUBLISH" > "$SCOPE/publish.out" 2>&1; then fail "pending work published a complete report"; fi
+grep -q 'cost work remains pending' "$SCOPE/publish.out" || fail "publish failed for a reason other than pending work"
+echo "PASS"
+
+echo "Test 34: fresh-shell publication cannot bypass a pending or required worklist"
+COST_RUN_DIR=; COST_RUN_ID=
+if cost_scope_run "$PUBLISH" > "$SCOPE/publish-fresh.out" 2>&1; then fail "unset run variables bypassed pending work"; fi
+grep -q 'cost work remains pending' "$SCOPE/publish-fresh.out" || fail "fresh publication did not recover pending state"
+rm "$SCOPE/audits/cost/active-run"
+if cost_scope_run "$PUBLISH" > "$SCOPE/publish-lost-pointer.out" 2>&1; then fail "missing pointer hid pending work"; fi
+grep -q 'cost work remains pending' "$SCOPE/publish-lost-pointer.out" || fail "missing pointer skipped saved worklist scan"
+cp "$SCOPE/audits/cost/sizing.json" "$SCOPE/sizing.saved"
+mv "$SCOPE/audits/cost/runs" "$SCOPE/runs.saved"
+jq '.unknown=[{provider:"azure",target:"azure",surface:"resource",reason:"denied"}]' "$SCOPE/sizing.saved" > "$SCOPE/audits/cost/sizing.json"
+if cost_scope_run "$PUBLISH" > "$SCOPE/publish-no-run.out" 2>&1; then fail "unknown scope published without a worklist"; fi
+grep -q 'requires a bound cost worklist' "$SCOPE/publish-no-run.out" || fail "unknown scope did not require a persisted run"
+mv "$SCOPE/runs.saved" "$SCOPE/audits/cost/runs"
+cp "$SCOPE/sizing.saved" "$SCOPE/audits/cost/sizing.json"
+printf '%s\n' 20260101T000000Z > "$SCOPE/audits/cost/active-run"
+echo "PASS"
+
+echo "Test 35: claim and completion bind config, selected target and canonical run path"
+FOREIGN="$SCOPE/foreign"; mkdir -p "$FOREIGN"
+printf '%s\n' '{"approved":true,"included":["other-target"],"excluded":[]}' > "$FOREIGN/scope.json"
+printf '0\tpending\tazure\tother-target\tresource\tforeign\n' > "$FOREIGN/worklist.tsv"
+COST_RUN_DIR="$FOREIGN"
+if cost_scope_run "$SCOPE/block.3.sh" > "$SCOPE/foreign-claim.out" 2>&1; then fail "foreign directory claimed against current config"; fi
+grep -q 'belongs to another selected run or target' "$SCOPE/foreign-claim.out" || fail "foreign run rejection was not target binding"
+[ ! -d "$FOREIGN/worklist.lock" ] || fail "foreign run mutated before rejection"
+COST_RUN_DIR=
+cost_scope_run "$SCOPE/block.3.sh" > "$SCOPE/bound-claim.out"
+COST_RUN_DIR="$SCOPE/audits/cost/runs/20260101T000000Z"
+COST_BATCH_ID=$(cat "$COST_RUN_DIR/worklist.lock/batch-id")
+cp "$SCOPE/config.yaml" "$SCOPE/config.saved"
+printf '%s\n' 'azure:' '  subscription_id: OTHER-SUBSCRIPTION' > "$SCOPE/config.yaml"
+_before=$(cksum < "$COST_RUN_DIR/worklist.tsv")
+for block in "$SCOPE/block.3.sh" "$SCOPE/block.4.sh"; do
+  if cost_scope_run "$block" > "$SCOPE/wrong-config.out" 2>&1; then fail "changed config was accepted: $block"; fi
+  grep -q 'run config changed' "$SCOPE/wrong-config.out" || fail "wrong config not detected before mutation"
+done
+[ "$(cksum < "$COST_RUN_DIR/worklist.tsv")" = "$_before" ] || fail "wrong-config completion changed worklist"
+[ -d "$COST_RUN_DIR/worklist.lock" ] || fail "wrong-config completion released another run lock"
+cp "$SCOPE/config.saved" "$SCOPE/config.yaml"
+# A copied run under another target still has its original selected_target binding.
+mkdir -p "$SCOPE/audits/cost/other/runs"
+cp -R "$COST_RUN_DIR" "$SCOPE/audits/cost/other/runs/20260101T000000Z"
+printf '%s\n' 20260101T000000Z > "$SCOPE/audits/cost/other/active-run"
+COST_RUN_DIR=; COST_SCOPE_TARGET=other
+if cost_scope_run "$SCOPE/block.4.sh" > "$SCOPE/wrong-target.out" 2>&1; then fail "copied run accepted another selected target"; fi
+grep -q 'run belongs to another config or target' "$SCOPE/wrong-target.out" || fail "selected target binding missing"
+COST_SCOPE_TARGET=
+cost_scope_run "$SCOPE/block.4.sh" > "$SCOPE/bound-complete.out"
+echo "PASS"
+
 echo "=== check-cost self-test passed ==="

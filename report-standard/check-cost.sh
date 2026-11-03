@@ -30,6 +30,71 @@ sch="$(jq -r '.schema // ""' "$F")"
 skill="$(jq -r '.skill // ""' "$F")"
 [ "$skill" = "audit-cost" ] || fail "skill is '$skill', expected 'audit-cost'"
 
+# The v1 schema is unchanged. Historical files may omit the later summary fields;
+# new runs must carry them explicitly, including null/[] for unavailable evidence.
+version_ok=$(jq -r '.toolkit_version | if type == "string" then test("^[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?(\\+[0-9A-Za-z.-]+)?$") else false end' "$F")
+[ "$version_ok" = true ] || fail "toolkit_version must be a semantic version; an invalid version cannot select legacy validation"
+if [ "$version_ok" = true ]; then
+  modern=$(jq -r '.toolkit_version | split("-")[0] | split("+")[0] | split(".") | map(tonumber) | . >= [0,1,238]' "$F")
+  if [ "$modern" = true ]; then
+    for k in observed_monthly_spend savings_pct_of_spend unassessed_monthly_spend unit_economics; do
+      jq -e --arg k "$k" '.summary | has($k)' "$F" >/dev/null 2>&1 || fail "missing required current summary field: $k (use null or [] when unavailable)"
+    done
+  fi
+fi
+
+# Validate later fields whenever present, including on a historical file. Unknown
+# spend is null, never zero; a foreign-currency denominator cannot justify a USD %.
+jq -e '
+  def text: type == "string" and test("\\S");
+  def nonnegative: type == "number" and isfinite and . >= 0;
+  def close($a; $b): (($a - $b) | fabs) <= (0.000001 * ([1, ($a|fabs), ($b|fabs)] | max));
+  . as $r | .summary as $s
+  | (if ($s | has("observed_monthly_spend")) and $s.observed_monthly_spend != null then
+       $s.observed_monthly_spend | type == "object" and (.amount | nonnegative)
+       and (.currency | type == "string" and test("^[A-Z]{3}$"))
+       and (.period | text) and (.source | text)
+     else true end)
+  and (if ($s | has("savings_pct_of_spend")) then
+       if $s.observed_monthly_spend == null or $s.observed_monthly_spend.amount == 0
+          or $s.observed_monthly_spend.currency != "USD" then $s.savings_pct_of_spend == null
+       else ($s.savings_pct_of_spend | nonnegative)
+          and (($s.savings_pct_of_spend - ($s.monthly_savings_identified_usd / $s.observed_monthly_spend.amount * 100)) | fabs) <= 0.01
+       end
+     else true end)
+  and (if ($s | has("unassessed_monthly_spend")) and $s.unassessed_monthly_spend != null then
+       $s.unassessed_monthly_spend | type == "object" and (.amount | nonnegative)
+       and (.currency | type == "string" and test("^[A-Z]{3}$")) and (.reason | text)
+       and (.projects_or_targets | type == "array" and length > 0 and all(.[]; text))
+     else true end)
+  and (if ($s | has("unit_economics")) then
+       ($s.unit_economics | type == "array") and
+       (if ($s.unit_economics | length) == 0 then any($r.findings[]; .id == "COST-UNIT-004") else true end)
+       and all($s.unit_economics[];
+         (.unit_name | text)
+         and (.estimated_monthly_savings_usd == null) and (.indicative_monthly_usd == null)
+         and (if has("excluded_reason") then
+           (.excluded_reason | text)
+           and all([.unit_cost, .unit_cost_prev, .trend_pct, .spend, .spend_prev, .volume, .volume_prev][]; . == null)
+         else
+           (.per | type == "number" and isfinite and . > 0)
+           and (.spend | nonnegative) and (.spend_prev | nonnegative)
+           and (.volume | type == "number" and isfinite and . > 0)
+           and (.volume_prev | type == "number" and isfinite and . > 0)
+           and (.unit_cost | nonnegative) and (.unit_cost_prev | nonnegative)
+           and (.currency | type == "string" and test("^[A-Z]{3}$"))
+           and (.spend_source | text) and (.volume_source | text) and (.basis | text)
+           and close(.unit_cost; (.spend / .volume * .per))
+           and close(.unit_cost_prev; (.spend_prev / .volume_prev * .per))
+           and (if .unit_cost_prev == 0 then .trend_pct == null
+                else (.trend_pct | type == "number" and isfinite)
+                  and ((.trend_pct - ((.unit_cost - .unit_cost_prev) / .unit_cost_prev * 100)) | fabs) <= 0.01 end)
+         end))
+     else true end)
+  and all($r.findings[] | select(.id | startswith("COST-UNIT-"));
+      .estimated_monthly_savings_usd == null and .indicative_monthly_usd == null)
+' "$F" >/dev/null 2>&1 || fail "spend/unit-economics contract: show sourced inputs, reconcile USD percentage and unit quotients, disclose unassessed targets, and never price COST-UNIT findings"
+
 # 2. THE ONE HARD RULE — money integrity.
 # 2a. monthly_savings_identified_usd must equal the sum of exactly the non-null
 #     estimated_monthly_savings_usd values (never a presence fact, never invented).
