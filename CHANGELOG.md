@@ -11,6 +11,7 @@
 - Kubernetes posture checks preserve explicit false settings and container overrides, distinguish allow-all policies from default-deny, and reject denied or malformed list reads before drawing conclusions. Topology readiness uses its shared six checks separately from posture.
 - Current-version findings are checked against the owning audit's exact catalog IDs; historical catalogs are handled explicitly.
 - Contributors and CI share strict marketplace/plugin-manifest validation. The contributor context adapter remains in place; no warning suppression is needed.
+- Repository packaging excludes local agent worktrees, removes an orphaned tracked worktree reference, and uses a pinned Node 24 checkout action for clean CI teardown.
 
 ## 0.1.237
 

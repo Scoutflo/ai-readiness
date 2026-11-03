@@ -1,5 +1,8 @@
 # Audit output never belongs in version control
 scoutflo-audits/
 
+# Agent worktrees are local execution state, never plugin source
+/.claude/worktrees/
+
 # OS noise
 .DS_Store
