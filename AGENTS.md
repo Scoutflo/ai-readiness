@@ -10,7 +10,7 @@ Run the repository gates from the repo root:
 sh ci/leak-scan.sh .
 sh ci/structure-check.sh .
 sh ci/run-tests.sh .
-claude plugin validate . --strict
+sh ci/plugin-validate.sh .
 ```
 
 `ci/structure-check.sh` composes 25 checks: anchor, cross-block, coverage,

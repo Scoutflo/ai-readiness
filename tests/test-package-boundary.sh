@@ -22,7 +22,7 @@ MANIFEST="docs/ship-manifest.md"
 rc=0
 
 # 1. Every tracked top-level entry is classified in exactly one list.
-if command -v git >/dev/null 2>&1 && [ -d .git ]; then
+if command -v git >/dev/null 2>&1 && [ -e .git ]; then
   entries="$(git ls-files | sed 's#/.*##' | sort -u)"
 else
   entries="$(ls -A | grep -v '^scoutflo-audits$' | sort -u)"

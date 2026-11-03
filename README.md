@@ -97,6 +97,11 @@ Green = read-only (safe, changes nothing) · amber = write, gated behind your co
 
 ## What's new (latest release)
 
+- **Saved business context is protected during imports.** Replacing it requires confirmation; validation happens before replacement, with backups and rollback on failure.
+- **Large Kubernetes and cost audits can resume.** Persistent target-bound worklists retain completed evidence and protect the previous completed report when a run stops.
+- **Unreachable Prometheus targets get an evidence-based verdict.** Missing tools, access or inconclusive DNS remains blocked; only corroborated retirement is treated as a stale target, and an outage requires observed unhealthy responses.
+- **Cost targets and evidence stay aligned.** Labeled AWS/Azure targets use their configured identities, scope counting precedes large audits, and current cost outputs must carry the declared evidence and unit-economics fields.
+
 - **A GCP score now tells you which parts of your estate it does not cover.** The GCP audit has never covered Cloud Run, Cloud Functions or App Engine. It now looks for them, and when any are running — or when it cannot tell because the API is switched off — the report names them and says plainly that they were not assessed. None of this changes your score. It stops a high score on a narrow surface from reading as a verdict on everything you run.
 
 - **Managed and self-hosted Prometheus are not graded to the same depth, and the report says so.** For Google Managed Prometheus the GCP audit answers one question: is it switched on where your alerting expects workload metrics to come from. The deep checks — scrape-target health, TSDB cardinality and churn, rule evaluation — only run against a Prometheus server the audit can reach directly. If you run both, the two sides are not comparable, and the reports no longer leave that implicit.

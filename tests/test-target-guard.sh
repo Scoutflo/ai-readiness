@@ -53,7 +53,9 @@ echo "Test 2: every distinct published audit guard stops on an unknown label, an
 # Each audit guard line follows its loop line. Collect the distinct (loop, guard) pairs.
 : > "$WORK/pairs"
 while IFS= read -r f; do
-  awk '{ sub(/^[ \t]+/, "") } prev != "" && /^\[ "\$\(sh "\$[A-Z_]+" "\$[A-Z_]+" [a-z0-9_-]+ kind\)" != seq \]/ { print prev "\t" $0 } { prev = $0 }' "$f" >> "$WORK/pairs"
+  # This test executes label-loop guards. A single-block-only refusal has no
+  # label loop (the Prometheus DNS recipe is covered by test-prometheus-dns.sh).
+  awk '{ sub(/^[ \t]+/, "") } prev ~ /SCOUTFLO_TARGET/ && prev ~ /_IDX=0;/ && /^\[ "\$\(sh "\$[A-Z_]+" "\$[A-Z_]+" [a-z0-9_-]+ kind\)" != seq \]/ { print prev "\t" $0 } { prev = $0 }' "$f" >> "$WORK/pairs"
 done < "$WORK/files"
 sort -u "$WORK/pairs" > "$WORK/pairs.u"
 VARIANTS="$(wc -l < "$WORK/pairs.u" | tr -d ' ')"

@@ -2,6 +2,22 @@
 
 Runnable, read-only checks for every surface the [audit-prometheus](../SKILL.md) workflow covers. This audit reads **one** surface: the Prometheus HTTP API (`/api/v1/*`, `/-/healthy`, `/-/ready`) over `prometheus.url`. Each section lists the catalog IDs it serves, the exact read command, the healthy target, the finding it emits, and the mutations forbidden on that surface. Evidence for a finding is the command plus its observed output, trimmed with truncation marked.
 
+## Target profile
+
+A 100/100 result means all applicable, assessed checks meet these published targets;
+blocked reads never earn credit. Provider limitations and declared exclusions stay
+visible outside the assessed denominator. This score is a posture measure, not an
+uptime guarantee or proof of alert delivery.
+
+| Category | Healthy target |
+| --- | --- |
+| Server reachability and config | Healthy API/query responses, successful reload and deliberate retention; retired endpoints classified separately |
+| Scrape targets and coverage | Critical targets are observed, healthy and fresh, with collection limits respected |
+| Rule-engine health | Required rules load, evaluate on time against live metrics and have an observed notification next hop |
+| TSDB cardinality and storage | Cardinality/churn stays within declared budgets; no observed WAL or compaction corruption |
+| Remote-write and federation | Configured remote-write queues drain without observed drops or excessive lag |
+| Security posture | Deliberate access controls and TLS; destructive administrative endpoints are not exposed unnecessarily |
+
 ## 1. Conventions
 
 - The HTTP API paths below (`/api/v1/status/{buildinfo,runtimeinfo,flags,tsdb,config}`, `/api/v1/{targets,rules,alerts,alertmanagers,query,label/<name>/values}`, `/-/healthy`, `/-/ready`) are the **stable, documented Prometheus 2.x / 3.x API**. The rule-health (`/api/v1/rules`), target (`/api/v1/targets`), and sample-age (`time() - timestamp(up)`) reads were **confirmed on live reads** (as part of audit-lgtm / audit-alertmanager on the benchmark Prometheus). Anything marked **confirm-live** — the exact self-metric set exposed by *your* build, and whether a metric exists at all — must be resolved from the live `/metrics` or an instant query this run, never assumed. Never invent a metric, label, or endpoint.
@@ -12,41 +28,10 @@ Runnable, read-only checks for every surface the [audit-prometheus](../SKILL.md)
 - `curl -fsS --max-time 20` is the default. Where a status code is itself the evidence (the unauthenticated exposure probe in PROM-051), `-f` is dropped deliberately and `-w '%{http_code}'` is used; that block says so.
 - Time windows and thresholds are examples; tune to your setup: `RANGE="1h"` for `increase()` windows, `FRESH_LAG_S=120` for scrape freshness, cardinality and churn thresholds per your series budget.
 
-Helpers (declare once per session; every block below calls `pq` / `pqq`):
+Each command block sources the shared config/auth/HTTP helper in its own fresh shell:
 
 ```bash
-set -eu
-# Resolve the shared prometheus block from ~/.scoutflo/toolkit.yaml via the shared enumerator (single
-# mapping = target 0; this audit never iterates labels). url + the token_env VARIABLE NAME come from the
-# block; the token value is read from the store with printenv — presence only, NEVER printed.
-CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
-SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.scoutflo/env" ]; then SCOUTFLO_ENV="./.scoutflo/env"; else SCOUTFLO_ENV="$HOME/.scoutflo/env"; fi; }
-[ -f "$SCOUTFLO_ENV" ] && . "$SCOUTFLO_ENV" || true
-_SF_CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$_SF_CFG" ] || for _sf_c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_sf_c" ] && { _SF_CFG="$_sf_c"; break; }; done
-_SF_TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
-if [ "$(sh "$_SF_TT" "$_SF_CFG" prometheus kind 2>/dev/null || true)" = seq ]; then _sf_i=0; while [ "$_sf_i" -lt "$(sh "$_SF_TT" "$_SF_CFG" prometheus count 2>/dev/null || echo 0)" ]; do [ -z "$(sh "$_SF_TT" "$_SF_CFG" prometheus get "$_sf_i" basic_user_env 2>/dev/null || true)" ] || { echo "prometheus in ${_SF_CFG} is a list of targets that each name their own basic_user_env, and this step reads PROM_BASIC_USER by its default name, so it cannot tell which target's value to use. It stops instead of guessing: give that target a config of its own where prometheus is a single block, and run with SCOUTFLO_CONFIG set to that file (and SCOUTFLO_AUDIT_DIR to its own folder)."; exit 1; }; _sf_i=$((_sf_i+1)); done; fi
-_sf_tv="$(sh "$_SF_TT" "$_SF_CFG" prometheus get 0 basic_user_env 2>/dev/null || true)"; if [ -n "$_sf_tv" ] && [ "$(sh "$_SF_TT" "$_SF_CFG" prometheus kind 2>/dev/null || true)" != seq ]; then _sf_v="$(sh -c '( [ -f "$1" ] && . "$1" >/dev/null 2>&1; printenv -- "$2" ) 2>/dev/null || printenv -- "$2"' _ "$SCOUTFLO_ENV" "$_sf_tv" 2>/dev/null || true)"; if [ -n "$_sf_v" ]; then PROM_BASIC_USER="$_sf_v"; export PROM_BASIC_USER; else unset PROM_BASIC_USER; echo "note: ${_sf_tv} (named by prometheus.basic_user_env) is not set in the secret store or the shell" >&2; fi; fi
-if [ "$(sh "$_SF_TT" "$_SF_CFG" prometheus kind 2>/dev/null || true)" = seq ]; then _sf_i=0; while [ "$_sf_i" -lt "$(sh "$_SF_TT" "$_SF_CFG" prometheus count 2>/dev/null || echo 0)" ]; do [ -z "$(sh "$_SF_TT" "$_SF_CFG" prometheus get "$_sf_i" basic_pass_env 2>/dev/null || true)" ] || { echo "prometheus in ${_SF_CFG} is a list of targets that each name their own basic_pass_env, and this step reads PROM_BASIC_PASS by its default name, so it cannot tell which target's value to use. It stops instead of guessing: give that target a config of its own where prometheus is a single block, and run with SCOUTFLO_CONFIG set to that file (and SCOUTFLO_AUDIT_DIR to its own folder)."; exit 1; }; _sf_i=$((_sf_i+1)); done; fi
-_sf_tv="$(sh "$_SF_TT" "$_SF_CFG" prometheus get 0 basic_pass_env 2>/dev/null || true)"; if [ -n "$_sf_tv" ] && [ "$(sh "$_SF_TT" "$_SF_CFG" prometheus kind 2>/dev/null || true)" != seq ]; then _sf_v="$(sh -c '( [ -f "$1" ] && . "$1" >/dev/null 2>&1; printenv -- "$2" ) 2>/dev/null || printenv -- "$2"' _ "$SCOUTFLO_ENV" "$_sf_tv" 2>/dev/null || true)"; if [ -n "$_sf_v" ]; then PROM_BASIC_PASS="$_sf_v"; export PROM_BASIC_PASS; else unset PROM_BASIC_PASS; echo "note: ${_sf_tv} (named by prometheus.basic_pass_env) is not set in the secret store or the shell" >&2; fi; fi
-TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
-PROM_URL=$(sh "$TT" "$CFG" prometheus get 0 url); PROM_URL="${PROM_URL%/}"
-PROM_TOKEN_VAR=$(sh "$TT" "$CFG" prometheus get 0 token_env)
-PROM_TOKEN=""; [ -n "$PROM_TOKEN_VAR" ] && PROM_TOKEN=$(printenv "$PROM_TOKEN_VAR" 2>/dev/null || true)
-AUTH="Authorization: Bearer ${PROM_TOKEN}"; [ -n "$PROM_TOKEN" ] || AUTH="Accept: application/json"
-if [ -n "${PROM_BASIC_USER:-}" ] && [ -n "${PROM_BASIC_PASS:-}" ]; then AUTH="Authorization: Basic $(printf '%s:%s' "$PROM_BASIC_USER" "$PROM_BASIC_PASS" | base64 | tr -d '\n')"; fi   # prom basic_user_env/basic_pass_env override (basic auth beats bearer)
-
-# pq  <path>          -> GET a raw API path (e.g. /api/v1/targets?state=active). GET only.
-# pqq <promql>        -> GET an instant query, url-encoded. GET only, no writes possible.
-pq()  { curl -fsS --max-time 20 -H "$AUTH" "${PROM_URL}$1"; }
-pqq() { curl -fsS --max-time 20 -H "$AUTH" --get --data-urlencode "query=$1" "${PROM_URL}/api/v1/query"; }
-
-# Detect the rule/metrics engine once (drives which self-metric names are valid downstream).
-ENGINE="unknown"
-if   pq "/api/v1/status/buildinfo" | jq -e '.data.version' >/dev/null 2>&1; then ENGINE="prometheus"
-elif pqq 'vmalert_iteration_total' | jq -e '.data.result | length > 0' >/dev/null 2>&1; then ENGINE="vmalert"
-elif pqq 'cortex_build_info' | jq -e '.data.result | length > 0' >/dev/null 2>&1; then ENGINE="mimir"
-fi
-echo "prometheus target: ${PROM_URL}  engine=${ENGINE}"
+. "${CLAUDE_PLUGIN_ROOT:?plugin root is required}/skills/audit-prometheus/scripts/prometheus-http.sh"
 ```
 
 ## 2. Check catalog
@@ -59,9 +44,9 @@ One permanent ID per check. IDs never change or get reused; retired checks keep 
 | PROM-002 | Server reachability and config | Last config reload succeeded — `prometheus_config_last_reload_successful == 1` (a `0` means changes since are not applied) | high |
 | PROM-003 | Server reachability and config | Runtime + retention posture — `runtimeinfo` corruption count, `flags` retention window | medium |
 | PROM-007 | Scrape targets and coverage | Reachable Prometheus with **zero active targets and zero `up` series** (blocks coverage), or **zero loaded rules** (rules not-in-scope) — a visibility/config gap, never a confident 0 | info |
-| PROM-010 | Scrape targets and coverage | Scrape targets healthy — no `health != "up"` target for a critical-service job (a down target reads stale, not absent) | high |
+| PROM-010 | Scrape targets and coverage | Scrape targets healthy — no `health != "up"` target for a critical-service job (inspect actual series and sample age for a down target) | high |
 | PROM-011 | Scrape targets and coverage | Per-service `up == 1` **and** fresh — `time() - timestamp(up)` within threshold (up-but-stale = ingestion lag) | high |
-| PROM-012 | Scrape targets and coverage | Scrape-config limits not breached — no `..._exceeded_sample_limit_total` / target-limit increase (series silently dropped while `up==1`) | medium |
+| PROM-012 | Scrape targets and coverage | Scrape-config limits not breached — no `..._exceeded_sample_limit_total` / target-limit increase (correlate with target scrape errors) | medium |
 | PROM-020 | Rule-engine health | Rules load and evaluate error-free — no `health != "ok"` and no non-empty `lastError` | high |
 | PROM-021 | Rule-engine health | Rules evaluate on time — no group `evaluationTime > interval`, no `prometheus_rule_evaluation_failures_total` increase | medium |
 | PROM-022 | Rule-engine health | Rules are backed by live metrics — each critical alerting rule's query metric returns data now; expected rules exist (rule presence) | high |
@@ -70,7 +55,7 @@ One permanent ID per check. IDs never change or get reused; retired checks keep 
 | PROM-031 | TSDB cardinality and storage | WAL + compaction integrity — no `wal_corruptions_total`, no `compactions_failed_total` increase, no failed truncations/reloads | high |
 | PROM-032 | TSDB cardinality and storage | Head-series churn + growth — `head_series` and `rate(head_series_created_total[..])` not exploding relative to a flat total | medium |
 | PROM-040 | Remote-write and federation | Remote-write health — `samples_pending` draining, shards below max, no `samples_failed/dropped_total` increase, write lag bounded (not-in-scope if no remote_write) | high |
-| PROM-050 | Security posture | Destructive-API exposure — `--web.enable-admin-api` / `--web.enable-lifecycle` (delete_series / reload / quit reachable); enabled + unauth = critical | high |
+| PROM-050 | Security posture | Admin/lifecycle flags plus read-only access-policy evidence of exposure | high |
 | PROM-051 | Security posture | Transport + auth exposure — TLS on the wire; not reachable unauthenticated on a public host | high |
 
 ## 3. Server reachability and config reload (PROM-001, PROM-002, PROM-003)
@@ -78,57 +63,85 @@ One permanent ID per check. IDs never change or get reused; retired checks keep 
 ### PROM-001 — reachable and healthy
 
 ```bash
+. "${CLAUDE_PLUGIN_ROOT:?plugin root is required}/skills/audit-prometheus/scripts/prometheus-http.sh"
 # Health, API liveness (tests the API, not the fleet), and the version string.
-pq "/-/healthy" ; echo " <- /-/healthy"
-pqq 'vector(1)' | jq '.status'
-pq "/api/v1/status/buildinfo" | jq '.data.version'
+HEALTH=$(pq "/-/healthy") || { echo "PROM-001 blocked: health response unavailable; classify the observed HTTP/access error before a server verdict"; exit 1; }
+printf '%s\n' "$HEALTH"
+RESPONSE=$(pqq_json 'vector(1)') || exit 1
+printf '%s' "$RESPONSE" | jq '.status'
+RESPONSE=$(pq_json "/api/v1/status/buildinfo") || exit 1
+printf '%s' "$RESPONSE" | jq '.data.version'
 ```
 
 - **Healthy target:** `/-/healthy` returns `Prometheus ... Healthy`, `vector(1)` returns `"success"`, buildinfo returns a version.
-- **DNS-truth classification (on a resolution failure, sharpens the PROM-001 evidence).** When the host does not resolve, do not stop at "unreachable": a *decommissioned* server (the DNS record was deleted) and a *broken ingress* (the name exists, the path is down) read identically at the socket but need opposite responses — retarget/remove the config vs fix the network. Query the zone's authoritative nameserver directly, read the DNS `status`, and rule out a local resolver failure with a known-good sibling (the zone apex). All read-only `dig` lookups:
+- **DNS classification (on a resolution failure, sharpens the PROM-001 evidence).** A missing DNS record and an unreachable server need different investigation. Query the zone's authoritative nameserver, read the DNS `status`, and check that the zone apex also answers authoritatively. This establishes DNS evidence only; separate retirement evidence is required before removing the configured target. All `dig` lookups are read-only:
 
 ```bash
-HOST="$(printf '%s' "$PROM_URL" | sed -E 's#^https?://([^/]+).*#\1#')"   # PROM_URL is prometheus.url
-if [ -z "$(dig +short A "$HOST"; dig +short CNAME "$HOST")" ]; then
-  ZONE="$(echo "$HOST" | awk -F. '{print $(NF-1)"."$NF}')"   # last two labels; tune for multi-label TLDs (e.g. co.uk needs three)
-  NS="$(dig +short NS "$ZONE" | head -1)"
-  STATUS="$(dig ${NS:+@$NS} +noall +comment "$HOST" | grep -oE 'status: [A-Z]+' | head -1 | awk '{print $2}')"
-  SIB="$(dig ${NS:+@$NS} +noall +comment "$ZONE"    | grep -oE 'status: [A-Z]+' | head -1 | awk '{print $2}')"   # zone apex = known-good sibling
-  case "$STATUS" in
-    NXDOMAIN) [ "$SIB" = NOERROR ] \
-      && echo "PROM-001 evidence: NXDOMAIN-authoritative — the record is GONE (apex resolves, not a resolver failure). DECOMMISSIONED server: the config outlived the infrastructure. Retarget or remove this block in toolkit.yaml." \
-      || echo "PROM-001 evidence: NXDOMAIN but the zone apex also failed (${SIB:-no-answer}) — cannot rule out a resolver/network failure; re-run from a working resolver before concluding decommission." ;;
-    SERVFAIL) echo "PROM-001 evidence: SERVFAIL — the zone delegation/DNSSEC is broken, not one missing record; fix the zone upstream." ;;
-    NOERROR)  echo "PROM-001 evidence: resolves at the authoritative NS but the local path failed — an ingress/LB/network-path problem (the name exists), not a decommission; check VPN/port-forward/ingress." ;;
-    *)        echo "PROM-001 evidence: no authoritative answer for ${HOST} (NS=${NS:-none}); classify manually: dig NS ${ZONE}; dig @<ns> ${HOST}" ;;
-  esac
+# PROM-001 DNS classification: self-contained and read-only; no token is needed.
+set -eu
+CFG="${SCOUTFLO_CONFIG:-}"
+[ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done
+[ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+TT="${CLAUDE_PLUGIN_ROOT:?plugin root is required}/report-standard/toolkit-targets.sh"
+[ -f "$CFG" ] || { echo "PROM-001 blocked: configuration is missing"; exit 0; }
+[ "$(sh "$TT" "$CFG" prometheus kind)" != seq ] || { echo "PROM-001 blocked: give the selected Prometheus target a single-block config"; exit 0; }
+PROM_URL=$(sh "$TT" "$CFG" prometheus get 0 url)
+HOST=${PROM_URL#*://}; HOST=${HOST%%/*}; HOST=${HOST##*@}; HOST=${HOST%%:*}
+case "$HOST" in ''|*[!a-zA-Z0-9.-]*) echo "PROM-001 blocked: DNS classifier requires a DNS hostname"; exit 0;; esac
+command -v dig >/dev/null 2>&1 || { echo "PROM-001 blocked: dig is unavailable; install DNS tools or obtain authoritative evidence separately"; exit 0; }
+# Discover the closest enclosing DNS zone, rather than guessing a two-label TLD.
+ZONE=$HOST; NS=""
+while :; do
+  NS=$(dig +time=5 +tries=1 +short NS "$ZONE" 2>/dev/null | head -1) || NS=""
+  [ -z "$NS" ] || break
+  case "$ZONE" in *.*) ZONE=${ZONE#*.};; *) break;; esac
+done
+[ -n "$NS" ] || { echo "PROM-001 blocked: no authoritative nameserver found"; exit 0; }
+ANSWER=$(dig +time=5 +tries=1 +norecurse "@$NS" "$HOST" A +noall +comments 2>/dev/null) || ANSWER=""
+APEX=$(dig +time=5 +tries=1 +norecurse "@$NS" "$ZONE" SOA +noall +comments 2>/dev/null) || APEX=""
+STATUS=$(printf '%s\n' "$ANSWER" | sed -n 's/.*status: \([A-Z]*\),.*/\1/p' | head -1)
+if ! printf '%s\n' "$ANSWER" | grep -Eq 'flags: ([^;]* )?aa( |;)'; then
+  echo "PROM-001 blocked: response is not authoritative"; exit 0
 fi
+case "$STATUS" in
+  NXDOMAIN)
+    if printf '%s\n' "$APEX" | grep -q 'status: NOERROR,' && printf '%s\n' "$APEX" | grep -Eq 'flags: ([^;]* )?aa( |;)'; then
+      echo "PROM-001 evidence: authoritative DNS record absent; corroborate decommissioning before target-gone, otherwise blocked"
+    else echo "PROM-001 blocked: zone apex also failed; resolver or network failure remains possible"; fi ;;
+  SERVFAIL) echo "PROM-001 blocked: DNS delegation or DNSSEC failure" ;;
+  NOERROR) echo "PROM-001 blocked: DNS exists; restore the network or API read path before judging server health" ;;
+  *) echo "PROM-001 blocked: no conclusive authoritative answer" ;;
+esac
 ```
 
 - **The classification above decides the verdict — it is not decoration.** The outcomes need opposite responses, and reporting the wrong one is the fastest way to lose a reader who knows the estate. **Every branch the classifier can print has a row here; there is no default.** Note that only the last row is a finding about the *server*, because only the last row has evidence about the server:
 
   | Classification the block printed | PROM-001 result | What to say |
   | --- | --- | --- |
-  | NXDOMAIN-authoritative, **apex resolves** | `not-in-scope`, `not_in_scope_reason: target-gone` | The server was decommissioned and the config outlived it. The action is on `toolkit.yaml`: retarget or remove the `prometheus:` block. **Never** a restore/scale/failover recommendation |
+  | Authoritative DNS record absent, **apex resolves**, and independent lifecycle evidence or operator confirmation says the endpoint was deliberately retired | `not-in-scope`, `not_in_scope_reason: target-gone` | Cite both pieces of evidence and retarget/remove the stale `prometheus:` block. **Never** a restore/scale/failover recommendation |
+  | Authoritative DNS absence without corroborated retirement, missing `dig`, or a non-authoritative answer | `blocked` | A missing record is not proof that the server was deleted. Establish the intended endpoint/lifecycle before choosing a remedy |
   | NXDOMAIN but **the apex also failed** | `blocked` | The classifier itself says this cannot be told apart from a resolver/network failure. Re-run from a working resolver before concluding anything. **Not** `target-gone` |
   | SERVFAIL | `blocked` | A broken zone delegation or DNSSEC — upstream of this server and says nothing about its health. Fix the zone, then re-run |
   | No authoritative answer for the host | `blocked` | We could not even ask. Classify manually (`dig NS <zone>`; `dig @<ns> <host>`) and re-run |
   | NOERROR at the authoritative NS, local path failed | `blocked` | The name exists, the path is down. Unlock the read (VPN, ingress, port-forward), then re-run — the server's health is still unknown |
   | **Reachable**, but unhealthy | `fail` (severity `critical`) | A real availability incident — the finding below |
 
-  Everything except the first and last row is `blocked`: a DNS answer that does not authoritatively prove absence is **evidence about DNS, not about the server**, and filing "restore or fail over the server" on it is the same wrong-finding class this release exists to remove. A timeout or refused connection is likewise `blocked`, never `target-gone` — it is indistinguishable from a firewall you are not behind. Only the authoritative-NXDOMAIN-with-resolving-apex path proves absence. Full rules: [not-in-scope-reasons.md](../../../report-standard/not-in-scope-reasons.md).
+  The healthy path is `pass`. Everything except the corroborated-retirement and reachable-unhealthy rows is `blocked`: a DNS answer that does not authoritatively prove absence is **evidence about DNS, not about the server**, and filing "restore or fail over the server" on it is the same wrong-finding class this release exists to remove. A timeout or refused connection is likewise `blocked`, never `target-gone` — it is indistinguishable from a firewall you are not behind. Authoritative NXDOMAIN proves the DNS name is absent; it requires separate retirement evidence before the configured server is classified as gone. Full rules: [not-in-scope-reasons.md](../../../report-standard/not-in-scope-reasons.md).
 
-- **Finding (PROM-001, critical) — only on the reachable-but-unhealthy path:** an unreachable Prometheus is the root of a cascade, not a yes/no. Pull `/api/v1/rules` and `/api/v1/targets` first and state what goes dark — "this server loads N alerting rules (M at `severity=page`) and scrapes K critical services; while it is down every rule evaluates to no-data and pages nothing, and every service is unmonitored." This is an availability incident (restore/scale/failover the server), then close the HA gap that let one instance take the plane down.
+- **Finding (PROM-001, critical) — only on the reachable-but-unhealthy path:** a reachable but unhealthy Prometheus can interrupt monitoring. If access allows, pull `/api/v1/rules` and `/api/v1/targets` first and state what goes dark — "this server loads N alerting rules (M at `severity=page`) and scrapes K critical services; these are the observed dependencies at risk." Never invent counts when those reads fail, and do not assume redundancy or actual delivery impact from server health alone. Investigate the observed failure and verify redundancy before recommending restoration or failover; one unhealthy endpoint does not prove a plane-wide outage or an HA gap.
 - **On the `target-gone` path, the cascade framing is wrong and must not be emitted.** Nothing "goes dark" — it went dark when the server was deleted, and the rules and targets you would enumerate no longer exist to enumerate. Report the stale config, and if this was the only metrics backend, that absence is a separate, honest finding about the estate having no metrics plane — not about this host being down.
 - **Forbidden:** GET only; see section 9.
 
 ### PROM-002 — last config reload succeeded
 
 ```bash
+. "${CLAUDE_PLUGIN_ROOT:?plugin root is required}/skills/audit-prometheus/scripts/prometheus-http.sh"
 # 1 = last reload OK; 0 = last reload FAILED (running config is the last-good one; changes since not applied).
-pqq 'prometheus_config_last_reload_successful' | jq -r '.data.result[]? | "reload_ok=\(.value[1])"'
+RESPONSE=$(pqq_json 'prometheus_config_last_reload_successful') || exit 1
+printf '%s' "$RESPONSE" | jq -r '.data.result[]? | "reload_ok=\(.value[1])"'
 # How long the running config has been in effect (age of the last SUCCESSFUL reload):
-pqq 'time() - prometheus_config_last_reload_success_timestamp_seconds' | jq -r '.data.result[]? | "seconds_since_last_good_reload=\(.value[1])"'
+RESPONSE=$(pqq_json 'time() - prometheus_config_last_reload_success_timestamp_seconds') || exit 1
+printf '%s' "$RESPONSE" | jq -r '.data.result[]? | "seconds_since_last_good_reload=\(.value[1])"'
 ```
 
 - **Healthy target:** `reload_ok=1`.
@@ -138,8 +151,11 @@ pqq 'time() - prometheus_config_last_reload_success_timestamp_seconds' | jq -r '
 ### PROM-003 — runtime and retention posture
 
 ```bash
-pq "/api/v1/status/runtimeinfo" | jq '.data | {storageRetention, corruptionCount, goroutineCount, timeSeriesCount: .timeSeriesCount?}'
-pq "/api/v1/status/flags" | jq '.data | {retention_time: ."storage.tsdb.retention.time", retention_size: ."storage.tsdb.retention.size", admin_api: ."web.enable-admin-api", lifecycle: ."web.enable-lifecycle"}'
+. "${CLAUDE_PLUGIN_ROOT:?plugin root is required}/skills/audit-prometheus/scripts/prometheus-http.sh"
+RESPONSE=$(pq_json "/api/v1/status/runtimeinfo") || exit 1
+printf '%s' "$RESPONSE" | jq '.data | {storageRetention, corruptionCount, goroutineCount, timeSeriesCount: .timeSeriesCount?}'
+RESPONSE=$(pq_json "/api/v1/status/flags") || exit 1
+printf '%s' "$RESPONSE" | jq '.data | {retention_time: ."storage.tsdb.retention.time", retention_size: ."storage.tsdb.retention.size", admin_api: ."web.enable-admin-api", lifecycle: ."web.enable-lifecycle"}'
 ```
 
 - **Healthy target:** a deliberate retention window that matches the team's stated need; `corruptionCount` is `0`.
@@ -151,29 +167,36 @@ pq "/api/v1/status/flags" | jq '.data | {retention_time: ."storage.tsdb.retentio
 ### PROM-010 — scrape targets healthy
 
 ```bash
+. "${CLAUDE_PLUGIN_ROOT:?plugin root is required}/skills/audit-prometheus/scripts/prometheus-http.sh"
 # Down/unhealthy active targets, grouped by scrape pool/job, with the last error.
-pq "/api/v1/targets?state=active" \
-  | jq -r '[.data.activeTargets[] | select(.health != "up")]
+RESPONSE=$(pq_json "/api/v1/targets?state=active") || exit 1
+printf '%s' "$RESPONSE" | jq -r '[.data.activeTargets[] | select(.health != "up")]
            | group_by(.scrapePool) | .[]
            | "\(.[0].scrapePool): \(length) down — e.g. \(.[0].labels.job) lastError=\(.[0].lastError)"'
 # Census for PROM-007: how many active targets exist at all.
-pq "/api/v1/targets?state=active" | jq '.data.activeTargets | length'
+RESPONSE=$(pq_json "/api/v1/targets?state=active") || exit 1
+printf '%s' "$RESPONSE" | jq '.data.activeTargets | length'
 ```
 
 - **Healthy target:** every critical-service job appears with `health="up"`.
-- **Finding (PROM-010, high):** a down target's data goes **stale, not absent** — dashboards and rules read the last-scraped value and look alive while the pod may be dead. Map each down target's `job`/`namespace`/`pod` to the critical set and name it in `affected`; a saturation or error there is invisible until scrape resumes. Zero active targets everywhere routes to PROM-007, not a confident fail. Remediation is inline (fix the ServiceMonitor/PodMonitor selector, the target port, or a relabel drop rule for the named job).
+- **Finding (PROM-010, high):** a failed scrape interrupts fresh collection. Existing series may become stale or absent depending on the engine and query window; inspect actual series and sample age before claiming impact. Map each down target's `job`/`namespace`/`pod` to the critical set and name it in `affected`; a saturation or error there is invisible until scrape resumes. Zero active targets everywhere routes to PROM-007, not a confident fail. Remediation is inline (fix the ServiceMonitor/PodMonitor selector, the target port, or a relabel drop rule for the named job).
 - **Forbidden:** GET only.
 
 ### PROM-011 — per-service coverage and freshness
 
 ```bash
+. "${CLAUDE_PLUGIN_ROOT:?plugin root is required}/skills/audit-prometheus/scripts/prometheus-http.sh"
 # up per target: 1 = scraped OK, 0 = scrape failing. Zero SERIES = nothing scraped (routes to PROM-007).
-pqq 'up' | jq -r '.data.result | length as $n | "up_series=\($n)"'
-pqq 'up == 0' | jq -r '.data.result[]? | "\(.metric.job // .metric.instance) is up==0"'
+RESPONSE=$(pqq_json 'up') || exit 1
+printf '%s' "$RESPONSE" | jq -r '.data.result | length as $n | "up_series=\($n)"'
+RESPONSE=$(pqq_json 'up == 0') || exit 1
+printf '%s' "$RESPONSE" | jq -r '.data.result[]? | "\(.metric.job // .metric.instance) is up==0"'
 # Real per-target sample age (verified live 0.4s..100s across many targets — does NOT collapse to 0).
-pqq 'time() - timestamp(up)' | jq -r '[.data.result[].value[1]|tonumber] | "max_sample_age_s=\(max) targets=\(length)"'
+RESPONSE=$(pqq_json 'time() - timestamp(up)') || exit 1
+printf '%s' "$RESPONSE" | jq -r '[.data.result[].value[1]|tonumber] | "max_sample_age_s=\(max) targets=\(length)"'
 # Widen the detection window to a target last seen up to 15m ago:
-pqq 'time() - max_over_time(timestamp(up)[15m:1m])' | jq -r '[.data.result[]?.value[1]|tonumber] | "max_age_15m_window_s=\(if length>0 then max else 0 end)"'
+RESPONSE=$(pqq_json 'time() - max_over_time(timestamp(up)[15m:1m])') || exit 1
+printf '%s' "$RESPONSE" | jq -r '[.data.result[]?.value[1]|tonumber] | "max_age_15m_window_s=\(if length>0 then max else 0 end)"'
 ```
 
 - **Healthy target:** every critical-service job has `up == 1` and a sample age below `FRESH_LAG_S`.
@@ -183,7 +206,8 @@ pqq 'time() - max_over_time(timestamp(up)[15m:1m])' | jq -r '[.data.result[]?.va
 ### PROM-012 — scrape-config limits not breached
 
 ```bash
-# Silent series drops: a target hitting its sample_limit reads up==1 while data is thrown away.
+. "${CLAUDE_PLUGIN_ROOT:?plugin root is required}/skills/audit-prometheus/scripts/prometheus-http.sh"
+# Scrape-limit rejection: correlate these counters with failed scrapes and target errors.
 for m in \
   prometheus_target_scrapes_exceeded_sample_limit_total \
   prometheus_target_scrape_pool_exceeded_target_limit_total \
@@ -194,13 +218,13 @@ for m in \
   # instance (`instance`/`job`), NOT by the scraped target — so sum to a total, never imply a per-job
   # attribution the metric can't give. A non-zero total means >=1 target breached; find which by reading
   # the scrape configs that set that limit.
-  pqq "sum(increase(${m}[1h]))" \
-    | jq -r --arg m "$m" '.data.result[]? | select((.value[1]|tonumber) > 0) | "\($m): +\(.value[1]) breach(es) in 1h (global counter — check scrape configs that set this limit)"'
+  RESPONSE=$(pqq_json "sum(increase(${m}[1h]))") || exit 1
+  printf '%s' "$RESPONSE" | jq -r --arg m "$m" '.data.result[]? | select((.value[1]|tonumber) > 0) | "\($m): +\(.value[1]) breach(es) in 1h (global counter — check scrape configs that set this limit)"'
 done
 ```
 
 - **Healthy target:** every counter's 1h increase is `0`.
-- **Finding (PROM-012, medium):** a target hitting `sample_limit`/`target_limit`/`body_size_limit` has series **silently dropped** — it reads `up == 1` (PROM-010/011 pass) while data is discarded, so a metric the responder expects simply is not there. Name the job and the limit; remediation is inline (raise the limit in the scrape config, or reduce what the target exposes).
+- **Finding (PROM-012, medium):** exceeded sample/body-size limits reject the affected scrape. Target-limit failures and out-of-order samples have distinct causes; inspect target errors and the relevant live limit before naming impact. Do not claim `up == 1` or identify a job from a global counter alone. Fix the evidenced limit or reduce scrape volume, then verify successful collection.
 - **Forbidden:** GET only.
 
 ## 5. Rule-engine health (PROM-020, PROM-021, PROM-022, PROM-023) — flagship
@@ -210,33 +234,39 @@ Detect the engine (section 1) first; the `/api/v1/rules` `health`/`lastError` re
 ### PROM-020 — rules load and evaluate error-free
 
 ```bash
+. "${CLAUDE_PLUGIN_ROOT:?plugin root is required}/skills/audit-prometheus/scripts/prometheus-http.sh"
 # Group + rule census, then every rule carrying a lastError or non-ok health.
-pq "/api/v1/rules" | jq -r '.data.groups | length as $g | [.[].rules[]] | "\($g) groups, \(length) rules"'
-pq "/api/v1/rules" | jq -r '.data.groups[].rules[]
+RESPONSE=$(pq_json "/api/v1/rules") || exit 1
+printf '%s' "$RESPONSE" | jq -r '.data.groups | length as $g | [.[].rules[]] | "\($g) groups, \(length) rules"'
+RESPONSE=$(pq_json "/api/v1/rules") || exit 1
+printf '%s' "$RESPONSE" | jq -r '.data.groups[].rules[]
   | select(((.health // "ok") != "ok") or ((.lastError // "") != ""))
   | "\(.type) \(.name) health=\(.health) severity=\(.labels.severity // "-") lastEvaluation=\(.lastEvaluation) lastError=\(.lastError)"'
 ```
 
 - **Healthy target:** every rule has `health="ok"` and an empty `lastError`.
-- **Finding (PROM-020, high):** a rule with `health != "ok"` or a non-empty `lastError` has fired zero times and never will until fixed. For each, resolve `.name`/`.labels`/`.query` to a topology service, read `.labels.severity`, and use `.lastEvaluation` for how long it has been broken — "`HighErrorRate{service=checkout}` severity=page has carried a PromQL parse error for 3 days; a spike tonight fires nothing." Blast radius: count of paging rules broken and critical services left with a dead rule. Remediation inline (fix the named rule's expression — the `lastError` says what).
+- **Finding (PROM-020, high):** non-ok health or a nonempty `lastError` records an evaluation failure. `lastEvaluation` is the latest attempt, not error onset; prior firing and failure duration require history. Name the observed rule, its mapped service and current error, then fix that expression and verify subsequent evaluations. Never infer three days of failure from one timestamp.
 - **Forbidden:** GET only.
 
 ### PROM-021 — rules evaluate on time
 
 ```bash
+. "${CLAUDE_PLUGIN_ROOT:?plugin root is required}/skills/audit-prometheus/scripts/prometheus-http.sh"
 # A group whose evaluationTime exceeds its interval fires late / skips windows even with health=ok.
-pq "/api/v1/rules" | jq -r '.data.groups[]
+RESPONSE=$(pq_json "/api/v1/rules") || exit 1
+printf '%s' "$RESPONSE" | jq -r '.data.groups[]
   | select((.evaluationTime // 0) > (.interval // 0))
   | "\(.name) eval=\(.evaluationTime)s > interval=\(.interval)s file=\(.file)"'
 # Engine-gated confirmation (Prometheus). On vmalert, DROP the overrun query (no interval-seconds analog)
 # and read vmalert_execution_errors_total / vmalert_alerting_rules_errors_total instead.
 if [ "${ENGINE:-unknown}" = "prometheus" ]; then
-  pqq 'sum by (rule_group) (increase(prometheus_rule_evaluation_failures_total[1h]))' \
-    | jq -r '.data.result[]? | select((.value[1]|tonumber) > 0) | "\(.metric.rule_group): \(.value[1]) eval failures/1h"'
-  pqq '(prometheus_rule_group_last_duration_seconds > prometheus_rule_group_interval_seconds)' \
-    | jq -r '.data.result[]? | "\(.metric.rule_group): eval overran its interval"'
+  RESPONSE=$(pqq_json 'sum by (rule_group) (increase(prometheus_rule_evaluation_failures_total[1h]))') || exit 1
+  printf '%s' "$RESPONSE" | jq -r '.data.result[]? | select((.value[1]|tonumber) > 0) | "\(.metric.rule_group): \(.value[1]) eval failures/1h"'
+  RESPONSE=$(pqq_json '(prometheus_rule_group_last_duration_seconds > prometheus_rule_group_interval_seconds)') || exit 1
+  printf '%s' "$RESPONSE" | jq -r '.data.result[]? | "\(.metric.rule_group): eval overran its interval"'
 elif [ "${ENGINE:-unknown}" = "vmalert" ]; then
-  pqq 'sum(increase(vmalert_execution_errors_total[1h]))' | jq -r '.data.result[]? | "vmalert exec errors/1h=\(.value[1])"'
+  RESPONSE=$(pqq_json 'sum(increase(vmalert_execution_errors_total[1h]))') || exit 1
+  printf '%s' "$RESPONSE" | jq -r '.data.result[]? | "vmalert exec errors/1h=\(.value[1])"'
 fi
 ```
 
@@ -246,39 +276,48 @@ fi
 
 ### PROM-022 — rules are backed by live metrics (the correlation flagship)
 
-The one failure that looks fine in `/api/v1/rules` (health=ok) **and** fine in `/api/v1/targets`, but is dead: a loaded, error-free alerting rule whose backing metric stopped being scraped evaluates to no-data forever and pages nobody.
+A positive-signal rule can evaluate without errors while a required selector has no data. Inspect the full expression and service scope; absence-alert designs intentionally handle missing input and must be judged differently.
 
 ```bash
+. "${CLAUDE_PLUGIN_ROOT:?plugin root is required}/skills/audit-prometheus/scripts/prometheus-http.sh"
 # 1) Pull critical/paging alerting rules and their expressions.
-pq "/api/v1/rules" | jq -r '.data.groups[].rules[]
+RESPONSE=$(pq_json "/api/v1/rules") || exit 1
+printf '%s' "$RESPONSE" | jq -r '.data.groups[].rules[]
   | select(.type=="alerting")
   | select((.labels.severity // "") | test("page|critical";"i"))
   | "\(.name)\t\(.query)"'
 
-# 2) For each rule, extract the metric names its expression reads and confirm each returns data NOW.
-#    (Extract the bare metric identifiers from the printed query, then, per metric M:)
-#    pqq "count(M)" | jq -r '.data.result[0].value[1] // "0"'
-#    A metric that returns 0 (or empty) is the dead-rule root cause — the rule can never fire.
+# 2) Inspect each full expression and its exact label selectors, preserving job/service scope.
+#    For ordinary positive-signal rules, query each exact selector with pqq_json.
+#    A successful empty selector is missing evidence for THAT scope, not every service.
+#    For absent()/absent_over_time() rules, missing input is the intended trigger:
+#    evaluate the full rule expression and expected absence window; never call it dead.
+#    An empty full expression may simply mean a threshold is not breached.
+#    Unsupported/ambiguous expression analysis is blocked; never replace it with count(M).
 
 # 3) Rule presence: an EXPECTED paging rule for a critical service that does not exist at all.
 #    Compare the critical-service list (topology.md) against the alerting-rule names above; a critical
 #    service with no owning paging rule is a PROM-022 presence gap, not a broken rule.
 ```
 
-- **Healthy target:** every critical/paging rule's backing metric(s) return data now, and every critical service has an owning paging rule.
-- **Finding (PROM-022, high):** a rule whose query metric returns `0`/empty is dead — name the rule, the missing metric, and the critical service; chain it to the metric's scrape (PROM-011) and, if that scrape is down, to PROM-010. A critical service with no paging rule at all is a presence gap. Remediation inline (fix the *scrape* of the metric — then confirm `count(<metric>) > 0` and the rule's `health` returns to `ok` — or author the missing rule).
+- **Healthy target:** required rules exist and their full expressions work as intended, including absence alerts; selector-specific evidence is available for positive-signal rules.
+- **Finding (PROM-022, high):** a positive-signal rule whose exact required selector is successfully observed empty can have a backing-data gap. Name that selector and service and correlate its scrape evidence. For absence alerts, empty input may be correct; evaluate intended absence behavior. A zero-valued series is present data, not an absent metric. Do not diagnose dead rules from `count(<metric>)` or an empty filtered expression. Unsupported analysis stays `blocked`. A missing required rule is a separate presence gap.
 - **Forbidden:** GET only.
 
 ### PROM-023 — the notify path is live (the seam with audit-alertmanager)
 
 ```bash
+. "${CLAUDE_PLUGIN_ROOT:?plugin root is required}/skills/audit-prometheus/scripts/prometheus-http.sh"
 # Does Prometheus have a live Alertmanager to send to, and is it dropping notifications?
-pq "/api/v1/alertmanagers" | jq -r '{active: (.data.activeAlertmanagers | length), dropped: (.data.droppedAlertmanagers | length)}'
-pqq 'increase(prometheus_notifications_dropped_total[1h])' | jq -r '.data.result[]? | "dropped_notifications/1h=\(.value[1])"'
+RESPONSE=$(pq_json "/api/v1/alertmanagers") || exit 1
+printf '%s' "$RESPONSE" | jq -r '{active: (.data.activeAlertmanagers | length), dropped: (.data.droppedAlertmanagers | length)}'
+RESPONSE=$(pqq_json 'increase(prometheus_notifications_dropped_total[1h])') || exit 1
+printf '%s' "$RESPONSE" | jq -r '.data.result[]? | "dropped_notifications/1h=\(.value[1])"'
 # sum()/max() is load-bearing, not style: on Prometheus 3.14 (confirmed live) queue_length carries
 # an `alertmanager` label while queue_capacity has none, so a bare division fails vector matching
 # and returns EMPTY — which reads as "healthy" when the queue could be saturating.
-pqq 'sum(prometheus_notifications_queue_length) / max(prometheus_notifications_queue_capacity)' | jq -r '.data.result[]? | "notif_queue_fill=\(.value[1])"'
+RESPONSE=$(pqq_json 'sum(prometheus_notifications_queue_length) / max(prometheus_notifications_queue_capacity)') || exit 1
+printf '%s' "$RESPONSE" | jq -r '.data.result[]? | "notif_queue_fill=\(.value[1])"'
 ```
 
 - **Healthy target:** at least one **active** Alertmanager, `dropped_notifications/1h == 0`, queue fill well below `1`.
@@ -290,7 +329,9 @@ pqq 'sum(prometheus_notifications_queue_length) / max(prometheus_notifications_q
 ### PROM-030 — cardinality
 
 ```bash
-pq "/api/v1/status/tsdb" | jq '{headSeries: .data.headStats.numSeries,
+. "${CLAUDE_PLUGIN_ROOT:?plugin root is required}/skills/audit-prometheus/scripts/prometheus-http.sh"
+RESPONSE=$(pq_json "/api/v1/status/tsdb") || exit 1
+printf '%s' "$RESPONSE" | jq '{headSeries: .data.headStats.numSeries,
   topMetrics: [.data.seriesCountByMetricName[0:10][] | {name: .name, series: .value}],
   topLabels:  [.data.labelValueCountByLabelName[0:10][] | {label: .name, values: .value}],
   topPairs:   [.data.seriesCountByLabelValuePair[0:10][] | {pair: .name, series: .value}]}'
@@ -303,14 +344,17 @@ pq "/api/v1/status/tsdb" | jq '{headSeries: .data.headStats.numSeries,
 ### PROM-031 — WAL and compaction integrity
 
 ```bash
+. "${CLAUDE_PLUGIN_ROOT:?plugin root is required}/skills/audit-prometheus/scripts/prometheus-http.sh"
 for m in \
   prometheus_tsdb_wal_corruptions_total \
   prometheus_tsdb_wal_truncations_failed_total \
   prometheus_tsdb_head_truncations_failed_total \
   prometheus_tsdb_reloads_failures_total ; do
-  pqq "$m" | jq -r --arg m "$m" '.data.result[]? | select((.value[1]|tonumber) > 0) | "\($m)=\(.value[1])"'
+  RESPONSE=$(pqq_json "$m") || exit 1
+  printf '%s' "$RESPONSE" | jq -r --arg m "$m" '.data.result[]? | select((.value[1]|tonumber) > 0) | "\($m)=\(.value[1])"'
 done
-pqq 'increase(prometheus_tsdb_compactions_failed_total[6h])' | jq -r '.data.result[]? | select((.value[1]|tonumber) > 0) | "compactions_failed/6h=\(.value[1])"'
+RESPONSE=$(pqq_json 'increase(prometheus_tsdb_compactions_failed_total[6h])') || exit 1
+printf '%s' "$RESPONSE" | jq -r '.data.result[]? | select((.value[1]|tonumber) > 0) | "compactions_failed/6h=\(.value[1])"'
 ```
 
 - **Healthy target:** every counter is `0`.
@@ -320,9 +364,13 @@ pqq 'increase(prometheus_tsdb_compactions_failed_total[6h])' | jq -r '.data.resu
 ### PROM-032 — head-series churn and growth
 
 ```bash
-pqq 'prometheus_tsdb_head_series' | jq -r '.data.result[]? | "head_series=\(.value[1])"'
-pqq 'sum(rate(prometheus_tsdb_head_series_created_total[1h]))' | jq -r '.data.result[]? | "series_created_per_s(1h)=\(.value[1])"'
-pqq 'sum(rate(prometheus_tsdb_head_series_removed_total[1h]))' | jq -r '.data.result[]? | "series_removed_per_s(1h)=\(.value[1])"'
+. "${CLAUDE_PLUGIN_ROOT:?plugin root is required}/skills/audit-prometheus/scripts/prometheus-http.sh"
+RESPONSE=$(pqq_json 'prometheus_tsdb_head_series') || exit 1
+printf '%s' "$RESPONSE" | jq -r '.data.result[]? | "head_series=\(.value[1])"'
+RESPONSE=$(pqq_json 'sum(rate(prometheus_tsdb_head_series_created_total[1h]))') || exit 1
+printf '%s' "$RESPONSE" | jq -r '.data.result[]? | "series_created_per_s(1h)=\(.value[1])"'
+RESPONSE=$(pqq_json 'sum(rate(prometheus_tsdb_head_series_removed_total[1h]))') || exit 1
+printf '%s' "$RESPONSE" | jq -r '.data.result[]? | "series_removed_per_s(1h)=\(.value[1])"'
 ```
 
 - **Healthy target:** creation rate roughly balances removal against a stable `head_series` total.
@@ -331,35 +379,53 @@ pqq 'sum(rate(prometheus_tsdb_head_series_removed_total[1h]))' | jq -r '.data.re
 
 ## 7. Remote-write and federation (PROM-040)
 
-Only when the remote-write self-metrics exist; a pure local-TSDB Prometheus has none → PROM-040 `not-in-scope`.
+A successful empty self-metric query does not prove remote-write is absent: the
+server may not scrape its own metrics. Failed reads are `blocked`. Only a
+successful live-config read that proves an empty `remote_write` section makes
+this check `not-in-scope`; record `inapplicable` and that evidence.
 
 ```bash
-# Presence gate: no remote_write self-metrics => not-in-scope, never a fail.
-if pqq 'prometheus_remote_storage_samples_pending' | jq -e '.data.result | length > 0' >/dev/null 2>&1; then
-  # Key the display on remote_name only (operator-set name, or a Prometheus-generated hash) — NEVER the
-  # `url` label, which can carry basic-auth userinfo (https://user:pass@host/...) and would leak a secret.
-  pqq 'prometheus_remote_storage_samples_pending' | jq -r '.data.result[]? | "\(.metric.remote_name // "queue"): pending=\(.value[1])"'
-  pqq 'prometheus_remote_storage_shards' | jq -r '.data.result[]? | "shards=\(.value[1])"'
-  pqq 'prometheus_remote_storage_shards_max' | jq -r '.data.result[]? | "shards_max=\(.value[1])"'
-  pqq 'increase(prometheus_remote_storage_samples_failed_total[1h])' | jq -r '.data.result[]? | select((.value[1]|tonumber) > 0) | "samples_failed/1h=\(.value[1])"'
-  # samples_dropped_total does NOT exist on every engine (confirmed absent on Prometheus 3.14's
-  # 34 remote_storage self-metrics) — check presence first so a silent empty result is reported
-  # as "counter not exposed on this build", never mistaken for zero drops.
-  if pqq 'prometheus_remote_storage_samples_dropped_total' | jq -e '.data.result | length > 0' >/dev/null 2>&1; then
-    pqq 'increase(prometheus_remote_storage_samples_dropped_total[1h])' | jq -r '.data.result[]? | select((.value[1]|tonumber) > 0) | "samples_dropped/1h=\(.value[1])"'
+. "${CLAUDE_PLUGIN_ROOT:?plugin root is required}/skills/audit-prometheus/scripts/prometheus-http.sh"
+# PROM-040 presence: distinguish failed, unobserved and explicitly absent.
+PENDING=$(pqq_json 'prometheus_remote_storage_samples_pending') \
+  || { echo "PROM-040 blocked: remote-write metric read failed"; exit 1; }
+if [ "$(printf '%s' "$PENDING" | jq '.data.result | length')" -eq 0 ]; then
+  CONFIG_BODY=$(pq_json '/api/v1/status/config') \
+    || { echo "PROM-040 blocked: self-metrics absent and live config unreadable"; exit 1; }
+  CONFIG_YAML=$(printf '%s' "$CONFIG_BODY" | jq -er '.data.yaml | select(type=="string" and length>0)') \
+    || { echo "PROM-040 blocked: no readable live YAML config"; exit 1; }
+  # Require an explicit empty field; missing/quoted/complex YAML stays unknown.
+  if printf '%s\n' "$CONFIG_YAML" | grep -Eq '^remote_write:[[:space:]]*\[\][[:space:]]*$'; then
+    echo "PROM-040 not-in-scope (inapplicable): live config explicitly has remote_write: []"
   else
-    echo "samples_dropped_total not exposed on this build — judge drops via samples_failed_total + write lag instead"
+    echo "PROM-040 blocked: self-metrics absent; live config does not prove remote-write is empty"
   fi
-  # Write lag: how far behind the remote endpoint is (highest local ts minus highest sent ts).
-  pqq 'prometheus_remote_storage_highest_timestamp_in_seconds - ignoring(remote_name,url) group_right prometheus_remote_storage_queue_highest_sent_timestamp_seconds' \
-    | jq -r '.data.result[]? | "write_lag_s=\(.value[1])"'
+  exit 0
+fi
+# Key the display on remote_name, never the url label (which can contain secrets).
+printf '%s' "$PENDING" | jq -r '.data.result[] | "\(.metric.remote_name // "queue"): pending=\(.value[1])"'
+for QUERY in 'prometheus_remote_storage_shards' 'prometheus_remote_storage_shards_max' \
+  'increase(prometheus_remote_storage_samples_failed_total[1h])' \
+  'prometheus_remote_storage_highest_timestamp_in_seconds - ignoring(remote_name,url) group_right prometheus_remote_storage_queue_highest_sent_timestamp_seconds'; do
+  RESULT=$(pqq_json "$QUERY") || { echo "PROM-040 blocked: required queue evidence unreadable"; exit 1; }
+  if [ "$(printf '%s' "$RESULT" | jq '.data.result | length')" -eq 0 ]; then
+    echo "PROM-040 blocked: required queue metric not observed on this engine"
+  else
+    printf '%s' "$RESULT" | jq -r '.data.result[] | "queue=\(.metric.remote_name // "queue") value=\(.value[1])"'
+  fi
+done
+# Optional counter varies by build; a failed read is still different from absence.
+DROPPED=$(pqq_json 'increase(prometheus_remote_storage_samples_dropped_total[1h])') \
+  || { echo "PROM-040 blocked: optional drop-counter read failed"; exit 1; }
+if [ "$(printf '%s' "$DROPPED" | jq '.data.result | length')" -eq 0 ]; then
+  echo "samples_dropped_total not observed on this build; judge observed failures and lag"
 else
-  echo "no prometheus_remote_storage_* self-metrics — remote-write not configured; PROM-040 not-in-scope"
+  printf '%s' "$DROPPED" | jq -r '.data.result[] | "samples_dropped/1h=\(.value[1])"'
 fi
 ```
 
 - **Healthy target:** `pending` drains, `shards` below `shards_max`, no failed/dropped increase, write lag bounded.
-- **Finding (PROM-040, high):** a backlogged (`pending` climbing), saturated (`shards == shards_max`), or failing remote-write means long-term storage (Mimir/Thanos/VictoriaMetrics) is **missing samples right now** — dashboards and long-range/burn-rate alerts that read the remote store go blind while the local Prometheus looks fine. Name the queue and the observed backlog/lag. Remediation inline (fix the remote endpoint's auth/throughput/limits, or tune `queue_config`).
+- **Finding (PROM-040, high):** a backlogged (`pending` climbing), saturated (`shards == shards_max`), or failing remote-write indicates delivery pressure or errors; confirm ingestion freshness on the remote store before claiming lost samples or unavailable dashboards. Name the queue and the observed backlog/lag. Remediation inline (fix the remote endpoint's auth/throughput/limits, or tune `queue_config`).
 - **Forbidden:** GET only.
 
 ## 8. Security posture (PROM-050, PROM-051)
@@ -367,29 +433,52 @@ fi
 ### PROM-050 — destructive-API exposure
 
 ```bash
+. "${CLAUDE_PLUGIN_ROOT:?plugin root is required}/skills/audit-prometheus/scripts/prometheus-http.sh"
 # Read the flags. NEVER call the destructive endpoints they gate.
 # Flags live under .data (confirmed live on Prometheus 3.14) and each value is a STRING
 # ("true"/"false") — compare to the string, never rely on jq truthiness (the string "false" is truthy).
-pq "/api/v1/status/flags" | jq '.data | {admin_api: ."web.enable-admin-api", lifecycle: ."web.enable-lifecycle"}'
+RESPONSE=$(pq_json "/api/v1/status/flags") || exit 1
+printf '%s' "$RESPONSE" | jq '.data | {admin_api: ."web.enable-admin-api", lifecycle: ."web.enable-lifecycle"}'
 ```
 
 - **Healthy target:** `web.enable-admin-api` is `false` unless deliberately needed; if `true`, the endpoint is behind auth on a private network.
-- **Finding (PROM-050):** `web.enable-admin-api=true` means `POST /api/v1/admin/tsdb/delete_series` and `.../clean_tombstones` are **reachable** — anyone who can reach the API can delete series; `web.enable-lifecycle=true` means `POST /-/reload` and `POST /-/quit` are reachable (reload/shutdown). Enabled **and** unauthenticated **and** on a non-loopback host = **critical** (open destructive control). Enabled behind auth = a medium posture note. This audit reads the flag; it never exercises the endpoint. Remediation inline (disable the flag if unused, or put it behind an auth proxy).
+- **Finding (PROM-050):** enabled admin/lifecycle flags establish configured capability only. Reverse-proxy policy may block the mutation paths even when read queries are open. Use read-only access-policy evidence to assess potential exposure and severity; unknown routing/authorization remains unverified. Never send a destructive request to test it. Remediate unused flags or the evidenced access policy.
 - **Forbidden:** GET only — **never** `POST /api/v1/admin/tsdb/delete_series`, `/-/reload`, or `/-/quit`; see section 9.
 
 ### PROM-051 — transport and auth exposure
 
-This probe sends **no** credentials, so the status code is the evidence and `-f` is dropped deliberately:
+This probe sends **no** credentials. A status code alone does not establish API
+exposure: an HTML login page can also return 200. A successful `vector(1)` JSON
+query proves unauthenticated query access from the current network only.
 
 ```bash
-# Is the API reachable with NO credential? (On a public host, an unauth 200 = the whole metrics store is exposed.)
-curl -s -o /dev/null -w 'unauth /api/v1/status/buildinfo: %{http_code}\n' --max-time 10 "${PROM_URL}/api/v1/status/buildinfo"
-# TLS on the wire:
-printf '%s\n' "$PROM_URL" | grep -qE '^https://' && echo "TLS: audit endpoint is https" || echo "TLS: audit endpoint is plaintext http — confirm this is loopback/port-forward, else a finding"
+. "${CLAUDE_PLUGIN_ROOT:?plugin root is required}/skills/audit-prometheus/scripts/prometheus-http.sh"
+# PROM-051 unauthenticated query proof; keep response private and remove on exit.
+BODY=$(mktemp); chmod 600 "$BODY"
+trap 'rm -f "$BODY"' EXIT HUP INT TERM
+CODE=$(curl -sS -o "$BODY" -w '%{http_code}' --max-time 10 --get \
+  --data-urlencode 'query=vector(1)' "${PROM_URL}/api/v1/query") \
+  || { echo "PROM-051 blocked: unauthenticated probe failed"; exit 1; }
+case "$CODE" in
+  200)
+    if jq -e '.status=="success" and (.data.resultType=="vector") and (.data.result|type=="array" and length==1) and (.data.result[0].value[1]=="1")' "$BODY" >/dev/null 2>&1; then
+      echo "PROM-051 evidence: unauthenticated query access from this network; classify exposure using the observed host/network scope"
+    else echo "PROM-051 blocked: 200 response is not a valid query result (possible login page)"; fi ;;
+  401|403) echo "PROM-051 evidence: unauthenticated query was denied; authenticated audit evidence is separate" ;;
+  *) echo "PROM-051 blocked: status=$CODE is inconclusive" ;;
+esac
+case "$PROM_URL" in https://*) echo "TLS: audit endpoint is https";; *) echo "TLS: audit endpoint is plaintext; confirm whether the path is loopback or trusted";; esac
 ```
 
-- **Healthy target:** on a public host the unauthenticated probe returns an auth-required status (behind a proxy); a plaintext `http://` endpoint is loopback/port-forward only.
-- **Finding (PROM-051, high):** an unauthenticated `200` on a non-loopback/public host means the entire metrics store — and any sensitive values in metric labels — is readable by anyone who reaches it; plaintext `http://` across an untrusted network carries any bearer token in clear. Record the host class (loopback / private / public) and TLS state. Remediation inline (auth proxy + TLS, or move off public ingress to a private network / port-forward).
+- **Healthy target:** an observed public query endpoint requires authentication;
+  plaintext traffic is confined to a trusted path such as loopback/port-forward.
+- **Finding (PROM-051, high):** a verified unauthenticated query on an observed
+  public host establishes public query access. Do not infer public reachability
+  from a successful query over a VPN or local tunnel, or claim every series is
+  exposed from `vector(1)` alone. Plaintext on an untrusted path is a separate
+  transport finding. Record the host class and observed network scope. Remediate
+  with an auth proxy/TLS or private access as appropriate.
+
 - **Forbidden:** GET only.
 
 ## 9. Forbidden mutations

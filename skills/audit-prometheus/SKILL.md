@@ -115,6 +115,14 @@ fi
 rm -f "$HB"
 ```
 
+**Failed-preflight exception for PROM-001:** a nonzero doctor result prevents all
+normal audit phases and scoring. It still permits the read-only PROM-001 access
+classification in the check reference (DNS evidence and already-observed health
+responses), followed by a limited report with the remaining checks `blocked`.
+Missing auth, HTML login pages, timeouts and DNS errors are access evidence,
+never a zero score. Run no other phase until preflight succeeds. Do not turn the
+doctor failure itself into an availability finding.
+
 Then one more cheap live call per plane that the phases below depend on — `GET /-/healthy` (200) and `GET /api/v1/status/buildinfo` (the version string). Exact commands are in [references/prometheus-checks.md](references/prometheus-checks.md) section 1. `/scoutflo:doctor` runs the same `vector(1)` probe standalone.
 
 ## Live-safety gate
@@ -145,9 +153,12 @@ If the resolved URL differs from what `toolkit.yaml` names, stop and report the 
 - API errors are evidence. A `401`/`403` on `/api/v1/*` means the endpoint is behind auth and `token_env` is missing or wrong — an auth-scope problem, never "the rules failed to load" or "the fleet is down". A `200` with an HTML body is a proxy/login page (fail closed). Never convert an upstream error into empty success.
 - Never score from object counts. Four hundred rules and a thousand targets prove nothing; credit comes from signal a responder could act on — a critical service actually `up` and fresh, a paging rule that evaluates without error and reads a metric that exists.
 - A target that exists is not coverage. A `job` present in `/api/v1/targets` with `health="down"` (or `up`-but-stale samples) is a gap, not a pass — a stale target makes dashboards and rules read the last-scraped value and look alive while the pod may be dead.
-- A rule that is loaded is not a working alert. A rule with a non-empty `lastError`, or one whose backing metric stopped being scraped (evaluates to no-data forever), or one whose group evaluates slower than its interval, is the core failure this audit exists to catch (PROM-020/021/022); "a rule exists" is `configured`, not working.
+- A rule that is loaded is not a working alert. A rule with a non-empty `lastError`, or a positive-signal rule whose exact required selector has no data (excluding absence-alert designs), or one whose group evaluates slower than its interval, is the core failure this audit exists to catch (PROM-020/021/022); "a rule exists" is `configured`, not working.
 - The Alertmanager notify path is this audit's boundary: PROM-023 proves Prometheus *has a live Alertmanager to send to and is not dropping notifications*. Whether a page then routes to the right human — the routing tree, silences, receivers, delivery — is `/scoutflo:audit-alertmanager`. Do not re-score routing here.
 - Never print, log, or write a secret: no bearer tokens, auth headers, or webhook URLs, in terminal output or in any output file. A scrape target's `scrapeUrl` or a remote-write queue URL can embed credentials — record host/job/class only, never a full URL with userinfo.
+
+- ❌ "There are 30 rules, so alerting scores 100/100."
+- ✅ "Thirty rules are configured; score only the evaluation, backing-signal and notification evidence actually observed."
 
 ## Metadata Load
 
@@ -220,24 +231,34 @@ AUTH="Authorization: Bearer ${PROM_TOKEN}"; [ -n "$PROM_TOKEN" ] || AUTH="Accept
 if [ -n "${PROM_BASIC_USER:-}" ] && [ -n "${PROM_BASIC_PASS:-}" ]; then AUTH="Authorization: Basic $(printf '%s:%s' "$PROM_BASIC_USER" "$PROM_BASIC_PASS" | base64 | tr -d '\n')"; fi   # prom basic_user_env/basic_pass_env override (basic auth beats bearer)
 SMALL_MAX_OBJECTS="100"    # example, tune to your environment
 MEDIUM_MAX_OBJECTS="500"   # example, tune to your environment
-# Active scrape targets (guard the fetch: an auth failure must surface, not silently count as zero).
-TARGETS=0
-if ! TARGETS="$(curl -fsS --max-time 15 -H "$AUTH" "${PROM_URL}/api/v1/targets?state=active" | jq '.data.activeTargets | length' 2>/dev/null)"; then
-  echo "WARN: GET /api/v1/targets failed — target count unknown; estate sizing is a floor, not the truth."; TARGETS=0
-fi
-# Loaded rules (alerting + recording).
-RULES=0
-if ! RULES="$(curl -fsS --max-time 15 -H "$AUTH" "${PROM_URL}/api/v1/rules" | jq '[.data.groups[].rules[]] | length' 2>/dev/null)"; then
-  echo "WARN: GET /api/v1/rules failed — rule count unknown."; RULES=0
-fi
+PROM_SIZING_FILE="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/prometheus/sizing.json"
+rm -f "$PROM_SIZING_FILE"
+# Capture the read status before parsing; empty stdin must never become count zero.
+TARGET_BODY=$(curl -fsS --max-time 15 -H "$AUTH" "${PROM_URL}/api/v1/targets?state=active") \
+  || { echo "PROM sizing blocked: target read failed; count unknown"; exit 1; }
+RULE_BODY=$(curl -fsS --max-time 15 -H "$AUTH" "${PROM_URL}/api/v1/rules") \
+  || { echo "PROM sizing blocked: rule read failed; count unknown"; exit 1; }
+TARGETS=$(printf '%s' "$TARGET_BODY" | jq -er 'select(.status=="success" and (.data.activeTargets|type=="array")) | .data.activeTargets | length') \
+  || { echo "PROM sizing blocked: invalid target response; count unknown"; exit 1; }
+RULES=$(printf '%s' "$RULE_BODY" | jq -er 'select(.status=="success" and (.data.groups|type=="array")) | [.data.groups[].rules[]] | length') \
+  || { echo "PROM sizing blocked: invalid rule response; count unknown"; exit 1; }
 TOTAL=$((TARGETS + RULES))
 path="large"
 [ "${TOTAL}" -le "${MEDIUM_MAX_OBJECTS}" ] && path="medium"
 [ "${TOTAL}" -le "${SMALL_MAX_OBJECTS}" ] && path="small"
+PROM_SIZING_FILE="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/prometheus/sizing.json"
+mkdir -p "$(dirname "$PROM_SIZING_FILE")"
+PROM_TARGET_KEY=$(printf '%s' "$PROM_URL" | cksum | awk '{print $1 ":" $2}')
+PROM_SIZING_TMP=$(mktemp "${PROM_SIZING_FILE}.XXXXXX")
+trap 'rm -f "$PROM_SIZING_TMP"' EXIT HUP INT TERM
+jq -n --arg key "$PROM_TARGET_KEY" --arg path "$path" --argjson total "$TOTAL" \
+  '{target_key:$key,path:$path,total:$total}' > "$PROM_SIZING_TMP"
+mv "$PROM_SIZING_TMP" "$PROM_SIZING_FILE"
 echo "estate: scrape_targets=${TARGETS} rules=${RULES} scored_objects=${TOTAL} sizing-path=${path}"
+
 ```
 
-Record `estate: {objects: TOTAL, path: path}` in `findings.json` per the [findings schema](../../report-standard/findings-schema.md). Never silently truncate a large estate: if the run judged a subset, the report names what was skipped and the coverage denominators reflect it.
+Record `estate: {objects: TOTAL, path: path}` in `findings.json` per the [findings schema](../../report-standard/findings-schema.md). A failed or malformed sizing read stops sizing as `blocked`; repair access before selecting a path. Never silently truncate a large estate: if the run judged a subset, the report names what was skipped and the coverage denominators reflect it.
 
 ### Scope checkpoint
 
@@ -245,15 +266,24 @@ On a large estate this audit pauses to let you scope before spending tokens, per
 
 ```bash
 set -eu
-# The Estate sizing step above sets TOTAL to this audit's object count.
-TOTAL="${TOTAL:?estate sizing must set TOTAL before the scope checkpoint}"
+# Read the successful census saved by Estate sizing; bind it to this target.
+. "${CLAUDE_PLUGIN_ROOT}/skills/audit-prometheus/scripts/prometheus-http.sh"
+PROM_SIZING_FILE="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/prometheus/sizing.json"
+PROM_URL="${PROM_URL:?HTTP helper must resolve the configured URL}"
+PROM_TARGET_KEY=$(printf '%s' "$PROM_URL" | cksum | awk '{print $1 ":" $2}')
+TOTAL=$(jq -er --arg key "$PROM_TARGET_KEY" 'select(.target_key==$key) | .total | select(type=="number" and .>=0 and .==floor)' "$PROM_SIZING_FILE") \
+  || { echo "run Estate sizing successfully for this target before the checkpoint"; exit 1; }
 . "${CLAUDE_PLUGIN_ROOT}/skills/cli-interactive/lib/cli-interactive.sh"
 . "${CLAUDE_PLUGIN_ROOT}/skills/checkpoint/lib/checkpoint.sh"
 SCOPE="$(checkpoint_load_scope)"                # reuse a saved scope, or "all"
 [ "$SCOPE" = "all" ] || echo "[checkpoint] reusing saved audit scope: ${SCOPE}"
 if [ "${TOTAL}" -ge 501 ]; then
   echo "estate: ${TOTAL} objects (large path) — pausing to let you scope before spending tokens"
-  cli_pause_before_audit "${TOTAL}"             # confirm before a large run
+  if [ "$TOTAL" -ge 1000 ]; then
+    cli_pause_before_audit "$TOTAL"
+  else
+    cli_confirm_proceed "Continue this scoped audit of ${TOTAL} objects?" || exit 1
+  fi
   cli_prompt_exclude_services                   # offer service exclusions
   echo "[checkpoint] narrow scope any time with /scoutflo:checkpoint; reset with /scoutflo:checkpoint --reset-scope"
 fi
@@ -267,11 +297,14 @@ The scope checkpoint narrows a *large* estate. This guardrail catches the opposi
 
 ```bash
 set -eu
-# Set from the Phase-2 reads.
-ACTIVE_TARGETS="${ACTIVE_TARGETS:-0}"   # count of active scrape targets
-UP_SERIES="${UP_SERIES:-0}"             # count of series returned by the `up` query
-RULE_COUNT="${RULE_COUNT:-0}"           # count of loaded rules
-PROM_REACHABLE="${PROM_REACHABLE:-1}"   # 1 = vector(1) succeeded this run
+. "${CLAUDE_PLUGIN_ROOT}/skills/audit-prometheus/scripts/prometheus-http.sh"
+TARGET_BODY=$(pq_json '/api/v1/targets?state=active') || exit 1
+UP_BODY=$(pqq_json 'up') || exit 1
+RULE_BODY=$(pq_json '/api/v1/rules') || exit 1
+ACTIVE_TARGETS=$(printf '%s' "$TARGET_BODY" | jq -er '.data.activeTargets | select(type=="array") | length') || exit 1
+UP_SERIES=$(printf '%s' "$UP_BODY" | jq -er '.data.result | length') || exit 1
+RULE_COUNT=$(printf '%s' "$RULE_BODY" | jq -er '.data.groups | select(type=="array") | [.[].rules[]] | length') || exit 1
+PROM_REACHABLE=1   # successful JSON reads above establish API access in this shell
 if [ "${PROM_REACHABLE}" -eq 1 ] && [ "${ACTIVE_TARGETS}" -eq 0 ] && [ "${UP_SERIES}" -eq 0 ]; then
   echo "[guard] Prometheus is reachable but has ZERO active scrape targets and up returns zero series — visibility/config gap, NOT a confident 0 (PROM-007)"
   echo "[guard] scrape config may be empty, service discovery broken, or this is a query-only frontend (Thanos/Mimir query) with no local scrape; confirm before scoring coverage as failed"
@@ -283,9 +316,9 @@ fi
 
 Behavior this enforces:
 
-- **Reachable Prometheus, zero targets and zero `up` series:** do **not** score PROM-010 (target health), PROM-011 (coverage/freshness), and PROM-012 (scrape-config limits) as a confident `0/100`, and do not score them a vacuous high from an empty set — note PROM-012's `..._exceeded_*_total` counters return empty with zero targets, which is *not* a clean pass. Mark **all three** `blocked` with the visibility-gap reason so the entire weight-20 "Scrape targets and coverage" category is unassessable and drops out on renormalization (leaving one member scoreable would let PROM-012 register a vacuous coverage sub-score — exactly the empty-set inflation this guardrail exists to prevent). **Keep TSDB health (PROM-030/031/032) and Security posture (PROM-050/051) included** (they read the server, not the fleet), renormalize per [severity-and-scoring.md](../../report-standard/severity-and-scoring.md), and emit **PROM-007** naming the gap (empty scrape config / broken service discovery / a query-only frontend) and the fix. Keeping server-plane categories included means at least one scored category always remains, which `check-findings.sh` requires.
+- **Reachable Prometheus, zero targets and zero `up` series:** mark PROM-007 and PROM-010/011/012 `blocked` with the visibility-gap reason; empty sets do not establish coverage. Emit the informational PROM-007 finding describing the observed gap without inventing its cause. Assess TSDB and security separately and include them only if their reads support a verdict. If no category can be assessed, v2 reports `overall: null` and zero assessment coverage; never force one included category to manufacture a score.
 - **Zero loaded rules:** mark the whole rule-engine category (PROM-020/021/022/023) `not-in-scope` with `not_in_scope_reason: "inapplicable"` and the reason — a scrape-only Prometheus with rules run elsewhere is a real topology, not a confident zero — and renormalize.
-- **No remote-write self-metrics** (a pure local-TSDB Prometheus): mark PROM-040 `not-in-scope` with `not_in_scope_reason: "inapplicable"`, renormalize; never a fail.
+- **No remote-write self-metrics:** this alone is inconclusive. Mark PROM-040 `not-in-scope` with `not_in_scope_reason: "inapplicable"` only when a successful live config read explicitly proves remote-write is empty; otherwise `blocked`.
 - **Never** write a confident `0/100`, a vacuously-high score, or an end-to-end claim on a tripped guardrail.
 
 ## Phase 2: Read-only inventory
@@ -308,7 +341,7 @@ Prometheus owns the metrics **collection and rule-evaluation** plane. It does **
 
 Commands in [references/prometheus-checks.md](references/prometheus-checks.md) section 3.
 
-- **PROM-001 (reachable and healthy):** `GET /-/healthy` is 200, `vector(1)` returns `status=success`, `buildinfo` returns a version. PROM-001 down is the root of a cascade, not a yes/no: when Prometheus is unreachable, every rule it loads evaluates to no-data and pages nothing, and every service it scrapes is unmonitored — state the blast radius (the count of rules and critical services that go dark), then treat it as an availability incident.
+- **PROM-001 (reachable and healthy):** use the verdict table in reference section 3 before writing a finding. Healthy API responses are `pass`; a reachable server with verified unhealthy responses is `fail`. Timeout, TLS/auth refusal, missing `dig`, or inconclusive DNS evidence is `blocked`, with the access unlock named. Authoritative DNS absence plus corroborated decommissioning is `not-in-scope` with `not_in_scope_reason: target-gone`; recommend retargeting/removing the stale config, never restoring a deleted server. DNS absence alone does not prove an infrastructure deletion. Only the verified unhealthy path gets availability-incident wording; name a blast radius only from rules/targets actually observed. This verdict precedence overrides generic outage advice elsewhere.
 - **PROM-002 (config reload succeeded):** query `prometheus_config_last_reload_successful` — a `0` means the last attempted config reload **failed**, so the running config is the last-good one and every change since (new rules, new targets, new remote-write) is silently not applied. Read `prometheus_config_last_reload_success_timestamp_seconds` for how long it has been stale. A failed reload is a high finding: the operator believes a change is live when it is not.
 - **PROM-003 (runtime and retention posture):** `runtimeinfo` (`storageRetention`, `corruptionCount`) and `flags` (`--storage.tsdb.retention.time`/`.size`) — record the retention window and flag a non-zero `corruptionCount` (feeds PROM-031). A retention far shorter than the team's stated need is a data-availability posture note.
 
@@ -316,17 +349,17 @@ Commands in [references/prometheus-checks.md](references/prometheus-checks.md) s
 
 For each critical service from Phase 1, and across all targets, query the confirmed reads (commands in section 4):
 
-- **PROM-010 (targets healthy):** `GET /api/v1/targets?state=active` — group `health != "up"` by `scrapePool`/`job` with the `lastError`. A down target's data goes **stale, not absent**: dashboards and rules read the last-scraped value and look alive while the pod may be dead. Name the affected job/service in `affected`; a saturation or error on a down target is invisible until scrape resumes.
+- **PROM-010 (targets healthy):** `GET /api/v1/targets?state=active` — group `health != "up"` by `scrapePool`/`job` with the `lastError`. A failed scrape interrupts fresh collection; existing series may become stale or absent depending on the engine and query window. Inspect the actual series and sample age before claiming dashboard or alert impact. Name the affected job/service in `affected`; a saturation or error on a down target is invisible until scrape resumes.
 - **PROM-011 (coverage + freshness):** `up` per critical-service job must be present and `== 1`; `time() - timestamp(up)` gives the real per-target sample age. A critical service with no `up` target at all (zero series) is a coverage gap; a target that is `up == 1` but whose newest sample is minutes old is an **ingestion-lag** gap (every rule with `for: Nm` on it pages ~N+lag late) — distinct from PROM-010, and the computed delay *is* the blast radius. Zero `up` series everywhere routes to PROM-007, not a confident PROM-011 fail.
-- **PROM-012 (scrape-config limits):** `increase(...[1h]) > 0` on `prometheus_target_scrapes_exceeded_sample_limit_total`, `prometheus_target_scrape_pool_exceeded_target_limit_total`, `prometheus_target_scrapes_exceeded_body_size_limit_total`, `prometheus_target_scrapes_sample_out_of_order_total`. A target hitting its `sample_limit` has series **silently dropped** — the target reads `up == 1` (PROM-010/011 pass) while data is thrown away. These are **global** counters (labelled by the Prometheus instance, not the scraped job), so a non-zero value means at least one target breached that limit in the window — name the limit that fired and cross-reference which scrape configs set a `sample_limit`/`target_limit`/`body_size_limit` to find the culprit job (this counter alone cannot name it).
+- **PROM-012 (scrape-config limits):** inspect increases in the published scrape-limit and out-of-order counters. Exceeded sample/body-size limits fail the affected scrape; they do not imply `up == 1`. Distinguish whole-scrape rejection from discarded individual out-of-order samples. A global counter alone does not identify a job: correlate it with target errors and the live scrape configuration before naming the affected service.
 
 ## Phase 6: Rule-engine health (PROM-020, PROM-021, PROM-022, PROM-023) — flagship
 
 This is the plane no scanner assembles into one verdict. Via `GET /api/v1/rules`, `/api/v1/alertmanagers`, and the rule self-metrics (commands in section 5). Detect the engine first (Prometheus vs vmalert vs Mimir ruler) — the self-metric names differ, and an empty self-metric result **on the wrong engine** is `not observable`, never `healthy`.
 
-- **PROM-020 (rules load and evaluate error-free):** rules with `health != "ok"` or a non-empty `lastError` have fired zero times and never will until the expression is fixed. For each, resolve `.name`/`.labels`/`.query` to a topology service, read `.labels.severity`, and use `.lastEvaluation` to say how long it has been broken — "`HighErrorRate{service=checkout}` severity=page has carried a PromQL parse error for 3 days; a spike tonight fires nothing." Blast radius is the count of paging rules broken and the critical services thereby left with a dead rule.
+- **PROM-020 (rules load and evaluate error-free):** a non-ok health or nonempty `lastError` is an observed evaluation failure. Resolve the rule to an observed service and severity. `lastEvaluation` is the latest attempt, not the first failure: duration and prior firing require historical evidence. Report the rules currently affected and avoid inventing how long paging has been impaired.
 - **PROM-021 (rules evaluate on time):** a rule group whose `evaluationTime` exceeds its `interval` (confirm with `prometheus_rule_group_last_duration_seconds > prometheus_rule_group_interval_seconds`, and `increase(prometheus_rule_evaluation_failures_total[1h]) > 0`) evaluates late and can skip windows — an SLO burn-rate page with no `lastError` (PROM-020 passes) can still be silently late here. Name the group and the over-interval margin.
-- **PROM-022 (rules are backed by live metrics — the correlation flagship):** a loaded, error-free alerting rule whose backing metric stopped being scraped evaluates to **no-data forever and pages nobody** — the one failure that looks fine in `/api/v1/rules` (health=ok) and fine in `/api/v1/targets`, but is dead. For a sample of alerting rules (all `severity=page`/critical-service ones), extract the metric names from `.query` and confirm each returns data now (`count(<metric>) > 0`) and is fresh. Also record **rule presence**: an expected paging rule for a critical service that does not exist at all (ALR-001 lineage) is a PROM-022 gap. This chains PROM-011 (the metric's scrape) → PROM-020 (the rule's health) → PROM-023 (its notify path).
+- **PROM-022 (backing metrics and rule presence):** inspect each full rule and its exact label selectors. Missing input can disable a positive-signal alert, but it is the intended trigger of `absent()`/`absent_over_time()` alerts. An empty full expression may mean its threshold is not breached. Mark unsupported or ambiguous expression analysis `blocked`; never infer a dead rule from a bare metric query. Compare required rule ownership against the declared critical services.
 - **PROM-023 (the notify path is live):** `GET /api/v1/alertmanagers` must list at least one **active** Alertmanager (Prometheus has somewhere to send), and `increase(prometheus_notifications_dropped_total[1h])` must be `0` with `prometheus_notifications_queue_length` well below capacity — a rule can fire and still page nobody if Prometheus has no Alertmanager configured or is dropping notifications. This is the **seam**: PROM-023 proves the Prometheus→Alertmanager hop exists and is not dropping; the routing tree, silences, receivers, and delivery to a human are `/scoutflo:audit-alertmanager`. If no alerting rules and no Alertmanager are configured, PROM-023 is `not-in-scope`, not a fail.
 
 ## Phase 7: TSDB cardinality and storage (PROM-030, PROM-031, PROM-032)
@@ -339,16 +372,16 @@ From `GET /api/v1/status/tsdb` and the `prometheus_tsdb_*` self-metrics (command
 
 ## Phase 8: Remote-write and federation (PROM-040)
 
-Only when the remote-write self-metrics exist (a pure local-TSDB Prometheus has none → PROM-040 `not-in-scope`). Commands in section 7:
+Missing self-metrics alone do not establish scope. A successful live config read must explicitly prove remote-write is empty before PROM-040 is `not-in-scope`; denied or inconclusive reads are `blocked`. Commands in section 7:
 
-- **PROM-040 (remote-write health):** `prometheus_remote_storage_samples_pending` (live backlog), `prometheus_remote_storage_shards` vs `prometheus_remote_storage_shards_max` (queue saturation), `increase(prometheus_remote_storage_samples_failed_total[...])` and `..._samples_dropped_total`, and the write lag `prometheus_remote_storage_highest_timestamp_in_seconds - prometheus_remote_storage_queue_highest_sent_timestamp_seconds`. A backlogged, saturated, or failing remote-write means long-term storage (Mimir/Thanos/VictoriaMetrics) is **missing samples right now** — dashboards and long-range/burn-rate alerts that read the remote store go blind even while the local Prometheus looks fine. Name the queue and the observed backlog/lag.
+- **PROM-040 (remote-write health):** `prometheus_remote_storage_samples_pending` (live backlog), `prometheus_remote_storage_shards` vs `prometheus_remote_storage_shards_max` (queue saturation), `increase(prometheus_remote_storage_samples_failed_total[...])` and `..._samples_dropped_total`, and the write lag `prometheus_remote_storage_highest_timestamp_in_seconds - prometheus_remote_storage_queue_highest_sent_timestamp_seconds`. A backlogged, saturated, or failing remote-write indicates delivery pressure or errors; measure remote-store ingestion freshness before claiming missing samples or broken dashboards. Name the queue and the observed backlog/lag.
 
 ## Phase 9: Security posture (PROM-050, PROM-051)
 
 Read-only inspection (commands in section 8). Prometheus has no native authz, so posture is mostly *what is exposed*:
 
-- **PROM-050 (destructive-API exposure):** from `GET /api/v1/status/flags` — `--web.enable-admin-api` and `--web.enable-lifecycle`. Admin API enabled means `POST /api/v1/admin/tsdb/delete_series` and `.../clean_tombstones` are **reachable** (anyone who can reach the API can delete series); lifecycle enabled means `POST /-/reload` and `POST /-/quit` are reachable (reload/shutdown). This audit **reads the flag; it never calls the endpoint.** Enabled + unauthenticated + non-loopback host = critical exposure; enabled behind auth = a medium posture note.
-- **PROM-051 (transport and auth exposure):** is `prometheus.url` `https` (TLS on the wire)? Is the API reachable with **no** credential on a non-loopback host (an unauthenticated public Prometheus leaks every metric — and metric labels can carry sensitive values)? Record the host class (loopback / private / public) and TLS state; a plaintext, unauthenticated, publicly-reachable Prometheus is a real posture finding.
+- **PROM-050 (destructive-API posture):** read the admin/lifecycle flags without calling any mutation endpoint. An enabled flag establishes configured capability, not external reachability: a reverse proxy may deny those paths. Report potential exposure until read-only access-policy evidence establishes the route and authorization scope; classify severity from that evidence.
+- **PROM-051 (transport and auth exposure):** validate an unauthenticated `vector(1)` JSON query and classify the network path actually observed. A 200 HTML response is inconclusive, and access over a VPN/tunnel does not prove public exposure. Report plaintext on an untrusted network separately; do not infer that every metric is exposed from a constant-vector query.
 
 ## Phase 9c: Scoutflo Topology Readiness
 
@@ -423,7 +456,8 @@ sh "${CLAUDE_PLUGIN_ROOT}/report-standard/check-report.sh" "$OUT/report.md"
 # Append the derived history row after findings/report validation. A same-date
 # rerun replaces that date's row instead of duplicating it.
 TARGET_DIR="$(dirname "$OUT")"
-RESOLVED="0"   # fixed count from this run's delta; 0 on the first run
+PREV=$(find "$TARGET_DIR" -mindepth 1 -maxdepth 1 -type d -name '[0-9]*-[0-9]*-[0-9]*' | awk -F/ -v today="$RUN_DATE" '$NF < today' | sort -r | head -1)
+RESOLVED=$(sh "${CLAUDE_PLUGIN_ROOT}/skills/audit-prometheus/scripts/resolved-count.sh" "$OUT/findings.json" "${PREV:+$PREV/findings.json}")
 LINE="$(jq -c --arg d "$RUN_DATE" --argjson resolved "$RESOLVED" \
   '{run_date:$d, skill:"audit-prometheus", overall:.score.overall, state:.score.state,
     scoring_model:.score.scoring_model, check_set:.score.check_set,
@@ -497,6 +531,17 @@ When invoked by `audit-all`, skip the Slack brief; the orchestrator sends exactl
 | `alertmanager` | `GET /api/v1/alertmanagers` | `state` (active/dropped) — host/class only, never a URL with userinfo |
 | `remote_write` | remote-write self-metrics | `queue`, `shards`, `pending`; never the remote URL if it carries userinfo |
 
+For `target` and `alert_rule` items, populate `covers` only when observed labels
+(`service`, `service_name`, or a verified job-to-service mapping) identify the
+canonical topology service. Do not infer a service from an arbitrary job name or
+parse a PromQL selector as proof of its returned series. Use `"-"` when no mapping
+is established and report that part of the coverage join as unassessed. For
+`alert_rule.routes_to`, record only the next-hop Alertmanager host confirmed by
+`/api/v1/alertmanagers`; the eventual receiver comes from the alert-routing audit.
+Use `"none"` only after a successful response proves no next hop; omit the field
+on a denied/unknown read. Apply the same evidence rules when the detected rule
+engine is vmalert; never manufacture Prometheus-only fields or downstream delivery.
+
 Every row traces to a raw object read this run; an empty estate is `items: []` with `total: 0`, reported honestly and paired with the PROM-007 guardrail. Redaction applies (`secret-redaction.md`): capture by key/name/class only — never a token, a webhook URL, or a URL with embedded credentials.
 
 ## Remediation pointers
@@ -505,10 +550,11 @@ This audit has no setup lane; every fix is an inline, read-the-state-first actio
 
 | Finding area | Inline fix |
 | --- | --- |
+| Reachability classification (PROM-001) | For `blocked`, restore the read path or install the missing DNS tool and re-run. For a corroborated `target-gone`, confirm the intended replacement and update the stale config. Only a verified unhealthy server calls for service restoration; re-check health and query success afterwards. |
 | Failed config reload (PROM-002) | Read `journalctl`/pod logs for the reload error, fix the offending `prometheus.yml` / rule file it names, then reload (`kill -HUP`, `POST /-/reload` if lifecycle is enabled, or restart) — and re-check `prometheus_config_last_reload_successful == 1` |
 | Down / stale scrape target (PROM-010, PROM-011) | Fix the scrape for the named job — the ServiceMonitor/PodMonitor selector, the target port, a relabel drop rule, or the exporter itself; confirm the target returns to `health="up"` with a fresh `lastScrape` |
 | Scrape limit dropping series (PROM-012) | Raise the `sample_limit`/`target_limit`/`body_size_limit` in the scrape config for the named job, or reduce what the target exposes; re-check the `..._exceeded_*_total` counter stops increasing |
-| Broken / late / dead rule (PROM-020, PROM-021, PROM-022) | Fix the named rule's PromQL (the `lastError` says what); for a late group raise its `interval` or split it; for a no-data rule (PROM-022) fix the *scrape* of the metric its expression reads, then confirm `count(<metric>) > 0` and the rule's `health` returns to `ok` |
+| Broken / late / missing-input rule (PROM-020, PROM-021, PROM-022) | Fix the evidenced expression error or late group. For positive-signal rules, restore the missing exact selector and verify its service scope and evaluation. For absence alerts, verify the intended absence behavior instead; an empty selector is not automatically a broken rule. |
 | No live Alertmanager / dropped notifications (PROM-023) | Configure `alerting.alertmanagers` in `prometheus.yml` (or fix the discovery), confirm `/api/v1/alertmanagers` lists it active and `prometheus_notifications_dropped_total` stops rising; the routing tree itself is `/scoutflo:audit-alertmanager` |
 | High cardinality / churn (PROM-030, PROM-032) | Drop the offending high-cardinality label with a `metric_relabel_configs` `labeldrop`/`drop`, or fix the instrumentation emitting IDs as labels; re-read `/api/v1/status/tsdb` to confirm the series count falls |
 | WAL / compaction failure (PROM-031) | Investigate the storage backend (disk full, permissions, corruption) from the TSDB error logs; a persistent `wal_corruptions_total` may need a controlled restart to replay — treat as a storage incident |
@@ -533,16 +579,16 @@ All thresholds and windows named in the checks (`RECENT_WINDOW`, `FRESH_LAG_S`, 
 
 | Failure | Prevention |
 | --- | --- |
-| A target exists, so coverage scored `pass` | Coverage is `up == 1` **and** a fresh sample per critical-service job, not target presence; a `health="down"` target reads stale, not absent (PROM-010/011) |
+| A target exists, so coverage scored `pass` | Coverage is `up == 1` **and** a fresh sample per critical-service job, not target presence; a `health="down"` target requires checking actual series and sample age (PROM-010/011) |
 | Down target read as "no data" | Distinguish a `health="down"`/absent target (PROM-010) from an `up==1` target whose `time() - timestamp(up)` lag is growing (PROM-011) |
-| Dropped series missed because `up==1` | A target at its `sample_limit` reads `up==1` while series are silently dropped — check the `..._exceeded_sample_limit_total` counter (PROM-012) |
-| A loaded rule counted as a working alert | `health="ok"` is not enough: a rule whose backing metric stopped being scraped evaluates to no-data forever — confirm `count(<metric-in-the-query>) > 0` (PROM-022) |
+| Scrape-limit failure misread as healthy collection | Exceeded sample/body-size limits fail the scrape; correlate counters with target errors and configuration before assigning impact (PROM-012) |
+| A loaded rule counted as a working alert | Evaluate the full expression and exact selectors; distinguish positive-signal and absence-alert designs. Rule health alone never proves paging behavior (PROM-022). |
 | Rule lag missed because there was no `lastError` | A group whose `evaluationTime > interval` fires late even with `health="ok"` — check the group timing and `prometheus_rule_evaluation_failures_total` (PROM-021) |
 | Self-metric read on the wrong engine as "healthy" | vmalert and the Mimir ruler expose *different* rule/remote-write metrics — detect the engine first; an empty result on the wrong engine is `not observable`, never `healthy` |
 | Failed config reload missed | The running config silently stays the last-good one — read `prometheus_config_last_reload_successful`; a `0` means every change since is not applied (PROM-002) |
 | Cardinality assumed from metric names | Read `/api/v1/status/tsdb` for the real `seriesCountByMetricName`/`labelValueCountByLabelName`; a point-in-time snapshot understates churn — also read the head-series-created rate (PROM-030/032) |
-| Remote-write scored on a local-TSDB Prometheus | No `prometheus_remote_storage_*` self-metrics means remote-write is not configured → PROM-040 `not-in-scope`, never a fail |
+| Remote-write scored on a local-TSDB Prometheus | Missing self-metrics are inconclusive; only explicit live-config absence makes PROM-040 `not-in-scope`; denied reads stay `blocked` |
 | The destructive admin API exercised to "test" it | Never `POST /api/v1/admin/tsdb/delete_series` or `/-/reload` or `/-/quit` — read the `--web.enable-admin-api`/`--web.enable-lifecycle` flags instead (PROM-050) |
-| An empty Prometheus scored a confident 0 | Reachable with zero targets and zero `up` series trips PROM-007 — block coverage/rules, keep TSDB+security, renormalize, never a confident 0/100 |
+| An empty Prometheus scored a confident 0 | Reachable with zero targets and zero `up` series trips PROM-007 — block the unobserved coverage, assess server categories separately, and permit overall null if nothing is assessable |
 | Alertmanager routing re-scored here | PROM-023 proves only that Prometheus has a live AM and isn't dropping notifications; the routing tree/silences/receivers/delivery are `/scoutflo:audit-alertmanager` |
 | Token or credentialed URL leaked into evidence | Record job/host/class only; never the bearer token, a `scrapeUrl` with userinfo, or a remote-write URL with embedded credentials |

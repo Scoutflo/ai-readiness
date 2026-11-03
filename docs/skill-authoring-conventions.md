@@ -407,4 +407,4 @@ None of the following may appear anywhere in the repo, including examples, comme
 - Boilerplate blocks copied from internal skill packs, and cross-references to skills that do not ship in this plugin. Every cross-reference must resolve to a skill or doc in this repo.
 - One environment's operational numbers presented as defaults. Regions, thresholds, fleet sizes, and retention figures from any real setup must become placeholders or be framed as "example, tune to your environment" (see the thresholds rule above).
 
-CI runs a secrets and identifier scan plus `claude plugin validate --strict` on every pull request; a hit blocks merge. Treat the scanner as a backstop, not the gate: the gate is that you never typed it in the first place.
+CI runs a secrets and identifier scan plus `sh ci/plugin-validate.sh .` (strict validation of both published manifests) on every pull request; a hit blocks merge. Treat the scanner as a backstop, not the gate: the gate is that you never typed it in the first place.

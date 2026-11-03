@@ -7,11 +7,13 @@
 # named selftest is also excluded: the maintainer's LOCAL test harness (kept
 # outside this repo) writes fabricated leak vectors to temp dirs, so excluding an
 # adjacent selftest/ keeps a scan clean. These vectors are never real secrets.
+# Linked worktrees store their Git metadata pointer in a .git FILE. It is not
+# plugin content and must be excluded just like a checkout's .git directory.
 set -eu
 DIR="${1:-.}"
 FAIL=0
-grep -rnE '/Users/[a-z]+/|/home/[a-z]+/|[A-Z]:\\\\Users\\\\' "$DIR" --exclude-dir=.git --exclude-dir=ci --exclude-dir=selftest && FAIL=1
-grep -rnE '[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.(com|dev|io|cloud)' "$DIR" --exclude-dir=.git --exclude-dir=ci --exclude-dir=selftest --exclude=README.md --exclude=marketplace.json --exclude=plugin.json && FAIL=1
+grep -rnE '/Users/[a-z]+/|/home/[a-z]+/|[A-Z]:\\\\Users\\\\' "$DIR" --exclude-dir=.git --exclude=.git --exclude-dir=ci --exclude-dir=selftest && FAIL=1
+grep -rnE '[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.(com|dev|io|cloud)' "$DIR" --exclude-dir=.git --exclude=.git --exclude-dir=ci --exclude-dir=selftest --exclude=README.md --exclude=marketplace.json --exclude=plugin.json && FAIL=1
 # 123456789012 is AWS's own canonical example account ID, used throughout AWS's
 # documentation and intentionally throughout this toolkit's AWS skills as the
 # placeholder account ID; any other 12-digit run is still flagged.
@@ -22,8 +24,8 @@ grep -rnE '[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.(com|dev|io|cloud)' "$DIR" --exclud
 # A period, hyphen, or hex digit on either side disqualifies the run; a real AWS
 # account id standalone or in an ARN (arn:aws:iam::987654321098:role/x, bounded
 # by ':') still matches. POSIX ERE only — no PCRE lookaround (Linux CI + /bin/sh).
-grep -rnE '(^|[^-.0-9A-Fa-f])[0-9]{12}([^-.0-9A-Fa-f]|$)' "$DIR" --exclude-dir=.git --exclude-dir=ci --exclude-dir=selftest | grep -v '123456789012' && FAIL=1
-grep -rnE '\b10\.[0-9]+\.[0-9]+\.[0-9]+\b|\b192\.168\.[0-9]+\.[0-9]+\b' "$DIR" --exclude-dir=.git --exclude-dir=ci --exclude-dir=selftest && FAIL=1
-grep -rnE '(token|secret|password|api_key)["'"'"']?\s*[:=]\s*["'"'"'][A-Za-z0-9_\-]{16,}' "$DIR" --exclude-dir=.git --exclude-dir=selftest && FAIL=1
-grep -rnE 'NRAK-[A-Za-z0-9]{20,}' "$DIR" --exclude-dir=.git --exclude-dir=selftest && FAIL=1
+grep -rnE '(^|[^-.0-9A-Fa-f])[0-9]{12}([^-.0-9A-Fa-f]|$)' "$DIR" --exclude-dir=.git --exclude=.git --exclude-dir=ci --exclude-dir=selftest | grep -v '123456789012' && FAIL=1
+grep -rnE '\b10\.[0-9]+\.[0-9]+\.[0-9]+\b|\b192\.168\.[0-9]+\.[0-9]+\b' "$DIR" --exclude-dir=.git --exclude=.git --exclude-dir=ci --exclude-dir=selftest && FAIL=1
+grep -rnE '(token|secret|password|api_key)["'"'"']?\s*[:=]\s*["'"'"'][A-Za-z0-9_\-]{16,}' "$DIR" --exclude-dir=.git --exclude=.git --exclude-dir=selftest && FAIL=1
+grep -rnE 'NRAK-[A-Za-z0-9]{20,}' "$DIR" --exclude-dir=.git --exclude=.git --exclude-dir=selftest && FAIL=1
 [ "$FAIL" -eq 0 ] && echo CLEAN || { echo "LEAK PATTERNS FOUND"; exit 1; }
