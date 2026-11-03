@@ -60,7 +60,7 @@ cat > "$WORK/mine.md" <<'MD'
 ## Cost Sensitivity
 - **Primary:** low
 MD
-bc_import_file "$WORK/mine.md" >/dev/null
+bc_import_file "$WORK/mine.md" --confirm-replace >/dev/null
 grep -q 'Acme' "$WORK/.scoutflo/business_context.md" || fail "imported file not adopted as SSOT"
 [ "$(jq -r '.cost_sensitivity' "$J")" = "low" ] || fail "derived json not refreshed after import (got $(jq -r .cost_sensitivity "$J"))"
 echo "PASS"

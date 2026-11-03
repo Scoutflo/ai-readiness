@@ -284,49 +284,135 @@ The context selects the cluster; there is no ambient default in this audit. The 
 
 ## Estate sizing
 
-Count before judging, and declare the path in the terminal output:
+Count before judging. The helper makes one explicitly scoped, time-bounded
+Kubernetes list read and persists **only kind, namespace and name** under the
+selected target's `sizing.json`. It preserves kubectl's own exit status: a denied,
+failed or malformed read records `blocked`, with count unknown, and stops the
+scope checkpoint. No failed read becomes an empty estate.
 
 ```bash
 set -eu
-CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
-# Resolve the CURRENT kubernetes target (single block or SCOUTFLO_TARGET-selected list item).
-TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
-K8S_N=$(sh "$TT" "$CFG" kubernetes count)
-K8S_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$K8S_N" ]; do [ "$(sh "$TT" "$CFG" kubernetes label "$_i")" = "$SCOUTFLO_TARGET" ] && { K8S_IDX=$_i; break; }; _i=$((_i+1)); done; fi
-[ "$(sh "$TT" "$CFG" kubernetes kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" kubernetes label "$K8S_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no kubernetes target in $CFG; labels: $(sh "$TT" "$CFG" kubernetes labels | tr '\n' ' ')"; exit 1; }
-KUBE_CONTEXT=$(sh "$TT" "$CFG" kubernetes get "$K8S_IDX" context)
-OBJ="$(kubectl --context "$KUBE_CONTEXT" get pods,deploy,sts,ds,svc,networkpolicy,pdb -A -o json 2>/dev/null | jq '.items | length')"
-if   [ "$OBJ" -lt 200 ];  then P=small
-elif [ "$OBJ" -lt 1000 ]; then P=medium
-elif [ "$OBJ" -lt 4000 ]; then P=large
-else P=xlarge; fi
-echo "estate: ${OBJ} objects, ${P} path"
+sh "${CLAUDE_PLUGIN_ROOT}/skills/audit-kubernetes/scripts/run-state.sh" size
 ```
 
-Record `estate: {objects, path}` in `findings.json`. On `xlarge`, scope by namespace (ask the user which namespaces matter) rather than listing every object cluster-wide in one pass.
+The defaults are small ≤100, medium 101–500, large 501–2000 and xlarge >2000
+objects. The count includes the workload, namespace, RBAC, network and resource
+policy identities needed by the catalog. Record the saved `objects` and `path`
+in `findings.json.estate` (use `run-state.sh meta` for a resumed large run's
+original sizing); name the selected namespace scope and excluded
+namespaces separately. On xlarge, agree a namespace scope before detailed reads.
 
 ### Scope checkpoint
 
-On a large estate this audit pauses to let you scope before spending tokens, per the shared [estate-sizing scope checkpoint](../../report-standard/estate-scope-checkpoint.md). After the sizing step above computes the object count, run the shared checkpoint block:
+This block works in a fresh shell: it reloads and checks the target/context-bound
+sizing file, rather than relying on a prior shell's `OBJ`. A resumable run keeps
+its original scope, object identities, date and completed rows. Review its ID
+before selecting it; a different target/context can never reuse those rows.
+The shared service-exclusion checkpoint is not a Kubernetes namespace selector.
 
 ```bash
 set -eu
-# audit-kubernetes sizing counts objects into OBJ, not TOTAL; set TOTAL from the estate object count computed above.
-TOTAL="${OBJ:?estate sizing must set OBJ (the estate object count) before the scope checkpoint}"
-: "${TOTAL:?estate sizing must set TOTAL before the scope checkpoint}"
-. "${CLAUDE_PLUGIN_ROOT}/skills/cli-interactive/lib/cli-interactive.sh"
-. "${CLAUDE_PLUGIN_ROOT}/skills/checkpoint/lib/checkpoint.sh"
-SCOPE="$(checkpoint_load_scope)"                # reuse a saved scope, or "all"
-[ "$SCOPE" = "all" ] || echo "[checkpoint] reusing saved audit scope: ${SCOPE}"
-if [ "${TOTAL}" -ge 501 ]; then
-  echo "estate: ${TOTAL} objects (large path) — pausing to let you scope before spending tokens"
-  cli_pause_before_audit "${TOTAL}"             # confirm before a large run
-  cli_prompt_exclude_services                   # offer service/region exclusions
-  echo "[checkpoint] narrow scope any time with /scoutflo:checkpoint; reset with /scoutflo:checkpoint --reset-scope"
+STATE="${CLAUDE_PLUGIN_ROOT}/skills/audit-kubernetes/scripts/run-state.sh"
+SIZING="$(sh "$STATE" sizing)"
+TOTAL="$(printf '%s' "$SIZING" | jq -r '.objects')"
+RESUMABLE="$(sh "$STATE" resumable)"
+if [ -n "${SCOUTFLO_K8S_RUN_ID:-}" ]; then
+  sh "$STATE" begin all "$SCOUTFLO_K8S_RUN_ID"
+  exit 0
 fi
+if [ -n "$RESUMABLE" ]; then
+  printf 'Unfinished run IDs:\n%s\nResume which ID? ' "$RESUMABLE"
+  read -r RESUME_ID
+  [ -n "$RESUME_ID" ] || { echo 'Choose an existing run before continuing.'; exit 1; }
+  sh "$STATE" begin all "$RESUME_ID"
+  exit 0
+fi
+SCOPE=all
+if [ "$TOTAL" -ge 501 ]; then
+  . "${CLAUDE_PLUGIN_ROOT}/skills/cli-interactive/lib/cli-interactive.sh"
+  # The shared helper pauses at 1000; explicitly cover 501–999 too.
+  if [ "$TOTAL" -lt 1000 ]; then
+    cli_confirm_proceed "Audit $TOTAL Kubernetes objects with bounded batches?"
+  else
+    cli_pause_before_audit "$TOTAL"
+  fi
+  printf '%s' "$SIZING" | jq -r '[.items[] | if .kind=="Namespace" then .name else .namespace end | select(length>0)] | unique | "Namespaces: " + join(", ")'
+  printf 'Namespaces to include (comma-separated, or all): '
+  read -r SCOPE
+  [ -n "$SCOPE" ] || { echo 'An explicit namespace scope is required.'; exit 1; }
+fi
+sh "$STATE" begin "$SCOPE"
 ```
 
-The large-path phases then run against the scoped set; the report names anything scoped out.
+### Large/xlarge worklist and resume
+
+Small/medium runs take one pass without a worklist. Large/xlarge runs keep
+`runs/<run-id>/meta.json`, `worklist.tsv`, `receipts/` and `draft/` under the
+selected target directory. The saved scope includes only the selected
+namespaces plus cluster-wide RBAC objects once. Namespace-scoped checks stay
+inside that scope; cluster-wide bindings are read for their relationship to the
+selected workloads. The final report names excluded namespaces and any unknown
+cross-scope correlations rather than claiming full-cluster coverage.
+
+For each batch, run Phases 2–7 on **only these object identities**, using the
+catalog's projections and joins. Replace its illustrative cluster-wide list
+commands with namespace/object-scoped reads for these identities; do not repeat
+all `-A` reads for every batch. Read the server version once for this run, then
+bank that fact in the run evidence. Reuse saved RBAC/policy evidence across
+related objects. Cap a batch at 100 identities; choose a smaller number for
+large workload specs. This is judgment by Claude using the reference checks;
+the helper only tracks progress and validates evidence receipts.
+
+```bash
+set -eu
+sh "${CLAUDE_PLUGIN_ROOT}/skills/audit-kubernetes/scripts/run-state.sh" next 100
+```
+
+Each TSV row is `key, kind, namespace, name, status` (namespace `-` means
+cluster-scoped). A worklist mutex serializes state updates; the durable `batch/`
+claim prevents another shell claiming those same rows. Only mark a row done
+once every applicable catalog check for that object is assessed, or its actual
+read failure is explicitly recorded as blocked. Save a small redacted JSON
+receipt with this shape, using the actual results rather than copying the
+example values:
+
+```json
+{"target":"kubernetes/example","context":"example-context","key":"0","object":{"kind":"Namespace","namespace":"-","name":"app"},"read_exit":0,"evidence":"Observed PSA enforce=restricted; policy and quota evidence joined from this run.","checks":[{"id":"K8S-001","result":"pass"},{"id":"K8S-003","result":"blocked","reason":"NetworkPolicy list Forbidden; policy coverage unknown"}]}
+```
+
+Receipts bind the key **and object identity** to the run's target/context. A
+nonzero read exit accepts only blocked results with reasons. Partial failures
+remain unknown for the affected check and cannot disappear into a pass; failed
+reads may be assessed as blocked so the resilience guarantee still permits an
+honest incomplete-coverage report. Preserve useful check evidence, correlations
+and affected objects in the receipt or redacted draft notes so a resumed session
+can aggregate without replaying completed reads. Never save raw Pod specs or
+Secret values. Mark the recorded row in a separate fresh shell:
+
+```bash
+set -eu
+: "${K8S_WORK_KEY:?set the key from the claimed batch}"
+: "${K8S_RECEIPT_FILE:?set the path of its recorded evidence receipt}"
+sh "${CLAUDE_PLUGIN_ROOT}/skills/audit-kubernetes/scripts/run-state.sh" done "$K8S_WORK_KEY" "$K8S_RECEIPT_FILE"
+```
+
+The last done row releases its batch. After interruption, run the scope block to
+resume the saved run. If a durable batch claim remains, first verify the earlier
+worker stopped; then explicitly run `run-state.sh release-batch
+--confirm-abandoned`. This retains completed rows and reoffers unfinished rows.
+Never delete or steal an active claim. If a writer was killed during a state
+update, also verify it stopped before removing its `worklist.lock` directory;
+inspect any saved temporary file against the durable worklist first.
+
+Use `run-state.sh output` to obtain the write directory in every shell. For a
+large run it is always `runs/<run-id>/draft`, even across midnight. Incremental
+notes and partial findings stay there. `ready` refuses pending rows or missing/
+invalid receipts; Phase 10 validates the final aggregate and `publish` applies
+the same readiness guard before installing the completed report. An interrupted
+batch never writes the last completed date directory. A previous same-date
+complete report is retained under `previous-complete` during replacement; a
+failed rename or caught signal restores it. After an uncatchable process kill,
+inspect that intact backup and restore it before retrying publication.
 
 ## Phase 1: Service context
 
@@ -434,7 +520,19 @@ Render the section in `report.md` under its own heading, after Scoutflo Topology
 
 ## Phase 9: Coverage matrix and topology readiness
 
-Per the report standard, render the per-service coverage matrix and the Scoutflo Topology Readiness section for the critical services named in Phase 1. Judge each service against six posture columns: **hardened** (namespace enforces pod security AND the workload is non-privileged/non-root — K8S-001/007/008), **least-privilege** (its SA holds no wildcard/secret-reader power and mounts a token only if it needs one — K8S-002/006/009), **network-isolated** (a NetworkPolicy selects it AND its namespace has a default-deny — K8S-003/011), **resource-bounded** (requests + limits, under a namespace LimitRange — K8S-004/014), **resilient** (PDB/replicas AND spread across nodes — K8S-005/013), and **health-probed** (readiness + liveness — K8S-012). A service missing all six is `0 of 6`; state the count in plain language (see [topology-readiness.md](../../report-standard/topology-readiness.md)). Every matrix row is keyed `<namespace>/<name>` (per the ground rule): two same-named services in different namespaces get two rows, each judged against its own namespace's labels, policies, PDBs, and spread rules.
+Render a **Kubernetes posture coverage matrix** for the critical services named in Phase 1. These six columns describe cluster posture; they do not determine Scoutflo Topology Readiness. Judge each service against six posture columns: **hardened** (namespace enforces pod security AND the workload is non-privileged/non-root — K8S-001/007/008), **least-privilege** (its SA holds no wildcard/secret-reader power and mounts a token only if it needs one — K8S-002/006/009), **network-isolated** (a NetworkPolicy selects it AND its namespace has a default-deny — K8S-003/011), **resource-bounded** (requests + limits, under a namespace LimitRange — K8S-004/014), **resilient** (PDB/replicas AND spread across nodes — K8S-005/013), and **health-probed** (readiness + liveness — K8S-012). A service missing all six is `0 of 6`; state the posture count in plain language. Every matrix row is keyed `<namespace>/<name>` (per the ground rule): two same-named services in different namespaces get two rows, each judged against its own namespace's labels, policies, PDBs, and spread rules.
+
+Separately render **Scoutflo Topology Readiness** using the shared
+[topology-readiness.md](../../report-standard/topology-readiness.md) six checks:
+Service identity, Workload mapping, Telemetry connections, Connection details,
+Tool identity and Match confidence. Read the service map for this run's actual
+cluster and critical services, then apply the shared ready/partial/not-ready
+rules and action-plan requirements. Show confidence with its /10 scale and use
+plain-English column names. Do not derive these verdicts from the posture
+matrix or add them to the 0–100 score. With no matching service map, state which
+map is missing or mismatched and point to `/scoutflo:map-topology`; render no
+guessed readiness count. A service may be hardened and still lack usable
+telemetry connections, or have clear signal identity while its Pod is unsafe.
 
 ## Phase 10: Score, write, brief
 
@@ -464,17 +562,17 @@ Then run the report-standard self-validation, exactly as every other audit does 
 
 ```bash
 set -eu
-CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
-# Resolve the CURRENT kubernetes target so output lands in the per-target directory:
-# kubernetes/<context>/<date>/ for a single block, kubernetes/<label>/<date>/ for a labeled list.
-TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
-K8S_KIND=$(sh "$TT" "$CFG" kubernetes kind); K8S_N=$(sh "$TT" "$CFG" kubernetes count)
-K8S_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$K8S_N" ]; do [ "$(sh "$TT" "$CFG" kubernetes label "$_i")" = "$SCOUTFLO_TARGET" ] && { K8S_IDX=$_i; break; }; _i=$((_i+1)); done; fi
-[ "$(sh "$TT" "$CFG" kubernetes kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" kubernetes label "$K8S_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no kubernetes target in $CFG; labels: $(sh "$TT" "$CFG" kubernetes labels | tr '\n' ' ')"; exit 1; }
-K8S_LABEL=$(sh "$TT" "$CFG" kubernetes label "$K8S_IDX"); KUBE_CONTEXT=$(sh "$TT" "$CFG" kubernetes get "$K8S_IDX" context)
-if [ "$K8S_KIND" = seq ]; then K8S_SEG="kubernetes/${K8S_LABEL}"; else K8S_SEG="kubernetes/${KUBE_CONTEXT}"; fi
-RUN_DATE="$(date -u +%Y-%m-%d)"
-OUT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${K8S_SEG}/${RUN_DATE}"   # per-target segment, matching the declared outputs
+STATE="${CLAUDE_PLUGIN_ROOT}/skills/audit-kubernetes/scripts/run-state.sh"
+SIZING="$(sh "$STATE" sizing)"
+K8S_SEG="$(printf '%s' "$SIZING" | jq -r '.target')"
+OUT="$(sh "$STATE" output)"
+FINAL_OUT="$(sh "$STATE" final-path)"
+RUN_DATE="$(basename "$FINAL_OUT")"
+TARGET_DIR="$(dirname "$FINAL_OUT")"
+if [ -f "${OUT%/draft}/worklist.tsv" ]; then
+  SIZING="$(sh "$STATE" meta)"   # frozen estate evidence, even after a later sizing read
+  sh "$STATE" ready
+fi
 mkdir -p "$OUT"
 # The findings.json/inventory.json ".target" is the per-target slug $K8S_SEG ("kubernetes/<context>" for a
 # single block, "kubernetes/<label>" for a labeled list target), so audit-all/correlation/render disambiguate
@@ -494,8 +592,12 @@ jq -e '.schema == "scoutflo-inventory/v1" and (.items | type == "array") and (.c
 sh "${CLAUDE_PLUGIN_ROOT}/report-standard/render-report-viz.sh" inventory "$OUT/inventory.json" >/dev/null && echo "inventory section renders"
 sh "${CLAUDE_PLUGIN_ROOT}/report-standard/render-report-viz.sh" lanes "$OUT/findings.json" >/dev/null && echo "findings-by-purpose section renders"
 grep -qxF '## Findings by purpose' "$OUT/report.md" && echo "findings-by-purpose section present"
-sh "${CLAUDE_PLUGIN_ROOT}/report-standard/render-report-viz.sh" html "$OUT/findings.json" "$OUT/report.html" "$(dirname "$OUT")/history.jsonl"
+sh "${CLAUDE_PLUGIN_ROOT}/report-standard/render-report-viz.sh" html "$OUT/findings.json" "$OUT/report.html" "$TARGET_DIR/history.jsonl"
 sh "${CLAUDE_PLUGIN_ROOT}/report-standard/check-report.sh" "$OUT/report.md"
+if [ -f "${OUT%/draft}/worklist.tsv" ]; then
+  sh "$STATE" publish
+  OUT="$(sh "$STATE" published-path)"
+fi
 
 # Append the derived v2 history row after findings/report validation. A same-date
 # rerun replaces that date's row instead of duplicating it.
@@ -519,17 +621,9 @@ Compute the delta against the previous run date per the [report standard](../../
 
 ```bash
 set -eu
-CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
-# Resolve the CURRENT kubernetes target so the brief reads the per-target run dir (matching the emit step).
-TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
-K8S_KIND=$(sh "$TT" "$CFG" kubernetes kind); K8S_N=$(sh "$TT" "$CFG" kubernetes count)
-K8S_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$K8S_N" ]; do [ "$(sh "$TT" "$CFG" kubernetes label "$_i")" = "$SCOUTFLO_TARGET" ] && { K8S_IDX=$_i; break; }; _i=$((_i+1)); done; fi
-[ "$(sh "$TT" "$CFG" kubernetes kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" kubernetes label "$K8S_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no kubernetes target in $CFG; labels: $(sh "$TT" "$CFG" kubernetes labels | tr '\n' ' ')"; exit 1; }
-K8S_LABEL=$(sh "$TT" "$CFG" kubernetes label "$K8S_IDX"); KUBE_CONTEXT=$(sh "$TT" "$CFG" kubernetes get "$K8S_IDX" context)
-if [ "$K8S_KIND" = seq ]; then K8S_SEG="kubernetes/${K8S_LABEL}"; else K8S_SEG="kubernetes/${KUBE_CONTEXT}"; fi
-TARGET_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${K8S_SEG}"
-RUN_DATE="$(date -u +%Y-%m-%d)"
-OUT="${TARGET_DIR}/${RUN_DATE}"
+OUT="$(sh "${CLAUDE_PLUGIN_ROOT}/skills/audit-kubernetes/scripts/run-state.sh" published-path)"
+TARGET_DIR="$(dirname "$OUT")"
+RUN_DATE="$(basename "$OUT")"
 RT_LINE=""   # optional; set only when live-runtime (K8SRT) observations exist this run
 # slack.webhook_env names the webhook variable; skip when unset.
 if [ -n "${SCOUTFLO_SLACK_WEBHOOK:-}" ]; then

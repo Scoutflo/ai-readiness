@@ -1,6 +1,27 @@
 # audit-kubernetes: Check Catalog and Commands
 
-Runnable, read-only checks for every surface the [audit-kubernetes](../SKILL.md) workflow covers. Each section lists the catalog IDs it serves, the commands, the expected healthy output, and — per the [depth doctrine](../../report-standard/depth-doctrine.md) — the **blast radius** each failure carries and the **correlation chains** it belongs to. A finding here never stops at "X is missing": it names the exact object and value, what an attacker or a node drain actually reaches through it, and the specific fix. Evidence for a finding is the command plus its observed output, trimmed with truncation marked. Every command passes `--context "$KUBE_CONTEXT"` explicitly.
+Runnable, read-only checks for every surface the [audit-kubernetes](../SKILL.md) workflow covers. Each section lists the catalog IDs it serves, the commands, the expected healthy output, and — per the [depth doctrine](../../../report-standard/depth-doctrine.md) — the **blast radius** each failure carries and the **correlation chains** it belongs to. A finding here never stops at "X is missing": it names the exact object and value, what an attacker or a node drain actually reaches through it, and the specific fix. Evidence for a finding is the command plus its observed output, trimmed with truncation marked. Every command passes `--context "$KUBE_CONTEXT"` explicitly.
+
+## Target profile: what full credit means
+
+These are the five scorecard categories, with the same weights and check sets
+as Phase 10. Full credit means every applicable check in the category passed on
+the selected scope; it never means that unreadable or excluded objects passed.
+Assessment coverage is reported separately. The live-runtime snapshot has no
+weight and cannot raise or lower readiness.
+
+| Category | Weight | Full-credit target |
+| --- | --- | --- |
+| Workload hardening | 25 | Application namespaces enforce the appropriate Pod Security Admission baseline; application workloads have no unjustified privileged, host-namespace, hostPath or dangerous-capability escape; containers meet the restricted baseline (K8S-001/007/008). Required system DaemonSet host access is handled by the catalog's scope rule, never silently scored as an application defect. |
+| Identity & access | 20 | Workload ServiceAccounts have no unnecessary wildcard/cluster-admin or cluster-wide secret-reader power; token mounting is disabled for workloads that do not use the Kubernetes API, with permissions verified by the read-only authorization checks (K8S-002/006/009). |
+| Network segmentation | 20 | Application pods are selected by network policies, their namespaces enforce default-deny ingress, and each internet-facing service has a bounded, evidenced path through workload privilege, identity and network controls (K8S-003/011/010). A public endpoint alone is not a failed check. |
+| Reliability & resilience | 20 | Critical workloads have the catalog-required disruption protection, readiness/liveness probes, and replica spreading where multiple replicas are expected (K8S-005/012/013). A PDB is protection for voluntary disruption; it does not make a single replica highly available. |
+| Resource governance | 15 | Workloads set resource requests and limits; application namespaces have ResourceQuota and LimitRange controls appropriate to their shared capacity (K8S-004/014). |
+
+For example, an unreadable RoleBinding list is **blocked** with its evidence
+unlock, not a pass for Identity & access. A verified least-privilege binding is
+a pass; a verified workload secret-reader grant is a finding with its actual
+scope and affected workloads.
 
 ## 1. Conventions
 
@@ -75,14 +96,20 @@ Healthy: no application workload sets `privileged`, a host namespace, a `hostPat
 ### K8S-008 — Container restricted-baseline hardening
 
 ```bash
-kubectl --context "$KUBE_CONTEXT" get pods -A -o json | jq -r '
-  .items[] | . as $p | .spec.containers[] | . as $c
-  | ($p.spec.securityContext.runAsNonRoot // $c.securityContext.runAsNonRoot) as $nonroot
+set -eu
+STATE="${CLAUDE_PLUGIN_ROOT}/skills/audit-kubernetes/scripts/run-state.sh"
+PODS="$(sh "$STATE" read-list pods)" || { echo 'K8S-008 blocked: pod read failed; hardening unknown' >&2; exit 1; }
+printf '%s' "$PODS" | jq -r '
+  def shown: if .==null then "unset" else tostring end;
+  if (.items|type)!="array" then error("expected Pod list") else .items[] end
+  | . as $p | (.spec.containers[], (.spec.initContainers // [])[]) | . as $c
+  | (if $c.securityContext.runAsNonRoot!=null then $c.securityContext.runAsNonRoot
+     else $p.spec.securityContext.runAsNonRoot end) as $nonroot
   | select(($nonroot != true)
-      or (($c.securityContext.readOnlyRootFilesystem // false) != true)
-      or (($c.securityContext.allowPrivilegeEscalation // true) != false)
+      or ($c.securityContext.readOnlyRootFilesystem != true)
+      or ($c.securityContext.allowPrivilegeEscalation != false)
       or (((($c.securityContext.capabilities.drop // []) | map(ascii_upcase)) | any(. == "ALL")) | not))
-  | "\($p.metadata.namespace)/\($p.metadata.name)\t\($c.name)\trunAsNonRoot=\($nonroot // "unset")\treadOnlyRootFS=\($c.securityContext.readOnlyRootFilesystem // "unset")\tallowPrivEsc=\($c.securityContext.allowPrivilegeEscalation // "unset")\tdropsALL=\((($c.securityContext.capabilities.drop // []) | map(ascii_upcase) | any(. == "ALL")))"'
+  | "\($p.metadata.namespace)/\($p.metadata.name)\t\($c.name)\trunAsNonRoot=\($nonroot|shown)\treadOnlyRootFS=\($c.securityContext.readOnlyRootFilesystem|shown)\tallowPrivEsc=\($c.securityContext.allowPrivilegeEscalation|shown)\tdropsALL=\((($c.securityContext.capabilities.drop // []) | map(ascii_upcase) | any(. == "ALL")))"'
 ```
 
 Healthy: application containers run as non-root, with a read-only root filesystem, `allowPrivilegeEscalation: false`, and drop `ALL` capabilities. Fail (K8S-008): one or more of those is unset/false. **Blast radius:** a container running as UID 0 with a writable root filesystem is the substrate for a cryptominer or ransomware payload after any code-exec bug — the attacker writes and executes freely and can `setuid`-escalate. A writable rootfs also means a compromised process persists across probes. Enumerate the highest-value cases first (internet-facing and shared-path workloads). This is `medium` on its own, but a container that is *both* root and privileged (K8S-007) is the same workload failing two gates — cite both in one attack narrative.
@@ -114,28 +141,50 @@ Healthy: no `*/*/*` ClusterRole bound to a workload ServiceAccount; no workload 
 ### K8S-009 — ServiceAccount token exposure
 
 ```bash
-# Workloads whose pods mount an SA token (automount not disabled at pod OR sa level).
-kubectl --context "$KUBE_CONTEXT" get pods -A -o json | jq -r '
-  .items[] | select((.spec.automountServiceAccountToken // true) == true)
-  | "\(.metadata.namespace)\t\(.spec.serviceAccountName // "default")\t\(.metadata.name)"' | sort -u
-
-# The SAs themselves may disable automount too — check both layers.
-kubectl --context "$KUBE_CONTEXT" get sa -A -o json \
-  | jq -r '.items[] | "\(.metadata.namespace)/\(.metadata.name)\tautomount=\(.automountServiceAccountToken // "unset(true)")"'
+set -eu
+STATE="${CLAUDE_PLUGIN_ROOT}/skills/audit-kubernetes/scripts/run-state.sh"
+umask 077
+TOKEN_TMP=$(mktemp -d)
+trap 'rm -rf "$TOKEN_TMP"' EXIT
+trap 'exit 1' HUP INT TERM
+PODS="$(sh "$STATE" read-list pods)" || { echo 'K8S-009 blocked: pod read failed; token exposure unknown' >&2; exit 1; }
+# Persist only the join fields; never the full spec (which can contain env values).
+printf '%s' "$PODS" | jq '[if (.items|type)!="array" then error("expected Pod list") else .items[] end
+  | {namespace:.metadata.namespace,name:.metadata.name,sa:(.spec.serviceAccountName // "default"),automount:.spec.automountServiceAccountToken}]' > "$TOKEN_TMP/pods.json"
+SAS="$(sh "$STATE" read-list serviceaccounts)" || { echo 'K8S-009 blocked: ServiceAccount read failed; inherited token exposure unknown' >&2; exit 1; }
+printf '%s' "$SAS" | jq '[if (.items|type)!="array" then error("expected ServiceAccount list") else .items[] end
+  | {namespace:.metadata.namespace,name:.metadata.name,automount:.automountServiceAccountToken}]' > "$TOKEN_TMP/sa.json"
+TOKEN_ROWS="$(jq -nr --slurpfile pods "$TOKEN_TMP/pods.json" --slurpfile sas "$TOKEN_TMP/sa.json" '
+  ($sas[0] | map({key:(.namespace+"/"+.name),value:.}) | from_entries) as $accounts
+  | $pods[0][] | . as $pod | ($accounts[.namespace+"/"+.sa]) as $sa
+  | (if .automount!=null then .automount
+     elif $sa==null then "unknown (ServiceAccount absent from read)"
+     elif $sa.automount!=null then $sa.automount else true end) as $mount
+  | select($mount!=false)
+  | "\($pod.namespace)\t\($pod.sa)\t\($pod.name)\teffectiveAutomount=\($mount)"')"
+[ -z "$TOKEN_ROWS" ] || printf '%s\n' "$TOKEN_ROWS" | sort -u
 ```
 
-Healthy: workloads that never call the Kubernetes API set `automountServiceAccountToken: false` (at the pod or SA level). Fail (K8S-009): a workload mounts a token it does not use. **Blast radius — the correlation is the whole point:** an unused mounted token is harmless *only if* its SA is powerless. Join every mounting workload to its SA's `auth can-i` result from K8S-002/006: a mounted token whose SA can `list secrets` (or is `cluster-admin`) turns any RCE in that pod into cluster-secret theft with zero extra steps. Rank findings by the SA's actual power, not by count — a `default` SA with no bindings that mounts a token is `low`; the payments pod mounting a secrets-reader token is `high`. The fix is `automountServiceAccountToken: false` **and** narrowing the SA's RBAC — name both.
+Healthy: workloads that never call the Kubernetes API have effective `automountServiceAccountToken: false`. An explicit Pod value overrides the ServiceAccount value, including explicit `true` over an SA's `false`; only an absent Pod value inherits from the SA. A missing SA is unknown, never a verified token mount. Fail (K8S-009): a workload mounts a token it does not use. **Blast radius — the correlation is the whole point:** an unused mounted token is harmless *only if* its SA is powerless. Join every mounting workload to its SA's `auth can-i` result from K8S-002/006: a mounted token whose SA can `list secrets` (or is `cluster-admin`) turns any RCE in that pod into cluster-secret theft with zero extra steps. Rank findings by the SA's actual power, not by count — a `default` SA with no bindings that mounts a token is `low`; the payments pod mounting a secrets-reader token is `high`. The fix is `automountServiceAccountToken: false` **and** narrowing the SA's RBAC — name both.
 
 ## 5. Network segmentation (K8S-003, K8S-011, K8S-010)
 
 ### K8S-003 — NetworkPolicy presence
 
 ```bash
-NP_TMP="${TMPDIR:-/tmp}/k8s003.$$"
-kubectl --context "$KUBE_CONTEXT" get ns -o jsonpath='{.items[*].metadata.name}' | tr ' ' '\n' | sort > "${NP_TMP}.all"
-kubectl --context "$KUBE_CONTEXT" get networkpolicy -A -o jsonpath='{.items[*].metadata.namespace}' | tr ' ' '\n' | sort -u > "${NP_TMP}.with"
-comm -23 "${NP_TMP}.all" "${NP_TMP}.with"
-rm -f "${NP_TMP}.all" "${NP_TMP}.with"
+set -eu
+STATE="${CLAUDE_PLUGIN_ROOT}/skills/audit-kubernetes/scripts/run-state.sh"
+umask 077
+NP_TMP=$(mktemp -d)
+trap 'rm -rf "$NP_TMP"' EXIT
+trap 'exit 1' HUP INT TERM
+NAMESPACES="$(sh "$STATE" read-list namespaces)" || { echo 'K8S-003 blocked: namespace read failed; coverage unknown' >&2; exit 1; }
+POLICIES="$(sh "$STATE" read-list networkpolicies)" || { echo 'K8S-003 blocked: NetworkPolicy read failed; absence is unproven' >&2; exit 1; }
+printf '%s' "$NAMESPACES" | jq -r 'if (.items|type)!="array" then error("expected Namespace list") else .items[].metadata.name end' > "$NP_TMP/namespaces"
+printf '%s' "$POLICIES" | jq -r 'if (.items|type)!="array" then error("expected NetworkPolicy list") else .items[].metadata.namespace end' > "$NP_TMP/policies"
+LC_ALL=C sort -u "$NP_TMP/namespaces" > "$NP_TMP/all"
+LC_ALL=C sort -u "$NP_TMP/policies" > "$NP_TMP/with"
+LC_ALL=C comm -23 "$NP_TMP/all" "$NP_TMP/with"
 ```
 
 Healthy: each application namespace appears with ≥1 NetworkPolicy. Fail (K8S-003): application namespaces (e.g. the one running checkout/orders/payments) appear in the zero-policy list — any pod can reach any other. System namespaces (`kube-system`, `kube-node-lease`) are excluded. **Blast radius — name the reachable datastore, not "flat network":** in a zero-policy namespace, list the workloads a compromised pod can open a TCP connection to, and call out the datastores by pod/port (`payments-db-0:5432`, `redis-0:6379`). "Any pod can reach `payments-db` on 5432" is a blast radius; "no network policy" is a linter line.
@@ -143,14 +192,23 @@ Healthy: each application namespace appears with ≥1 NetworkPolicy. Fail (K8S-0
 ### K8S-011 — Default-deny baseline
 
 ```bash
-# Namespaces that HAVE a default-deny ingress policy (empty podSelector + Ingress policyType).
-kubectl --context "$KUBE_CONTEXT" get networkpolicy -A -o json | jq -r '
-  .items[] | select(((.spec.podSelector.matchLabels // {}) | length) == 0
-      and ((.spec.policyTypes // []) | any(. == "Ingress")))
-  | .metadata.namespace' | sort -u
+set -eu
+STATE="${CLAUDE_PLUGIN_ROOT}/skills/audit-kubernetes/scripts/run-state.sh"
+POLICIES="$(sh "$STATE" read-list networkpolicies)" || { echo 'K8S-011 blocked: NetworkPolicy read failed; default-deny coverage unknown' >&2; exit 1; }
+# Select every Pod AND allow zero ingress rules. ingress:[{}] allows all traffic;
+# a matchExpressions selector applies only to a subset and is not a baseline.
+BASELINE_NAMESPACES="$(printf '%s' "$POLICIES" | jq -r '
+  if (.items|type)!="array" then error("expected NetworkPolicy list") else .items[] end
+  | select((.spec.podSelector|type)=="object"
+      and ((.spec.podSelector.matchLabels // {}) | length)==0
+      and ((.spec.podSelector.matchExpressions // []) | length)==0
+      and ((.spec.ingress // []) | length)==0
+      and ((if (.spec.policyTypes // [] | length)==0 then ["Ingress"] else .spec.policyTypes end) | any(.=="Ingress")))
+  | .metadata.namespace')"
+[ -z "$BASELINE_NAMESPACES" ] || printf '%s\n' "$BASELINE_NAMESPACES" | sort -u
 ```
 
-Healthy: every application namespace with any policy also carries a default-deny (the list above includes it). Fail (K8S-011): a namespace has NetworkPolicies but no default-deny — every pod that no policy explicitly selects is still wide open (allow-by-omission). **Blast radius:** name the pods in the namespace that no `podSelector` covers; those are the silent holes a reader would never spot from "we have network policies." This is the difference between "has policies" (K8S-003 passes) and "is actually segmented" — a namespace can pass K8S-003 and fail K8S-011.
+Healthy: every application namespace with any policy also carries a default-deny (the list above includes it). Policies are additive: a separate allow-all policy can neutralize that baseline, so join all matching policies before calling the namespace segmented; cite both policies when that happens. Fail (K8S-011): a namespace has NetworkPolicies but no default-deny — every pod that no policy explicitly selects is still wide open (allow-by-omission). **Blast radius:** name the pods in the namespace that no `podSelector` covers; those are the silent holes a reader would never spot from "we have network policies." This is the difference between "has policies" (K8S-003 passes) and "is actually segmented" — a namespace can pass K8S-003 and fail K8S-011.
 
 ### K8S-010 — External exposure surface
 
