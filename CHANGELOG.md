@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.238 (unreleased)
+## 0.1.238
 
 **Preserve saved context, make interrupted audits resumable, and keep verdicts and validation consistent.**
 
