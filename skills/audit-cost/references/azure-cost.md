@@ -51,14 +51,33 @@ One permanent ID per check; IDs never change or get reused. "Savings figure" is 
 
 ## 4. Conventions
 
-- **Identity preamble.** Every block confirms its target subscription and mints its own ARM bearer, so each block runs alone in a fresh shell and the run holds exactly one identity with no silent fallback. The confirmed auth path is `DefaultAzureCredential` → `AzureCliCredential`, so the bearer for the two POST-read endpoints (Cost Management, Resource Graph — neither has a first-class `az` command) comes from that same `az login`:
+- **Identity preamble.** Every block resolves `SCOUTFLO_TARGET` through `toolkit-targets.sh` and confirms its configured subscription and mints its own ARM bearer, so each block runs alone in a fresh shell and the run holds exactly one identity with no silent fallback. The confirmed auth path is `DefaultAzureCredential` → `AzureCliCredential`, so the bearer for the two POST-read endpoints (Cost Management, Resource Graph — neither has a first-class `az` command) comes from that same `az login`:
 
 ```bash
 set -eu
-AZ_SUBSCRIPTION_CFG=""    # azure.subscription_id — set to the audited subscription (empty = az CLI default)
-az account show --query '{subscription:id, tenant:tenantId, user:user.name}' -o json   # confirm the target BEFORE any read
-SUB="${AZ_SUBSCRIPTION_CFG:-$(az account show --query id -o tsv)}"
-ARM_TOKEN="$(az account get-access-token --resource https://management.azure.com --query accessToken -o tsv)"
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done
+[ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+[ -f "$CFG" ] || { echo "missing $CFG; run /scoutflo:connect"; exit 1; }
+TT="${CLAUDE_PLUGIN_ROOT}/report-standard/toolkit-targets.sh"
+AZ_KIND=$(sh "$TT" "$CFG" azure kind); AZ_N=$(sh "$TT" "$CFG" azure count)
+[ "${AZ_N:-0}" -ge 1 ] || { echo "no azure target configured"; exit 1; }
+AZ_IDX=0
+if [ "$AZ_KIND" = seq ]; then
+  AZ_IDX=""; _i=0
+  while [ "$_i" -lt "$AZ_N" ]; do
+    [ "$(sh "$TT" "$CFG" azure label "$_i")" = "${SCOUTFLO_TARGET:-}" ] && AZ_IDX=$_i
+    _i=$((_i+1))
+  done
+  [ -n "$AZ_IDX" ] || { echo "select a azure target with SCOUTFLO_TARGET; labels: $(sh "$TT" "$CFG" azure labels | tr '\n' ' ')"; exit 1; }
+fi
+AZ_LABEL=$(sh "$TT" "$CFG" azure label "$AZ_IDX")
+SUB=$(sh "$TT" "$CFG" azure get "$AZ_IDX" subscription_id)
+[ -n "$SUB" ] || { echo "azure.subscription_id is required; no ambient subscription is selected"; exit 1; }
+AZ_ID=$(az account show --subscription "$SUB" -o json) || { echo "Azure identity read failed; stop"; exit 1; }
+printf '%s' "$AZ_ID" | jq -e --arg sub "$SUB" '.id == $sub and .tenantId != null' >/dev/null || { echo "Azure identity differs from azure.subscription_id; stop"; exit 1; }
+printf '%s' "$AZ_ID" | jq -r --arg label "$AZ_LABEL" '"azure target=\($label) subscription=\(.id) tenant=\(.tenantId)"'
+ARM_TOKEN=$(az account get-access-token --subscription "$SUB" --resource https://management.azure.com --query accessToken -o tsv)
+[ -n "$ARM_TOKEN" ] || { echo "Azure ARM token unavailable; stop"; exit 1; }
 ```
 
   If `az account show` names a subscription/tenant/user other than the one you intend to audit, **stop** — reading the wrong subscription is a boundary violation even though every call is read-only. If minting the token fails, stop; do not fall back to a different credential. `ARM_TOKEN` travels only in `Authorization` headers — never echo it, never put it in a URL, evidence, or the report.
@@ -71,24 +90,53 @@ ARM_TOKEN="$(az account get-access-token --resource https://management.azure.com
 - **The 429-aware read-only POST helper.** Cost Management is tightly rate-limited (a live call returned HTTP 429); Resource Graph less so but shares the pattern. Both are reads that use POST. Honor a `Retry-After` header when present; otherwise back off `attempt² × 2` seconds up to a small cap:
 
 ```bash
-arm_post() {   # $1 = full URL (with api-version), $2 = JSON body. READ that uses POST — mark readOnly in the harness.
-  _url="$1"; _body="$2"; _attempt=1; _max=5
+set -eu
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done
+[ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+[ -f "$CFG" ] || { echo "missing $CFG; run /scoutflo:connect"; exit 1; }
+TT="${CLAUDE_PLUGIN_ROOT}/report-standard/toolkit-targets.sh"
+AZ_KIND=$(sh "$TT" "$CFG" azure kind); AZ_N=$(sh "$TT" "$CFG" azure count)
+[ "${AZ_N:-0}" -ge 1 ] || { echo "no azure target configured"; exit 1; }
+AZ_IDX=0
+if [ "$AZ_KIND" = seq ]; then
+  AZ_IDX=""; _i=0
+  while [ "$_i" -lt "$AZ_N" ]; do
+    [ "$(sh "$TT" "$CFG" azure label "$_i")" = "${SCOUTFLO_TARGET:-}" ] && AZ_IDX=$_i
+    _i=$((_i+1))
+  done
+  [ -n "$AZ_IDX" ] || { echo "select a azure target with SCOUTFLO_TARGET; labels: $(sh "$TT" "$CFG" azure labels | tr '\n' ' ')"; exit 1; }
+fi
+AZ_LABEL=$(sh "$TT" "$CFG" azure label "$AZ_IDX")
+SUB=$(sh "$TT" "$CFG" azure get "$AZ_IDX" subscription_id)
+[ -n "$SUB" ] || { echo "azure.subscription_id is required; no ambient subscription is selected"; exit 1; }
+AZ_ID=$(az account show --subscription "$SUB" -o json) || { echo "Azure identity read failed; stop"; exit 1; }
+printf '%s' "$AZ_ID" | jq -e --arg sub "$SUB" '.id == $sub and .tenantId != null' >/dev/null || { echo "Azure identity differs from azure.subscription_id; stop"; exit 1; }
+printf '%s' "$AZ_ID" | jq -r --arg label "$AZ_LABEL" '"azure target=\($label) subscription=\(.id) tenant=\(.tenantId)"'
+ARM_TOKEN=$(az account get-access-token --subscription "$SUB" --resource https://management.azure.com --query accessToken -o tsv)
+[ -n "$ARM_TOKEN" ] || { echo "Azure ARM token unavailable; stop"; exit 1; }
+arm_post() { # READ that uses POST: Resource Graph /resources or Cost Management /query only.
+  _url="$1"; _body="$2"; _attempt=1
+  _headers=$(mktemp)
   while :; do
-    _resp="$(curl -sS -D /tmp/az-hdr -w '\n%{http_code}' -X POST "$_url" \
-      -H "Authorization: Bearer ${ARM_TOKEN}" -H 'Content-Type: application/json' -d "$_body")"
-    _code="$(printf '%s' "$_resp" | tail -n1)"; _payload="$(printf '%s' "$_resp" | sed '$d')"
-    if [ "$_code" = "429" ] && [ "$_attempt" -lt "$_max" ]; then
-      _ra="$(sed -n 's/^[Rr]etry-[Aa]fter:[[:space:]]*\([0-9]\{1,\}\).*/\1/p' /tmp/az-hdr | head -n1)"
-      sleep "${_ra:-$((_attempt * _attempt * 2))}"; _attempt=$((_attempt + 1)); continue
+    if ! _resp=$(curl -sS --max-time 30 -D "$_headers" -w '\n%{http_code}' -X POST "$_url" -H "Authorization: Bearer ${ARM_TOKEN}" -H 'Content-Type: application/json' -d "$_body"); then
+      rm -f "$_headers"; echo "Azure read transport failure; check blocked" >&2; return 1
     fi
+    _code=$(printf '%s' "$_resp" | tail -n1); _payload=$(printf '%s' "$_resp" | sed '$d')
+    if [ "$_code" = 429 ] && [ "$_attempt" -lt 5 ]; then
+      _ra=$(sed -n 's/^[Rr]etry-[Aa]fter:[[:space:]]*\([0-9]\{1,\}\).*/\1/p' "$_headers" | head -n1)
+      _wait=${_ra:-$((_attempt * _attempt * 2))}; [ "$_wait" -le 30 ] || _wait=30
+      sleep "$_wait"; _attempt=$((_attempt+1)); continue
+    fi
+    rm -f "$_headers"
+    [ "$_code" = 200 ] && printf '%s' "$_payload" | jq -e 'type == "object" and (has("error") | not)' >/dev/null || { echo "Azure read refused/invalid (HTTP $_code); check blocked" >&2; return 1; }
     printf '%s' "$_payload"; return 0
   done
 }
 RG_URL="https://management.azure.com/providers/Microsoft.ResourceGraph/resources?api-version=2022-10-01"
-rg_query() {   # $1 = KQL; wraps it in the CONFIRMED body shape {subscriptions:[...], query:"..."}
-  _kql="$1"
-  arm_post "$RG_URL" "$(jq -n --arg s "$SUB" --arg q "$_kql" '{subscriptions:[$s], query:$q}')" \
-    | jq '{count: .count, rows: .data}'
+rg_query() {
+  _result=$(arm_post "$RG_URL" "$(jq -n --arg s "$SUB" --arg q "$1" '{subscriptions:[$s], query:$q}')") || return 1
+  printf '%s' "$_result" | jq -e '(has("data") and (.data|type=="array")) and (.resultTruncated != "true") and (.resultTruncated != true) and ((.skipToken // ."$skipToken" // "") == "")' >/dev/null || { echo "Resource Graph result incomplete; page it before reporting an empty/complete result" >&2; return 1; }
+  printf '%s' "$_result" | jq '{count: .count, rows: .data}'
 }
 ```
 
@@ -97,6 +145,54 @@ rg_query() {   # $1 = KQL; wraps it in the CONFIRMED body shape {subscriptions:[
 - **Cheap estate-sizing list note.** Before the deep per-resource pulls, size the estate with **one** Resource Graph count — a single cross-region `readOnly` POST, the same cheap call the deeper blocks reuse — and feed that number into the SKILL's estate-sizing checkpoint (small ≤100 / medium 101–500 / large 501–2000 / xlarge >2000). This never enumerates per resource, so it stays cheap even on a large subscription:
 
 ```bash
+set -eu
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done
+[ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+[ -f "$CFG" ] || { echo "missing $CFG; run /scoutflo:connect"; exit 1; }
+TT="${CLAUDE_PLUGIN_ROOT}/report-standard/toolkit-targets.sh"
+AZ_KIND=$(sh "$TT" "$CFG" azure kind); AZ_N=$(sh "$TT" "$CFG" azure count)
+[ "${AZ_N:-0}" -ge 1 ] || { echo "no azure target configured"; exit 1; }
+AZ_IDX=0
+if [ "$AZ_KIND" = seq ]; then
+  AZ_IDX=""; _i=0
+  while [ "$_i" -lt "$AZ_N" ]; do
+    [ "$(sh "$TT" "$CFG" azure label "$_i")" = "${SCOUTFLO_TARGET:-}" ] && AZ_IDX=$_i
+    _i=$((_i+1))
+  done
+  [ -n "$AZ_IDX" ] || { echo "select a azure target with SCOUTFLO_TARGET; labels: $(sh "$TT" "$CFG" azure labels | tr '\n' ' ')"; exit 1; }
+fi
+AZ_LABEL=$(sh "$TT" "$CFG" azure label "$AZ_IDX")
+SUB=$(sh "$TT" "$CFG" azure get "$AZ_IDX" subscription_id)
+[ -n "$SUB" ] || { echo "azure.subscription_id is required; no ambient subscription is selected"; exit 1; }
+AZ_ID=$(az account show --subscription "$SUB" -o json) || { echo "Azure identity read failed; stop"; exit 1; }
+printf '%s' "$AZ_ID" | jq -e --arg sub "$SUB" '.id == $sub and .tenantId != null' >/dev/null || { echo "Azure identity differs from azure.subscription_id; stop"; exit 1; }
+printf '%s' "$AZ_ID" | jq -r --arg label "$AZ_LABEL" '"azure target=\($label) subscription=\(.id) tenant=\(.tenantId)"'
+ARM_TOKEN=$(az account get-access-token --subscription "$SUB" --resource https://management.azure.com --query accessToken -o tsv)
+[ -n "$ARM_TOKEN" ] || { echo "Azure ARM token unavailable; stop"; exit 1; }
+arm_post() { # READ that uses POST: Resource Graph /resources or Cost Management /query only.
+  _url="$1"; _body="$2"; _attempt=1
+  _headers=$(mktemp)
+  while :; do
+    if ! _resp=$(curl -sS --max-time 30 -D "$_headers" -w '\n%{http_code}' -X POST "$_url" -H "Authorization: Bearer ${ARM_TOKEN}" -H 'Content-Type: application/json' -d "$_body"); then
+      rm -f "$_headers"; echo "Azure read transport failure; check blocked" >&2; return 1
+    fi
+    _code=$(printf '%s' "$_resp" | tail -n1); _payload=$(printf '%s' "$_resp" | sed '$d')
+    if [ "$_code" = 429 ] && [ "$_attempt" -lt 5 ]; then
+      _ra=$(sed -n 's/^[Rr]etry-[Aa]fter:[[:space:]]*\([0-9]\{1,\}\).*/\1/p' "$_headers" | head -n1)
+      _wait=${_ra:-$((_attempt * _attempt * 2))}; [ "$_wait" -le 30 ] || _wait=30
+      sleep "$_wait"; _attempt=$((_attempt+1)); continue
+    fi
+    rm -f "$_headers"
+    [ "$_code" = 200 ] && printf '%s' "$_payload" | jq -e 'type == "object" and (has("error") | not)' >/dev/null || { echo "Azure read refused/invalid (HTTP $_code); check blocked" >&2; return 1; }
+    printf '%s' "$_payload"; return 0
+  done
+}
+RG_URL="https://management.azure.com/providers/Microsoft.ResourceGraph/resources?api-version=2022-10-01"
+rg_query() {
+  _result=$(arm_post "$RG_URL" "$(jq -n --arg s "$SUB" --arg q "$1" '{subscriptions:[$s], query:$q}')") || return 1
+  printf '%s' "$_result" | jq -e '(has("data") and (.data|type=="array")) and (.resultTruncated != "true") and (.resultTruncated != true) and ((.skipToken // ."$skipToken" // "") == "")' >/dev/null || { echo "Resource Graph result incomplete; page it before reporting an empty/complete result" >&2; return 1; }
+  printf '%s' "$_result" | jq '{count: .count, rows: .data}'
+}
 # One POST returns the whole subscription's cost-bearing object count, grouped by type — the sizing input.
 rg_query "Resources | where type in~ ('microsoft.compute/disks','microsoft.network/publicipaddresses','microsoft.compute/virtualmachines','microsoft.compute/virtualmachinescalesets','microsoft.network/networkinterfaces','microsoft.compute/snapshots') | summarize count() by type"
 ```
@@ -115,11 +211,28 @@ rg_query "Resources | where type in~ ('microsoft.compute/disks','microsoft.netwo
 
 ```bash
 set -eu
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done
+[ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+[ -f "$CFG" ] || { echo "missing $CFG; run /scoutflo:connect"; exit 1; }
+TT="${CLAUDE_PLUGIN_ROOT}/report-standard/toolkit-targets.sh"
+AZ_KIND=$(sh "$TT" "$CFG" azure kind); AZ_N=$(sh "$TT" "$CFG" azure count)
+[ "${AZ_N:-0}" -ge 1 ] || { echo "no azure target configured"; exit 1; }
+AZ_IDX=0
+if [ "$AZ_KIND" = seq ]; then
+  AZ_IDX=""; _i=0
+  while [ "$_i" -lt "$AZ_N" ]; do
+    [ "$(sh "$TT" "$CFG" azure label "$_i")" = "${SCOUTFLO_TARGET:-}" ] && AZ_IDX=$_i
+    _i=$((_i+1))
+  done
+  [ -n "$AZ_IDX" ] || { echo "select a azure target with SCOUTFLO_TARGET; labels: $(sh "$TT" "$CFG" azure labels | tr '\n' ' ')"; exit 1; }
+fi
+AZ_LABEL=$(sh "$TT" "$CFG" azure label "$AZ_IDX")
 RUN_DATE="$(date -u +%Y-%m-%d)"
 MATRIX="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/doctor/${RUN_DATE}/matrix.tsv"   # this run's doctor gate, or the most recent
 [ -f "$MATRIX" ] || { echo "no doctor matrix; run the doctor gate before the Azure cost phase"; exit 1; }
-awk -F'\t' -v b="azure" -v c="cost-permissions" '
-  ($1 == b || substr($1, 1, length(b) + 2) == b " (") && $2 == c { n++; print $1, $5, $7 }
+AZ_MATRIX_LABEL=azure; [ "$AZ_N" -le 1 ] || AZ_MATRIX_LABEL="azure ($AZ_LABEL)"
+awk -F'\t' -v b="$AZ_MATRIX_LABEL" -v c="cost-permissions" '
+  $1 == b && $2 == c { n++; print $1, $5, $7 }
   END { if (!n)    { print "no " b " " c " row in this matrix — re-run /scoutflo:doctor against this config before the cost phase; a missing row is NOT permission to skip the checks it gates" > "/dev/stderr"; exit 1 }
         if (n > 1) { print "several " b " targets carry a " c " row — set SCOUTFLO_TARGET so this gate reads the one this run audits" > "/dev/stderr"; exit 1 } }' "$MATRIX"
 ```
@@ -140,11 +253,32 @@ Advisor is the one place Azure itself may attach a **native savings figure**. Th
 
 ```bash
 set -eu
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done
+[ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+[ -f "$CFG" ] || { echo "missing $CFG; run /scoutflo:connect"; exit 1; }
+TT="${CLAUDE_PLUGIN_ROOT}/report-standard/toolkit-targets.sh"
+AZ_KIND=$(sh "$TT" "$CFG" azure kind); AZ_N=$(sh "$TT" "$CFG" azure count)
+[ "${AZ_N:-0}" -ge 1 ] || { echo "no azure target configured"; exit 1; }
+AZ_IDX=0
+if [ "$AZ_KIND" = seq ]; then
+  AZ_IDX=""; _i=0
+  while [ "$_i" -lt "$AZ_N" ]; do
+    [ "$(sh "$TT" "$CFG" azure label "$_i")" = "${SCOUTFLO_TARGET:-}" ] && AZ_IDX=$_i
+    _i=$((_i+1))
+  done
+  [ -n "$AZ_IDX" ] || { echo "select a azure target with SCOUTFLO_TARGET; labels: $(sh "$TT" "$CFG" azure labels | tr '\n' ' ')"; exit 1; }
+fi
+AZ_LABEL=$(sh "$TT" "$CFG" azure label "$AZ_IDX")
+SUB=$(sh "$TT" "$CFG" azure get "$AZ_IDX" subscription_id)
+[ -n "$SUB" ] || { echo "azure.subscription_id is required; no ambient subscription is selected"; exit 1; }
+AZ_ID=$(az account show --subscription "$SUB" -o json) || { echo "Azure identity read failed; stop"; exit 1; }
+printf '%s' "$AZ_ID" | jq -e --arg sub "$SUB" '.id == $sub and .tenantId != null' >/dev/null || { echo "Azure identity differs from azure.subscription_id; stop"; exit 1; }
+printf '%s' "$AZ_ID" | jq -r --arg label "$AZ_LABEL" '"azure target=\($label) subscription=\(.id) tenant=\(.tenantId)"'
 # --category Cost filters to Advisor's cost recommendations. Print the whole recommendation including
 # its extendedProperties: Azure documents cost recommendations as carrying an impact and (for many types)
 # an own savings amount, but the exact key varies by recommendation type and was NOT validated here —
 # so emit the raw object and copy ONLY what Advisor itself returns, verbatim.
-az advisor recommendation list --category Cost -o json 2>/tmp/adv-err \
+az advisor recommendation list --subscription "$SUB" --category Cost -o json 2>/tmp/adv-err \
   | jq '[.[] | {
       id: .id,
       impacted_resource: (.impactedValue // .resourceMetadata.resourceId // null),
@@ -153,7 +287,7 @@ az advisor recommendation list --category Cost -o json 2>/tmp/adv-err \
       problem: (.shortDescription.problem // null),
       solution: (.shortDescription.solution // null),
       extended_properties: .extendedProperties }]' \
-  || echo "COST-AZ-001..005 excluded: az advisor recommendation list --category Cost denied/unavailable — $(cat /tmp/adv-err)"
+  || echo "COST-AZ-001..005 excluded: az advisor recommendation list --subscription "$SUB" --category Cost denied/unavailable — $(cat /tmp/adv-err)"
 ```
 
 **Expected & failure meaning.** Zero or more recommendations, each naming the impacted resource, Advisor's `impact` (`High`/`Medium`/`Low`), and an `extended_properties` object. Where that object contains Advisor's own **monthly-USD** savings amount, copy it verbatim into `estimated_monthly_savings_usd` and set `savings_source: azure-advisor`; where Advisor gives an **annual** or **non-USD** figure, record it verbatim in the finding body with its own unit/currency and leave `estimated_monthly_savings_usd` unset (never divide an annual figure to fabricate a monthly one). Where Advisor gives no figure at all, the recommendation is still a presence fact worth reporting (e.g. "Advisor recommends shutting down VM `x`") — just with no dollar. A permission error or no Advisor data → `excluded` with the reason, never a guessed `0`.
@@ -169,14 +303,36 @@ Classify the section 6 pull. The exact sub-type/category field on an Advisor rec
 - **COST-AZ-002** — idle / shutdown: Advisor recommends shutting down or deleting an underutilized/idle resource. Carry the subtype (shut down vs delete) so the reader knows whether the action is reversible.
 
 ```bash
+set -eu
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done
+[ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+[ -f "$CFG" ] || { echo "missing $CFG; run /scoutflo:connect"; exit 1; }
+TT="${CLAUDE_PLUGIN_ROOT}/report-standard/toolkit-targets.sh"
+AZ_KIND=$(sh "$TT" "$CFG" azure kind); AZ_N=$(sh "$TT" "$CFG" azure count)
+[ "${AZ_N:-0}" -ge 1 ] || { echo "no azure target configured"; exit 1; }
+AZ_IDX=0
+if [ "$AZ_KIND" = seq ]; then
+  AZ_IDX=""; _i=0
+  while [ "$_i" -lt "$AZ_N" ]; do
+    [ "$(sh "$TT" "$CFG" azure label "$_i")" = "${SCOUTFLO_TARGET:-}" ] && AZ_IDX=$_i
+    _i=$((_i+1))
+  done
+  [ -n "$AZ_IDX" ] || { echo "select a azure target with SCOUTFLO_TARGET; labels: $(sh "$TT" "$CFG" azure labels | tr '\n' ' ')"; exit 1; }
+fi
+AZ_LABEL=$(sh "$TT" "$CFG" azure label "$AZ_IDX")
+SUB=$(sh "$TT" "$CFG" azure get "$AZ_IDX" subscription_id)
+[ -n "$SUB" ] || { echo "azure.subscription_id is required; no ambient subscription is selected"; exit 1; }
+AZ_ID=$(az account show --subscription "$SUB" -o json) || { echo "Azure identity read failed; stop"; exit 1; }
+printf '%s' "$AZ_ID" | jq -e --arg sub "$SUB" '.id == $sub and .tenantId != null' >/dev/null || { echo "Azure identity differs from azure.subscription_id; stop"; exit 1; }
+printf '%s' "$AZ_ID" | jq -r --arg label "$AZ_LABEL" '"azure target=\($label) subscription=\(.id) tenant=\(.tenantId)"'
 # Right-size class (COST-AZ-001): solution mentions resizing / SKU change.
-jq --argjson recs "$(az advisor recommendation list --category Cost -o json 2>/dev/null || echo '[]')" \
-  -n '$recs | map(select((.shortDescription.solution // "") | test("(?i)resize|right.?size|sku|underutil"))) 
+jq --argjson recs "$(az advisor recommendation list --subscription "$SUB" --category Cost -o json 2>/dev/null || echo '[]')" \
+  -n '$recs | map(select((.shortDescription.solution // "") | test("(?i)resize|right.?size|sku|underutil")))
       | map({resource: (.impactedValue // .resourceMetadata.resourceId), impact, solution: .shortDescription.solution, extended_properties: .extendedProperties})'
 
 # Idle / shutdown class (COST-AZ-002): solution mentions shutdown / delete / idle.
-jq --argjson recs "$(az advisor recommendation list --category Cost -o json 2>/dev/null || echo '[]')" \
-  -n '$recs | map(select((.shortDescription.solution // "") | test("(?i)shut ?down|deallocate|delete|idle"))) 
+jq --argjson recs "$(az advisor recommendation list --subscription "$SUB" --category Cost -o json 2>/dev/null || echo '[]')" \
+  -n '$recs | map(select((.shortDescription.solution // "") | test("(?i)shut ?down|deallocate|delete|idle")))
       | map({resource: (.impactedValue // .resourceMetadata.resourceId), impact, solution: .shortDescription.solution, extended_properties: .extendedProperties})'
 ```
 
@@ -187,14 +343,36 @@ jq --argjson recs "$(az advisor recommendation list --category Cost -o json 2>/d
 Advisor surfaces commitment purchase opportunities in the same `--category Cost` set. A **commitment is a spend decision**, so these findings are advisory-only and must name the term Advisor assumed (1-year vs 3-year changes the number) and whether the figure is monthly or annual before any dollar is copied.
 
 ```bash
+set -eu
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done
+[ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+[ -f "$CFG" ] || { echo "missing $CFG; run /scoutflo:connect"; exit 1; }
+TT="${CLAUDE_PLUGIN_ROOT}/report-standard/toolkit-targets.sh"
+AZ_KIND=$(sh "$TT" "$CFG" azure kind); AZ_N=$(sh "$TT" "$CFG" azure count)
+[ "${AZ_N:-0}" -ge 1 ] || { echo "no azure target configured"; exit 1; }
+AZ_IDX=0
+if [ "$AZ_KIND" = seq ]; then
+  AZ_IDX=""; _i=0
+  while [ "$_i" -lt "$AZ_N" ]; do
+    [ "$(sh "$TT" "$CFG" azure label "$_i")" = "${SCOUTFLO_TARGET:-}" ] && AZ_IDX=$_i
+    _i=$((_i+1))
+  done
+  [ -n "$AZ_IDX" ] || { echo "select a azure target with SCOUTFLO_TARGET; labels: $(sh "$TT" "$CFG" azure labels | tr '\n' ' ')"; exit 1; }
+fi
+AZ_LABEL=$(sh "$TT" "$CFG" azure label "$AZ_IDX")
+SUB=$(sh "$TT" "$CFG" azure get "$AZ_IDX" subscription_id)
+[ -n "$SUB" ] || { echo "azure.subscription_id is required; no ambient subscription is selected"; exit 1; }
+AZ_ID=$(az account show --subscription "$SUB" -o json) || { echo "Azure identity read failed; stop"; exit 1; }
+printf '%s' "$AZ_ID" | jq -e --arg sub "$SUB" '.id == $sub and .tenantId != null' >/dev/null || { echo "Azure identity differs from azure.subscription_id; stop"; exit 1; }
+printf '%s' "$AZ_ID" | jq -r --arg label "$AZ_LABEL" '"azure target=\($label) subscription=\(.id) tenant=\(.tenantId)"'
 # Reserved Instance class (COST-AZ-003).
-jq --argjson recs "$(az advisor recommendation list --category Cost -o json 2>/dev/null || echo '[]')" \
-  -n '$recs | map(select(((.shortDescription.solution // "") + (.shortDescription.problem // "")) | test("(?i)reserv"))) 
+jq --argjson recs "$(az advisor recommendation list --subscription "$SUB" --category Cost -o json 2>/dev/null || echo '[]')" \
+  -n '$recs | map(select(((.shortDescription.solution // "") + (.shortDescription.problem // "")) | test("(?i)reserv")))
       | map({resource: (.impactedValue // .resourceMetadata.resourceId), impact, solution: .shortDescription.solution, extended_properties: .extendedProperties})'
 
 # Savings Plan class (COST-AZ-004).
-jq --argjson recs "$(az advisor recommendation list --category Cost -o json 2>/dev/null || echo '[]')" \
-  -n '$recs | map(select(((.shortDescription.solution // "") + (.shortDescription.problem // "")) | test("(?i)savings ?plan"))) 
+jq --argjson recs "$(az advisor recommendation list --subscription "$SUB" --category Cost -o json 2>/dev/null || echo '[]')" \
+  -n '$recs | map(select(((.shortDescription.solution // "") + (.shortDescription.problem // "")) | test("(?i)savings ?plan")))
       | map({resource: (.impactedValue // .resourceMetadata.resourceId), impact, solution: .shortDescription.solution, extended_properties: .extendedProperties})'
 ```
 
@@ -208,8 +386,30 @@ jq --argjson recs "$(az advisor recommendation list --category Cost -o json 2>/d
 New Advisor cost recommendation types appear over time (SQL, storage, App Service, Cosmos DB, Data Explorer, and others). Rather than hardcode a classifier that silently goes stale, COST-AZ-005 sweeps up **every** `--category Cost` recommendation from the section 6 pull that sections 7 and 8 did not already classify, so nothing surfaced by Advisor is dropped on the floor:
 
 ```bash
+set -eu
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done
+[ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+[ -f "$CFG" ] || { echo "missing $CFG; run /scoutflo:connect"; exit 1; }
+TT="${CLAUDE_PLUGIN_ROOT}/report-standard/toolkit-targets.sh"
+AZ_KIND=$(sh "$TT" "$CFG" azure kind); AZ_N=$(sh "$TT" "$CFG" azure count)
+[ "${AZ_N:-0}" -ge 1 ] || { echo "no azure target configured"; exit 1; }
+AZ_IDX=0
+if [ "$AZ_KIND" = seq ]; then
+  AZ_IDX=""; _i=0
+  while [ "$_i" -lt "$AZ_N" ]; do
+    [ "$(sh "$TT" "$CFG" azure label "$_i")" = "${SCOUTFLO_TARGET:-}" ] && AZ_IDX=$_i
+    _i=$((_i+1))
+  done
+  [ -n "$AZ_IDX" ] || { echo "select a azure target with SCOUTFLO_TARGET; labels: $(sh "$TT" "$CFG" azure labels | tr '\n' ' ')"; exit 1; }
+fi
+AZ_LABEL=$(sh "$TT" "$CFG" azure label "$AZ_IDX")
+SUB=$(sh "$TT" "$CFG" azure get "$AZ_IDX" subscription_id)
+[ -n "$SUB" ] || { echo "azure.subscription_id is required; no ambient subscription is selected"; exit 1; }
+AZ_ID=$(az account show --subscription "$SUB" -o json) || { echo "Azure identity read failed; stop"; exit 1; }
+printf '%s' "$AZ_ID" | jq -e --arg sub "$SUB" '.id == $sub and .tenantId != null' >/dev/null || { echo "Azure identity differs from azure.subscription_id; stop"; exit 1; }
+printf '%s' "$AZ_ID" | jq -r --arg label "$AZ_LABEL" '"azure target=\($label) subscription=\(.id) tenant=\(.tenantId)"'
 # Residual sweep (COST-AZ-005): everything in the Cost set NOT matched by the right-size, idle, RI, or savings-plan classifiers.
-jq --argjson recs "$(az advisor recommendation list --category Cost -o json 2>/dev/null || echo '[]')" \
+jq --argjson recs "$(az advisor recommendation list --subscription "$SUB" --category Cost -o json 2>/dev/null || echo '[]')" \
   -n '$recs
       | map(select((((.shortDescription.solution // "") + (.shortDescription.problem // ""))
             | test("(?i)resize|right.?size|sku|underutil|shut ?down|deallocate|delete|idle|reserv|savings ?plan")) | not))
@@ -224,37 +424,115 @@ This is **context, not a savings figure**: it shows where the money is actually 
 
 ```bash
 set -eu
-# Self-contained: the section-4 identity preamble + arm_post helper, repeated so this block runs alone.
-AZ_SUBSCRIPTION_CFG=""    # azure.subscription_id (empty = az CLI default)
-SUB="${AZ_SUBSCRIPTION_CFG:-$(az account show --query id -o tsv)}"
-ARM_TOKEN="$(az account get-access-token --resource https://management.azure.com --query accessToken -o tsv)"
-arm_post() {   # READ that uses POST (readOnly); honor Retry-After / back off on 429
-  _url="$1"; _body="$2"; _attempt=1; _max=5
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done
+[ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+[ -f "$CFG" ] || { echo "missing $CFG; run /scoutflo:connect"; exit 1; }
+TT="${CLAUDE_PLUGIN_ROOT}/report-standard/toolkit-targets.sh"
+AZ_KIND=$(sh "$TT" "$CFG" azure kind); AZ_N=$(sh "$TT" "$CFG" azure count)
+[ "${AZ_N:-0}" -ge 1 ] || { echo "no azure target configured"; exit 1; }
+AZ_IDX=0
+if [ "$AZ_KIND" = seq ]; then
+  AZ_IDX=""; _i=0
+  while [ "$_i" -lt "$AZ_N" ]; do
+    [ "$(sh "$TT" "$CFG" azure label "$_i")" = "${SCOUTFLO_TARGET:-}" ] && AZ_IDX=$_i
+    _i=$((_i+1))
+  done
+  [ -n "$AZ_IDX" ] || { echo "select a azure target with SCOUTFLO_TARGET; labels: $(sh "$TT" "$CFG" azure labels | tr '\n' ' ')"; exit 1; }
+fi
+AZ_LABEL=$(sh "$TT" "$CFG" azure label "$AZ_IDX")
+SUB=$(sh "$TT" "$CFG" azure get "$AZ_IDX" subscription_id)
+[ -n "$SUB" ] || { echo "azure.subscription_id is required; no ambient subscription is selected"; exit 1; }
+AZ_ID=$(az account show --subscription "$SUB" -o json) || { echo "Azure identity read failed; stop"; exit 1; }
+printf '%s' "$AZ_ID" | jq -e --arg sub "$SUB" '.id == $sub and .tenantId != null' >/dev/null || { echo "Azure identity differs from azure.subscription_id; stop"; exit 1; }
+printf '%s' "$AZ_ID" | jq -r --arg label "$AZ_LABEL" '"azure target=\($label) subscription=\(.id) tenant=\(.tenantId)"'
+ARM_TOKEN=$(az account get-access-token --subscription "$SUB" --resource https://management.azure.com --query accessToken -o tsv)
+[ -n "$ARM_TOKEN" ] || { echo "Azure ARM token unavailable; stop"; exit 1; }
+arm_post() { # READ that uses POST: Resource Graph /resources or Cost Management /query only.
+  _url="$1"; _body="$2"; _attempt=1
+  _headers=$(mktemp)
   while :; do
-    _resp="$(curl -sS -D /tmp/az-hdr -w '\n%{http_code}' -X POST "$_url" -H "Authorization: Bearer ${ARM_TOKEN}" -H 'Content-Type: application/json' -d "$_body")"
-    _code="$(printf '%s' "$_resp" | tail -n1)"; _payload="$(printf '%s' "$_resp" | sed '$d')"
-    if [ "$_code" = "429" ] && [ "$_attempt" -lt "$_max" ]; then
-      _ra="$(sed -n 's/^[Rr]etry-[Aa]fter:[[:space:]]*\([0-9]\{1,\}\).*/\1/p' /tmp/az-hdr | head -n1)"
-      sleep "${_ra:-$((_attempt * _attempt * 2))}"; _attempt=$((_attempt + 1)); continue
+    if ! _resp=$(curl -sS --max-time 30 -D "$_headers" -w '\n%{http_code}' -X POST "$_url" -H "Authorization: Bearer ${ARM_TOKEN}" -H 'Content-Type: application/json' -d "$_body"); then
+      rm -f "$_headers"; echo "Azure read transport failure; check blocked" >&2; return 1
     fi
+    _code=$(printf '%s' "$_resp" | tail -n1); _payload=$(printf '%s' "$_resp" | sed '$d')
+    if [ "$_code" = 429 ] && [ "$_attempt" -lt 5 ]; then
+      _ra=$(sed -n 's/^[Rr]etry-[Aa]fter:[[:space:]]*\([0-9]\{1,\}\).*/\1/p' "$_headers" | head -n1)
+      _wait=${_ra:-$((_attempt * _attempt * 2))}; [ "$_wait" -le 30 ] || _wait=30
+      sleep "$_wait"; _attempt=$((_attempt+1)); continue
+    fi
+    rm -f "$_headers"
+    [ "$_code" = 200 ] && printf '%s' "$_payload" | jq -e 'type == "object" and (has("error") | not)' >/dev/null || { echo "Azure read refused/invalid (HTTP $_code); check blocked" >&2; return 1; }
     printf '%s' "$_payload"; return 0
   done
 }
-# READ that uses POST (readOnly) — subscription-scoped, whole month-to-date, one call, no per-region loop.
+RG_URL="https://management.azure.com/providers/Microsoft.ResourceGraph/resources?api-version=2022-10-01"
+rg_query() {
+  _result=$(arm_post "$RG_URL" "$(jq -n --arg s "$SUB" --arg q "$1" '{subscriptions:[$s], query:$q}')") || return 1
+  printf '%s' "$_result" | jq -e '(has("data") and (.data|type=="array")) and (.resultTruncated != "true") and (.resultTruncated != true) and ((.skipToken // ."$skipToken" // "") == "")' >/dev/null || { echo "Resource Graph result incomplete; page it before reporting an empty/complete result" >&2; return 1; }
+  printf '%s' "$_result" | jq '{count: .count, rows: .data}'
+}
 CM_URL="https://management.azure.com/subscriptions/${SUB}/providers/Microsoft.CostManagement/query?api-version=2023-11-01"
 CM_BODY='{"type":"ActualCost","timeframe":"MonthToDate","dataset":{"granularity":"None","aggregation":{"totalCost":{"name":"PreTaxCost","function":"Sum"}}}}'
-arm_post "$CM_URL" "$CM_BODY" \
-  | jq '{columns: [.properties.columns[].name], rows: .properties.rows}' \
-  || echo "COST-AZ-020 excluded: Cost Management query denied (needs Cost Management Reader or Billing Reader)"
+CM_RESULT=$(arm_post "$CM_URL" "$CM_BODY") || { echo "COST-AZ-020 blocked: Cost Management query denied or unavailable"; exit 1; }
+printf '%s' "$CM_RESULT" | jq -e '.properties.columns | type=="array"' >/dev/null || { echo "COST-AZ-020 blocked: invalid response shape"; exit 1; }
+printf '%s' "$CM_RESULT" | jq '{columns: [.properties.columns[].name], rows: .properties.rows}'
 ```
 
 **Expected & failure meaning.** The response's `rows` carry the subscription's month-to-date `PreTaxCost` with its currency column — report the provider's own total **verbatim** as context, with its currency and the `MonthToDate` window, on its own COST-AZ-020 line. **Never** sum it into the savings total, and **never** blend two subscriptions' totals into one number (report each scope's total separately). A `403` → `excluded` with the doctor's reason. A persistent `429` after the section 4 backoff → `blocked, reason: "Cost Management throttled (429) after retries"` — never a guessed or `0` figure. Present spend as spend; mixing it into savings misleads a budget conversation.
 
 ## 11. Presence facts via Resource Graph (COST-AZ-021 to COST-AZ-025)
 
-These run from the confirmed Resource Graph endpoint (`2022-10-01`) plus the subscription `Reader` role the scored audit already requires, so they still run when the Advisor and Cost Management scopes are missing. **None carries a dollar figure** — Azure returns no native cost for a bare idle resource, so each is a presence fact naming the concrete resource, its resource group, region, SKU/size, and age. The KQL `properties.*` paths below are Azure's public resource schema and were **not** validated in the confirmed run; a wrong path yields *no rows* (a miss), not a false dollar — confirm a flagged resource is truly idle before reporting it. Reuse the section 4 `rg_query` helper.
+These run from the confirmed Resource Graph endpoint (`2022-10-01`) plus the subscription `Reader` role the scored audit already requires, so they still run when the Advisor and Cost Management scopes are missing. **None carries a dollar figure** — Azure returns no native cost for a bare idle resource, so each is a presence fact naming the concrete resource, its resource group, region, SKU/size, and age. The KQL `properties.*` paths below are Azure's public resource schema and were **not** validated in the confirmed run; a wrong path yields *no rows* (a miss), not a false dollar — confirm a flagged resource is truly idle before reporting it. Each block includes its own target-bound `rg_query` helper.
 
 ```bash
+set -eu
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done
+[ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+[ -f "$CFG" ] || { echo "missing $CFG; run /scoutflo:connect"; exit 1; }
+TT="${CLAUDE_PLUGIN_ROOT}/report-standard/toolkit-targets.sh"
+AZ_KIND=$(sh "$TT" "$CFG" azure kind); AZ_N=$(sh "$TT" "$CFG" azure count)
+[ "${AZ_N:-0}" -ge 1 ] || { echo "no azure target configured"; exit 1; }
+AZ_IDX=0
+if [ "$AZ_KIND" = seq ]; then
+  AZ_IDX=""; _i=0
+  while [ "$_i" -lt "$AZ_N" ]; do
+    [ "$(sh "$TT" "$CFG" azure label "$_i")" = "${SCOUTFLO_TARGET:-}" ] && AZ_IDX=$_i
+    _i=$((_i+1))
+  done
+  [ -n "$AZ_IDX" ] || { echo "select a azure target with SCOUTFLO_TARGET; labels: $(sh "$TT" "$CFG" azure labels | tr '\n' ' ')"; exit 1; }
+fi
+AZ_LABEL=$(sh "$TT" "$CFG" azure label "$AZ_IDX")
+SUB=$(sh "$TT" "$CFG" azure get "$AZ_IDX" subscription_id)
+[ -n "$SUB" ] || { echo "azure.subscription_id is required; no ambient subscription is selected"; exit 1; }
+AZ_ID=$(az account show --subscription "$SUB" -o json) || { echo "Azure identity read failed; stop"; exit 1; }
+printf '%s' "$AZ_ID" | jq -e --arg sub "$SUB" '.id == $sub and .tenantId != null' >/dev/null || { echo "Azure identity differs from azure.subscription_id; stop"; exit 1; }
+printf '%s' "$AZ_ID" | jq -r --arg label "$AZ_LABEL" '"azure target=\($label) subscription=\(.id) tenant=\(.tenantId)"'
+ARM_TOKEN=$(az account get-access-token --subscription "$SUB" --resource https://management.azure.com --query accessToken -o tsv)
+[ -n "$ARM_TOKEN" ] || { echo "Azure ARM token unavailable; stop"; exit 1; }
+arm_post() { # READ that uses POST: Resource Graph /resources or Cost Management /query only.
+  _url="$1"; _body="$2"; _attempt=1
+  _headers=$(mktemp)
+  while :; do
+    if ! _resp=$(curl -sS --max-time 30 -D "$_headers" -w '\n%{http_code}' -X POST "$_url" -H "Authorization: Bearer ${ARM_TOKEN}" -H 'Content-Type: application/json' -d "$_body"); then
+      rm -f "$_headers"; echo "Azure read transport failure; check blocked" >&2; return 1
+    fi
+    _code=$(printf '%s' "$_resp" | tail -n1); _payload=$(printf '%s' "$_resp" | sed '$d')
+    if [ "$_code" = 429 ] && [ "$_attempt" -lt 5 ]; then
+      _ra=$(sed -n 's/^[Rr]etry-[Aa]fter:[[:space:]]*\([0-9]\{1,\}\).*/\1/p' "$_headers" | head -n1)
+      _wait=${_ra:-$((_attempt * _attempt * 2))}; [ "$_wait" -le 30 ] || _wait=30
+      sleep "$_wait"; _attempt=$((_attempt+1)); continue
+    fi
+    rm -f "$_headers"
+    [ "$_code" = 200 ] && printf '%s' "$_payload" | jq -e 'type == "object" and (has("error") | not)' >/dev/null || { echo "Azure read refused/invalid (HTTP $_code); check blocked" >&2; return 1; }
+    printf '%s' "$_payload"; return 0
+  done
+}
+RG_URL="https://management.azure.com/providers/Microsoft.ResourceGraph/resources?api-version=2022-10-01"
+rg_query() {
+  _result=$(arm_post "$RG_URL" "$(jq -n --arg s "$SUB" --arg q "$1" '{subscriptions:[$s], query:$q}')") || return 1
+  printf '%s' "$_result" | jq -e '(has("data") and (.data|type=="array")) and (.resultTruncated != "true") and (.resultTruncated != true) and ((.skipToken // ."$skipToken" // "") == "")' >/dev/null || { echo "Resource Graph result incomplete; page it before reporting an empty/complete result" >&2; return 1; }
+  printf '%s' "$_result" | jq '{count: .count, rows: .data}'
+}
 # COST-AZ-021: unattached managed disks (diskState 'Unattached' == not attached to any VM, still billed).
 rg_query "Resources | where type =~ 'microsoft.compute/disks'
   | where tostring(properties.diskState) =~ 'Unattached'

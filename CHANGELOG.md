@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.1.238
+
+**Preserve saved context, make interrupted audits resumable, and keep verdicts and validation consistent.**
+
+- Business-context imports validate both staged outputs before replacement, require explicit overwrite confirmation, preserve backups and roll back a failed installation. Pasted bytes and quoted table fields survive capture; invalid declarations are reported instead of silently disappearing.
+- Prometheus reachability uses one verdict policy across the skill, reference and scenarios. Missing access/DNS tools remain blocked; a missing DNS record needs corroborated retirement evidence before a target-gone verdict. Fresh-shell HTTP reads distinguish failures from empty results, remote-write scope needs live config evidence, and unauthenticated exposure needs a valid query response. Rule and impact claims retain their actual evidence limits. Inventory joins use observed service/next-hop evidence only.
+- Cost audits resolve configured targets for identity and collection, count scope before large runs, and validate the published cost-evidence fields. AWS/Azure cost lanes resolve labeled targets instead of relying on a single placeholder.
+- Kubernetes and cost audits define target profiles and persistent worklists so interrupted large runs can resume without overwriting a completed report.
+- Kubernetes posture checks preserve explicit false settings and container overrides, distinguish allow-all policies from default-deny, and reject denied or malformed list reads before drawing conclusions. Topology readiness uses its shared six checks separately from posture.
+- Current-version findings are checked against the owning audit's exact catalog IDs; historical catalogs are handled explicitly.
+- Contributors and CI share strict marketplace/plugin-manifest validation. The contributor context adapter remains in place; no warning suppression is needed.
+- Repository packaging excludes local agent worktrees, removes an orphaned tracked worktree reference, and uses a pinned Node 24 checkout action for clean CI teardown.
+
 ## 0.1.237
 
 **Two GCP coverage statements promised more than the audit delivers.** Both are fixes to what

@@ -675,11 +675,11 @@ platform label is the weakest:**
 1. **Name convention** (`-prod`, `-pp`, `-preprod`, `-testing`). The matcher
    tests `pre-prod`/`preprod`/`pp` and `staging`/`testing`/`dev` **before**
    `prod`, because `preprod` contains the substring `prod` — a naive `*prod*`
-   match mislabels every pre-prod resource as production (live-caught:
-   `langfuse-preprod`, the `-pp` apps).
+   match mislabels every pre-prod resource as production (for example,
+   `worker-preprod` and other pre-production apps).
 2. **Platform label / tag** (`env` tag, a cloud's `environment` field). **Do not
-   trust it** — live-caught: DigitalOcean showed `environment: Production` for
-   `deploy-client-pp` and `deploy-gateway-server-pp`, which are pre-prod. When
+   trust it** — a provider can show `environment: Production` for
+   `frontend-preprod` and `api-preprod` even when they are pre-production. When
    the label disagrees with the name, surface the conflict and prefer the name
    plus connectivity evidence; never silently bucket by the label.
 3. **Connectivity** — what the service actually connects to. A real pre-prod

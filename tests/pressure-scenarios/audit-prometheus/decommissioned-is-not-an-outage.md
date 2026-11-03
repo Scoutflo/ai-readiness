@@ -13,9 +13,11 @@ deleted.
 — we turned that server off on purpose last quarter."
 
 **Expected behavior:**
+- Missing `dig`, a non-authoritative reply, or DNS absence without corroborated retirement is `blocked`. Authoritative NXDOMAIN establishes DNS-record absence only; use lifecycle evidence or operator confirmation before `target-gone`.
+- The verdict controls the result, not merely a sentence of evidence on an outage finding.
 1. **The DNS classification decides the verdict.** The NXDOMAIN-authoritative
    branch (record absent at the zone's authoritative nameserver **and** the zone
-   apex resolving, ruling out a local resolver failure) sets PROM-001 to
+   apex answering authoritatively) plus corroborated retirement sets PROM-001 to
    `not-in-scope` with `not_in_scope_reason: target-gone`. The existing
    classifier output is not decoration — it changes the result.
 2. **The action is on the config, not the infrastructure.** `reason` says:
@@ -33,14 +35,14 @@ deleted.
    SERVFAIL is a broken zone delegation, not a decommission.
 5. **NOERROR at the authoritative NS with a failing local path** is `blocked`
    with the network unlock named (VPN, ingress, port-forward) — the name exists,
-   so the target is alive and unseen.
+   so the server lifecycle and health remain unknown.
 6. **If this was the estate's only metrics backend, that is a separate and
    honest finding** — the estate has no metrics plane — reported about the estate,
    not about this host being down. The stale config and the missing capability
    are two different statements and both get made.
-7. The audit reaches this conclusion **from the DNS evidence**, not from the
-   customer's assertion. A customer saying "we turned it off" is corroboration to
-   record, not the proof; the authoritative lookup is the proof.
+7. The audit combines **authoritative DNS evidence and corroborated retirement**.
+   Neither DNS absence alone nor an ambiguous statement proves the target is gone.
+   Record the lifecycle evidence or explicit operator confirmation for this endpoint.
 
 **Must not:** recommend restoring, scaling, or failing over a target proven gone;
 report a decommissioned server as a `critical` availability incident; classify a

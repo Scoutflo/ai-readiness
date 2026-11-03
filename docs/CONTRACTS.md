@@ -57,6 +57,12 @@ these two classes existed; these steps are what caught them.
   valid ONLY across runs whose `scoring_model` + `check_set` match — an
   incompatible score must never leak into a trend; guarded by
   `tests/test-report-viz.sh` Test 7a).
+- **Catalog integrity:** for artifacts emitted by this plugin version, every
+  `checks[]` and `findings[]` ID must occur in the owning audit's explicit ID
+  catalog. A `TOPO-*` observation is allowed only with zero recoverable points
+  and `scoring_scope: "non-scored"`. Historical versions retain structural
+  validation with a catalog-skip diagnostic; future versions require their own
+  validator. The owner must name a shipped scored audit, never a filesystem path.
 - **SSOT:** `report-standard/findings-schema.md`, `inventory-schema.md`,
   `report-template.md`, `severity-and-scoring.md`, `README.md`.
 - **Guards:** `report-standard/check-findings.sh` (reconciliation, histogram,
@@ -129,6 +135,10 @@ these two classes existed; these steps are what caught them.
   setup-azure, their doctor target) through the same enumerator and `SCOUTFLO_TARGET`. On a labeled list they stop
   when `SCOUTFLO_TARGET` is unset or matches no label: a writing skill never
   falls back to the first entry.
+- **Cost provider lanes (v0.1.238):** `audit-cost` remains an aggregator with no
+  own connection block. Its AWS, Azure and GCP reference steps resolve their
+  provider block through the enumerator and stop on an unselected or unmatched
+  list label; each command uses the selected identity explicitly.
 - **Unmatched label (v0.1.222):** every other label loop (each audit and
   `map-topology`) is followed by a stop: on a labeled list, a `SCOUTFLO_TARGET` that
   matches no label stops the block with the label list instead of using the first
@@ -200,6 +210,7 @@ these two classes existed; these steps are what caught them.
   unit_metrics[], exclusions{accounts,regions,services,resources}, derived_at}`; `business-context-resolver` →
   `~/.scoutflo/computed_metadata.jsonl` (per-resource); the `.md` is the SSOT and
   a valid fallback source.
+- **Import invariant:** `bc_import_file FILE [--confirm-replace]` validates and derives staged data before replacing either context file. Existing context requires explicit replacement consent, is backed up, and is restored if installation fails. Direct derivation preserves prior JSON on failure; dropped resource/unit declarations emit diagnostics. `skills/business-context/tests/test-business-context-import.sh` exercises these guarantees and the published fresh-shell recipes.
 - **Consumers:** all 17 own-block audits' **Metadata Load** block — the canonical
   block (byte-identical across all 17) that loads the workspace layer
   (`business_context.json`, else the `.md` via the ssot-md fallback) **and** the
@@ -370,6 +381,12 @@ these two classes existed; these steps are what caught them.
   value from the configured variable; published preludes run against the store ladder,
   custom names, unset names, lists, a malformed store, doctl and LGTM stacks).
   Selftest: `layer_parity`.
+- **Durable scope (v0.1.238):** cost sizing records measured lower bounds and
+  uncensused catalogs; an unknown count must trigger a scope decision, never
+  become zero. Cost and Kubernetes persist a fixed-run worklist, bind resume to
+  the selected targets, retain successful evidence before marking work done,
+  and refuse final publication while required work remains pending. Kubernetes
+  sizes the selected context and persists that count for fresh-shell steps.
 
 ## C14 — Cross-tool coverage correlation (a gap in one tool covered by another)
 
@@ -399,6 +416,10 @@ these two classes existed; these steps are what caught them.
   match is `unmappable` (verify-pending); nothing is `true-gap`. Confidence is
   highest when `map-topology` has run so both sides use the canonical service name.
   Every `covered_by` entry names an inventory item present in this run.
+  Prometheus `covers` values come from observed service labels or a verified
+  job-to-service mapping. Unknown mappings stay unknown. Its `routes_to` may
+  name only a successfully observed Alertmanager next hop; this does not prove
+  eventual notification delivery.
 - **SSOT:** `skills/correlation-engine/SKILL.md` (`coverage[]` schema, must match
   the lib) and `report-standard/inventory-schema.md` (`covers` = canonical service
   name when known).
@@ -547,6 +568,8 @@ Every gate `ci/structure-check.sh` composes is listed here; `ci/contract-map-che
 fails the build if a composed gate is missing from this file or if this file names
 a gate that does not exist — so the map cannot silently drift from reality.
 
+Manifest validation runs outside the composed structure gate: `ci/plugin-validate.sh` strictly validates the explicit marketplace manifest and the actual plugin manifest/assets with its README in an isolated fixture. It rejects OS metadata and all validator failures; contributor context is not runtime plugin content. Tests: `tests/test-plugin-validate.sh`.
+
 Structural / linkage:
 `ci/anchor-check.sh` (every `skill#anchor` resolves) ·
 `ci/crossblock-check.sh` (no fenced block reads an undeclared cross-block var, no inline write command reads another block's variables, and no setup-skill undo step is a one-line note) ·
@@ -615,6 +638,10 @@ PR; the live smoke against a real estate is a hard merge gate (`AGENTS.md`).
   `null`. The savings summary must equal the sum of its findings. A cost file
   never carries a 0-100 score and never enters `score.categories` anywhere.
   Provider slugs come from cost-schema.md's registered list.
+- **Current summary contract:** v0.1.238 and later also require
+  `observed_monthly_spend`, `savings_pct_of_spend`, `unassessed_monthly_spend` and
+  `unit_economics` with the types and arithmetic in `cost-schema.md`. Historical
+  v1 artifacts may omit these fields; when present they are still validated.
 - **SSOT:** [report-standard/cost-schema.md](../report-standard/cost-schema.md);
   each provider's deep lane in `skills/audit-cost/references/<provider>-cost.md`.
 - **Guards:** `report-standard/check-cost.sh` (the money-integrity gate:
@@ -740,6 +767,10 @@ PR; the live smoke against a real estate is a hard merge gate (`AGENTS.md`).
   from the owning control plane and **fails closed** (a timeout, refused
   connection, missing CLI, expired credential or denied permission is `blocked`,
   never gone) and its action is on the config, never a live-system remediation.
+  For Prometheus, authoritative DNS absence establishes only that the record is
+  absent. `target-gone` additionally needs corroborated retirement evidence;
+  DNS absence alone, non-authoritative answers and unavailable DNS tooling
+  remain `blocked`. A reachable unhealthy endpoint is still `fail`.
   `by-design` is **declared, never inferred** — no name, tag, label, utilisation
   level or architectural guess establishes intent, and with no declaration the
   finding stands. `covered-elsewhere` requires the capability to be **verified**

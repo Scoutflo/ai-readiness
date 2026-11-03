@@ -15,6 +15,23 @@ A dedicated, deep, **per-resource** cost audit. It queries each configured provi
 
 A cost report ranks opportunities by dollars; it is deliberately **not** folded into a 0–100 health score. Mixing a dollar-savings axis into a reliability score creates a perverse incentive: an idle standby replica is "waste" by a cost lens and "correct" by a reliability lens, so one score would reward the wrong fix. This is the same "parallel non-scored section" rule the toolkit already uses for Cost & Resource Optimization inside `audit-aws` and for Topology Readiness. So this skill emits `scoutflo-cost/v1` (a ranked-savings schema with no `score` object), and its report is validated by [`check-cost.sh`](../../report-standard/check-cost.sh), never `check-report.sh`.
 
+## Target profile
+
+This audit has no 100/100 score and awards no recoverable readiness points. Its
+benchmark is an auditable cost decision across these dimensions:
+
+| Dimension | Target state | Evidence required |
+| --- | --- | --- |
+| Scope and coverage | Every selected provider/target is assessed or explicitly excluded | Config-bound identities, sizing evidence, completed/blocked worklist rows |
+| Spend context | Savings have an actual same-scope spend denominator | Billing amount, currency, period and source; unknown is null |
+| Opportunity quality | Every opportunity names resources and a measured signal | Live inventory/metrics and provider recommendation; declared intent retained |
+| Money integrity | Native savings and indicative estimates stay separate | Verbatim native amount/source; arithmetic reconciles without double counting |
+| Unassessed spend | Billed resources with no checks stay visible | Targets, billed amount/currency and why assessment failed, or explicit unknown |
+| Unit economics | Only declared units with aligned, auditable inputs | Both periods' spend/volume, sources, basis, quotients and trend; otherwise exclusion |
+
+- ❌ Treat an unavailable billing export as zero spend and announce complete savings coverage.
+- ✅ Keep spend and percentage null, name the missing export, and report verified opportunities with their limits.
+
 ## Outputs
 
 - `./scoutflo-audits/cost/<YYYY-MM-DD>/findings.json` — or `cost/<target>/<YYYY-MM-DD>/` when `SCOUTFLO_TARGET` selects one of several configured targets — per the [cost schema](../../report-standard/cost-schema.md) (`scoutflo-cost/v1`), finding IDs `COST-<PROV>-NNN`.
@@ -75,21 +92,55 @@ echo "doctor gate: pass (per-provider cost scope resolved from the matrix above)
 
 ## Live-safety gate
 
-Print every target this run will read from, and confirm before the first call. This audit is read-only, but reading the wrong account is still a boundary violation.
+Resolve the same config and target used by the provider lane. This block displays the
+**configured** scope; it performs no ambient-account probes and does not claim a pass.
+Before collecting inventory, run that provider reference's independent identity preamble:
+AWS STS with the selected profile/region (compare `account_id` when pinned), GCP's
+selected project and authenticated identity, Azure's explicit subscription, or the
+configured Kubernetes context. A mismatch or failed identity read stops that provider;
+it is never an empty estate. Confirm the displayed scope before the first provider read.
 
 ```bash
 set -eu
-# For each configured provider, print the exact identity this run will use.
-# AWS: sts identity + region. GCP: project + active account. Azure: subscription/tenant/user. K8s: context + server. DO: account. Datadog: site.
-# (Each provider block in references/<prov>-cost.md prints its own identity preamble; this gate is the summary.)
-echo "audit-cost will READ the following targets (nothing is modified):"
-# AWS
-if command -v aws >/dev/null; then aws sts get-caller-identity --output text --query '[Account,Arn]' 2>/dev/null | sed 's/^/  aws: /' || true; fi
-# GCP
-if command -v gcloud >/dev/null; then gcloud config get-value project 2>/dev/null | sed 's/^/  gcp project: /' || true; fi
-# Azure
-if command -v az >/dev/null; then az account show --query '{sub:id,tenant:tenantId,user:user.name}' -o tsv 2>/dev/null | sed 's/^/  azure: /' || true; fi
-echo "live-safety gate: pass — confirm these are the accounts you intend to audit for cost"
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done
+[ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+[ -f "$CFG" ] || { echo "missing $CFG; run /scoutflo:connect"; exit 1; }
+TT="${CLAUDE_PLUGIN_ROOT}/report-standard/toolkit-targets.sh"
+select_target() {
+  COST_PROVIDER="$1"; COST_KIND=$(sh "$TT" "$CFG" "$1" kind); COST_N=$(sh "$TT" "$CFG" "$1" count)
+  COST_IDX=0
+  [ "$COST_N" -gt 0 ] || return 1
+  if [ "$COST_KIND" = seq ]; then
+    COST_IDX=""; _i=0
+    while [ "$_i" -lt "$COST_N" ]; do
+      [ "$(sh "$TT" "$CFG" "$1" label "$_i")" = "${SCOUTFLO_TARGET:-}" ] && COST_IDX=$_i
+      _i=$((_i+1))
+    done
+    [ -n "$COST_IDX" ] || { echo "select $1 with SCOUTFLO_TARGET; labels: $(sh "$TT" "$CFG" "$1" labels | tr '\n' ' ')" >&2; exit 1; }
+  fi
+  COST_LABEL=$(sh "$TT" "$CFG" "$1" label "$COST_IDX")
+}
+for provider in aws gcp azure kubernetes datadog digitalocean signoz newrelic; do
+  if select_target "$provider"; then
+    case "$provider" in
+      aws) keys="profile region account_id" ;;
+      gcp) keys="project billing_project" ;;
+      azure) keys="subscription_id" ;;
+      kubernetes) keys="context" ;;
+      datadog) keys="site" ;;
+      digitalocean) keys="team" ;;
+      signoz) keys="url" ;;
+      newrelic) keys="account_id region" ;;
+    esac
+    printf 'configured %s target=%s' "$provider" "$COST_LABEL"
+    for key in $keys; do
+      value=$(sh "$TT" "$CFG" "$provider" get "$COST_IDX" "$key")
+      [ -z "$value" ] || printf ' %s=%s' "$key" "$value"
+    done
+    printf '\n'
+  fi
+done
+echo "Scope resolved from config; verify each provider identity before its reads. No live-safety pass is claimed by this display."
 ```
 
 ## Ground rules
@@ -110,35 +161,54 @@ echo "live-safety gate: pass — confirm these are the accounts you intend to au
 
 ## Estate sizing and the interactive scope checkpoint
 
-Cost surfaces scale with resource count, and a large multi-account/multi-region estate can be thousands of objects. Before spending tokens, size the estate cheaply and **pause to let the user scope** — the checkpoint the toolkit's `checkpoint` skill and `cli-interactive` library provide. This is mandatory, not optional: an unbounded grind over 4,000 objects with no scoping question is a bug.
+Before deep checks, run the cheap inventory collection in
+[references/estate-scope.md](references/estate-scope.md#collect-sizing-evidence).
+It writes resource IDs and explicit unknown surfaces to `cost/<target>/sizing.json`.
+No request denial, incomplete list, or unavailable count becomes zero. The known count
+is a lower bound; any unknown surface requires a scope decision even below the threshold.
 
 ```bash
 set -eu
 . "${CLAUDE_PLUGIN_ROOT}/skills/cli-interactive/lib/cli-interactive.sh"
-# Cheap count per configured provider (list-only, no per-resource pulls yet).
-# Example for AWS+GCP; extend per configured provider. These are the SAME cheap
-# list calls the per-provider references open with.
-TOTAL=0
-# ... sum cheap list counts per provider into TOTAL (see each reference's sizing note) ...
-
-# Sizing paths (shared toolkit thresholds):
-#   small   (<= 100 objects): one pass, no checkpoint needed
-#   medium  (101–500):        one pass, print scope, proceed
-#   large   (501–2000):       PAUSE — offer scope choices, save to topology.json
-#   xlarge  (> 2000):         PAUSE — scope selection REQUIRED before proceeding
-echo "estate: cost-bearing objects=${TOTAL}"
-
-# Interactive checkpoint on large/xlarge — offer: (a) audit everything (batched),
-# (b) scope by provider/region/service, (c) exclude noisy classes. Persist the
-# choice to ~/.scoutflo/topology.json audit_scope for reuse (see /scoutflo:checkpoint).
-if [ "${TOTAL}" -ge 501 ]; then
-  cli_pause_before_audit "${TOTAL}"          # confirm before a large run
-  cli_prompt_exclude_services                # offer scope/exclusions, persist to topology.json
-  echo "[checkpoint] scope saved to ~/.scoutflo/topology.json (reused on the next run; /scoutflo:checkpoint --reset-scope to clear)"
+COST_SEG="cost${SCOUTFLO_TARGET:+/${SCOUTFLO_TARGET}}"
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done
+[ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+[ -f "$CFG" ] || { echo "missing $CFG; run /scoutflo:connect"; exit 1; }
+TT="${CLAUDE_PLUGIN_ROOT}/report-standard/toolkit-targets.sh"
+SIZE="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${COST_SEG}/sizing.json"
+[ -f "$SIZE" ] || { echo "missing sizing evidence; run estate-scope.md collection before deep checks"; exit 1; }
+jq -e '(.objects | type == "array") and (.unknown | type == "array")' "$SIZE" >/dev/null
+jq -e --arg config "$CFG" --arg fingerprint "$(cksum < "$CFG")" --arg selected "${SCOUTFLO_TARGET:-}" '.config==$config and .config_fingerprint==$fingerprint and .selected_target==$selected' "$SIZE" >/dev/null || { echo "sizing config changed; recollect it"; exit 1; }
+TOTAL=$(jq '.objects | length' "$SIZE")
+UNKNOWN=$(jq '.unknown | length' "$SIZE")
+SMALL_MAX=100; MEDIUM_MAX=500; LARGE_MAX=2000  # examples; tune to your estate
+PATH_SIZE=small
+[ "$TOTAL" -le "$SMALL_MAX" ] || PATH_SIZE=medium
+[ "$TOTAL" -le "$MEDIUM_MAX" ] || PATH_SIZE=large
+[ "$TOTAL" -le "$LARGE_MAX" ] || PATH_SIZE=xlarge
+[ "$UNKNOWN" -eq 0 ] || PATH_SIZE=large
+echo "estate: cost-bearing objects=${TOTAL} unknown-surfaces=${UNKNOWN} path=${PATH_SIZE}"
+if [ "${TOTAL}" -ge 501 ] || [ "$UNKNOWN" -gt 0 ]; then
+  jq -r '.unknown[] | "size unknown: \(.provider) / \(.surface): \(.reason)"' "$SIZE"
+  # The shared pause helper returns immediately below 1000, so explicitly confirm
+  # 501-999 objects and unknown counts through its companion function.
+  if [ "$TOTAL" -ge 1000 ]; then cli_pause_before_audit "${TOTAL}"
+  else cli_confirm_proceed "Cost audit has ${TOTAL} known objects and ${UNKNOWN} unknown surfaces; continue with a bounded scope?"; fi
+  echo "Record the approved providers/regions/classes in the large-run scope file before deep reads. No shared topology file was changed."
 fi
 ```
 
-On the large/xlarge path, per-provider phases run against the **scoped** set in bounded batches (process one region/namespace/product-line group at a time rather than the whole estate at once). Never silently truncate: the report names any provider or region the user scoped out, and the summary reflects it.
+Small (≤100) and medium (101–500) estates with complete sizing run in one pass.
+Large/xlarge or unknown-size scopes use the
+[durable worklist](references/estate-scope.md#large-path-worklist-and-resume): one
+provider/target/resource row, fixed run ID, atomic batch lock, and persisted batch evidence.
+Before creating a run, offer any matching unfinished run for resume. A row becomes `done`
+only after its reads and written evidence succeed; a terminal failure becomes `blocked`
+with a reason and remains disclosed. Pending rows prevent replacing the last complete
+report. Scope exclusions are recorded before omitting rows, never silently truncated.
+
+- ❌ A failed VM list contributes zero, so the audit declares a small estate and starts every deep check.
+- ✅ The failed list is an unknown surface; the audit asks for scope and keeps its spend unassessed.
 
 ## Phase 1: Load context and prior-run cross-reference
 
@@ -199,13 +269,57 @@ set -eu
 # project's findings with no error. Same `<integration>/<label>/<date>` shape every
 # own-block audit uses. A single-target estate is unchanged.
 COST_SEG="cost${SCOUTFLO_TARGET:+/${SCOUTFLO_TARGET}}"
-OUT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${COST_SEG}/$(date -u +%Y-%m-%d)"
+# Recover the persisted run in a fresh shell; an unset COST_RUN_DIR never skips the gate.
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done
+[ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+[ -f "$CFG" ] || { echo "cost configuration is missing"; exit 1; }
+case "${SCOUTFLO_TARGET:-}" in .|..|*[!a-zA-Z0-9._-]*) echo "invalid cost target label"; exit 1;; esac
+BASE="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${COST_SEG}"
+[ -d "$BASE" ] || { echo "collect sizing evidence before publication"; exit 1; }
+BASE=$(CDPATH= cd -- "$BASE" && pwd -P)
+SIZE="$BASE/sizing.json"; FINGERPRINT=$(cksum < "$CFG")
+jq -e --arg config "$CFG" --arg fingerprint "$FINGERPRINT" --arg selected "${SCOUTFLO_TARGET:-}" '.config==$config and .config_fingerprint==$fingerprint and .selected_target==$selected and (.objects|type=="array") and (.unknown|type=="array")' "$SIZE" >/dev/null || { echo "sizing belongs to another config or target; recollect it"; exit 1; }
+# Even a missing pointer or newly smaller census cannot hide unfinished work.
+for saved in "$BASE"/runs/*; do
+  [ ! -f "$saved/worklist.tsv" ] || {
+    [ ! -d "$saved/worklist.lock" ] || { echo "cost batch is still locked; finish it first"; exit 1; }
+    awk -F'\t' '$2 != "done" && $2 != "blocked" && $2 != "excluded" {bad=1} END {exit bad}' "$saved/worklist.tsv" || { echo "cost work remains pending; keep partial evidence in the run directory"; exit 1; }
+  }
+done
+COST_RUN_ID="${COST_RUN_ID:-}"
+[ -n "$COST_RUN_ID" ] || { [ ! -f "$BASE/active-run" ] || COST_RUN_ID=$(cat "$BASE/active-run"); }
+COST_DATE="$(date -u +%Y-%m-%d)"
+if [ -n "$COST_RUN_ID" ]; then
+  case "$COST_RUN_ID" in *[!0-9TZ]*) echo "invalid cost run ID"; exit 1;; esac
+  EXPECTED_RUN="$BASE/runs/$COST_RUN_ID"
+  [ -d "$EXPECTED_RUN" ] || { echo "selected cost run is missing"; exit 1; }
+  EXPECTED_RUN=$(CDPATH= cd -- "$EXPECTED_RUN" && pwd -P)
+  [ "$EXPECTED_RUN" = "$BASE/runs/$COST_RUN_ID" ] || { echo "cost run escapes its target directory"; exit 1; }
+  if [ -n "${COST_RUN_DIR:-}" ]; then
+    GIVEN_RUN=$(CDPATH= cd -- "$COST_RUN_DIR" && pwd -P) || exit 1
+    [ "$GIVEN_RUN" = "$EXPECTED_RUN" ] || { echo "cost run directory belongs to another selected run or target"; exit 1; }
+  fi
+  COST_RUN_DIR="$EXPECTED_RUN"
+  [ -f "$COST_RUN_DIR/worklist.tsv" ] || { echo "missing cost worklist"; exit 1; }
+  [ "$(cat "$COST_RUN_DIR/config-fingerprint")" = "$FINGERPRINT" ] || { echo "run config changed; do not mix evidence"; exit 1; }
+  jq -e --arg config "$CFG" --arg fingerprint "$FINGERPRINT" --arg selected "${SCOUTFLO_TARGET:-}" '.config==$config and .config_fingerprint==$fingerprint and .selected_target==$selected' "$COST_RUN_DIR/sizing.json" >/dev/null || { echo "run belongs to another config or target; do not mix evidence"; exit 1; }
+  jq -e '.approved==true and (.included|type=="array" and length>0) and (.excluded|type=="array")' "$COST_RUN_DIR/scope.json" >/dev/null || { echo "cost scope was not approved"; exit 1; }
+  COST_DATE=$(cat "$COST_RUN_DIR/report-date")
+else
+  [ -z "${COST_RUN_DIR:-}" ] || { echo "select the bound COST_RUN_ID instead of supplying an arbitrary directory"; exit 1; }
+  jq -e '(.objects|length)<=500 and (.unknown|length)==0' "$SIZE" >/dev/null || { echo "large or unknown scope requires a bound cost worklist before publication"; exit 1; }
+fi
+OUT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${COST_SEG}/${COST_DATE}"
 mkdir -p "$OUT"
-# ... write findings.json (scoutflo-cost/v1) and report.md per the standard, then verify:
+# Write findings.json (scoutflo-cost/v1) and report.md from the collected evidence, then verify:
 jq -e '.schema=="scoutflo-cost/v1" and (.findings|type=="array") and .summary' "$OUT/findings.json" >/dev/null && echo "findings.json valid"
 grep -q '^# ' "$OUT/report.md" && echo "report.md present"
 # Money-integrity + schema gate (NOT check-report.sh — this is a ranked-savings report):
 sh "${CLAUDE_PLUGIN_ROOT}/report-standard/check-cost.sh" "$OUT/findings.json"
+# Retain the run evidence, but do not select this completed run for the next audit.
+if [ -n "${COST_RUN_ID:-}" ] && [ -f "$BASE/active-run" ] && [ "$(cat "$BASE/active-run")" = "$COST_RUN_ID" ]; then
+  rm "$BASE/active-run"
+fi
 ```
 
 Append one line to `$(dirname "$OUT")/history.jsonl` (date, `opportunities_total`, `monthly_savings_identified_usd`), replacing any line for the same date **within that target's ledger**. Never a single flat `cost/history.jsonl` across targets: same-date replacement would keep only the last target audited and drop the rest without an error.

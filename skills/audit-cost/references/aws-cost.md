@@ -18,26 +18,44 @@ Findings from this catalog live in the `scoutflo-cost/v1` result (a savings summ
 
 Coverage APIs (`GetSavingsPlansCoverage`, `GetReservationCoverage`) return a **percentage**, not a dollar — report the percentage AWS gives, never derive a saving from the gap.
 
-## 2. Config placeholders and the region rule
+## 2. Config target and the region rule
 
-Every command uses an `aws_cli` helper reading two placeholders from `~/.scoutflo/toolkit.yaml`: `aws.profile` (empty means the default credential chain) and `aws.region`. Set both to the account you are auditing. Run `aws sts get-caller-identity` with the same `--profile`/`--region` and confirm the account before any read.
+Every command uses an `aws_cli` helper reading the selected target from `~/.scoutflo/toolkit.yaml`: `aws.profile` (empty means the default credential chain) and `aws.region`. A labeled list requires `SCOUTFLO_TARGET`; a single mapping keeps its existing shape. Run `aws sts get-caller-identity` with the same `--profile`/`--region` and confirm the account before any read.
 
 ```bash
 set -eu
-AWS_PROFILE_CFG=""            # aws.profile — set to the audited account's profile (empty = default credential chain)
-AWS_REGION_CFG="us-east-1"    # aws.region — set to the audited account's region (example)
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done
+[ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+[ -f "$CFG" ] || { echo "missing $CFG; run /scoutflo:connect"; exit 1; }
+TT="${CLAUDE_PLUGIN_ROOT}/report-standard/toolkit-targets.sh"
+AWS_KIND=$(sh "$TT" "$CFG" aws kind); AWS_N=$(sh "$TT" "$CFG" aws count)
+[ "${AWS_N:-0}" -ge 1 ] || { echo "no aws target configured"; exit 1; }
+AWS_IDX=0
+if [ "$AWS_KIND" = seq ]; then
+  AWS_IDX=""; _i=0
+  while [ "$_i" -lt "$AWS_N" ]; do
+    [ "$(sh "$TT" "$CFG" aws label "$_i")" = "${SCOUTFLO_TARGET:-}" ] && AWS_IDX=$_i
+    _i=$((_i+1))
+  done
+  [ -n "$AWS_IDX" ] || { echo "select a aws target with SCOUTFLO_TARGET; labels: $(sh "$TT" "$CFG" aws labels | tr '\n' ' ')"; exit 1; }
+fi
+AWS_LABEL=$(sh "$TT" "$CFG" aws label "$AWS_IDX")
+AWS_PROFILE_CFG=$(sh "$TT" "$CFG" aws get "$AWS_IDX" profile)
+AWS_REGION_CFG=$(sh "$TT" "$CFG" aws get "$AWS_IDX" region)
+AWS_ACCOUNT_CFG=$(sh "$TT" "$CFG" aws get "$AWS_IDX" account_id)
+[ -n "$AWS_REGION_CFG" ] || { echo "aws.region is required; no ambient region is selected"; exit 1; }
 aws_cli() {
-  if [ -n "$AWS_PROFILE_CFG" ]; then
-    aws --profile "$AWS_PROFILE_CFG" ${AWS_REGION_CFG:+--region "$AWS_REGION_CFG"} "$@"
-  else
-    aws ${AWS_REGION_CFG:+--region "$AWS_REGION_CFG"} "$@"
-  fi
+  if [ -n "$AWS_PROFILE_CFG" ]; then aws --profile "$AWS_PROFILE_CFG" --region "$AWS_REGION_CFG" "$@"
+  else aws --region "$AWS_REGION_CFG" "$@"; fi
 }
+AWS_ID=$(aws_cli sts get-caller-identity --output json) || { echo "AWS identity read failed; stop"; exit 1; }
+printf '%s' "$AWS_ID" | jq -e --arg expected "$AWS_ACCOUNT_CFG" '.Account and .Arn and ($expected == "" or .Account == $expected)' >/dev/null || { echo "AWS identity differs from aws.account_id or is incomplete; stop"; exit 1; }
+printf '%s' "$AWS_ID" | jq -r --arg label "$AWS_LABEL" --arg region "$AWS_REGION_CFG" '"aws target=\($label) region=\($region) account=\(.Account) principal=\(.Arn)"'
 ```
 
 **The region rule (critical for a non-`us-east-1` account like `ap-south-2`).** Three services are single-endpoint globals reachable **only from `us-east-1`**, regardless of `aws.region`:
 
-- **Cost Explorer** (`ce`) — a global service; omit `--region` (it resolves to the global endpoint).
+- **Cost Explorer** (`ce`) — a global service; pin `--region us-east-1`.
 - **Cost Optimization Hub** (`cost-optimization-hub`) — exists **only** in `us-east-1`; pin `--region us-east-1`.
 - **Trusted Advisor** (`support`) — API reachable **only** from `us-east-1`; pin `--region us-east-1`.
 
@@ -79,11 +97,28 @@ Targeting these at `ap-south-2` hits a non-existent endpoint and fails. **Comput
 
 ```bash
 set -eu
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done
+[ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+[ -f "$CFG" ] || { echo "missing $CFG; run /scoutflo:connect"; exit 1; }
+TT="${CLAUDE_PLUGIN_ROOT}/report-standard/toolkit-targets.sh"
+AWS_KIND=$(sh "$TT" "$CFG" aws kind); AWS_N=$(sh "$TT" "$CFG" aws count)
+[ "${AWS_N:-0}" -ge 1 ] || { echo "no aws target configured"; exit 1; }
+AWS_IDX=0
+if [ "$AWS_KIND" = seq ]; then
+  AWS_IDX=""; _i=0
+  while [ "$_i" -lt "$AWS_N" ]; do
+    [ "$(sh "$TT" "$CFG" aws label "$_i")" = "${SCOUTFLO_TARGET:-}" ] && AWS_IDX=$_i
+    _i=$((_i+1))
+  done
+  [ -n "$AWS_IDX" ] || { echo "select a aws target with SCOUTFLO_TARGET; labels: $(sh "$TT" "$CFG" aws labels | tr '\n' ' ')"; exit 1; }
+fi
+AWS_LABEL=$(sh "$TT" "$CFG" aws label "$AWS_IDX")
 RUN_DATE="$(date -u +%Y-%m-%d)"
 MATRIX="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/doctor/${RUN_DATE}/matrix.tsv"   # this run's doctor gate, or most recent
 [ -f "$MATRIX" ] || { echo "no doctor matrix; run the doctor gate before the AWS cost phase"; exit 1; }
-awk -F'\t' -v b="aws" -v c="cost-permissions" '
-  ($1 == b || substr($1, 1, length(b) + 2) == b " (") && $2 == c { n++; print $1, $5, $7 }
+AWS_MATRIX_LABEL=aws; [ "$AWS_N" -le 1 ] || AWS_MATRIX_LABEL="aws ($AWS_LABEL)"
+awk -F'\t' -v b="$AWS_MATRIX_LABEL" -v c="cost-permissions" '
+  $1 == b && $2 == c { n++; print $1, $5, $7 }
   END { if (!n)    { print "no " b " " c " row in this matrix — re-run /scoutflo:doctor against this config before the cost phase; a missing row is NOT permission to skip the checks it gates" > "/dev/stderr"; exit 1 }
         if (n > 1) { print "several " b " targets carry a " c " row — set SCOUTFLO_TARGET so this gate reads the one this run audits" > "/dev/stderr"; exit 1 } }' "$MATRIX"
 ```
@@ -107,6 +142,34 @@ The scope split, so a partial block excludes only what it must rather than the w
 Enrollment first — recommendations are empty and the finding is `excluded` (never a metrics-derived guess) unless the account shows `Active`:
 
 ```bash
+set -eu
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done
+[ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+[ -f "$CFG" ] || { echo "missing $CFG; run /scoutflo:connect"; exit 1; }
+TT="${CLAUDE_PLUGIN_ROOT}/report-standard/toolkit-targets.sh"
+AWS_KIND=$(sh "$TT" "$CFG" aws kind); AWS_N=$(sh "$TT" "$CFG" aws count)
+[ "${AWS_N:-0}" -ge 1 ] || { echo "no aws target configured"; exit 1; }
+AWS_IDX=0
+if [ "$AWS_KIND" = seq ]; then
+  AWS_IDX=""; _i=0
+  while [ "$_i" -lt "$AWS_N" ]; do
+    [ "$(sh "$TT" "$CFG" aws label "$_i")" = "${SCOUTFLO_TARGET:-}" ] && AWS_IDX=$_i
+    _i=$((_i+1))
+  done
+  [ -n "$AWS_IDX" ] || { echo "select a aws target with SCOUTFLO_TARGET; labels: $(sh "$TT" "$CFG" aws labels | tr '\n' ' ')"; exit 1; }
+fi
+AWS_LABEL=$(sh "$TT" "$CFG" aws label "$AWS_IDX")
+AWS_PROFILE_CFG=$(sh "$TT" "$CFG" aws get "$AWS_IDX" profile)
+AWS_REGION_CFG=$(sh "$TT" "$CFG" aws get "$AWS_IDX" region)
+AWS_ACCOUNT_CFG=$(sh "$TT" "$CFG" aws get "$AWS_IDX" account_id)
+[ -n "$AWS_REGION_CFG" ] || { echo "aws.region is required; no ambient region is selected"; exit 1; }
+aws_cli() {
+  if [ -n "$AWS_PROFILE_CFG" ]; then aws --profile "$AWS_PROFILE_CFG" --region "$AWS_REGION_CFG" "$@"
+  else aws --region "$AWS_REGION_CFG" "$@"; fi
+}
+AWS_ID=$(aws_cli sts get-caller-identity --output json) || { echo "AWS identity read failed; stop"; exit 1; }
+printf '%s' "$AWS_ID" | jq -e --arg expected "$AWS_ACCOUNT_CFG" '.Account and .Arn and ($expected == "" or .Account == $expected)' >/dev/null || { echo "AWS identity differs from aws.account_id or is incomplete; stop"; exit 1; }
+printf '%s' "$AWS_ID" | jq -r --arg label "$AWS_LABEL" --arg region "$AWS_REGION_CFG" '"aws target=\($label) region=\($region) account=\(.Account) principal=\(.Arn)"'
 aws_cli compute-optimizer get-enrollment-status --output json | jq -r '.status'
 ```
 
@@ -115,6 +178,34 @@ Expected `Active`. `Inactive`/`Pending`/`AccessDeniedException` → COST-AWS-001
 **COST-AWS-025 — surface the enablement gap as ONE actionable finding, not seven silent exclusions.** When `get-enrollment-status` is not `Active` (and/or Cost Optimization Hub is not enrolled), the reader currently sees rightsizing simply *missing* — the value ("turn this on, it's free, and you unlock native savings figures") is buried across seven `excluded` reasons. Emit a single **COST-AWS-025** (low, actionable, **no dollar** — it is an enablement action, not a measured saving): *"AWS Compute Optimizer is not enrolled, so per-resource rightsizing/idle recommendations (COST-AWS-001…007) cannot run — the account is blind to its largest native-savings source. Enrollment is **free** and account-wide (Compute Optimizer console → opt in; add Cost Optimization Hub for COST-AWS-013). Re-run the cost audit after enrollment (Compute Optimizer needs ~24–48h to generate first recommendations)."* This is a real prerequisite, not a fabricated number — do not attach `estimated_monthly_savings_usd`. When both are already `Active`, COST-AWS-025 is `not-in-scope` (nothing to enable). The RI/SP **unused-commitment** waste (a commitment running at low utilization — the "$/mo already spent on idle reservations" case) is **COST-AWS-012**, reported verbatim from the utilization API; keep it prominent in the report rather than letting it hide among the presence facts.
 
 ```bash
+set -eu
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done
+[ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+[ -f "$CFG" ] || { echo "missing $CFG; run /scoutflo:connect"; exit 1; }
+TT="${CLAUDE_PLUGIN_ROOT}/report-standard/toolkit-targets.sh"
+AWS_KIND=$(sh "$TT" "$CFG" aws kind); AWS_N=$(sh "$TT" "$CFG" aws count)
+[ "${AWS_N:-0}" -ge 1 ] || { echo "no aws target configured"; exit 1; }
+AWS_IDX=0
+if [ "$AWS_KIND" = seq ]; then
+  AWS_IDX=""; _i=0
+  while [ "$_i" -lt "$AWS_N" ]; do
+    [ "$(sh "$TT" "$CFG" aws label "$_i")" = "${SCOUTFLO_TARGET:-}" ] && AWS_IDX=$_i
+    _i=$((_i+1))
+  done
+  [ -n "$AWS_IDX" ] || { echo "select a aws target with SCOUTFLO_TARGET; labels: $(sh "$TT" "$CFG" aws labels | tr '\n' ' ')"; exit 1; }
+fi
+AWS_LABEL=$(sh "$TT" "$CFG" aws label "$AWS_IDX")
+AWS_PROFILE_CFG=$(sh "$TT" "$CFG" aws get "$AWS_IDX" profile)
+AWS_REGION_CFG=$(sh "$TT" "$CFG" aws get "$AWS_IDX" region)
+AWS_ACCOUNT_CFG=$(sh "$TT" "$CFG" aws get "$AWS_IDX" account_id)
+[ -n "$AWS_REGION_CFG" ] || { echo "aws.region is required; no ambient region is selected"; exit 1; }
+aws_cli() {
+  if [ -n "$AWS_PROFILE_CFG" ]; then aws --profile "$AWS_PROFILE_CFG" --region "$AWS_REGION_CFG" "$@"
+  else aws --region "$AWS_REGION_CFG" "$@"; fi
+}
+AWS_ID=$(aws_cli sts get-caller-identity --output json) || { echo "AWS identity read failed; stop"; exit 1; }
+printf '%s' "$AWS_ID" | jq -e --arg expected "$AWS_ACCOUNT_CFG" '.Account and .Arn and ($expected == "" or .Account == $expected)' >/dev/null || { echo "AWS identity differs from aws.account_id or is incomplete; stop"; exit 1; }
+printf '%s' "$AWS_ID" | jq -r --arg label "$AWS_LABEL" --arg region "$AWS_REGION_CFG" '"aws target=\($label) region=\($region) account=\(.Account) principal=\(.Arn)"'
 # COST-AWS-001 EC2 — per instance: current type, recommended type, native $.
 aws_cli compute-optimizer get-ec2-instance-recommendations --output json \
   | jq '[.instanceRecommendations[]? | select(.finding != "Optimized") | {
@@ -171,6 +262,34 @@ aws_cli compute-optimizer get-ecs-service-recommendations --output json \
 Compute Optimizer's idle finder aggregates idle EC2, ASGs, EBS, ELBs, and RDS into one call, each with a native monthly-savings figure:
 
 ```bash
+set -eu
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done
+[ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+[ -f "$CFG" ] || { echo "missing $CFG; run /scoutflo:connect"; exit 1; }
+TT="${CLAUDE_PLUGIN_ROOT}/report-standard/toolkit-targets.sh"
+AWS_KIND=$(sh "$TT" "$CFG" aws kind); AWS_N=$(sh "$TT" "$CFG" aws count)
+[ "${AWS_N:-0}" -ge 1 ] || { echo "no aws target configured"; exit 1; }
+AWS_IDX=0
+if [ "$AWS_KIND" = seq ]; then
+  AWS_IDX=""; _i=0
+  while [ "$_i" -lt "$AWS_N" ]; do
+    [ "$(sh "$TT" "$CFG" aws label "$_i")" = "${SCOUTFLO_TARGET:-}" ] && AWS_IDX=$_i
+    _i=$((_i+1))
+  done
+  [ -n "$AWS_IDX" ] || { echo "select a aws target with SCOUTFLO_TARGET; labels: $(sh "$TT" "$CFG" aws labels | tr '\n' ' ')"; exit 1; }
+fi
+AWS_LABEL=$(sh "$TT" "$CFG" aws label "$AWS_IDX")
+AWS_PROFILE_CFG=$(sh "$TT" "$CFG" aws get "$AWS_IDX" profile)
+AWS_REGION_CFG=$(sh "$TT" "$CFG" aws get "$AWS_IDX" region)
+AWS_ACCOUNT_CFG=$(sh "$TT" "$CFG" aws get "$AWS_IDX" account_id)
+[ -n "$AWS_REGION_CFG" ] || { echo "aws.region is required; no ambient region is selected"; exit 1; }
+aws_cli() {
+  if [ -n "$AWS_PROFILE_CFG" ]; then aws --profile "$AWS_PROFILE_CFG" --region "$AWS_REGION_CFG" "$@"
+  else aws --region "$AWS_REGION_CFG" "$@"; fi
+}
+AWS_ID=$(aws_cli sts get-caller-identity --output json) || { echo "AWS identity read failed; stop"; exit 1; }
+printf '%s' "$AWS_ID" | jq -e --arg expected "$AWS_ACCOUNT_CFG" '.Account and .Arn and ($expected == "" or .Account == $expected)' >/dev/null || { echo "AWS identity differs from aws.account_id or is incomplete; stop"; exit 1; }
+printf '%s' "$AWS_ID" | jq -r --arg label "$AWS_LABEL" --arg region "$AWS_REGION_CFG" '"aws target=\($label) region=\($region) account=\(.Account) principal=\(.Arn)"'
 aws_cli compute-optimizer get-idle-recommendations --output json \
   | jq '[.idleRecommendations[]? | select(.finding != "Active") | {
       resource: .resourceArn, id: .resourceId, type: .resourceType, finding: .finding,
@@ -182,12 +301,38 @@ aws_cli compute-optimizer get-idle-recommendations --output json \
 
 ## 8. Savings Plans / RI commitments (COST-AWS-008 … 012)
 
-**Purchase recommendations carry the native dollar** (`EstimatedMonthlySavingsAmount`); coverage returns a **percentage**; utilization returns **unused-commitment dollars** (waste already incurred, not a projected saving — never summed). Cost Explorer is global — **omit `--region`**.
+**Purchase recommendations carry the native dollar** (`EstimatedMonthlySavingsAmount`); coverage returns a **percentage**; utilization returns **unused-commitment dollars** (waste already incurred, not a projected saving — never summed). Cost Explorer is global — **pin `--region us-east-1`**.
 
 ```bash
 set -eu
-AWS_PROFILE_CFG=""            # aws.profile (empty = default credential chain)
-ce_cli() { if [ -n "$AWS_PROFILE_CFG" ]; then aws --profile "$AWS_PROFILE_CFG" "$@"; else aws "$@"; fi; }   # NO --region: ce is global
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done
+[ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+[ -f "$CFG" ] || { echo "missing $CFG; run /scoutflo:connect"; exit 1; }
+TT="${CLAUDE_PLUGIN_ROOT}/report-standard/toolkit-targets.sh"
+AWS_KIND=$(sh "$TT" "$CFG" aws kind); AWS_N=$(sh "$TT" "$CFG" aws count)
+[ "${AWS_N:-0}" -ge 1 ] || { echo "no aws target configured"; exit 1; }
+AWS_IDX=0
+if [ "$AWS_KIND" = seq ]; then
+  AWS_IDX=""; _i=0
+  while [ "$_i" -lt "$AWS_N" ]; do
+    [ "$(sh "$TT" "$CFG" aws label "$_i")" = "${SCOUTFLO_TARGET:-}" ] && AWS_IDX=$_i
+    _i=$((_i+1))
+  done
+  [ -n "$AWS_IDX" ] || { echo "select a aws target with SCOUTFLO_TARGET; labels: $(sh "$TT" "$CFG" aws labels | tr '\n' ' ')"; exit 1; }
+fi
+AWS_LABEL=$(sh "$TT" "$CFG" aws label "$AWS_IDX")
+AWS_PROFILE_CFG=$(sh "$TT" "$CFG" aws get "$AWS_IDX" profile)
+AWS_REGION_CFG=$(sh "$TT" "$CFG" aws get "$AWS_IDX" region)
+AWS_ACCOUNT_CFG=$(sh "$TT" "$CFG" aws get "$AWS_IDX" account_id)
+[ -n "$AWS_REGION_CFG" ] || { echo "aws.region is required; no ambient region is selected"; exit 1; }
+aws_cli() {
+  if [ -n "$AWS_PROFILE_CFG" ]; then aws --profile "$AWS_PROFILE_CFG" --region "$AWS_REGION_CFG" "$@"
+  else aws --region "$AWS_REGION_CFG" "$@"; fi
+}
+AWS_ID=$(aws_cli sts get-caller-identity --output json) || { echo "AWS identity read failed; stop"; exit 1; }
+printf '%s' "$AWS_ID" | jq -e --arg expected "$AWS_ACCOUNT_CFG" '.Account and .Arn and ($expected == "" or .Account == $expected)' >/dev/null || { echo "AWS identity differs from aws.account_id or is incomplete; stop"; exit 1; }
+printf '%s' "$AWS_ID" | jq -r --arg label "$AWS_LABEL" --arg region "$AWS_REGION_CFG" '"aws target=\($label) region=\($region) account=\(.Account) principal=\(.Arn)"'
+ce_cli() { aws_cli --region us-east-1 "$@"; }
 START="$(date -u -v-30d +%Y-%m-%d 2>/dev/null || date -u -d '30 days ago' +%Y-%m-%d)"
 END="$(date -u +%Y-%m-%d)"
 
@@ -239,8 +384,34 @@ The Hub aggregates rightsizing, idle, and commitment recommendations across serv
 
 ```bash
 set -eu
-AWS_PROFILE_CFG=""            # aws.profile (empty = default credential chain)
-coh_cli() { if [ -n "$AWS_PROFILE_CFG" ]; then aws --profile "$AWS_PROFILE_CFG" --region us-east-1 "$@"; else aws --region us-east-1 "$@"; fi; }
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done
+[ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+[ -f "$CFG" ] || { echo "missing $CFG; run /scoutflo:connect"; exit 1; }
+TT="${CLAUDE_PLUGIN_ROOT}/report-standard/toolkit-targets.sh"
+AWS_KIND=$(sh "$TT" "$CFG" aws kind); AWS_N=$(sh "$TT" "$CFG" aws count)
+[ "${AWS_N:-0}" -ge 1 ] || { echo "no aws target configured"; exit 1; }
+AWS_IDX=0
+if [ "$AWS_KIND" = seq ]; then
+  AWS_IDX=""; _i=0
+  while [ "$_i" -lt "$AWS_N" ]; do
+    [ "$(sh "$TT" "$CFG" aws label "$_i")" = "${SCOUTFLO_TARGET:-}" ] && AWS_IDX=$_i
+    _i=$((_i+1))
+  done
+  [ -n "$AWS_IDX" ] || { echo "select a aws target with SCOUTFLO_TARGET; labels: $(sh "$TT" "$CFG" aws labels | tr '\n' ' ')"; exit 1; }
+fi
+AWS_LABEL=$(sh "$TT" "$CFG" aws label "$AWS_IDX")
+AWS_PROFILE_CFG=$(sh "$TT" "$CFG" aws get "$AWS_IDX" profile)
+AWS_REGION_CFG=$(sh "$TT" "$CFG" aws get "$AWS_IDX" region)
+AWS_ACCOUNT_CFG=$(sh "$TT" "$CFG" aws get "$AWS_IDX" account_id)
+[ -n "$AWS_REGION_CFG" ] || { echo "aws.region is required; no ambient region is selected"; exit 1; }
+aws_cli() {
+  if [ -n "$AWS_PROFILE_CFG" ]; then aws --profile "$AWS_PROFILE_CFG" --region "$AWS_REGION_CFG" "$@"
+  else aws --region "$AWS_REGION_CFG" "$@"; fi
+}
+AWS_ID=$(aws_cli sts get-caller-identity --output json) || { echo "AWS identity read failed; stop"; exit 1; }
+printf '%s' "$AWS_ID" | jq -e --arg expected "$AWS_ACCOUNT_CFG" '.Account and .Arn and ($expected == "" or .Account == $expected)' >/dev/null || { echo "AWS identity differs from aws.account_id or is incomplete; stop"; exit 1; }
+printf '%s' "$AWS_ID" | jq -r --arg label "$AWS_LABEL" --arg region "$AWS_REGION_CFG" '"aws target=\($label) region=\($region) account=\(.Account) principal=\(.Arn)"'
+coh_cli() { aws_cli --region us-east-1 "$@"; }
 if COH_ENROLL="$(coh_cli cost-optimization-hub list-enrollment-statuses --output json 2>/tmp/coh-err)"; then
   echo "$COH_ENROLL" | jq -r '.items[]?.status // "NOT_ENROLLED"'
   coh_cli cost-optimization-hub list-recommendations --output json \
@@ -260,8 +431,34 @@ fi
 
 ```bash
 set -eu
-AWS_PROFILE_CFG=""            # aws.profile (empty = default credential chain)
-ta_cli() { if [ -n "$AWS_PROFILE_CFG" ]; then aws --profile "$AWS_PROFILE_CFG" --region us-east-1 "$@"; else aws --region us-east-1 "$@"; fi; }
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done
+[ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+[ -f "$CFG" ] || { echo "missing $CFG; run /scoutflo:connect"; exit 1; }
+TT="${CLAUDE_PLUGIN_ROOT}/report-standard/toolkit-targets.sh"
+AWS_KIND=$(sh "$TT" "$CFG" aws kind); AWS_N=$(sh "$TT" "$CFG" aws count)
+[ "${AWS_N:-0}" -ge 1 ] || { echo "no aws target configured"; exit 1; }
+AWS_IDX=0
+if [ "$AWS_KIND" = seq ]; then
+  AWS_IDX=""; _i=0
+  while [ "$_i" -lt "$AWS_N" ]; do
+    [ "$(sh "$TT" "$CFG" aws label "$_i")" = "${SCOUTFLO_TARGET:-}" ] && AWS_IDX=$_i
+    _i=$((_i+1))
+  done
+  [ -n "$AWS_IDX" ] || { echo "select a aws target with SCOUTFLO_TARGET; labels: $(sh "$TT" "$CFG" aws labels | tr '\n' ' ')"; exit 1; }
+fi
+AWS_LABEL=$(sh "$TT" "$CFG" aws label "$AWS_IDX")
+AWS_PROFILE_CFG=$(sh "$TT" "$CFG" aws get "$AWS_IDX" profile)
+AWS_REGION_CFG=$(sh "$TT" "$CFG" aws get "$AWS_IDX" region)
+AWS_ACCOUNT_CFG=$(sh "$TT" "$CFG" aws get "$AWS_IDX" account_id)
+[ -n "$AWS_REGION_CFG" ] || { echo "aws.region is required; no ambient region is selected"; exit 1; }
+aws_cli() {
+  if [ -n "$AWS_PROFILE_CFG" ]; then aws --profile "$AWS_PROFILE_CFG" --region "$AWS_REGION_CFG" "$@"
+  else aws --region "$AWS_REGION_CFG" "$@"; fi
+}
+AWS_ID=$(aws_cli sts get-caller-identity --output json) || { echo "AWS identity read failed; stop"; exit 1; }
+printf '%s' "$AWS_ID" | jq -e --arg expected "$AWS_ACCOUNT_CFG" '.Account and .Arn and ($expected == "" or .Account == $expected)' >/dev/null || { echo "AWS identity differs from aws.account_id or is incomplete; stop"; exit 1; }
+printf '%s' "$AWS_ID" | jq -r --arg label "$AWS_LABEL" --arg region "$AWS_REGION_CFG" '"aws target=\($label) region=\($region) account=\(.Account) principal=\(.Arn)"'
+ta_cli() { aws_cli --region us-east-1 "$@"; }
 CHECK_IDS="$(ta_cli support describe-trusted-advisor-checks --language en --output json 2>/tmp/ta-err \
   | jq -r '.checks[] | select(.category == "cost_optimizing") | .id')" \
   || { echo "COST-AWS-014 excluded: support:Describe* denied or no Business/Enterprise support — $(cat /tmp/ta-err)"; CHECK_IDS=""; }
@@ -280,8 +477,34 @@ done
 
 ```bash
 set -eu
-AWS_PROFILE_CFG=""            # aws.profile (empty = default credential chain)
-ce_cli() { if [ -n "$AWS_PROFILE_CFG" ]; then aws --profile "$AWS_PROFILE_CFG" "$@"; else aws "$@"; fi; }   # ce is global
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done
+[ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+[ -f "$CFG" ] || { echo "missing $CFG; run /scoutflo:connect"; exit 1; }
+TT="${CLAUDE_PLUGIN_ROOT}/report-standard/toolkit-targets.sh"
+AWS_KIND=$(sh "$TT" "$CFG" aws kind); AWS_N=$(sh "$TT" "$CFG" aws count)
+[ "${AWS_N:-0}" -ge 1 ] || { echo "no aws target configured"; exit 1; }
+AWS_IDX=0
+if [ "$AWS_KIND" = seq ]; then
+  AWS_IDX=""; _i=0
+  while [ "$_i" -lt "$AWS_N" ]; do
+    [ "$(sh "$TT" "$CFG" aws label "$_i")" = "${SCOUTFLO_TARGET:-}" ] && AWS_IDX=$_i
+    _i=$((_i+1))
+  done
+  [ -n "$AWS_IDX" ] || { echo "select a aws target with SCOUTFLO_TARGET; labels: $(sh "$TT" "$CFG" aws labels | tr '\n' ' ')"; exit 1; }
+fi
+AWS_LABEL=$(sh "$TT" "$CFG" aws label "$AWS_IDX")
+AWS_PROFILE_CFG=$(sh "$TT" "$CFG" aws get "$AWS_IDX" profile)
+AWS_REGION_CFG=$(sh "$TT" "$CFG" aws get "$AWS_IDX" region)
+AWS_ACCOUNT_CFG=$(sh "$TT" "$CFG" aws get "$AWS_IDX" account_id)
+[ -n "$AWS_REGION_CFG" ] || { echo "aws.region is required; no ambient region is selected"; exit 1; }
+aws_cli() {
+  if [ -n "$AWS_PROFILE_CFG" ]; then aws --profile "$AWS_PROFILE_CFG" --region "$AWS_REGION_CFG" "$@"
+  else aws --region "$AWS_REGION_CFG" "$@"; fi
+}
+AWS_ID=$(aws_cli sts get-caller-identity --output json) || { echo "AWS identity read failed; stop"; exit 1; }
+printf '%s' "$AWS_ID" | jq -e --arg expected "$AWS_ACCOUNT_CFG" '.Account and .Arn and ($expected == "" or .Account == $expected)' >/dev/null || { echo "AWS identity differs from aws.account_id or is incomplete; stop"; exit 1; }
+printf '%s' "$AWS_ID" | jq -r --arg label "$AWS_LABEL" --arg region "$AWS_REGION_CFG" '"aws target=\($label) region=\($region) account=\(.Account) principal=\(.Arn)"'
+ce_cli() { aws_cli --region us-east-1 "$@"; }
 START="$(date -u -v-30d +%Y-%m-%d 2>/dev/null || date -u -d '30 days ago' +%Y-%m-%d)"
 END="$(date -u +%Y-%m-%d)"
 ce_cli ce get-anomalies --date-interval "StartDate=${START},EndDate=${END}" --output json \
@@ -299,6 +522,34 @@ ce_cli ce get-anomalies --date-interval "StartDate=${START},EndDate=${END}" --ou
 Pure presence facts — name every resource, attach **no** dollar figure.
 
 ```bash
+set -eu
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done
+[ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+[ -f "$CFG" ] || { echo "missing $CFG; run /scoutflo:connect"; exit 1; }
+TT="${CLAUDE_PLUGIN_ROOT}/report-standard/toolkit-targets.sh"
+AWS_KIND=$(sh "$TT" "$CFG" aws kind); AWS_N=$(sh "$TT" "$CFG" aws count)
+[ "${AWS_N:-0}" -ge 1 ] || { echo "no aws target configured"; exit 1; }
+AWS_IDX=0
+if [ "$AWS_KIND" = seq ]; then
+  AWS_IDX=""; _i=0
+  while [ "$_i" -lt "$AWS_N" ]; do
+    [ "$(sh "$TT" "$CFG" aws label "$_i")" = "${SCOUTFLO_TARGET:-}" ] && AWS_IDX=$_i
+    _i=$((_i+1))
+  done
+  [ -n "$AWS_IDX" ] || { echo "select a aws target with SCOUTFLO_TARGET; labels: $(sh "$TT" "$CFG" aws labels | tr '\n' ' ')"; exit 1; }
+fi
+AWS_LABEL=$(sh "$TT" "$CFG" aws label "$AWS_IDX")
+AWS_PROFILE_CFG=$(sh "$TT" "$CFG" aws get "$AWS_IDX" profile)
+AWS_REGION_CFG=$(sh "$TT" "$CFG" aws get "$AWS_IDX" region)
+AWS_ACCOUNT_CFG=$(sh "$TT" "$CFG" aws get "$AWS_IDX" account_id)
+[ -n "$AWS_REGION_CFG" ] || { echo "aws.region is required; no ambient region is selected"; exit 1; }
+aws_cli() {
+  if [ -n "$AWS_PROFILE_CFG" ]; then aws --profile "$AWS_PROFILE_CFG" --region "$AWS_REGION_CFG" "$@"
+  else aws --region "$AWS_REGION_CFG" "$@"; fi
+}
+AWS_ID=$(aws_cli sts get-caller-identity --output json) || { echo "AWS identity read failed; stop"; exit 1; }
+printf '%s' "$AWS_ID" | jq -e --arg expected "$AWS_ACCOUNT_CFG" '.Account and .Arn and ($expected == "" or .Account == $expected)' >/dev/null || { echo "AWS identity differs from aws.account_id or is incomplete; stop"; exit 1; }
+printf '%s' "$AWS_ID" | jq -r --arg label "$AWS_LABEL" --arg region "$AWS_REGION_CFG" '"aws target=\($label) region=\($region) account=\(.Account) principal=\(.Arn)"'
 # COST-AWS-016 unattached EBS volumes — id, size, type, AZ, age.
 aws_cli ec2 describe-volumes --filters 'Name=status,Values=available' --output json \
   | jq '[.Volumes[] | {id: .VolumeId, size_gb: .Size, type: .VolumeType, az: .AvailabilityZone, created: .CreateTime}]'
@@ -317,8 +568,33 @@ aws_cli ec2 describe-instances --filters 'Name=instance-state-name,Values=stoppe
 
 ```bash
 set -eu
-AWS_PROFILE_CFG=""; AWS_REGION_CFG="us-east-1"
-aws_cli() { if [ -n "$AWS_PROFILE_CFG" ]; then aws --profile "$AWS_PROFILE_CFG" ${AWS_REGION_CFG:+--region "$AWS_REGION_CFG"} "$@"; else aws ${AWS_REGION_CFG:+--region "$AWS_REGION_CFG"} "$@"; fi; }
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done
+[ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+[ -f "$CFG" ] || { echo "missing $CFG; run /scoutflo:connect"; exit 1; }
+TT="${CLAUDE_PLUGIN_ROOT}/report-standard/toolkit-targets.sh"
+AWS_KIND=$(sh "$TT" "$CFG" aws kind); AWS_N=$(sh "$TT" "$CFG" aws count)
+[ "${AWS_N:-0}" -ge 1 ] || { echo "no aws target configured"; exit 1; }
+AWS_IDX=0
+if [ "$AWS_KIND" = seq ]; then
+  AWS_IDX=""; _i=0
+  while [ "$_i" -lt "$AWS_N" ]; do
+    [ "$(sh "$TT" "$CFG" aws label "$_i")" = "${SCOUTFLO_TARGET:-}" ] && AWS_IDX=$_i
+    _i=$((_i+1))
+  done
+  [ -n "$AWS_IDX" ] || { echo "select a aws target with SCOUTFLO_TARGET; labels: $(sh "$TT" "$CFG" aws labels | tr '\n' ' ')"; exit 1; }
+fi
+AWS_LABEL=$(sh "$TT" "$CFG" aws label "$AWS_IDX")
+AWS_PROFILE_CFG=$(sh "$TT" "$CFG" aws get "$AWS_IDX" profile)
+AWS_REGION_CFG=$(sh "$TT" "$CFG" aws get "$AWS_IDX" region)
+AWS_ACCOUNT_CFG=$(sh "$TT" "$CFG" aws get "$AWS_IDX" account_id)
+[ -n "$AWS_REGION_CFG" ] || { echo "aws.region is required; no ambient region is selected"; exit 1; }
+aws_cli() {
+  if [ -n "$AWS_PROFILE_CFG" ]; then aws --profile "$AWS_PROFILE_CFG" --region "$AWS_REGION_CFG" "$@"
+  else aws --region "$AWS_REGION_CFG" "$@"; fi
+}
+AWS_ID=$(aws_cli sts get-caller-identity --output json) || { echo "AWS identity read failed; stop"; exit 1; }
+printf '%s' "$AWS_ID" | jq -e --arg expected "$AWS_ACCOUNT_CFG" '.Account and .Arn and ($expected == "" or .Account == $expected)' >/dev/null || { echo "AWS identity differs from aws.account_id or is incomplete; stop"; exit 1; }
+printf '%s' "$AWS_ID" | jq -r --arg label "$AWS_LABEL" --arg region "$AWS_REGION_CFG" '"aws target=\($label) region=\($region) account=\(.Account) principal=\(.Arn)"'
 aws_cli elbv2 describe-load-balancers --output json | jq -r '.LoadBalancers[] | "\(.LoadBalancerName)\t\(.LoadBalancerArn)"'
 LB_DIM="app/your-lb/1234567890abcdef"   # the LoadBalancer dimension value from the ARN suffix
 IDLE_DAYS="14"
@@ -334,6 +610,34 @@ aws_cli cloudwatch get-metric-statistics --namespace AWS/ApplicationELB --metric
 ## 13. Snapshots, S3 lifecycle, and storage-class presence facts (COST-AWS-020 … 022)
 
 ```bash
+set -eu
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done
+[ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+[ -f "$CFG" ] || { echo "missing $CFG; run /scoutflo:connect"; exit 1; }
+TT="${CLAUDE_PLUGIN_ROOT}/report-standard/toolkit-targets.sh"
+AWS_KIND=$(sh "$TT" "$CFG" aws kind); AWS_N=$(sh "$TT" "$CFG" aws count)
+[ "${AWS_N:-0}" -ge 1 ] || { echo "no aws target configured"; exit 1; }
+AWS_IDX=0
+if [ "$AWS_KIND" = seq ]; then
+  AWS_IDX=""; _i=0
+  while [ "$_i" -lt "$AWS_N" ]; do
+    [ "$(sh "$TT" "$CFG" aws label "$_i")" = "${SCOUTFLO_TARGET:-}" ] && AWS_IDX=$_i
+    _i=$((_i+1))
+  done
+  [ -n "$AWS_IDX" ] || { echo "select a aws target with SCOUTFLO_TARGET; labels: $(sh "$TT" "$CFG" aws labels | tr '\n' ' ')"; exit 1; }
+fi
+AWS_LABEL=$(sh "$TT" "$CFG" aws label "$AWS_IDX")
+AWS_PROFILE_CFG=$(sh "$TT" "$CFG" aws get "$AWS_IDX" profile)
+AWS_REGION_CFG=$(sh "$TT" "$CFG" aws get "$AWS_IDX" region)
+AWS_ACCOUNT_CFG=$(sh "$TT" "$CFG" aws get "$AWS_IDX" account_id)
+[ -n "$AWS_REGION_CFG" ] || { echo "aws.region is required; no ambient region is selected"; exit 1; }
+aws_cli() {
+  if [ -n "$AWS_PROFILE_CFG" ]; then aws --profile "$AWS_PROFILE_CFG" --region "$AWS_REGION_CFG" "$@"
+  else aws --region "$AWS_REGION_CFG" "$@"; fi
+}
+AWS_ID=$(aws_cli sts get-caller-identity --output json) || { echo "AWS identity read failed; stop"; exit 1; }
+printf '%s' "$AWS_ID" | jq -e --arg expected "$AWS_ACCOUNT_CFG" '.Account and .Arn and ($expected == "" or .Account == $expected)' >/dev/null || { echo "AWS identity differs from aws.account_id or is incomplete; stop"; exit 1; }
+printf '%s' "$AWS_ID" | jq -r --arg label "$AWS_LABEL" --arg region "$AWS_REGION_CFG" '"aws target=\($label) region=\($region) account=\(.Account) principal=\(.Arn)"'
 # COST-AWS-020 snapshot age vs the team's STATED retention (no assumed default).
 aws_cli ec2 describe-snapshots --owner-ids self --output json \
   | jq '[.Snapshots[] | {id: .SnapshotId, volume: .VolumeId, size_gb: .VolumeSize, started: .StartTime}]'
@@ -358,6 +662,34 @@ done
 ## 14. Previous-generation families and idle NAT gateways (COST-AWS-023, 024)
 
 ```bash
+set -eu
+CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done
+[ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
+[ -f "$CFG" ] || { echo "missing $CFG; run /scoutflo:connect"; exit 1; }
+TT="${CLAUDE_PLUGIN_ROOT}/report-standard/toolkit-targets.sh"
+AWS_KIND=$(sh "$TT" "$CFG" aws kind); AWS_N=$(sh "$TT" "$CFG" aws count)
+[ "${AWS_N:-0}" -ge 1 ] || { echo "no aws target configured"; exit 1; }
+AWS_IDX=0
+if [ "$AWS_KIND" = seq ]; then
+  AWS_IDX=""; _i=0
+  while [ "$_i" -lt "$AWS_N" ]; do
+    [ "$(sh "$TT" "$CFG" aws label "$_i")" = "${SCOUTFLO_TARGET:-}" ] && AWS_IDX=$_i
+    _i=$((_i+1))
+  done
+  [ -n "$AWS_IDX" ] || { echo "select a aws target with SCOUTFLO_TARGET; labels: $(sh "$TT" "$CFG" aws labels | tr '\n' ' ')"; exit 1; }
+fi
+AWS_LABEL=$(sh "$TT" "$CFG" aws label "$AWS_IDX")
+AWS_PROFILE_CFG=$(sh "$TT" "$CFG" aws get "$AWS_IDX" profile)
+AWS_REGION_CFG=$(sh "$TT" "$CFG" aws get "$AWS_IDX" region)
+AWS_ACCOUNT_CFG=$(sh "$TT" "$CFG" aws get "$AWS_IDX" account_id)
+[ -n "$AWS_REGION_CFG" ] || { echo "aws.region is required; no ambient region is selected"; exit 1; }
+aws_cli() {
+  if [ -n "$AWS_PROFILE_CFG" ]; then aws --profile "$AWS_PROFILE_CFG" --region "$AWS_REGION_CFG" "$@"
+  else aws --region "$AWS_REGION_CFG" "$@"; fi
+}
+AWS_ID=$(aws_cli sts get-caller-identity --output json) || { echo "AWS identity read failed; stop"; exit 1; }
+printf '%s' "$AWS_ID" | jq -e --arg expected "$AWS_ACCOUNT_CFG" '.Account and .Arn and ($expected == "" or .Account == $expected)' >/dev/null || { echo "AWS identity differs from aws.account_id or is incomplete; stop"; exit 1; }
+printf '%s' "$AWS_ID" | jq -r --arg label "$AWS_LABEL" --arg region "$AWS_REGION_CFG" '"aws target=\($label) region=\($region) account=\(.Account) principal=\(.Arn)"'
 # COST-AWS-023 previous-generation instance families still running (newer gens are cheaper per unit of perf).
 PREV_GEN='^(t1|t2|m1|m2|m3|m4|c1|c3|c4|cc2|r3|r4|i2|i3\.|d2|g2|g3|p2|hs1|cr1)'
 aws_cli ec2 describe-instances --filters 'Name=instance-state-name,Values=running' --output json \

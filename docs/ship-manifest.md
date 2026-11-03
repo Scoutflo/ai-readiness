@@ -24,3 +24,5 @@ This is a **declaration + gate**, not a build step: it does not change what ship
 - `.github/`, `.claude/`, `.gitignore`, `.gitleaksignore` — repo/tooling config
 
 Generated output (`scoutflo-audits/`) is gitignored and never tracked, so it is out of scope here.
+
+Agent working directories under `.claude/worktrees/` are also local-only and gitignored. The package-boundary gate rejects any tracked entry there, including Git links; classifying `.claude/` as development tooling does not permit committing those working directories. Remove an accidentally tracked entry from the index while preserving its local files.

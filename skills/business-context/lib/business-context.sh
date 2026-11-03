@@ -22,32 +22,98 @@ TEMPLATE="${CLAUDE_PLUGIN_ROOT:-.}/templates/business_context_template.md"
 bc_init_dir() { mkdir -p "$SCOUTFLO_DIR"; }
 
 # --- Mode 4: import an existing business-context file -------------------------
-# Adopt the user's own file as the SSOT (copy it in), or reference it. Validates
-# it against the section gate before adopting so a malformed import is caught.
-bc_import_file() {
-  src="$1"
-  [ -f "$src" ] || { echo "no such file: $src"; return 1; }
-  bc_init_dir
-  cp "$src" "$SSOT_MD"
-  echo "[imported] copied $src -> $SSOT_MD"
-  bc_validate "$SSOT_MD" || { echo "[warn] imported file is missing required sections; edit $SSOT_MD or re-run guided capture to fill them"; }
-  bc_derive_json
-}
+# --confirm-replace records the user's approval for THIS source and destination;
+# it is not a session-wide permission. Stage both files before touching the old
+# pair. The subshell keeps temporary paths and traps out of the caller's shell.
+bc_import_file() (
+  bc_src="${1:-}"
+  bc_replace="${2:-}"
+  [ "$#" -le 2 ] && { [ -z "$bc_replace" ] || [ "$bc_replace" = --confirm-replace ]; } \
+    || { echo "usage: bc_import_file FILE [--confirm-replace]" >&2; return 1; }
+  [ -f "$bc_src" ] && [ -r "$bc_src" ] && [ -s "$bc_src" ] \
+    || { echo "import source is missing, unreadable or empty: $bc_src" >&2; return 2; }
+  umask 077
+  bc_init_dir || return 1
+  bc_lock="${SCOUTFLO_DIR}/.business-context-import.lock"
+  mkdir "$bc_lock" 2>/dev/null \
+    || { echo "another import holds $bc_lock; inspect it before retrying" >&2; return 1; }
+  bc_stage=""; bc_backup=""; bc_installing=no; bc_had_md=no; bc_had_json=no
+  bc_import_cleanup() {
+    bc_rc=$?
+    trap - EXIT HUP INT TERM
+    if [ "$bc_installing" = yes ]; then
+      bc_restored=yes
+      if [ "$bc_had_md" = yes ]; then
+        cp -p "$bc_backup/business_context.md" "$SSOT_MD" || bc_restored=no
+      else rm -f "$SSOT_MD" || bc_restored=no; fi
+      if [ "$bc_had_json" = yes ]; then
+        cp -p "$bc_backup/business_context.json" "$SSOT_JSON" || bc_restored=no
+      else rm -f "$SSOT_JSON" || bc_restored=no; fi
+      if [ "$bc_restored" = yes ]; then
+        echo "import failed; previous context restored from $bc_backup" >&2
+      else
+        echo "import failed and recovery failed; preserve $bc_backup and restore both context files before continuing" >&2
+        bc_rc=1
+      fi
+    fi
+    [ -z "$bc_stage" ] || rm -rf "$bc_stage"
+    rmdir "$bc_lock" || bc_rc=1
+    exit "$bc_rc"
+  }
+  trap bc_import_cleanup EXIT
+  trap 'exit 1' HUP INT TERM
+  for bc_dest in "$SSOT_MD" "$SSOT_JSON"; do
+    [ ! -L "$bc_dest" ] && { [ ! -e "$bc_dest" ] || [ -f "$bc_dest" ]; } \
+      || { echo "refusing a non-regular context destination: $bc_dest" >&2; return 1; }
+  done
+  [ ! -f "$SSOT_MD" ] || bc_had_md=yes
+  [ ! -f "$SSOT_JSON" ] || bc_had_json=yes
+  if { [ "$bc_had_md" = yes ] || [ "$bc_had_json" = yes ]; } && [ "$bc_replace" != --confirm-replace ]; then
+    echo "context already exists at $SSOT_MD / $SSOT_JSON; show the replacement and obtain confirmation, then use --confirm-replace" >&2
+    return 1
+  fi
+  bc_stage=$(mktemp -d "${SCOUTFLO_DIR}/.business-context-import.XXXXXX") || return 1
+  cp "$bc_src" "$bc_stage/incoming.md" || return 1
+  bc_validate "$bc_stage/incoming.md" || return 2
+  # The real parser runs against the staged copy. Neither published file moves
+  # on a validation or projection error, even when the caller uses `if`/`||`.
+  (
+    SSOT_MD="$bc_stage/incoming.md"
+    SSOT_JSON="$bc_stage/incoming.json"
+    bc_derive_json
+  ) || return 2
+  jq -e 'type == "object"' "$bc_stage/incoming.json" >/dev/null || return 2
+  mkdir -p "${SCOUTFLO_DIR}/backups" || return 1
+  bc_backup=$(mktemp -d "${SCOUTFLO_DIR}/backups/business-context.XXXXXX") || return 1
+  [ "$bc_had_md" = no ] || cp -p "$SSOT_MD" "$bc_backup/business_context.md" || return 1
+  [ "$bc_had_json" = no ] || cp -p "$SSOT_JSON" "$bc_backup/business_context.json" || return 1
+  bc_installing=yes
+  mv "$bc_stage/incoming.json" "$SSOT_JSON" || return 1
+  mv "$bc_stage/incoming.md" "$SSOT_MD" || return 1
+  bc_installing=no
+  echo "[imported] $SSOT_MD and $SSOT_JSON; previous files saved in $bc_backup"
+)
 
 # --- Mode 3: append a free-form custom-rules / runbook block ------------------
 # Reads a heredoc-style paste from stdin and appends it under Custom Rules.
-bc_append_custom() {
-  bc_init_dir
-  [ -f "$SSOT_MD" ] || bc_scaffold_from_template
-  block="$(cat)"   # caller pipes the pasted text in
-  [ -n "$block" ] || { echo "[skip] nothing pasted"; return 0; }
+bc_append_custom() (
+  bc_init_dir || return 1
+  umask 077
+  bc_paste_tmp=$(mktemp "${SCOUTFLO_DIR}/.business-context-paste.XXXXXX") || return 1
+  trap 'rm -f "$bc_paste_tmp"' EXIT
+  trap 'exit 1' HUP INT TERM
+  # Command substitution removes trailing newlines. Stage stdin as bytes so a
+  # pasted runbook, including its final blank lines, survives unchanged.
+  cat > "$bc_paste_tmp" || return 1
+  [ -s "$bc_paste_tmp" ] || { echo "[skip] nothing pasted"; return 0; }
+  [ -f "$SSOT_MD" ] || bc_scaffold_from_template || return 1
   {
     printf '\n## Custom Rules (added %s)\n\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date)"
-    printf '%s\n' "$block"
-  } >> "$SSOT_MD"
+    cat "$bc_paste_tmp"
+  } >> "$SSOT_MD" || return 1
   echo "[saved] appended custom rules to $SSOT_MD"
   bc_derive_json
-}
+)
 
 # --- Scaffold the SSOT from the shipped template (starting point) -------------
 bc_scaffold_from_template() {
@@ -68,6 +134,8 @@ bc_scaffold_from_template() {
 # Delegates to ci/validate-business-context.sh so the skill and CI agree.
 bc_validate() {
   f="${1:-$SSOT_MD}"
+  [ -f "$f" ] && [ -r "$f" ] && [ -s "$f" ] \
+    || { echo "missing, unreadable or empty context: $f" >&2; return 1; }
   gate="${CLAUDE_PLUGIN_ROOT:-.}/ci/validate-business-context.sh"
   if [ -f "$gate" ]; then
     sh "$gate" "$f"
@@ -102,9 +170,14 @@ bc_exclusion_list() {
 # (environment, cost_sensitivity, critical_dependencies, per-env SLA map,
 # per-service SLAs, and exclusions). It is ALWAYS regenerated from the .md;
 # never hand-edited.
-bc_derive_json() {
+bc_derive_json() (
   [ -f "$SSOT_MD" ] || { echo "no SSOT to derive from"; return 1; }
-  bc_init_dir
+  command -v jq >/dev/null || { echo "missing binary: jq" >&2; return 1; }
+  bc_init_dir || return 1
+  umask 077
+  bc_json_tmp=$(mktemp "${SCOUTFLO_DIR}/.business-context-json.XXXXXX") || return 1
+  trap 'rm -f "$bc_json_tmp"' EXIT
+  trap 'exit 1' HUP INT TERM
 
   stage="$(grep -iA5 '^## Environment' "$SSOT_MD" | grep -iE 'Stage:' | head -1 | sed -E 's/.*Stage:\**[[:space:]]*//; s/[][]//g; s/[[:space:]]*$//' | tr 'A-Z' 'a-z')"
   case "$stage" in prod|production) stage="production" ;; staging) stage="staging" ;; dev|development) stage="dev" ;; dr) stage="dr" ;; *) stage="production" ;; esac
@@ -129,9 +202,13 @@ bc_derive_json() {
     | grep -E '^\|' | grep -vE '^\|[[:space:]]*Environment|^\|[[:space:]]*-' \
     | awk -F'|' 'NF>=7 {
         for(i=1;i<=NF;i++){gsub(/^[[:space:]]+|[[:space:]]+$/,"",$i)}
-        printf "{\"environment\":\"%s\",\"aws_profile\":\"%s\",\"gcp_project\":\"%s\",\"kube_context\":\"%s\",\"region\":\"%s\",\"uptime_sla\":\"%s\"}\n",$2,$3,$4,$5,$6,$7
+        printf "%s\t%s\t%s\t%s\t%s\t%s\n",$2,$3,$4,$5,$6,$7
       }' \
-    | jq -s 'map(select([.environment,.aws_profile,.gcp_project,.kube_context,.region,.uptime_sla] | any(test("\\[|<"))|not) | select(.environment|length>0))' 2>/dev/null || echo '[]')"
+    | jq -Rs 'split("\n") | map(select(length>0) | split("\t")
+        | if length==6 then {environment:.[0],aws_profile:.[1],gcp_project:.[2],kube_context:.[3],region:.[4],uptime_sla:.[5]}
+          else error("Environment Map row has unexpected tab-separated fields") end)
+        | map(select([.environment,.aws_profile,.gcp_project,.kube_context,.region,.uptime_sla] | any(test("\\[|<"))|not) | select(.environment|length>0))')" \
+    || { echo 'failed to derive Environment Map; previous JSON preserved' >&2; return 1; }
   [ -n "$envmap" ] || envmap='[]'
 
   # Per-service SLAs: parse the "## SLAs / SLOs" table (service + SLA columns).
@@ -139,9 +216,13 @@ bc_derive_json() {
     | grep -E '^\|' | grep -vE '^\|[[:space:]]*Service|^\|[[:space:]]*-' \
     | awk -F'|' 'NF>=4 {
         for(i=1;i<=NF;i++){gsub(/^[[:space:]]+|[[:space:]]+$/,"",$i)}
-        printf "{\"service\":\"%s\",\"sla\":\"%s\"}\n",$2,$3
+        printf "%s\t%s\n",$2,$3
       }' \
-    | jq -s 'map(select([.service,.sla] | any(test("\\[|<"))|not) | select(.service|length>0))' 2>/dev/null || echo '[]')"
+    | jq -Rs 'split("\n") | map(select(length>0) | split("\t")
+        | if length==2 then {service:.[0],sla:.[1]}
+          else error("SLA row has unexpected tab-separated fields") end)
+        | map(select([.service,.sla] | any(test("\\[|<"))|not) | select(.service|length>0))')" \
+    || { echo 'failed to derive service SLAs; previous JSON preserved' >&2; return 1; }
   [ -n "$svcslas" ] || svcslas='[]'
 
   # Exclusions: one string array per "## Exclusions" subsection.
@@ -166,7 +247,8 @@ bc_derive_json() {
       { line=$0; sub(/\r$/,"",line); gsub(/\t/," ",line); sub(/^[[:space:]]+/,"",line) }
       line ~ /^#/ {next}                                  # defence-in-depth; see the note above
       line ~ /^-[[:space:]]/ {
-        if (mk!="") print mk "\t" mv "\t" it "\t" wy "\t" rb
+        if (entry) print mk "\t" mv "\t" it "\t" wy "\t" rb
+        entry=1
         mk="";mv="";it="";wy="";rb=""
         sub(/^-[[:space:]]*/,"",line)
       }
@@ -180,7 +262,7 @@ bc_derive_json() {
         else if (k=="review_by") rb=v
         else if (k=="cluster"||k=="namespace"||k=="workload"||k=="instance_id"||k=="resource_name") { mk=k; mv=v }
       }
-      END{ if (mk!="") print mk "\t" mv "\t" it "\t" wy "\t" rb }
+      END{ if (entry) print mk "\t" mv "\t" it "\t" wy "\t" rb }
       # --- YAML scalar readers, shared by both parsers below ---------------------
       # A quoted scalar ends at its FIRST closing quote. Ending at the LAST one
       # (match(/"[^"]*$/)) let a trailing comment that itself contains a quote
@@ -235,7 +317,8 @@ bc_derive_json() {
       { line=$0; sub(/\r$/,"",line); gsub(/\t/," ",line); sub(/^[[:space:]]+/,"",line) }
       line ~ /^#/ {next}
       line ~ /^-[[:space:]]/ {
-        if (nm!="") print nm "\t" qr "\t" sr "\t" sc "\t" pr
+        if (entry) print nm "\t" qr "\t" sr "\t" sc "\t" pr
+        entry=1
         nm="";qr="";sr="";sc="";pr=""
         sub(/^-[[:space:]]*/,"",line)
       }
@@ -254,7 +337,7 @@ bc_derive_json() {
         else if (k=="scope") sc=v
         else if (k=="per") pr=v
       }
-      END{ if (nm!="") print nm "\t" qr "\t" sr "\t" sc "\t" pr }
+      END{ if (entry) print nm "\t" qr "\t" sr "\t" sc "\t" pr }
       # --- YAML scalar readers, shared by both parsers below ---------------------
       # A quoted scalar ends at its FIRST closing quote. Ending at the LAST one
       # (match(/"[^"]*$/)) let a trailing comment that itself contains a quote
@@ -298,14 +381,14 @@ bc_derive_json() {
   # Count only entries the operator really attempted: a leading `<placeholder>` or
   # `[placeholder]` is the shipped template's own example, not a failed declaration,
   # and warning about it on every fresh scaffold would train people to ignore this.
-  _ri_seen="$(printf '%s' "$_ri_raw" | grep -c '^[^<[	]*	[^<[]' 2>/dev/null || true)"; _ri_seen="${_ri_seen:-0}"
-  _um_seen="$(printf '%s' "$_um_raw" | grep -c '^[^<[	]*	[^<[]' 2>/dev/null || true)"; _um_seen="${_um_seen:-0}"
+  _ri_seen="$(printf '%s' "$_ri_raw" | jq -R -s 'split("\n") | map(select(length>0) | split("\t") | select((.[1] // "") | test("^<|^\\[") | not)) | length')" || return 1
+  _um_seen="$(printf '%s' "$_um_raw" | jq -R -s 'split("\n") | map(select(length>0) | split("\t") | select([.[0] // "", .[1] // ""] | any(test("^<|^\\[")) | not)) | length')" || return 1
   _ri_kept="$(printf '%s' "$rintent"  | jq 'length')"
   _um_kept="$(printf '%s' "$umetrics" | jq 'length')"
   _ri_drop=$(( _ri_seen - _ri_kept )); [ "$_ri_drop" -ge 0 ] || _ri_drop=0
   _um_drop=$(( _um_seen - _um_kept )); [ "$_um_drop" -ge 0 ] || _um_drop=0
   if [ "$_ri_drop" -gt 0 ] || [ "$_um_drop" -gt 0 ]; then
-    echo "[derived] WARNING: dropped ${_ri_drop} resource_intent and ${_um_drop} unit_metrics entr(ies) — an unfilled <placeholder>, an intent outside standby|dr|backup|pre-scaled|accepted-tradeoff, a source outside prometheus|victoriametrics|thanos|cloud-monitoring, or a YAML block scalar (query: > / |) which cannot be executed as a query. Those declarations are NOT in effect; fix them in ${SSOT_MD} and re-run." >&2
+    echo "[derived] WARNING: dropped ${_ri_drop} resource_intent and ${_um_drop} unit_metrics entr(ies) — a missing or unrecognized match/name key, an unfilled <placeholder>, an intent outside standby|dr|backup|pre-scaled|accepted-tradeoff, a source outside prometheus|victoriametrics|thanos|cloud-monitoring, or a YAML block scalar (query: > / |) which cannot be executed as a query. Those declarations are NOT in effect; fix them in ${SSOT_MD} and re-run." >&2
   fi
 
   now="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date)"
@@ -332,14 +415,16 @@ bc_derive_json() {
         resources: $excl_resources
       },
       derived_at: $now
-    }' > "$SSOT_JSON"
+    }' > "$bc_json_tmp" || return 1
+  jq -e 'type == "object"' "$bc_json_tmp" >/dev/null || return 1
+  mv "$bc_json_tmp" "$SSOT_JSON" || return 1
   # printf '%s', never echo: `echo` interprets backslashes in some shells, so a
   # declaration whose free text contains one (a Windows path in a `why`, a regex
   # in a query) reaches jq as mangled JSON and this summary line dies with a
   # parse error on stderr while the written file is perfectly fine. Counting is
   # not worth a scary error message about data that is correct.
   echo "[derived] $SSOT_JSON (environment=$stage cost=$cost critical=$(printf '%s' "$crit" | jq 'length') envs=$(printf '%s' "$envmap" | jq 'length') slas=$(printf '%s' "$svcslas" | jq 'length') intents=$(printf '%s' "$rintent" | jq 'length') units=$(printf '%s' "$umetrics" | jq 'length'))"
-}
+)
 
 # --- Read helpers other skills can source -------------------------------------
 # Precedence: business_context.json (derived from the SSOT) is authoritative.
