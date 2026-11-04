@@ -14,7 +14,7 @@ Start with [AGENTS.md](AGENTS.md) and [docs/skill-authoring-conventions.md](docs
 ## PR checklist
 
 1. `sh ci/leak-scan.sh .` prints CLEAN and `sh ci/structure-check.sh .` prints STRUCTURE-OK.
-2. `sh ci/run-tests.sh .` prints TESTS-OK (every `tests/*.sh` and `skills/*/tests/*.sh` pass under `/bin/sh`).
+2. `sh ci/run-tests.sh .` prints TESTS-OK (every `tests/*.sh` and `skills/*/tests/*.sh` pass under `/bin/sh`). The native Alertmanager configuration tests require Python 3.9+ with PyYAML; CI installs PyYAML 6.0.3 in an isolated environment.
 3. `sh ci/plugin-validate.sh .` passes on the CI-pinned Claude Code v2.1.281 and current contributor CLIs. It strictly validates the explicit marketplace manifest and the actual plugin manifest/assets in an isolated metadata fixture, and rejects OS metadata. It does not suppress warnings. The fixture does not validate skill content; the structure and test gates cover that separately. The supported runtime minimum remains v2.1.140, guarded by `ci/manifest-compat-check.sh`.
 4. Skill changes update or add pressure scenarios under `tests/pressure-scenarios/`.
 5. Tested live with `claude --plugin-dir .` for the skills you touched.

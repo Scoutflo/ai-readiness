@@ -53,6 +53,7 @@ does not add new checks:
 | `datadog` | monitors with no notification target / `@all`; monitors stuck in ALERT; no-recovery-threshold on a paging monitor |
 | `grafana` | default notification policy → no-op contact point; `noDataState=Alerting` flap; a paging rule with no `for` |
 | `signoz` | alert rule → no channel / dead channel; a critical rule disabled with no maintenance window |
+| `splunk_oncall` | SOC-001 routing-key policy references + SOC-002 owning-team references from three bulk inventories; two anchor checks; staffing/current/source checks explicitly deferred and blocked |
 | `newrelic` | conditioned policy caught by no enabled workflow; inactive destination behind an enabled workflow; open-ended active muting rule |
 | `alertmanager`/`prometheus` | default route → black-hole receiver; a rule with no `for`; missing inhibition while a node-down + per-pod alerts coexist |
 | `kubernetes` | crashlooping/not-ready critical workloads; no resource limits on a critical deployment; a namespace with no PodSecurity |

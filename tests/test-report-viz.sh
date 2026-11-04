@@ -187,6 +187,60 @@ printf '%s' "$RU3" | grep -q '`datadog` | 90/100' || fail "datadog row missing f
 printf '%s' "$RU3" | grep -q 'only 40% assessed' || fail "low-coverage v2 stack not flagged as not-end-to-end in its rollup row"
 echo "PASS"
 
+echo "Test 10d: full assessment never overrides explicit false end-to-end proof"
+for target in splunk_oncall splunk_oncall/secondary grafana legacy missing; do
+  dir="$WORK/readiness/$target/2026-08-16"; mkdir -p "$dir"
+  jq -n --arg t "$target" '{schema:"scoutflo-findings/v2",target:$t,score:{overall:100,end_to_end:false,assessment:{coverage_percent:100}}}' > "$dir/findings.json"
+done
+jq '.score.end_to_end=true' "$WORK/readiness/grafana/2026-08-16/findings.json" > "$WORK/ready.json"
+mv "$WORK/ready.json" "$WORK/readiness/grafana/2026-08-16/findings.json"
+jq '.schema="scoutflo-findings/v1" | del(.score.end_to_end)' "$WORK/readiness/legacy/2026-08-16/findings.json" > "$WORK/ready.json"
+mv "$WORK/ready.json" "$WORK/readiness/legacy/2026-08-16/findings.json"
+jq 'del(.score.end_to_end)' "$WORK/readiness/missing/2026-08-16/findings.json" > "$WORK/ready.json"
+mv "$WORK/ready.json" "$WORK/readiness/missing/2026-08-16/findings.json"
+READY="$(sh "$VIZ" rollup "$WORK/readiness" 2026-08-16)"
+printf '%s' "$READY" | grep -q 'fully assessed): 2/5' || fail 'explicit false or missing v2 readiness was promoted to end-to-end'
+printf '%s' "$READY" | grep '^| `splunk_oncall' | grep -c 'end-to-end not established' | grep -q '^2$' || fail 'both On-Call layouts must flag unproven delivery at full assessment'
+jq '.score.end_to_end=false' "$WORK/readiness/legacy/2026-08-16/findings.json" > "$WORK/ready.json"
+mv "$WORK/ready.json" "$WORK/readiness/legacy/2026-08-16/findings.json"
+READY="$(sh "$VIZ" rollup "$WORK/readiness" 2026-08-16)"
+printf '%s' "$READY" | grep -q 'fully assessed): 1/5' || fail 'explicit false v1 readiness was ignored'
+echo "PASS"
+
+echo "Test 10e: trends compare only the same scope, including legacy full-account rows"
+jq '.scope="triage" | .score.scoring_model="assessed-only-v1" | .score.check_set="same-check-set"' "$WORK/f.json" > "$WORK/scoped.json"
+printf '%s\n' \
+  '{"overall":52,"scoring_model":"assessed-only-v1","check_set":"same-check-set"}' \
+  '{"overall":64,"scope":"account","scoring_model":"assessed-only-v1","check_set":"same-check-set"}' \
+  '{"overall":100,"scope":"triage","scoring_model":"assessed-only-v1","check_set":"same-check-set"}' > "$WORK/scoped-history.jsonl"
+TREND="$(sh "$VIZ" at-a-glance "$WORK/scoped.json" "$WORK/scoped-history.jsonl" | grep '^Trend')"
+printf '%s' "$TREND" | grep -q 'last 1 runs): 100 ' || fail 'triage trend imported an incomparable full-run score'
+jq 'del(.scope)' "$WORK/scoped.json" > "$WORK/full.json"
+TREND="$(sh "$VIZ" at-a-glance "$WORK/full.json" "$WORK/scoped-history.jsonl" | grep '^Trend')"
+printf '%s' "$TREND" | grep -q 'last 2 runs): 52 → 64 ' || fail 'full trend imported triage or dropped legacy account scope'
+jq 'del(.score.scoring_model,.score.check_set)' "$WORK/full.json" > "$WORK/legacy.json"
+TREND="$(sh "$VIZ" at-a-glance "$WORK/legacy.json" "$WORK/scoped-history.jsonl" | grep '^Trend')"
+printf '%s' "$TREND" | grep -q 'last 2 runs): 52 → 64 ' || fail 'unfingerprinted legacy trend lost scope safety'
+python3 - "$ROOT" "$WORK" <<'PY'
+from pathlib import Path
+import re,sys
+root,work=map(Path,sys.argv[1:])
+blocks=re.findall(r'```bash\n(.*?)```',(root/'skills/audit-all/SKILL.md').read_text(),re.S)
+code=next(b for b in blocks if 'for h in ' in b and 'compatible runs' in b)
+(work/'audit-all-trend.sh').write_text(code)
+PY
+mkdir -p "$WORK/pin-bin" "$WORK/trend-proof/splunk_oncall/2026-08-16"
+printf '%s\n' '#!/bin/sh' 'case "$*" in "-u +%F") echo 2026-08-16;; *) exec /bin/date "$@";; esac' > "$WORK/pin-bin/date"
+chmod +x "$WORK/pin-bin/date"
+cp "$WORK/scoped.json" "$WORK/trend-proof/splunk_oncall/2026-08-16/findings.json"
+cp "$WORK/scoped-history.jsonl" "$WORK/trend-proof/splunk_oncall/history.jsonl"
+TREND="$(env PATH="$WORK/pin-bin:$PATH" SCOUTFLO_AUDIT_DIR="$WORK/trend-proof" /bin/sh "$WORK/audit-all-trend.sh")"
+printf '%s' "$TREND" | grep -q 'splunk_oncall: 100 (last 1 compatible runs' || fail 'published audit-all recipe mixed triage and full history'
+cp "$WORK/legacy.json" "$WORK/trend-proof/splunk_oncall/2026-08-16/findings.json"
+TREND="$(env PATH="$WORK/pin-bin:$PATH" SCOUTFLO_AUDIT_DIR="$WORK/trend-proof" /bin/sh "$WORK/audit-all-trend.sh")"
+printf '%s' "$TREND" | grep -q 'splunk_oncall: 52 -> 64 (last 2 compatible runs' || fail 'published audit-all legacy recipe lost scope safety'
+echo "PASS"
+
 echo "Test 11: inventory-rollup includes BOTH the one-level and the two-level (kubernetes/ctx-a) stacks"
 # reuse the roll dir from Test 10: a one-level inventory.json + a two-level one (single-block
 # kubernetes always nests) — the dual-glob must reach both. (regression-lock for the fix.)
@@ -230,6 +284,7 @@ printf '%s' "$AFMD" | grep -q 'setup-sentry#alert-rule-remediation-playbook' || 
 printf '%s' "$AFMD" | grep -q 'Why it matters: 62 chronic issues re-page unbounded' || fail "impact (why it matters) not rendered"
 printf '%s' "$AFMD" | grep -q '`deploy-gateway` | datadog, sentry | 2' || fail "cross-source storm row missing"
 printf '%s' "$AFMD" | grep -q 'Not measured this run' || fail "honest not-measured block missing"
+printf '%s' "$AFMD" | grep -qi 'does not prove duplicate pages or human delivery' || fail "fatigue markdown claims observed delivery from configuration overlap"
 printf '%s' "$AFMD" | grep -q 'AWS-032' && fail "a non-cited/non-noise finding leaked into the fatigue report"
 # worst-first: both HIGH sentry rules before the MEDIUM datadog rule before the LOW sentry rule
 printf '%s' "$AFMD" | awk '/SNTRY-106/{h=NR} /DD-006/{m=NR} /SNTRY-110/{l=NR} END{exit !(h<m && m<l)}' || fail "top offenders not ordered worst-first"
@@ -240,6 +295,7 @@ sh "$VIZ" alert-fatigue-html "$AFD/alert-fatigue.json" "$AFD/af.html" "$AFD" "$A
 [ "$(grep -c '<!doctype html>' "$AFD/af.html")" -eq 1 ] || fail "html not a single self-contained document"
 grep -q 'setup-datadog#burn-rate-monitors' "$AFD/af.html" || fail "fix pointer missing from html dashboard"
 grep -q 'deploy-gateway' "$AFD/af.html" || fail "storm service missing from html"
+grep -qi 'does not prove duplicate pages or human delivery' "$AFD/af.html" || fail "fatigue html claims observed delivery from configuration overlap"
 grep -qi 'keep within your team' "$AFD/af.html" || fail "missing privacy caveat in html footer"
 grep -qE 'src="http|href="http|<link |<img ' "$AFD/af.html" && fail "html references an external asset"
 grep -q 'AWS-032' "$AFD/af.html" && fail "non-cited finding leaked into html"
@@ -449,4 +505,13 @@ printf '%s' "$(sh "$VIZ" env-compare "$ECRD" prod "$WORK/nope-prod" nonprod "$WO
 echo "PASS"
 
 echo
+# Additive target identity is visible; the unmodified v1 fixture above still renders.
+jq '.mode="full" | .totals.migrate=0 | .totals.already_covered=1 | .inventory |= map(. + {source_target:"datadog/alpha"}) | .inventory[0] += {source_target:"datadog/beta",disposition:"already-covered",matched_target:"mon-healthy",matched_target_identity:{target:"signoz/green",kind:"alert_rule",name:"mon-healthy"}}' "$MPD/plan.json" > "$MPD/scoped-plan.json"
+SCOPED=$(sh "$VIZ" migration-plan "$MPD/scoped-plan.json")
+printf '%s' "$SCOPED" | grep -q 'datadog/alpha' || fail "source label missing from migration markdown"
+printf '%s' "$SCOPED" | grep -q 'datadog/beta' || fail "second source label missing from migration markdown"
+printf '%s' "$SCOPED" | grep -q 'signoz/green' || fail "matched target label missing from migration markdown"
+sh "$VIZ" migration-plan-html "$MPD/scoped-plan.json" "$MPD/scoped-plan.html" >/dev/null
+for label in datadog/alpha datadog/beta signoz/green; do grep -q "$label" "$MPD/scoped-plan.html" || fail "migration html lost target identity: $label"; done
+
 echo "=== report-viz self-test passed ==="

@@ -41,6 +41,20 @@ le_kubectl() {
   le_ctx="$1"; le_verb="$2"; shift 2
   [ -n "$le_ctx" ] || { echo "live-evidence: refusing kubectl with no explicit --context" >&2; return 2; }
   le_verb_ok "$le_verb" || { echo "live-evidence: refusing non-read kubectl verb '$le_verb'" >&2; return 2; }
+  # config/auth contain writes as well as reads. Only these read subcommands
+  # are part of the probe contract; a verb-only allowlist is not sufficient.
+  case "$le_verb:${1:-}" in
+    config:view|config:get-contexts|auth:can-i) ;;
+    config:*|auth:*) echo "live-evidence: refusing non-read kubectl subcommand" >&2; return 2 ;;
+  esac
+  # A later global flag overrides the context pinned below. Do not let a probe
+  # switch identity, endpoint, credentials or kubeconfig through its arguments.
+  for le_arg do
+    case "$le_arg" in
+      --request-timeout|--request-timeout=*|--context|--context=*|--kubeconfig|--kubeconfig=*|--cluster|--cluster=*|--user|--user=*|--server|--server=*|-s|-s=*|-s?*|--as|--as=*|--as-group|--as-group=*|--as-uid|--as-uid=*|--token|--token=*|--username|--username=*|--password|--password=*|--client-certificate|--client-certificate=*|--client-key|--client-key=*|--certificate-authority|--certificate-authority=*|--insecure-skip-tls-verify|--insecure-skip-tls-verify=*|--tls-server-name|--tls-server-name=*|--raw|--raw=*)
+        echo "live-evidence: refusing a credential, target or raw-output override" >&2; return 2 ;;
+    esac
+  done
   kubectl --context "$le_ctx" --request-timeout=15s "$le_verb" "$@"
 }
 
@@ -54,6 +68,14 @@ le_redact() {
   fi
 }
 
+# Capture provider status before jq: an empty or partial failed read cannot
+# become a successful empty projection through a pipeline.
+le_read_json() {
+  le_json="$(le_kubectl "$@" 2>/dev/null)" || { echo "live-evidence: provider read failed" >&2; return 1; }
+  printf '%s' "$le_json" | jq -ce -s 'select(length==1) | .[0] | select(type=="object")' 2>/dev/null \
+    || { echo "live-evidence: provider returned no valid JSON object" >&2; return 1; }
+}
+
 # --- probes ------------------------------------------------------------------
 # Each probe is read-only, pins --context, and emits a compact JSON record on
 # stdout (or, for logs, a redacted text slice). A failed/blocked call prints
@@ -65,7 +87,8 @@ le_redact() {
 # reason (CrashLoopBackOff/ImagePullBackOff/CreateContainerError), and the last
 # terminated state (reason=OOMKilled + exitCode=137, etc.).
 probe_pod_status() {
-  le_kubectl "$1" get pod "$3" -n "$2" -o json 2>/dev/null | jq '{
+  pp_json="$(le_read_json "$1" get pod "$3" -n "$2" -o json)" || return 1
+  printf '%s' "$pp_json" | jq -e 'select(.status|type=="object") | {
     phase: .status.phase,
     startTime: .status.startTime,
     containers: [ .status.containerStatuses[]? | {
@@ -83,16 +106,17 @@ probe_pod_status() {
 # Recent Warning events for the object (bounded), newest last. FailedScheduling,
 # BackOff, Unhealthy (probe failures), Failed (image pull) all surface here.
 probe_events() {
-  le_kubectl "$1" get events -n "$2" \
+  pe_json="$(le_read_json "$1" get events -n "$2" \
     --field-selector "involvedObject.name=$3,type=Warning" \
-    --sort-by=.lastTimestamp -o json 2>/dev/null \
-    | jq '[ .items[]? | {reason, message, count, lastTimestamp} ] | .[-20:]' 2>/dev/null
+    --sort-by=.lastTimestamp -o json)" || return 1
+  printf '%s' "$pe_json" | jq -e 'select(.items|type=="array") | [ .items[]? | {reason, message, count, lastTimestamp} ] | .[-20:]' 2>/dev/null
 }
 
 # probe_rollout <context> <namespace> <deployment>
 # Workload-level view: desired vs ready vs unavailable replicas and conditions.
 probe_rollout() {
-  le_kubectl "$1" get deploy "$3" -n "$2" -o json 2>/dev/null | jq '{
+  pr_json="$(le_read_json "$1" get deploy "$3" -n "$2" -o json)" || return 1
+  printf '%s' "$pr_json" | jq -e 'select(.status|type=="object") | {
     replicas: (.status.replicas // 0),
     ready: (.status.readyReplicas // 0),
     updated: (.status.updatedReplicas // 0),
@@ -106,16 +130,20 @@ probe_rollout() {
 # reported as "Kind/name" lines. Uses only identity metadata, never blames it.
 probe_owner() {
   po_ctx="$1"; po_ns="$2"; po_pod="$3"
-  po_owner="$(le_kubectl "$po_ctx" get pod "$po_pod" -n "$po_ns" -o json 2>/dev/null \
-    | jq -r '.metadata.ownerReferences[]? | "\(.kind)/\(.name)"' 2>/dev/null | head -1)"
+  po_json="$(le_read_json "$po_ctx" get pod "$po_pod" -n "$po_ns" -o json)" || return 1
+  printf '%s' "$po_json" | jq -e '.metadata|type=="object"' >/dev/null || return 1
+  po_owner="$(printf '%s' "$po_json" | jq -r '[.metadata.ownerReferences[]? | "\(.kind)/\(.name)"][0] // empty')" || return 1
   [ -n "$po_owner" ] || return 0
-  echo "$po_owner"
+  po_parent=
   case "$po_owner" in
     ReplicaSet/*)
       po_rs="${po_owner#ReplicaSet/}"
-      le_kubectl "$po_ctx" get rs "$po_rs" -n "$po_ns" -o json 2>/dev/null \
-        | jq -r '.metadata.ownerReferences[]? | "\(.kind)/\(.name)"' 2>/dev/null | head -1 ;;
+      po_json="$(le_read_json "$po_ctx" get rs "$po_rs" -n "$po_ns" -o json)" || return 1
+      printf '%s' "$po_json" | jq -e '.metadata|type=="object"' >/dev/null || return 1
+      po_parent="$(printf '%s' "$po_json" | jq -r '[.metadata.ownerReferences[]? | "\(.kind)/\(.name)"][0] // empty')" || return 1 ;;
   esac
+  printf '%s\n' "$po_owner"
+  [ -z "$po_parent" ] || printf '%s\n' "$po_parent"
 }
 
 # probe_logs_previous <context> <namespace> <pod> [container] [tail]
@@ -123,11 +151,15 @@ probe_owner() {
 # Never emits raw logs: every line passes through le_redact. Default cap 50.
 probe_logs_previous() {
   pl_ctx="$1"; pl_ns="$2"; pl_pod="$3"; pl_container="${4:-}"; pl_tail="${5:-50}"
+  case "$pl_tail" in ''|*[!0-9]*) echo "live-evidence: log tail must be a nonnegative bound" >&2; return 2 ;; esac
   if [ -n "$pl_container" ]; then
-    le_kubectl "$pl_ctx" logs "$pl_pod" -n "$pl_ns" -c "$pl_container" --previous --tail="$pl_tail" 2>/dev/null | le_redact
+    pl_text="$(le_kubectl "$pl_ctx" logs "$pl_pod" -n "$pl_ns" -c "$pl_container" --previous --tail="$pl_tail" 2>/dev/null)" \
+      || { echo "live-evidence: previous log read failed" >&2; return 1; }
   else
-    le_kubectl "$pl_ctx" logs "$pl_pod" -n "$pl_ns" --previous --tail="$pl_tail" 2>/dev/null | le_redact
+    pl_text="$(le_kubectl "$pl_ctx" logs "$pl_pod" -n "$pl_ns" --previous --tail="$pl_tail" 2>/dev/null)" \
+      || { echo "live-evidence: previous log read failed" >&2; return 1; }
   fi
+  printf '%s\n' "$pl_text" | le_redact
 }
 
 # le_can_probe <context> — degrade-not-block readiness for the live path.
@@ -138,7 +170,9 @@ le_can_probe() {
   lc_ctx="$1"
   command -v kubectl >/dev/null 2>&1 || { echo "live-evidence: kubectl not installed" >&2; return 1; }
   [ -n "$lc_ctx" ] || { echo "live-evidence: no kubernetes.context configured" >&2; return 1; }
-  le_kubectl "$lc_ctx" config get-contexts -o name 2>/dev/null | grep -qx "$lc_ctx" \
+  lc_contexts="$(le_kubectl "$lc_ctx" config get-contexts -o name 2>/dev/null)" \
+    || { echo "live-evidence: context lookup failed" >&2; return 1; }
+  printf '%s\n' "$lc_contexts" | grep -Fqx -- "$lc_ctx" \
     || { echo "live-evidence: context '$lc_ctx' not in kubeconfig" >&2; return 1; }
   le_kubectl "$lc_ctx" auth can-i get pods >/dev/null 2>&1 \
     || { echo "live-evidence: not authorized to get pods on '$lc_ctx'" >&2; return 1; }

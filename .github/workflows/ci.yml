@@ -28,6 +28,11 @@ jobs:
         # The audit/correlation/cost/redaction libraries and their test suites
         # parse JSON with jq; the runner needs it available.
         run: sudo apt-get update && sudo apt-get install -y jq
+      - name: install YAML verification dependency
+        run: |
+          python3 -m venv "$RUNNER_TEMP/scoutflo-test-python"
+          "$RUNNER_TEMP/scoutflo-test-python/bin/python" -m pip install PyYAML==6.0.3
+          echo "$RUNNER_TEMP/scoutflo-test-python/bin" >> "$GITHUB_PATH"
       - name: run test suites
         # Executes every tests/*.sh and skills/*/tests/*.sh under /bin/sh and
         # fails the build on any failure. Also rejects dead bats-syntax tests

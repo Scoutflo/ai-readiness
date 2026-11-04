@@ -18,7 +18,7 @@ PASS=0; FAIL=0
 ok()  { PASS=$((PASS+1)); printf '  ok   %s\n' "$1"; }
 bad() { FAIL=$((FAIL+1)); printf '  FAIL %s\n' "$1"; }
 # expect: pass|fail
-run() { jq -n "$2" > "$WORK/s.json"; sh "$V" "$WORK/s.json" "$SCOUTFLO_AUDIT_DIR" "$DATE" >/dev/null 2>&1; rc=$?
+run() { jq -n "$2" | jq '{generated_at:"2026-09-08T12:00:00Z",window:"7d"} + .' > "$WORK/s.json"; sh "$V" "$WORK/s.json" "$SCOUTFLO_AUDIT_DIR" "$DATE" >/dev/null 2>&1; rc=$?
   if [ "$1" = pass ]; then [ "$rc" -eq 0 ] && ok "$3" || bad "$3 (expected pass, got exit $rc)";
   else [ "$rc" -ne 0 ] && ok "$3" || bad "$3 (expected fail, got exit 0)"; fi; }
 

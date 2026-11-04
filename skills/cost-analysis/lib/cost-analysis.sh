@@ -66,8 +66,9 @@ cost_analysis_aggregate_findings() {
   set --
   for findings_file in "$AUDITS_DIR"/*/"$audit_date"/findings.json "$AUDITS_DIR"/*/*/"$audit_date"/findings.json; do
     [ -e "$findings_file" ] || continue
-    case "$findings_file" in
-      */all/*|*/cost-analysis/*|*/cost/*|*/doctor/*) continue ;;
+    relative="${findings_file#"$AUDITS_DIR"/}"
+    case "$relative" in
+      all/*|cost-analysis/*|cost/*|doctor/*) continue ;;
     esac
     set -- "$@" "$findings_file"
   done
@@ -80,6 +81,8 @@ cost_analysis_aggregate_findings() {
   jq -s --arg captured "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '
     [ .[] | (.target // "unknown") as $t | (.findings // [])[]
       | select(.area == "cost-optimization")
+      | select(((.status as $s | [null, "configured", "validated-live"] | index($s)) != null
+           and (.lifecycle as $l | [null, "new", "unchanged", "regressed"] | index($l)) != null))
       | {
           id, title,
           source_target: $t,
@@ -90,10 +93,10 @@ cost_analysis_aggregate_findings() {
     ]' "$@"
 }
 
-# Apply deduplication: mark cost findings whose finding ID appears in a
-# correlation.json overlap group (same service flagged by multiple targets).
+# Annotate same-run overlaps by exact target and finding ID. Monitoring
+# overlap is not proof that provider-native savings describe the same money.
 cost_analysis_deduplicate() {
-  findings="$1"
+  findings="$1"; cost_run_date="${2:-${audit_date:-}}"
 
   if [ ! -f "$CORRELATION_FILE" ]; then
     # No correlation = no dedup possible, return as-is
@@ -101,14 +104,17 @@ cost_analysis_deduplicate() {
     return 0
   fi
 
-  correlation=$(jq '.overlaps // []' "$CORRELATION_FILE")
+  correlation=$(jq -ce --arg date "$cost_run_date" 'if $date!="" and .audit_date==$date then (.overlaps // []) else [] end' "$CORRELATION_FILE") || {
+    echo 'cost-analysis: correlation is unreadable; overlap annotation unavailable' >&2
+    printf '%s\n' "$findings"; return 0
+  }
 
   printf '%s\n' "$findings" | jq \
     --argjson overlaps "$correlation" \
     '
     map(
       . as $cost |
-      ([$overlaps[] | select(.findings[]?.finding_id == $cost.id)] | first) as $ovl |
+      ([$overlaps[] | select(any(.findings[]?; .finding_id==$cost.id and .target==$cost.source_target))] | first) as $ovl |
       . + {
         deduplicated: ($ovl != null),
         dedup_reason: ($ovl.recommendation // "No overlap")
@@ -162,6 +168,7 @@ cost_analysis_build_report() {
       environment: $env,
       cost_sensitivity: $sensitivity,
       findings: $findings,
+      data_status: (if ($findings|length)==0 then "no-cost-findings" else "findings-present" end),
       summary: {
         total_findings: ($findings | length),
         findings_with_native_savings_figure:
@@ -169,13 +176,13 @@ cost_analysis_build_report() {
         presence_fact_findings:
           ($findings | map(select(.estimated_monthly_savings_usd == null)) | length),
         monthly_savings_identified:
-          ($findings | map(.estimated_monthly_savings_usd // 0) | add),
+          ($findings | map(.estimated_monthly_savings_usd // 0) | add // 0),
         annual_savings_identified:
-          ($findings | map(.roi_annual // 0) | add),
+          ($findings | map(.roi_annual // 0) | add // 0),
         deduplicated_overlaps:
           ($findings | map(select(.deduplicated == true)) | length)
       },
-      note: "Savings totals sum only provider-native recommendation figures (Compute Optimizer, Cost Explorer, Datadog usage). Presence-fact findings carry no invented dollar value.",
+      note: "Savings totals sum only provider-native recommendation figures (Compute Optimizer, Cost Explorer, Datadog usage). Presence-fact findings carry no invented dollar value. Overlap flags annotate monitoring evidence only; totals are unadjusted sums, not proven unique savings. An empty result means no cost findings were supplied for this run; it does not establish zero spend or absence of waste.",
       trend: {last_5_runs: $trend}
     }
     '
@@ -205,12 +212,11 @@ cost_analysis_run() {
   all_costs=$(cost_analysis_aggregate_findings "$audit_date")
 
   if [ "$(printf '%s\n' "$all_costs" | jq '. | length')" -eq 0 ]; then
-    echo "[cost-analysis] No cost findings available"
-    return 0
+    echo "[cost-analysis] No cost findings available; replacing the roll-up so prior savings are not carried forward"
   fi
 
   # Deduplicate using correlation data
-  deduped=$(cost_analysis_deduplicate "$all_costs")
+  deduped=$(cost_analysis_deduplicate "$all_costs" "$audit_date")
 
   # Build report
   report=$(cost_analysis_build_report "$audit_date" "$deduped" "$context")

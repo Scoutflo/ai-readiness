@@ -124,6 +124,7 @@ Expected output: one key per line, for example `grafana`, `sentry`, `prometheus`
 | `elk` | `audit-elk` |
 | `jsm` | `audit-jsm` |
 | `zenduty` | `audit-zenduty` |
+| `splunk_oncall` | `audit-splunk-oncall` |
 | `groundcover` | `audit-groundcover` |
 | `prometheus.alertmanager_url` or `victoriametrics.vmalert_url` | `audit-alertmanager` |
 | `digitalocean` | `audit-digitalocean` |
@@ -223,6 +224,8 @@ Expected output: one line per completed audit, for example `grafana: 214 objects
 
 Score trend per target, from each target's `history.jsonl`. The ledger is the only trend source; the two most recent `findings.json` files stay reserved for finding-level matching inside each audit:
 
+Score movement also requires matching scope. Missing historical scope and explicit `account` mean `full`; a `triage` run is never compared with a full run, even if both emit the same check IDs. Preserve scope in new history rows.
+
 ```bash
 set -eu
 AUDITS_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}"   # report-standard output root
@@ -234,18 +237,17 @@ for h in "$AUDITS_DIR"/*/history.jsonl "$AUDITS_DIR"/*/*/history.jsonl; do
   # "clickstack/hdx-eu" (not a bare "hdx-eu" that collides across integrations).
   target=$(dirname "$h"); target="${target#"$AUDITS_DIR"/}"
   current="$AUDITS_DIR/$target/$RUN_DATE/findings.json"
-  model=""; check_set=""
+  model=""; check_set=""; scope='"full"'
   if [ -f "$current" ]; then
     model=$(jq -r '.score.scoring_model // ""' "$current")
     check_set=$(jq -r '.score.check_set // ""' "$current")
+    scope=$(jq -c '(.scope//"full") | if .=="account" then "full" else . end' "$current")
   fi
-  if [ -n "$model" ] && [ -n "$check_set" ]; then
-    values=$(tail -n 30 "$h" | jq -Rr --arg model "$model" --arg set "$check_set" \
-      'fromjson? | select(.scoring_model == $model and .check_set == $set and (.overall|type)=="number") | .overall' \
-      | tail -n 5)
-  else
-    values=$(tail -n 5 "$h" | jq -Rr 'fromjson? | select((.overall|type)=="number") | .overall')
-  fi
+  values=$(tail -n 30 "$h" | jq -Rr --arg model "$model" --arg set "$check_set" --argjson scope "$scope" '
+    def scope_key: (.scope//"full") | if .=="account" then "full" else . end;
+    fromjson? | select(scope_key==$scope and (.overall|type)=="number"
+      and (($model=="" or $set=="") or (.scoring_model == $model and .check_set == $set))) | .overall' \
+    | tail -n 5)
   parsed=$(printf '%s\n' "$values" | awk 'NF{n++} END{print n+0}')
   if [ "$parsed" -eq 0 ]; then
     echo "${target}: no comparable numeric history yet"
@@ -358,7 +360,7 @@ Expected output: `[correlation] Written <audits-dir>/correlation.json` followed 
 **Use cases:**
 - Surfaces candidate redundant monitoring (two stacks watching the same service) for consolidation review
 - Flags cascade risk: a failing database resource paired with untested alert delivery paths
-- Feeds cost-analysis deduplication (Phase 3.7) and `topology-guided-setup` fix sequencing
+- Feeds cost-analysis overlap annotation (Phase 3.7) and `topology-guided-setup` fix sequencing
 
 **Graceful degradation:** If the correlation library is absent (user on v0.1.65 or earlier), the log notes this and continues — correlation is optional but recommended for multi-stack estates.
 
@@ -397,7 +399,7 @@ Expected output: `[alert-fatigue] Written <audits-dir>/alert-fatigue.json` plus 
 
 ## Phase 3.7: Cost roll-up (v0.1.67+)
 
-After correlation completes, run the cost-analysis roll-up to aggregate every audit's cost-optimization findings (`area: cost-optimization` — `AWSOPT-*`, `DDOPT-*`) into one cross-provider view, deduplicated via `correlation.json`. This is a lightweight roll-up of findings the individual audits already produced; it makes no provider calls.
+After correlation completes, run the cost-analysis roll-up to aggregate every audit's cost-optimization findings (`area: cost-optimization` — `AWSOPT-*`, `DDOPT-*`) into one cross-provider view, annotated by same-run exact-target `correlation.json` overlaps. This is a lightweight roll-up of findings the individual audits already produced; it makes no provider calls.
 
 > For a **deep, live, per-resource cost analysis** (queries Compute Optimizer / Cost Explorer / GCP Recommender / Datadog usage / K8s requests-vs-usage / DO billing, ranked by provider-native savings), run [`/scoutflo:audit-cost`](../audit-cost/SKILL.md) directly. `audit-all` intentionally runs only the fast roll-up so a combined run stays bounded; the deep cost audit is its own explicitly-invoked run.
 
@@ -464,7 +466,7 @@ Write `./scoutflo-audits/all/<YYYY-MM-DD>/report.md`. It summarizes and links; i
 
 1. **Header**: date (UTC), toolkit version, audits run as `<n> of <m> configured`.
 2. **Executive summary (top-of-report one-pager)**: paste the output of `sh "${CLAUDE_PLUGIN_ROOT}/report-standard/render-report-viz.sh" exec-summary "<audits-dir>" "<run-date>"` — a posture grade (AT RISK / NEEDS WORK / FAIR / HEALTHY) + severity counts, the **top 5–7 worst findings across the whole estate** each as *what · where (blast radius) · $ · the fix*, the measured **alerting-reachability** headline (AF-004), and the single top real cost lever. Ranked **severity-first, then recoverable points, then $ as an in-band tiebreaker — never a blended cross-domain score, and $ never promotes a lesser finding above a critical one** (CVSS / AWS Security Hub both keep severity separate from $/criticality). So a leader sees the worst things and their fix in 30 seconds. Renders only artifacts already on disk; degrades to a one-line note when no findings exist yet. Part of the fast [triage-mode.md](../../report-standard/triage-mode.md) doctrine.
-3. **At a glance (all stacks)**: paste the output of `sh "${CLAUDE_PLUGIN_ROOT}/report-standard/render-report-viz.sh" rollup "<audits-dir>" "<run-date>"` — a gate-count meter (stacks passing the 85 gate / total) and a worst-first per-stack score-bar table, so a leader sees estate health and which stack to send the team to first at a glance. Never a combined average (that hides a failing stack behind a healthy one); this only visualizes the per-target scores.
+3. **At a glance (all stacks)**: paste the output of `sh "${CLAUDE_PLUGIN_ROOT}/report-standard/render-report-viz.sh" rollup "<audits-dir>" "<run-date>"` — a readiness meter and a worst-first per-stack score-bar table. End-to-end credit requires the score gate, full assessment and the audit's own readiness flag; an explicit false flag is never overridden by a high score. Missing v1 flags preserve legacy behavior, while missing v2 proof fails closed. Never a combined average; this visualizes each target's result and stated limits.
 4. **Scores**: one row per completed target: readiness (`n/100` or `unassessed`), v2 assessment coverage, severity counts, estate size and sizing path (from the Phase 3 roll-up; `estate not recorded` when the audit did not emit one), delta versus that target's previous compatible run (`+9`, `-3`, `first run`, or `not comparable`), the compatible score trend from its `history.jsonl` (last five runs, oldest first), and the relative path to its full `report.md`. Score movement is comparable only when `scoring_model` and `check_set` match. One score line per target, never a combined average: an average hides a failing stack behind a healthy one.
 5. **Blocked audits**: one row per blocked audit with reason and fix pointer. Omit the section only when nothing was blocked, and then state "No audits blocked."
 6. **Regressions**: the Phase 3 regressions list, one row per regressed finding with its target, ID, severity, and title, ordered highest severity first. State "No regressions this run." when the list is empty. This section always precedes Top findings; regressions are the highest-signal state in the lifecycle model and are named before anything else.

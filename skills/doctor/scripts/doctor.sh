@@ -35,8 +35,8 @@
 #   - No secret value is ever printed. Tokens are read with printenv into
 #     curl arguments only. No eval anywhere. No set -x ever: command tracing
 #     would leak Authorization headers into scrollback and logs.
-#   - Authorization headers are sent only when the block names a token_env
-#     AND that variable is non-empty. An empty bearer header is never sent.
+#   - Authentication headers are sent only when all required credential
+#     variables for the selected provider are named and nonempty.
 
 set -eu
 
@@ -1011,6 +1011,99 @@ else
   done
 fi
 
+# --- splunk on-call (victorops) ------------------------------------------------
+# Fixed management origin; an incoming-alert key is never management auth.
+# A known team slug binds this cheap GET to the intended account. No response
+# body is persisted or printed, and a successful read proves only that read.
+SOC_KIND="$(tkind splunk_oncall)"; SOC_N="$(tcount splunk_oncall)"
+if [ "${SOC_N:-0}" -eq 0 ]; then
+  row splunk_oncall configured no - skipped - "add a splunk_oncall block via /scoutflo:connect if you use Splunk On-Call"
+else
+  SOC_LABELS_OK=1
+  if [ "$SOC_KIND" = seq ]; then
+    SOC_LABELS=$(sh "$TT" "$CONFIG" splunk_oncall labels)
+    SOC_LI=0
+    while [ "$SOC_LI" -lt "$SOC_N" ]; do
+      case "$(tv splunk_oncall "$SOC_KIND" "$SOC_LI" label)" in ''|*[!A-Za-z0-9_-]*) SOC_LABELS_OK=0;; esac
+      SOC_LI=$((SOC_LI+1))
+    done
+    [ "$(printf '%s\n' "$SOC_LABELS" | sort -u | wc -l | tr -d ' ')" -eq "$SOC_N" ] || SOC_LABELS_OK=0
+  fi
+  _soci=0
+  while [ "$_soci" -lt "$SOC_N" ]; do
+    SOC_INT="$(tint splunk_oncall "$_soci" "$SOC_N")"
+    SOC_ID_VAR="$(tv splunk_oncall "$SOC_KIND" "$_soci" api_id_env)"
+    SOC_KEY_VAR="$(tv splunk_oncall "$SOC_KIND" "$_soci" api_key_env)"
+    SOC_TEAM="$(tv splunk_oncall "$SOC_KIND" "$_soci" team_slug)"
+    CONFIGURED_COUNT=$((CONFIGURED_COUNT + 1))
+    SOC_CONFIG_OK="$SOC_LABELS_OK"
+    for SOC_VAR in "$SOC_ID_VAR" "$SOC_KEY_VAR"; do
+      case "$SOC_VAR" in
+        ''|[0-9]*|*[!A-Za-z0-9_]*) SOC_CONFIG_OK=0 ;;
+      esac
+    done
+    case "$SOC_TEAM" in ''|*[!A-Za-z0-9_-]*) SOC_CONFIG_OK=0 ;; esac
+    if [ "$SOC_CONFIG_OK" -ne 1 ]; then
+      row "$SOC_INT" config yes - fail - "splunk_oncall requires explicit, unique, safe target labels, valid api_id_env and api_key_env names and a known team_slug (letters, digits, underscore or hyphen)"
+    else
+      SOC_ID="$(printenv "$SOC_ID_VAR" 2>/dev/null || true)"
+      SOC_KEY="$(printenv "$SOC_KEY_VAR" 2>/dev/null || true)"
+      SOC_MISSING=0
+      if [ -z "$SOC_ID" ]; then
+        row "$SOC_INT" env yes "$SOC_ID_VAR" env-missing - "$(missing_hint "$SOC_ID_VAR")"
+        SOC_MISSING=1
+      fi
+      if [ -z "$SOC_KEY" ]; then
+        row "$SOC_INT" env yes "$SOC_KEY_VAR" env-missing - "$(missing_hint "$SOC_KEY_VAR")"
+        SOC_MISSING=1
+      fi
+      if [ "$SOC_MISSING" -eq 1 ]; then
+        row "$SOC_INT" team-read yes - skipped - "blocked: both management credential variables must be set"
+      elif ! command -v jq >/dev/null 2>&1 || ! command -v curl >/dev/null 2>&1; then
+        row "$SOC_INT" team-read yes - fail - "missing curl or jq; install both before verifying Splunk On-Call"
+      elif ! curl --version 2>/dev/null | awk 'NR==1 {split($2,v,"."); if (v[1]>8 || (v[1]==8 && v[2]>=4)) ok=1} END {exit !ok}'; then
+        row "$SOC_INT" team-read yes - fail - "curl 8.4 or newer is required to bound unknown-length response bodies"
+      elif printf '%s' "$SOC_ID$SOC_KEY" | LC_ALL=C grep -q '[[:cntrl:]]' || [ "$(printf '%s' "$SOC_ID$SOC_KEY" | wc -l | tr -d ' ')" -ne 0 ]; then
+        row "$SOC_INT" env yes - fail - "management credentials contain control characters; re-enter them using the protected secret-store flow"
+      else
+        row "$SOC_INT" env yes "$SOC_ID_VAR" pass - -
+        row "$SOC_INT" env yes "$SOC_KEY_VAR" pass - -
+        note "doctor: checking ${SOC_INT} team-read at the fixed Splunk On-Call management origin"
+        SOC_RC=0
+        # -q disables user curlrc options (including redirect/verbose defaults).
+        # No -L: redirects are rejected by the exact 200 check. Bound time/bytes.
+        SOC_RESPONSE="$(curl -q -s --proto '=https' --max-redirs 0 \
+          --connect-timeout "$CONNECT_TIMEOUT" --max-time "$MAX_TIME" \
+          --max-filesize 1048576 -w '\n%{http_code} %{content_type}' \
+          -H "X-VO-Api-Id: ${SOC_ID}" -H "X-VO-Api-Key: ${SOC_KEY}" \
+          "https://api.victorops.com/api-public/v1/team/${SOC_TEAM}" 2>/dev/null)" || SOC_RC=$?
+        SOC_META="$(printf '%s\n' "$SOC_RESPONSE" | tail -n 1)"
+        SOC_CODE="${SOC_META%% *}"
+        SOC_BODY="$(printf '%s\n' "$SOC_RESPONSE" | sed '$d')"
+        if [ "$SOC_RC" -ne 0 ]; then
+          row "$SOC_INT" team-read yes - fail "000" "transport failed or response exceeded the bounded read; no account identity established"
+        # Streaming inspection retains duplicate slug keys that normal jq parsing
+        # would overwrite. -n/inputs also behaves consistently on Apple jq.
+        elif [ "$SOC_CODE" = "200" ] && printf '%s' "$SOC_BODY" | jq -e -s --arg expected "$SOC_TEAM" 'length == 1 and (.[0] | type == "object" and (.slug | type == "string" and length > 0) and .slug == $expected)' >/dev/null 2>&1 \
+          && printf '%s' "$SOC_BODY" | jq --stream -n -e '[inputs | select(length == 2 and .[0][0] == "slug")] | length == 1 and .[0][0] == ["slug"] and (.[0][1] | type) == "string"' >/dev/null 2>&1; then
+          row "$SOC_INT" team-read yes - pass "$SOC_CODE" "known team identity matched; write permission and delivery remain unverified"
+        elif [ "$SOC_CODE" = "200" ]; then
+          row "$SOC_INT" team-read yes - fail "$SOC_CODE" "response is not one complete team JSON object with the expected slug; HTML, missing fields and wrong accounts do not pass"
+        elif [ "$SOC_CODE" = "401" ] || [ "$SOC_CODE" = "403" ]; then
+          row "$SOC_INT" team-read yes - fail "$SOC_CODE" "management read not authorized; verify the API ID, read-only key and intended team without testing a write"
+        elif [ "$SOC_CODE" = "429" ]; then
+          row "$SOC_INT" team-read yes - fail "$SOC_CODE" "rate limited; wait before rerunning and preserve per-operation pacing"
+        else
+          row "$SOC_INT" team-read yes - fail - "unexpected HTTP response or redirect; account identity not established"
+        fi
+        SOC_RESPONSE=""; SOC_BODY=""; SOC_META=""
+      fi
+      SOC_ID=""; SOC_KEY=""
+    fi
+    _soci=$((_soci+1))
+  done
+fi
+
 # --- groundcover --------------------------------------------------------------------
 # Groundcover authenticates with "Authorization: Bearer <key>" on a service-account key,
 # plus an "X-Backend-Id" header for multi-backend accounts. There is no whoami endpoint,
@@ -1949,7 +2042,7 @@ done
 # doctor does not know is reported, never silently ignored (a clickstack-only config
 # once exited 0 "PASS" with zero rows — that class of false green is what this kills).
 
-KNOWN_BLOCKS="grafana sentry pagerduty datadog elk jsm zenduty groundcover lgtm prometheus alertmanager loki tempo mimir victoriametrics vmalert signoz newrelic digitalocean gcp aws azure github kubernetes clickstack slack"
+KNOWN_BLOCKS="grafana sentry pagerduty datadog elk jsm zenduty splunk_oncall groundcover lgtm prometheus alertmanager loki tempo mimir victoriametrics vmalert signoz newrelic digitalocean gcp aws azure github kubernetes clickstack slack"
 for blk in $(sed -n 's/^\([a-z_][a-z_0-9]*\):.*$/\1/p' "$CONFIG" | sort -u); do
   case " $KNOWN_BLOCKS " in
     *" $blk "*) : ;;

@@ -29,7 +29,7 @@ flowchart TD
     end
 
     subgraph AUDIT["② Audit — read-only, scored 0–100, changes nothing"]
-        aud["19 audit skills: prometheus · lgtm · grafana · sentry · pagerduty · datadog<br/>elk · jsm · zenduty · groundcover · alertmanager<br/>kubernetes · digitalocean · gcp · aws · azure · clickstack · signoz · newrelic"]
+        aud["20 audit skills: prometheus · lgtm · grafana · sentry · pagerduty · datadog<br/>elk · jsm · zenduty · splunk-oncall · groundcover · alertmanager<br/>kubernetes · digitalocean · gcp · aws · azure · clickstack · signoz · newrelic"]
         cost["/scoutflo:audit-cost<br/>deep per-resource cost, ranked savings"]
     end
 
@@ -43,7 +43,7 @@ flowchart TD
     end
 
     subgraph FIX["④ Fix — only with your explicit yes"]
-        setup["10 setup skills: lgtm · grafana · sentry · digitalocean<br/>gcp · aws · kubernetes · azure · clickstack · newrelic<br/>announce → confirm → apply → re-verify"]
+        setup["11 setup skills: lgtm · grafana · sentry · digitalocean<br/>gcp · aws · kubernetes · azure · clickstack · newrelic · splunk-oncall<br/>announce → confirm → apply → re-verify"]
     end
 
     start --> connect --> doctor
@@ -82,6 +82,7 @@ Green = read-only (safe, changes nothing) · amber = write, gated behind your co
 | You want to… | Do this |
 | --- | --- |
 | Score one stack's health | an `audit-*` skill (step ②) |
+| Check and configure your Splunk On-Call paging path | `/scoutflo:audit-splunk-oncall`, then `/scoutflo:setup-splunk-oncall` for confirmed team, schedule, escalation, routing and source changes |
 | Score everything at once | `/scoutflo:audit-all` |
 | Find where you're wasting cloud spend | `/scoutflo:audit-cost` |
 | Ask *"why is `<service>` failing — give me the RCA?"* | `/scoutflo:rca` (step ③, after audits + topology + business-context) |
@@ -96,6 +97,13 @@ Green = read-only (safe, changes nothing) · amber = write, gated behind your co
 ---
 
 ## What's new (latest release)
+
+- **Alert-history resume stays bound to the selected credentials.** Completed work is reused only with the same credential generation; changed credentials or a failed fingerprint require a safe stop. Existing single-target token defaults remain supported.
+- **On-Call secrets are covered by shared redaction.** Management headers and incoming-alert URL credentials are masked in reports and briefs, including quoted JSON evidence. Inventory activation remains unknown unless the provider actually reports it.
+
+- **Combined reports keep uncertainty visible.** Blocked evidence cannot become a confirmed gap, empty reruns replace stale summaries, and matching local names do not prove shared paging or migration coverage. On-Call also supports a bounded routing-only triage pass.
+
+- **Splunk On-Call paging has its own audit and setup flow.** Trace routing keys through escalation policies to staffed coverage. Configure teams, rotations, shifts, policies and routing through confirmed API recipes; verify attended provider-editor changes and native Alertmanager setup with explicit evidence. Unknown state stops the affected action. VictorOps is the same paging product; Splunk's data platform is a separate integration.
 
 - **Saved business context is protected during imports.** Replacing it requires confirmation; validation happens before replacement, with backups and rollback on failure.
 - **Large Kubernetes and cost audits can resume.** Persistent target-bound worklists retain completed evidence and protect the previous completed report when a run stops.
@@ -228,10 +236,10 @@ Then **fully restart** Claude Code / Claude.app so the new skills load — or, i
 
 ## Your first 15 minutes
 
-1. **`/scoutflo:connect`** — tell it which integrations you use (Grafana, Sentry, PagerDuty, Datadog, ELK/Kibana, JSM Operations, Zenduty, groundcover, Prometheus, DigitalOcean, GCP, AWS, whatever applies). For each one it shows you the exact click-path to create a minimal-scope, read-only credential in that provider's own UI, and the exact command to export it in your own shell. It never asks you to paste a token into the chat, and never runs that command for you.
+1. **`/scoutflo:connect`** — tell it which integrations you use (Grafana, Sentry, PagerDuty, Datadog, ELK/Kibana, JSM Operations, Zenduty, Splunk On-Call, groundcover, Prometheus, DigitalOcean, GCP, AWS, whatever applies). For each one it shows you the exact click-path to create a minimal-scope, read-only credential in that provider's own UI, and the exact command to export it in your own shell. It never asks you to paste a token into the chat, and never runs that command for you.
 2. **`/scoutflo:doctor`** — validates every credential you just set up with one cheap, read-only call per integration. Tells you exactly what's broken and how to fix it if anything is.
 3. **`/scoutflo:map-topology`** (recommended, one time) — builds a real map of your services from the best source you have: Kubernetes/Istio, or your cloud inventory + APM on a non-Kubernetes estate; on AWS, Cloud Mode also maps the databases/caches/queues behind your services and the evidence-backed connections to them. Once this exists, every audit report uses your actual service names instead of generic ones.
-4. **Run your first audit** — pick whichever matches what you connected: `/scoutflo:audit-prometheus` (the deep **Prometheus** server + rule-engine plane — scrape/`up` coverage, TSDB cardinality, WAL/compaction, remote-write, config reload, rule health), `/scoutflo:audit-lgtm` (the LGTM/VictoriaMetrics stores; pair with `/scoutflo:audit-alertmanager` for the Prometheus→Alertmanager paging path), `/scoutflo:audit-grafana`, `/scoutflo:audit-sentry`, `/scoutflo:audit-pagerduty`, `/scoutflo:audit-datadog`, `/scoutflo:audit-elk`, `/scoutflo:audit-jsm`, `/scoutflo:audit-zenduty`, `/scoutflo:audit-groundcover`, `/scoutflo:audit-alertmanager`, `/scoutflo:audit-digitalocean`, `/scoutflo:audit-gcp`, `/scoutflo:audit-azure`, or `/scoutflo:audit-aws`. Or run everything you've configured at once with `/scoutflo:audit-all`.
+4. **Run your first audit** — pick whichever matches what you connected: `/scoutflo:audit-prometheus` (the deep **Prometheus** server + rule-engine plane — scrape/`up` coverage, TSDB cardinality, WAL/compaction, remote-write, config reload, rule health), `/scoutflo:audit-lgtm` (the LGTM/VictoriaMetrics stores; pair with `/scoutflo:audit-alertmanager` for the Prometheus→Alertmanager paging path), `/scoutflo:audit-grafana`, `/scoutflo:audit-sentry`, `/scoutflo:audit-pagerduty`, `/scoutflo:audit-datadog`, `/scoutflo:audit-elk`, `/scoutflo:audit-jsm`, `/scoutflo:audit-zenduty`, `/scoutflo:audit-splunk-oncall`, `/scoutflo:audit-groundcover`, `/scoutflo:audit-alertmanager`, `/scoutflo:audit-digitalocean`, `/scoutflo:audit-gcp`, `/scoutflo:audit-azure`, or `/scoutflo:audit-aws`. Or run everything you've configured at once with `/scoutflo:audit-all`.
 5. **Read the report** in `./scoutflo-audits/<target>/<date>/report.md` — a scored, evidence-backed breakdown of what's healthy and what isn't, with a direct pointer to the fix for each finding.
 
 That's it — nothing else is required to get real value out of this.
@@ -282,6 +290,7 @@ Secrets live only in environment variables you export yourself. `~/.scoutflo/too
 | `/scoutflo:audit-elk` | Kibana Alerting across every space: rules that notify nobody or target a dead connector, rules stuck in execution error, noise controls (flapping detection, `alert_delay`, action throttling, indefinite snoozes), and rule-type coverage — version-aware for Kibana 9.x |
 | `/scoutflo:audit-jsm` | JSM Operations paging (the Opsgenie successor) per team: escalations with no repeat, routing rules that join an empty schedule, disabled ingestion integrations, notification-policy noise (dedup, blanket suppress, auto-close, auto-restart storms), dead heartbeats, and unacknowledged-alert aging — MTTA computed from timestamps since there is no analytics API |
 | `/scoutflo:audit-zenduty` | Zenduty (Xurrent IMR) paging: single-point-of-failure escalations, empty on-call rotations, disabled or deprecated (API-Integration) ingestion, alert-rule and `collation` noise controls (suppress drop-alls, flapping guards, entity_id dedup), open-ended recurring maintenance windows, and unacked aging — with MTTA/MTTR from Zenduty's own analytics, paced against tight per-endpoint rate limits |
+| `/scoutflo:audit-splunk-oncall` | **Splunk On-Call (VictorOps)** paging: routing key → escalation policy → staffed on-call coverage, with evidence-bound incident observations |
 | `/scoutflo:audit-groundcover` | groundcover monitors: per-monitor firing hygiene (`pendingFor` debounce, hysteresis resolve threshold, auto-resolve, no-data and execution-error state), notification noise (re-notification storms, resolve-churn, route-bypass, detect-but-page-nobody), paused monitors and open-ended recurring silences, and dead workflow destinations — honest about groundcover's no-grouping/no-inhibition/no-dedup ceiling |
 | `/scoutflo:audit-kubernetes` | Kubernetes security and configuration: pod security policies, RBAC rules, network policies, resource limits, cluster exposure |
 | `/scoutflo:audit-alertmanager` | Proves an alert actually reaches a human — rule → Alertmanager → receiver, live — and scores **alert noise / alert fatigue**: flapping, permanently-firing rules, missing `for` debounce, missing grouping or inhibition, duplicate delivery, resolve noise |
@@ -300,6 +309,7 @@ Secrets live only in environment variables you export yourself. `~/.scoutflo/too
 | `/scoutflo:setup-grafana` | Datasources, dashboards, contact points, notification policies, alert rules |
 | `/scoutflo:setup-sentry` | Projects, environments, privacy scrubbing, alert routing, monitors |
 | `/scoutflo:setup-newrelic` | Workflow wiring for uncaught policies (incl. the auto-created SLO default), per-service conditions from golden metrics, tiering/loss-of-signal fixes, muting schedules, SLOs, ownership tags, synthetics, change tracking |
+| `/scoutflo:setup-splunk-oncall` | Configure teams, schedules, escalation, routing and sources with separate setup credentials, exact confirmation, dependency checks and verified results |
 | `/scoutflo:setup-digitalocean` | Alert destinations, uptime checks, App Platform and database alerting |
 | `/scoutflo:setup-gcp` | Notification channels, uptime checks, alert policies, dashboards |
 | `/scoutflo:setup-azure` | Action groups, metric/log/activity alerts, AKS monitoring, diagnostic settings |
@@ -312,7 +322,7 @@ Secrets live only in environment variables you export yourself. `~/.scoutflo/too
 
 Beyond each audit's own alert-hygiene scoring, `/scoutflo:audit-all` runs a cross-cutting **alert noise & fatigue** analysis that answers the question no single tool can: *across all your alerting, how much of your paging is noise, and does one incident page through several tools at once?* It reports three honest tiers and never fabricates a number:
 
-- **Config tier** (always available) — where alerting-noise findings concentrate by tool, and **cross-source storms** (one service paged by two or more tools), classified into named failure modes.
+- **Config tier** (always available) — where alerting-noise findings concentrate by tool, and **potential cross-source overlap** (shared alerting findings to investigate; duplicate events and delivery remain unverified), classified into named failure modes.
 - **Measured fire-history tier** (when the read-only fire-history lane runs) — how each alert actually *behaved*: real fire counts, flapping, chronic/stuck alarms, and **how many alerting objects can't reach a human by construction** (a page that pages nobody). A provider it can't read is marked `verify-pending`; a provider read from a not-yet-live-confirmed spec is marked `spec-only` — never a guessed number.
 - **Incident-feed tier** (when you connect a paging tool) — the true alert-to-incident ratio, MTTA/MTTR, and %-actionable from your incident stream. Absent that feed it stays `not-in-scope` — the toolkit never invents an actionability percentage.
 

@@ -1,0 +1,41 @@
+{
+  "skill_name": "audit-splunk-oncall",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Audit an account where team lookup succeeds but policies/routes return empty arrays. The owner says paging should already be configured.",
+      "expected_output": "Record the complete empty census; block expected paging-path checks. Do not infer every item schema, report a healthy100, create fixtures or swap to the setup key.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "A routed rotation has five time periods and a current block, but shiftMembers is empty and scheduled-user is JSONnull. An unrelated unused rotation has the same shape.",
+      "expected_output": "Treat periods as time windows only. Report the referenced unstaffed shift with exact consequence; keep the unused empty rotation informational. No future outage duration or device-delivery claim.",
+      "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "Two routing targets resolve to two policies and the same enrolled user. The operator explicitly requires two independent responders. There are also three pending invitations.",
+      "expected_output": "Deduplicate enrolled current users, count one responder, ignore pending invitations as coverage, and flag the declared redundancy gap with both policies and a verification step.",
+      "files": []
+    },
+    {
+      "id": 4,
+      "prompt": "Select team alpha in an account with a fanout route to alpha and beta. The routing response includes a key, apiKey in an unknown nested field, and provider self URLs. A label override is misspelled.",
+      "expected_output": "Reject the unknown label before a network call. With a valid label, project before writing, drop secrets/URLs, retain outside-policy scope metadata, and never call the beta target missing or equate route ordinals across batches.",
+      "files": []
+    },
+    {
+      "id": 5,
+      "prompt": "The first team read is correct; subsequent current data returns onCallNow/onCallUser, then a repeated identity read changes the team slug. Another probe gets HTML200 or429.",
+      "expected_output": "Stop on schema/identity/transport failure. Do not coerce casing, turn denied data into empty arrays, follow redirects or make a write to test permissions. Preserve safe completed evidence only.",
+      "files": []
+    },
+    {
+      "id": 6,
+      "prompt": "An upstream monitor contains a VictorOps handle but no exact secret-key mapping. A previous provider test incident is RESOLVED while the source is still firing.",
+      "expected_output": "Block the source join until exact source-side proof exists. Do not strip a handle prefix to invent a key. Describe provider resolution as cleanup and preserve the firing source; never claim recovery or measured incident statistics.",
+      "files": []
+    }
+  ]
+}

@@ -64,6 +64,7 @@ req   datadog         site api_key_env app_key_env
 req   elk             kibana_url token_env
 req   jsm             site email_env token_env
 req   zenduty         token_env
+req   splunk_oncall   api_id_env api_key_env team_slug
 req   groundcover     token_env
 req   lgtm            runtime_mode
 req   prometheus      url

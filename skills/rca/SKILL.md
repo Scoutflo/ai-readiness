@@ -76,7 +76,7 @@ echo "doctor gate: pass (reports=${REPORTS}, live=$([ "$LIVE" -eq 1 ] && echo ye
 
 ## Live-safety gate
 
-The report path is read-only over local files. The live path makes read-only calls only (`get`/`describe`/`list`/`logs`/`events`, guarded by the live-evidence lib and `ci/liveness-readonly-check.sh`) — it changes nothing. When the live branch is active, positively identify the cluster before probing, exactly as audit-kubernetes does, and pin `--context` explicitly (never the ambient kube-context — the same service name can exist in many clusters):
+The shared probe helper admits only `config view` / `config get-contexts` and `auth can-i` under those command families and refuses later flags that override its pinned context, endpoint or credentials. It also refuses raw credential output. The report path is read-only over local files. The live path makes read-only calls only (`get`/`describe`/`list`/`logs`/`events`, guarded by the live-evidence lib and `ci/liveness-readonly-check.sh`) — it changes nothing. When the live branch is active, positively identify the cluster before probing, exactly as audit-kubernetes does, and pin `--context` explicitly (never the ambient kube-context — the same service name can exist in many clusters):
 
 ```bash
 set -eu

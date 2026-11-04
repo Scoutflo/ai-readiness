@@ -1,5 +1,60 @@
 # Changelog
 
+## 0.1.244
+
+Refuse alert-history initialization or resume when credential hashing fails or
+returns an invalid fingerprint. Preserve existing bindings on failure. Mask
+On-Call incoming credentials inside quoted JSON strings and case-insensitive
+HTTP schemes while keeping the resulting findings valid JSON.
+
+## 0.1.243
+
+Keep resumed alert-history collection within one credential generation, including
+when the same variable name changes accounts behind a shared endpoint. Preserve
+verified completed results and require a new run after credentials change; private
+bindings contain no credential values. Restore the owning audits' legacy token
+name defaults and keep DigitalOcean configuration analysis available without
+claiming unsupported native event history. Mask On-Call management credentials
+and incoming-alert URL credentials across shared redaction consumers. Render
+unobserved inventory activation as unknown and clarify forward routing evidence.
+
+## 0.1.242
+
+**Configure and verify the supported Splunk On-Call paging path.**
+
+- Add guarded team, membership, rotation, shift, escalation-policy and routing-key workflows with exact approval, complete dependency checks, current-duty preservation and readback. Owned retirement is separate from restoration; unknown outcomes cannot replay writes.
+- Add asserted attended verification for provider editor workflows. Bind private routing identities to their actual credential generation, preserve hidden-mode evidence separately, and stop unsupported shapes or unavailable preservation checks.
+- Document native Alertmanager source configuration with protected credentials, configured cluster identity, preserved existing receivers, installed-version validation and verified rollback.
+- Make alert-history collection resumable with selected-target preflight, fixed observation windows and immutable completed results. Prometheus state samples remain observations; they do not become invented fire or episode counts.
+- Keep paging benchmarks contextual to service objectives, shifts and the selected window. Preserve legacy reports, skill names and read-only audit credentials.
+
+## 0.1.241
+
+Preserve validated migration measurements for each target when another account
+of the same provider has unavailable history. The shared validator remains the
+authority for coverage; a second provider-only filter no longer discards valid
+evidence after validation.
+
+## 0.1.240
+
+**Keep cross-audit conclusions tied to eligible, current evidence.**
+
+- Prevent blocked, suppressed or resolved findings and local routing aliases from becoming corroborated coverage gaps. Empty reruns replace stale correlation, cost and alert-fatigue summaries, and labeled targets keep their own identities.
+- Preserve explicit limits on end-to-end readiness. On-Call triage reads only bulk routing and ownership evidence, marks deeper checks deferred, and keeps subset scores separate from full-run trends. Intent-based exclusions require business-context provenance.
+- Require provider, target, object kind and exact identity for migration evidence. Target coverage requires an enabled, routed matching alert; shared names and configuration findings do not prove duplicate pages or delivery.
+- Preserve completed migration worklists on identical inputs and refuse changed-input overwrites. Reject unfinished plans at finalization; stale, malformed or impossible supplied history cannot become current measurements.
+- Detect secrets in report files as well as literal strings, including documented GitHub tokens and URL query credentials. Restrict Kubernetes live-evidence config/auth subcommands to reads.
+- Preserve legacy report inputs while adding regressions for the new evidence boundaries. Provider notification delivery and broad On-Call setup remain separately verified capabilities.
+
+## 0.1.239
+
+**Trace Splunk On-Call paging configuration from routing keys to staffed coverage.**
+
+- Add `audit-splunk-oncall` for Splunk On-Call (formerly VictorOps), with a read-only management credential and account-bound team probe. Route, policy, rotation and incident observations retain their actual evidence limits; management reads alone never prove notification delivery.
+- Add `setup-splunk-oncall` with executable description-only team plan/update/restore, a separate elevated credential, exact change confirmation, credential-bound plans, exclusive local journals, drift checks and readback. Team membership, rotations, policies, routing and ingestion have planning guidance; their execution and rollback proof remain pending.
+- Register both skills across onboarding, doctor, the config template, audit-all and reporting. Labeled accounts resolve their own key pair and team identity; HTML, redirects and mismatched team responses fail closed.
+- Scope reports to observed configuration and current assignments. Source correlation needs separately verified source evidence; incident observations do not imply complete fire history, delivery or future coverage.
+
 ## 0.1.238
 
 **Preserve saved context, make interrupted audits resumable, and keep verdicts and validation consistent.**

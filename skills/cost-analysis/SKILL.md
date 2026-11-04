@@ -1,17 +1,26 @@
 ---
 name: cost-analysis
-description: 'Internal roll-up harness (v0.1.67+): inside /scoutflo:audit-all, aggregates the cost-optimization findings the individual audits already wrote (area cost-optimization — AWSOPT-*, DDOPT-*), de-duplicates them via correlation.json, and writes a combined cost roll-up. It ALWAYS regenerates (no skip, no cache) and re-reads existing findings only; it does NOT query providers. For a DEEP, live, per-resource cost analysis, use /scoutflo:audit-cost. Wired into /scoutflo:audit-all after the correlation engine.'
+description: 'Internal roll-up harness (v0.1.67+): inside /scoutflo:audit-all, aggregates the cost-optimization findings the individual audits already wrote (area cost-optimization — AWSOPT-*, DDOPT-*), annotates exact-target overlaps via same-run correlation.json, and writes a combined cost roll-up. It ALWAYS regenerates (no skip, no cache) and re-reads existing findings only; it does NOT query providers. For a DEEP, live, per-resource cost analysis, use /scoutflo:audit-cost. Use when you ask "combine existing cost findings" or "summarize audit savings". Wired into /scoutflo:audit-all after the correlation engine.'
 ---
 
 # Cost Analysis (roll-up harness)
 
-Aggregates the cost-optimization findings the individual audits already wrote into one combined, de-duplicated roll-up. This is a lightweight post-run roll-up, **not** a deep cost analysis.
+Aggregates the cost-optimization findings the individual audits already wrote into one combined roll-up with overlap annotations. This is a lightweight post-run roll-up, **not** a deep cost analysis.
 
 > **For a real cost audit, run [`/scoutflo:audit-cost`](../audit-cost/SKILL.md).** That skill queries each provider's live cost surfaces (AWS Compute Optimizer / Cost Explorer / Cost Optimization Hub, GCP Recommender, Datadog usage, Kubernetes requests-vs-usage, DigitalOcean billing), produces per-resource findings ranked by provider-native dollar savings, and writes a full `report.md`. This roll-up only re-reads findings other audits already produced — by design it makes zero provider calls and adds no new findings. It never scores 0–100 (cost is a ranked-savings axis, not a health score) and never invents a dollar figure.
 
 **When it runs:**
 - Automatically inside `/scoutflo:audit-all` after the correlation engine, to give one combined cost view across whatever audits ran.
 - It is not the place to start a cost investigation — `/scoutflo:audit-cost` is.
+
+An empty rerun also regenerates the roll-up. `data_status: "no-cost-findings"`
+means this run supplied no cost findings, not that spend or waste is zero. Prior
+savings are never carried forward as current evidence.
+
+Current conclusions use only open, observed findings: `configured` or `validated-live`,
+with lifecycle `new`, `unchanged` or `regressed`. Missing status/lifecycle fields
+remain compatible with historical artifacts; blocked, unknown, deferred, resolved
+or suppressed rows cannot establish current noise, savings or migration defects.
 
 ## How it works
 
@@ -37,16 +46,16 @@ verbatim; a presence-fact finding leaves it `null`:
   "findings": [
     {
       "id": "AWSOPT-001",
-      "title": "3 stopped EC2 instances still billing for EBS",
+      "title": "EC2 instance rightsizing recommendation",
       "area": "cost-optimization",
       "affected": ["ec2/i-0abc", "ec2/i-0def"],
       "estimated_monthly_savings_usd": 320
     },
     {
       "id": "AWSOPT-002",
-      "title": "RDS instance under 20% utilization",
+      "title": "Unattached EBS volume",
       "area": "cost-optimization",
-      "affected": ["rds/prod-db-1"],
+      "affected": ["ebs/vol-example"],
       "estimated_monthly_savings_usd": null
     }
   ]
@@ -66,7 +75,7 @@ For each audit findings.json (skips the all/ and cost-analysis/ dirs):
 Merge all cost findings → one array
 
 Check correlation.json:
-  ├─ Any finding ID in an overlap group?
+  ├─ Same run date, source target and finding ID in an overlap group?
   ├─ Mark deduplicated=true with the overlap recommendation
   └─ Keep it visible (annotated, never dropped)
 
@@ -74,7 +83,7 @@ Rank by provider-native savings (a ranked-savings axis, NOT a 0–100 score):
   └─ estimated_monthly_savings_usd, largest first; presence facts (null) after
 
 Output:
-  ├─ cost-analysis/<date>/findings.json: the deduplicated findings, ranked by savings
+  ├─ cost-analysis/<date>/findings.json: the overlap-annotated findings, ranked by savings
   └─ cost-analysis.jsonl: append one history line (monthly_savings_identified trend)
 ```
 
@@ -91,7 +100,7 @@ Output:
   "findings": [
     {
       "id": "AWSOPT-001",
-      "title": "3 stopped EC2 instances still billing for EBS",
+      "title": "EC2 instance rightsizing recommendation",
       "source_target": "aws",
       "affected": ["ec2/i-0abc", "ec2/i-0def"],
       "estimated_monthly_savings_usd": 320,
@@ -137,29 +146,19 @@ Output:
 {"date":"2026-07-30","total_findings":2,"monthly_savings_identified":320,"state":"analyzed"}
 ```
 
-## Deduplication Example
+## Overlap annotation example
 
-**Without dedup:**
-```
-AWS audit: "stopped instances = $320/mo"
-GCP audit: "unused resources = $200/mo"
-Cost-analysis without dedup: sees both, total = $520
-But correlation.json says AWS instances also monitored by Grafana → 50% redundant
-Cost without dedup: $520 (WRONG)
-```
+❌ “Two tools mention the same service, so subtract one provider's estimated savings.” Monitoring overlap does not identify the same billable resource or recommendation.
 
-**With dedup via correlation:**
-```
-AWS: "stopped instances = $320/mo" [primary per correlation]
-GCP: "unused resources = $200/mo" [secondary, already counted]
-Cost-analysis: $320 (only count once, mark GCP as deduplicated)
-```
+✅ “The run contains provider-native recommendations of $320 and $200, giving an unadjusted sum of $520. Same-run correlation flags a matching target/finding pair for review. Unique recoverable savings remain unverified until the underlying financial recommendations are reconciled.”
+
+The legacy `deduplicated` field is retained for compatibility and means overlap annotation only. It never subtracts, drops or re-prices a finding. A stale correlation date or a finding from another target cannot set it.
 
 ## Ranking (not a 0–100 score)
 
-This roll-up does **not** compute a 0–100 health score — cost is a ranked-savings axis, not a reliability grade, and inventing a "cost score" would be an invented number. It presents the deduplicated findings **ranked by provider-native monthly savings** (`estimated_monthly_savings_usd`, largest first); presence-fact findings with no figure (`null`) sort to the end. Each finding also carries a derived `roi_annual` (its monthly figure × 12), so ranking by monthly or annual savings yields the same order. `cost_sensitivity` is read from business context and recorded in the output, but the current roll-up does not re-sort by it.
+This roll-up does **not** compute a 0–100 health score — cost is a ranked-savings axis, not a reliability grade, and inventing a "cost score" would be an invented number. It presents the overlap-annotated findings **ranked by provider-native monthly savings** (`estimated_monthly_savings_usd`, largest first); presence-fact findings with no figure (`null`) sort to the end. Each finding also carries a derived `roi_annual` (its monthly figure × 12), so ranking by monthly or annual savings yields the same order. `cost_sensitivity` is read from business context and recorded in the output, but the current roll-up does not re-sort by it.
 
-The only headline figures are provider-native, copied verbatim: `monthly_savings_identified` and `annual_savings_identified` (the sum of the ranked findings' own `estimated_monthly_savings_usd` / `roi_annual`), plus the `findings_with_native_savings_figure` vs `presence_fact_findings` split. Overlaps flagged by `correlation.json` are marked `deduplicated=true` so a dollar is never counted twice. The trend line tracks `monthly_savings_identified` over runs, not a score.
+The only headline figures are provider-native, copied verbatim: `monthly_savings_identified` and `annual_savings_identified` (the sum of the ranked findings' own `estimated_monthly_savings_usd` / `roi_annual`), plus the `findings_with_native_savings_figure` vs `presence_fact_findings` split. Same-run exact-target overlaps flagged by `correlation.json` are marked `deduplicated=true` for review; the sum remains unadjusted and is not a claim of unique savings. The trend line tracks `monthly_savings_identified` over runs, not a score.
 
 ## Business Context Integration
 

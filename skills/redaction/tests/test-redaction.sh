@@ -63,5 +63,62 @@ if echo "$out" | grep -q 'AKIA\[REDACTED\]'; then
 fi
 echo "PASS (assertions verified falsifiable)"
 
+echo "Test 8: documented GitHub PAT families are masked and detectable"
+CLASSIC_PAT="ghp_$(printf 'a%.0s' $(seq 1 36))"
+FINE_PAT="github_pat_$(printf 'b%.0s' $(seq 1 22))_$(printf 'c%.0s' $(seq 1 59))"
+for token in "$CLASSIC_PAT" "$FINE_PAT"; do
+  has_secrets "$token" || fail "supported PAT family not detected"
+  out=$(printf '%s' "$token" | redact_content)
+  [ "$out" != "$token" ] || fail "supported PAT family survived redaction"
+  has_secrets "$out" && fail "redacted PAT still detected" || :
+done
+echo "PASS"
+
+echo "Test 9: query credentials are masked without dropping safe parameters"
+in='https://example.test/path?token=fixture%2Fone&keep=ok&password=fixture(two)three#section'
+expected='https://example.test/path?token=[REDACTED]&keep=ok&password=[REDACTED]#section'
+out=$(printf '%s' "$in" | redact_content)
+[ "$out" = "$expected" ] || fail "query credential masking did not preserve URL structure"
+has_secrets "$in" || fail "query credential not detected"
+has_secrets "$out" && fail "redacted query still detected" || :
+[ "$(printf '%s' "$out" | redact_content)" = "$out" ] || fail "query masking is not idempotent"
+in='prefix "https://example.test/?TOKEN=fixture" suffix'
+out=$(printf '%s' "$in" | redact_content)
+[ "$out" = 'prefix "https://example.test/?TOKEN=[REDACTED]" suffix' ] || fail "quoted query leaked or lost its delimiter"
+[ "$(printf '%s' 'token=ordinary-word password reset ?token=&safe=yes' | redact_content)" = 'token=ordinary-word password reset ?token=&safe=yes' ] || fail "non-query prose or empty query was changed"
+echo "PASS"
+
+echo "Test 10: documented file-path detection reads the file and all masking families"
+tmp=$(mktemp)
+trap 'rm -f "$tmp"' EXIT HUP INT TERM
+for token in "$AKIA_KEY" "$STRIPE_KEY" "$BEARER_TOK" "$CLASSIC_PAT" "$FINE_PAT" "$in"; do
+  printf '%s\n' "$token" > "$tmp"
+  has_secrets_file "$tmp" || fail "file-path detector missed a supported secret family"
+  has_secrets "$tmp" || fail "existing file-path compatibility was lost"
+  redact_file "$tmp"
+  has_secrets_file "$tmp" && fail "file-path detector still flags a masked file" || :
+done
+printf '%s\n' 'clean report' > "$tmp"
+has_secrets_file "$tmp" && fail "clean file detected as secret" || :
+rm -f "$tmp"
+trap - EXIT HUP INT TERM
+echo "PASS"
+
+echo "Test 11: missing, non-regular and failed file reads are blocked, not clean"
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT HUP INT TERM
+for path in "$work/missing" "$work"; do
+  rc=0; has_secrets_file "$path" || rc=$?
+  [ "$rc" -eq 2 ] || fail "missing or non-regular input did not return blocked"
+done
+printf 'fixture\n' > "$work/unreadable"
+# Simulate a read error even when a privileged test runner can bypass mode bits.
+rc=0
+( cat() { return 1; }; has_secrets_file "$work/unreadable" ) || rc=$?
+[ "$rc" -eq 2 ] || fail "failed file read did not return blocked"
+rm -rf "$work"
+trap - EXIT HUP INT TERM
+echo "PASS"
+
 echo
 echo "=== All redaction tests passed ==="

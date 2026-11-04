@@ -1,6 +1,6 @@
 ---
 name: connect
-description: Guided credential setup; creates minimal-scope tokens per tier for Grafana, Sentry, PagerDuty, Datadog, ELK/Kibana, JSM Operations, Zenduty, Groundcover, Prometheus, Loki, Tempo, Mimir, VictoriaMetrics (plus VictoriaLogs and VictoriaTraces via the loki/tempo blocks), ClickStack (ClickHouse + HyperDX), SigNoz, New Relic, DigitalOcean, GCP, Azure, AWS, Kubernetes, and Slack, and writes ~/.scoutflo/toolkit.yaml. Use when the user wants to connect or onboard the toolkit, add an integration, rotate a token, or set up credentials, including the audit-brief Slack webhook. Do not use for alert-delivery webhooks (Grafana contact points, Alertmanager receivers; use setup-grafana or setup-lgtm) or to verify reachability (use doctor).
+description: Guided credential setup; creates minimal-scope tokens per tier for Grafana, Sentry, PagerDuty, Datadog, ELK/Kibana, JSM Operations, Zenduty, Splunk On-Call (VictorOps), Groundcover, Prometheus, Loki, Tempo, Mimir, VictoriaMetrics (plus VictoriaLogs and VictoriaTraces via the loki/tempo blocks), ClickStack (ClickHouse + HyperDX), SigNoz, New Relic, DigitalOcean, GCP, Azure, AWS, Kubernetes, and Slack, and writes ~/.scoutflo/toolkit.yaml. Use when the user wants to connect or onboard the toolkit, add an integration, rotate a token, or set up credentials, including the audit-brief Slack webhook. Do not use for alert-delivery webhooks (Grafana contact points, Alertmanager receivers; use setup-grafana or setup-lgtm) or to verify reachability (use doctor).
 ---
 
 # Connect: Credential and Config Setup
@@ -29,7 +29,7 @@ Two hard rules for this whole flow:
 - Admin access to each provider you connect (you create the tokens in their UIs).
 - Write access to `~/.scoutflo/`.
 
-Most integrations (Grafana, Prometheus, Loki, Tempo, Mimir, VictoriaMetrics, Sentry, Datadog, PagerDuty, ELK, JSM, Zenduty, Groundcover) are reached over HTTPS with a token, so they need only `curl` + `jq` — no vendor CLI. Only Kubernetes and AWS/GCP/Azure/DigitalOcean lean on a CLI. If you connect one of those and don't have its CLI yet (`doctor` will name exactly which is missing), install it first:
+Most integrations (Grafana, Prometheus, Loki, Tempo, Mimir, VictoriaMetrics, Sentry, Datadog, PagerDuty, ELK, JSM, Zenduty, Splunk On-Call, Groundcover) are reached over HTTPS with a token, so they need only `curl` + `jq` — no vendor CLI. Only Kubernetes and AWS/GCP/Azure/DigitalOcean lean on a CLI. If you connect one of those and don't have its CLI yet (`doctor` will name exactly which is missing), install it first:
 
 | CLI | Needed for | Install |
 | --- | --- | --- |
@@ -118,6 +118,7 @@ Ask which integrations to configure as a plain numbered list in a normal chat me
 | Cost (cross-provider) | audit-cost | (reuses `aws:`, `gcp:`, `azure:`, `datadog:`, `digitalocean:`, `kubernetes:` blocks) | none of its own | reuses each provider's read creds; add the optional cost scope per provider (AWS Compute Optimizer/Cost Explorer read; GCP Recommender viewer; Azure `Cost Management Reader` + Advisor via `Reader`; Datadog `usage_read`) to get provider-native dollar figures |
 | ELK / Kibana | audit-elk | `elk:` | `KIBANA_API_KEY` | read-only Kibana **feature** privileges (Stack Rules, Rules Settings, Actions & Connectors) at `spaces:["*"]` — not ES cluster/index privileges; the audit auto-discovers spaces. Minting via `POST /_security/api_key`? Use the `role_descriptors` recipe in [references/providers.md](references/providers.md#or-mint-it-directly-via-the-elasticsearch-api-curl) |
 | JSM Operations | audit-jsm | `jsm:` | `JSM_EMAIL` + `JSM_API_TOKEN` | Atlassian API token over Basic auth; read-only by GET-only use |
+| Splunk On-Call (VictorOps) | audit-splunk-oncall | `splunk_oncall:` | `SPLUNK_ONCALL_API_ID` + `SPLUNK_ONCALL_API_KEY` | API ID + read-only management API key; a known `team_slug` binds the probe to the intended account |
 | Zenduty | audit-zenduty | `zenduty:` | `ZENDUTY_TOKEN` | `Authorization: Token` API key; Bot Token (Beta) for least privilege, read-only by GET-only use |
 | Groundcover | audit-groundcover | `groundcover:` | `GROUNDCOVER_API_KEY` | service-account API key on a Viewer role = true read-only tier |
 | LGTM runtime | audit-lgtm | `lgtm:` | none | explicit `runtime_mode`; choose from live deployment evidence, never infer it from metric names |
@@ -151,6 +152,7 @@ Judgment step: collect the non-secret facts for every integration you picked bef
 | Datadog | `datadog.site`, `datadog.api_key_env`, `datadog.app_key_env`, `datadog.tier` | `site: datadoghq.com` |
 | ELK / Kibana | `elk.kibana_url`, `elk.token_env`, `elk.tier`; optional `spaces` | `kibana_url: https://kibana.example.com` |
 | JSM Operations | `jsm.site`, `jsm.email_env`, `jsm.token_env`, `jsm.tier`; optional `cloud_id`, `teams` | `site: your-site.atlassian.net` |
+| Splunk On-Call | `splunk_oncall.api_id_env`, `splunk_oncall.api_key_env`, `splunk_oncall.team_slug`; optional `setup_api_key_env` | `api_id_env: SPLUNK_ONCALL_API_ID` |
 | Zenduty | `zenduty.token_env`, `zenduty.tier`; optional `teams` | `token_env: ZENDUTY_TOKEN` |
 | Groundcover | `groundcover.token_env`, `groundcover.tier`; optional `backend_id`, `api_url` | `token_env: GROUNDCOVER_API_KEY` |
 | LGTM runtime | `lgtm.runtime_mode`; exactly one of `kubernetes`, `ec2-systemd`, `docker`, `external` | `runtime_mode: ec2-systemd` |
