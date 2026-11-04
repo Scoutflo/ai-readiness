@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.241
+
+Preserve validated migration measurements for each target when another account
+of the same provider has unavailable history. The shared validator remains the
+authority for coverage; a second provider-only filter no longer discards valid
+evidence after validation.
+
 ## 0.1.240
 
 **Keep cross-audit conclusions tied to eligible, current evidence.**

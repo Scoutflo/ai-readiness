@@ -11,6 +11,10 @@ findings. Explicitly uncollected or spec-unverified history is not measured
 evidence. Historical v1 signals without optional coverage metadata remain
 readable under their original provenance requirements.
 
+When primary-account history is collected and secondary-account history is
+unavailable, retain the validated primary measurements. A provider-level filter
+must not silently erase one target's evidence because another target is blocked.
+
 A SigNoz dashboard with the same name is not an alert equivalent. A disabled,
 unrouted, differently scoped or ambiguous alert match cannot be already-covered.
 Only one cataloged monitor-to-alert-rule match, with exact name and coverage,

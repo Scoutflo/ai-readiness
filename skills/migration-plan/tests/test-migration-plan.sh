@@ -238,6 +238,11 @@ if migration_plan_load_signals "$DATE" > "$WORK/unverified.out" 2>&1; then bad "
 jq 'del(.provider_coverage)' "$SIGNALS_FILE" > "$SIGNALS_FILE.tmp" && mv "$SIGNALS_FILE.tmp" "$SIGNALS_FILE"
 check "historical measured signal shape stays readable" "$(migration_plan_load_signals "$DATE" | jq 'length')" "1"
 cp "$SIGNALS_FILE" "$WORK/current-signals.json"
+cat > "$SIGNALS_FILE" <<'EOF'
+{"schema":"scoutflo-fatigue-signals/v1","generated_at":"2026-09-17T12:00:00Z","window":"7d","signals":[{"provider":"datadog","target":"datadog/primary","object_kind":"monitor","object_id":"primary-rule","fires":0,"source_finding_ids":[]}],"provider_coverage":[{"provider":"datadog","target":"datadog/primary","status":"collected"},{"provider":"datadog","target":"datadog/secondary","status":"verify-pending","reason":"permission unavailable"}]}
+EOF
+check "unavailable secondary target cannot erase primary measurement" "$(migration_plan_load_signals "$DATE" | jq -r '.[0].target // "missing"')" "datadog/primary"
+cp "$WORK/current-signals.json" "$SIGNALS_FILE"
 for fault in stale impossible; do
   case "$fault" in stale) expr='.generated_at="2025-01-01T00:00:00Z"';; impossible) expr='.signals[0].off_hours_fires=999';; esac
   jq "$expr" "$WORK/current-signals.json" > "$SIGNALS_FILE"

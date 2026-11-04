@@ -95,10 +95,9 @@ migration_plan_load_signals() {
       echo '[migration-plan] optional measured evidence failed validation; existing plan is preserved' >&2
       return 4
     fi
-    jq '(.provider_coverage // []) as $coverage
-      | [ (.signals // [])[] | . as $signal
-          | select([ $coverage[] | select(.provider==$signal.provider
-              and (.tier // "fire-history")=="fire-history" and .status!="collected") ] | length==0) ]' "$SIGNALS_FILE"
+    # The shared validator already binds coverage to provider and target.
+    # A second provider-only filter would discard other targets' valid evidence.
+    jq '.signals' "$SIGNALS_FILE"
   else
     echo "[]"
   fi
