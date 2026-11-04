@@ -57,6 +57,14 @@ these two classes existed; these steps are what caught them.
   valid ONLY across runs whose `scoring_model` + `check_set` match — an
   incompatible score must never leak into a trend; guarded by
   `tests/test-report-viz.sh` Test 7a).
+- **On-Call history/lifecycle refinement:** `audit-splunk-oncall` replaces the
+  same UTC date’s history row after validation and preserves other valid rows;
+  malformed rows are quarantined. Score trends/deltas still require matching
+  fingerprints. Finding lifecycle instead compares stable check IDs across
+  earlier complete artifacts, even if their score models differ; absence is
+  resolved only by a same-ID passing check. SSOT and executable recipe:
+  `skills/audit-splunk-oncall/references/lifecycle.md`; regression guard:
+  `skills/audit-splunk-oncall/tests/test-lifecycle.sh`.
 - **Catalog integrity:** for artifacts emitted by this plugin version, every
   `checks[]` and `findings[]` ID must occur in the owning audit's explicit ID
   catalog. A `TOPO-*` observation is allowed only with zero recoverable points
@@ -130,6 +138,19 @@ these two classes existed; these steps are what caught them.
   audits never double-score the same series. Guard: the maintainer review + the
   `layer_depth` selftest lock asserting `audit-lgtm` keeps `LGTM-006` and the
   "Metrics stores" category.
+- **Splunk On-Call:** the public skills are `audit-splunk-oncall` and
+  `setup-splunk-oncall`; their config key is `splunk_oncall`. Each target requires
+  `api_id_env`, `api_key_env` and a known `team_slug`. Doctor verifies that exact
+  team's identity at the fixed management origin. The setup-only
+  `setup_api_key_env` is optional for audits and must never be their fallback.
+  A successful team read does not establish complete visibility or alert delivery.
+  Description setup stores a credential-bound plan, exact before/after metadata,
+  attempt markers and readback receipts in the private per-target
+  `setup-<run-id>/` folder. Action/checksum confirmation, fresh drift checks and
+  exclusive journal creation gate each PUT; raw credentials never enter those
+  files. SSOT: `skills/setup-splunk-oncall/references/team-description.md`;
+  guard: `skills/setup-splunk-oncall/tests/test-team-description.sh`.
+
 - **Setup skills (v0.1.217):** `setup-lgtm`, `-aws`, `-azure`, `-gcp`,
   `-digitalocean` and `-sentry` resolve their live-safety-gate target (and, except
   setup-azure, their doctor target) through the same enumerator and `SCOUTFLO_TARGET`. On a labeled list they stop

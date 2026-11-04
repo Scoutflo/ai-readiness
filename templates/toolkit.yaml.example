@@ -98,6 +98,15 @@ jsm:
   # cloud_id: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx  # optional UUID; skip site-based discovery if you already know it
   # teams: [team-id-a, team-id-b]           # JSM Operations team IDs to audit (policies/heartbeats are team-scoped); omit to discover from /v1/teams
 
+# Splunk On-Call (formerly VictorOps), distinct from the Splunk data platform.
+# The API origin is fixed; do not put an inbound alert URL/key here.
+splunk_oncall:
+  api_id_env: SPLUNK_ONCALL_API_ID
+  api_key_env: SPLUNK_ONCALL_API_KEY       # read-only management key
+  team_slug: team-example                 # known team in the intended account
+  # setup_api_key_env: SPLUNK_ONCALL_SETUP_API_KEY  # separate elevated key, setup only
+
+
 zenduty:
   token_env: ZENDUTY_TOKEN                  # env var holding the Zenduty (Xurrent IMR) API key; sent as "Authorization: Token <key>"
   tier: read-only                           # NOTE: Zenduty has no read-only key scope; read-only is by GET-only use. Prefer a Bot Token (Beta).

@@ -6,7 +6,7 @@ description: Non-scored alert noise & fatigue assessment with TWO modes. (1) Cro
 
 # alert-fatigue
 
-Alert noise & fatigue, two ways, answering a question no single backend can: *across your alerting, how much of your paging is noise, and does one incident page through several tools at once?* It is a sibling of `/scoutflo:correlation-engine` and the `cost-analysis` roll-up. It **never mutates a finding or its severity and never re-scores** — each alerting-noise finding is scored **once**, in its home audit (`audit-alertmanager`, `audit-grafana`, `audit-datadog`, `audit-lgtm`, `audit-prometheus`, `audit-sentry`, `audit-pagerduty`, `audit-jsm`, `audit-zenduty`, `audit-signoz`, `audit-newrelic`, `audit-groundcover`, `audit-digitalocean`); this skill **cites** those source finding-IDs and adds the estate-wide view.
+Alert noise & fatigue, two ways, answering a question no single backend can: *across your alerting, how much of your paging is noise, and does one incident page through several tools at once?* It is a sibling of `/scoutflo:correlation-engine` and the `cost-analysis` roll-up. It **never mutates a finding or its severity and never re-scores** — each alerting-noise finding is scored **once**, in its home audit (`audit-alertmanager`, `audit-grafana`, `audit-datadog`, `audit-lgtm`, `audit-prometheus`, `audit-sentry`, `audit-pagerduty`, `audit-jsm`, `audit-zenduty`, `audit-splunk-oncall`, `audit-signoz`, `audit-newrelic`, `audit-groundcover`, `audit-digitalocean`); this skill **cites** those source finding-IDs and adds the estate-wide view.
 
 ## Two modes
 
@@ -30,6 +30,7 @@ When the user asks for an alert-noise/fatigue read on **one integration** (or a 
    | `datadog` | `audit-datadog` — DD-006/007/008/018/019/023/035-038/039 (measured alert-event volume, placeholder handles, `@all`, no-floor ratio, tautological threshold, downtime decay, dupes, never-evaluated, paused synthetic, partial-window flap) |
    | `sentry` | `audit-sentry` — SNTRY-101/102/103/106/107/108/109/110 + SNTRY-014 (un-gated rules, all-env scope, flap-prone metric, fire-history, chronic re-page, name/scope, dead-weight, ownerless) |
    | `pagerduty` | `audit-pagerduty` — PD-016/017/026/043 (verify-pending: needs a live key) |
+   | `splunk_oncall` | `audit-splunk-oncall` — routing and paging checks from its catalog; reuse its bounded evidence and preserve blocked outcomes. An observed incident is not a complete incident feed or a measured notification count |
    | `zenduty` | `audit-zenduty` — ZD-007/008/025/033/034 (orphaned EP, bus factor, dormancy, GET-only actionability, timeout posture) |
    | `grafana` | `audit-grafana` — alert-rule wiring, receiver delivery |
    | `signoz` | `audit-signoz` — SIG-040 routing + SIG-042 SLO-aware alert quality |

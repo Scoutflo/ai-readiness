@@ -124,6 +124,7 @@ Expected output: one key per line, for example `grafana`, `sentry`, `prometheus`
 | `elk` | `audit-elk` |
 | `jsm` | `audit-jsm` |
 | `zenduty` | `audit-zenduty` |
+| `splunk_oncall` | `audit-splunk-oncall` |
 | `groundcover` | `audit-groundcover` |
 | `prometheus.alertmanager_url` or `victoriametrics.vmalert_url` | `audit-alertmanager` |
 | `digitalocean` | `audit-digitalocean` |

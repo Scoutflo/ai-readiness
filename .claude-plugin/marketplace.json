@@ -9,7 +9,7 @@
     {
       "name": "scoutflo",
       "source": "./",
-      "description": "Read-only, scored audits of your infra and observability stacks (LGTM/VictoriaMetrics, ClickStack/ClickHouse/HyperDX, SigNoz, Grafana, Sentry, PagerDuty, Datadog, ELK/Kibana, JSM Operations, Zenduty, groundcover, Prometheus (server + rule-engine plane), DigitalOcean, GCP, Azure/AKS, AWS) with alert-noise/alert-fatigue scoring, cross-provider cost and RCA, guided hardening, Slack briefs, and scheduled runs. Commands run in your environment with your credentials. Claude Code may include prompts and tool results in your configured model session; optional Slack and CI storage have separate data flows.",
+      "description": "Read-only, scored audits of your infra and observability stacks (LGTM/VictoriaMetrics, ClickStack/ClickHouse/HyperDX, SigNoz, Grafana, Sentry, PagerDuty, Datadog, ELK/Kibana, JSM Operations, Zenduty, Splunk On-Call (VictorOps), groundcover, Prometheus (server + rule-engine plane), DigitalOcean, GCP, Azure/AKS, AWS) with alert-noise/alert-fatigue scoring, cross-provider cost and RCA, guided hardening, Slack briefs, and scheduled runs. Commands run in your environment with your credentials. Claude Code may include prompts and tool results in your configured model session; optional Slack and CI storage have separate data flows.",
       "category": "devops",
       "keywords": [
         "sre",
@@ -50,7 +50,9 @@
         "rightsizing",
         "rca",
         "root-cause",
-        "incident-analysis"
+        "incident-analysis",
+        "splunk-oncall",
+        "victorops"
       ]
     }
   ]

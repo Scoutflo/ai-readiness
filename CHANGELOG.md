@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.239
+
+**Trace Splunk On-Call paging configuration from routing keys to staffed coverage.**
+
+- Add `audit-splunk-oncall` for Splunk On-Call (formerly VictorOps), with a read-only management credential and account-bound team probe. Route, policy, rotation and incident observations retain their actual evidence limits; management reads alone never prove notification delivery.
+- Add `setup-splunk-oncall` with executable description-only team plan/update/restore, a separate elevated credential, exact change confirmation, credential-bound plans, exclusive local journals, drift checks and readback. Team membership, rotations, policies, routing and ingestion have planning guidance; their execution and rollback proof remain pending.
+- Register both skills across onboarding, doctor, the config template, audit-all and reporting. Labeled accounts resolve their own key pair and team identity; HTML, redirects and mismatched team responses fail closed.
+- Scope reports to observed configuration and current assignments. Source correlation needs separately verified source evidence; incident observations do not imply complete fire history, delivery or future coverage.
+
 ## 0.1.238
 
 **Preserve saved context, make interrupted audits resumable, and keep verdicts and validation consistent.**

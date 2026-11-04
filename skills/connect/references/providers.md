@@ -26,6 +26,7 @@ Skim this table to see everything you need before opening any provider UI. Full 
 | [Datadog](#datadog) | API key + Application key pair | Scoped app key: `monitors_read`, `monitors_downtime`, `events_read`, `slos_read` (+ `usage_read`, `billing_read` for the cost section) | Organization Settings > API Keys, then Application Keys |
 | [ELK / Kibana](#elk--kibana) | Elasticsearch API key | Kibana feature privileges `Read` on Stack Rules, Rules Settings, and Actions and Connectors | Kibana > Stack Management > API keys (or Elasticsearch `POST /_security/api_key`) |
 | [JSM Operations](#jsm-operations) | Atlassian API token (Basic auth) | Read-only enforced by GET-only use; a JSM agent/user account with Operations access | id.atlassian.com > Security > API tokens |
+| [Splunk On-Call (VictorOps)](#splunk-on-call-victorops) | API ID + API key in two headers | Separate **read-only** management key for audit; elevated key only for setup | Integrations > API; an admin creates the keys |
 | [Zenduty](#zenduty-xurrent-imr) | API key (`Authorization: Token`) | No read-only key scope; use a **Bot Token (Beta)** with view-only permissions, GET-only use | Account Settings > API Keys (Bot Tokens for least privilege) |
 | [Groundcover](#groundcover) | Service-account API key (`Authorization: Bearer`) | A **Viewer-role** service account = true read-only tier | Settings > Access > Service Accounts, then API Keys |
 | [GCP](#google-cloud-gcp) | Service account | `roles/monitoring.viewer`, `roles/logging.viewer`, `roles/compute.viewer`, `roles/container.viewer` | IAM & Admin > Service Accounts > Create service account |
@@ -497,6 +498,95 @@ code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 -u "${JSM_EMAIL}:${J
   "https://api.atlassian.com/jsm/ops/api/${CLOUD_ID}/v1/alerts?size=1")
 [ "$code" = "200" ] && echo "JSM Operations PASS" || echo "FAIL: got $code (401 = bad token/email; 403 = user lacks Operations access; 404 = wrong cloud_id)"
 ```
+
+## Splunk On-Call (VictorOps)
+
+Splunk On-Call is the paging product formerly named VictorOps. Its management API
+uses `https://api.victorops.com`; incoming alert credentials for
+`alert.victorops.com` belong to a different surface. An incoming key cannot
+replace the management key. This connection does not cover Splunk Enterprise,
+Cloud Platform, Observability Cloud or ITSI.
+
+### Config
+
+```yaml
+splunk_oncall:
+  api_id_env: SPLUNK_ONCALL_API_ID
+  api_key_env: SPLUNK_ONCALL_API_KEY
+  team_slug: team-example
+  # setup_api_key_env: SPLUNK_ONCALL_SETUP_API_KEY
+```
+
+All three uncommented keys are required. `team_slug` is a known team identifier
+from the account you intend to audit, not its display name. Use the team
+identifier shown in the team's portal link; verify it against that team before
+saving. The shared doctor reads that exact team and requires its returned
+`slug` to match. A key that can read some other account is not a successful
+connection. The team anchor proves access to this team; it does not establish a
+provider-wide organization identity, complete visibility or delivery to a person.
+
+Multiple On-Call accounts in ONE environment: make `splunk_oncall` a YAML list,
+with a unique label and a distinct key pair plus known team for each account:
+
+```yaml
+splunk_oncall:
+  - label: primary
+    api_id_env: ONCALL_PRIMARY_API_ID
+    api_key_env: ONCALL_PRIMARY_READONLY_KEY
+    team_slug: team-primary
+    # setup_api_key_env: ONCALL_PRIMARY_SETUP_KEY
+  - label: secondary
+    api_id_env: ONCALL_SECONDARY_API_ID
+    api_key_env: ONCALL_SECONDARY_READONLY_KEY
+    team_slug: team-secondary
+```
+
+Doctor checks every configured account. Run the audit per selected label with
+`SCOUTFLO_TARGET=primary` or `SCOUTFLO_TARGET=secondary`; setup requires an
+explicit matching selection for a list. The audit uses only `api_key_env`.
+`setup_api_key_env` is optional for connecting and auditing, and required only
+when a supported setup action is requested. Never silently reuse the audit key
+as the setup key or infer elevated permissions from a successful GET.
+
+### Create the keys
+
+An account administrator opens **Integrations > API** in the On-Call portal.
+Activate the management API if needed, then create a dedicated **read-only** key
+for audits. Store the API ID and that key under the variable names above using
+`/scoutflo:connect`'s protected local secret-store flow. Enter values in your own
+terminal, never the conversation, a report, a screenshot or `toolkit.yaml`.
+Create a separate write-capable key only for setup, and name its variable in
+`setup_api_key_env`. Creating persistent API access and changing key privileges
+are access changes: review and approve them explicitly.
+
+Authentication is two required headers, `X-VO-Api-Id` and `X-VO-Api-Key`.
+There is no Bearer prefix, region host selector or configurable API origin.
+The [official API specification](https://portal.victorops.com/api-docs/victorops-api-v1.yaml)
+declares these as shared header parameters. Read-only keys restrict mutations;
+a setup key's actual capability still depends on the operation and account.
+
+### Verify
+
+Run the canonical doctor, which resolves the selected config and local secret
+store exactly as the audit does. This command never creates an incident or test
+page:
+
+```bash
+set -eu
+sh "${CLAUDE_PLUGIN_ROOT}/skills/doctor/scripts/doctor.sh"
+```
+
+The probe requires curl 8.4 or newer for bounded unknown-length bodies and refuses duplicate target labels before any On-Call request.
+
+The `splunk_oncall` **team-read** row passes only on HTTP 200 with a JSON object
+whose nonempty string `slug` equals the configured `team_slug`. The probe never
+follows redirects or prints its response body. A 401 or 403 means this read is
+not authorized, a 404 can mean the team is wrong or unavailable, and a 429 means
+rate limited. HTML, malformed JSON, missing or duplicate identity, timeout or a partial body
+are failures rather than empty success. Correct the reported input or access
+problem and rerun; a green row establishes this read only, not complete account
+visibility, write permission or end-to-end paging delivery.
+
 
 ## Zenduty (Xurrent IMR)
 

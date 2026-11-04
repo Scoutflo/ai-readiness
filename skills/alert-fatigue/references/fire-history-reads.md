@@ -98,6 +98,7 @@ the plugin's own live-smoke gate (AGENTS Done-criteria #5) provider by provider.
 | **New Relic** | `NrAiIncident` NRQL via NerdGraph | field set CONFIRMED LIVE against a real fired incident (event/openTime/conditionName/priority/muted/entity.guid, 2026-09) — first live run may set `live-verified` directly after re-confirming on the target tenant |
 | **PagerDuty** | `GET /incidents` + `log_entries` | `analytics/metrics` response fields (prefer `log_entries` until confirmed) |
 | **incident.io / Opsgenie** | incidents lists | `duration_metrics[]` / `report.ackTime` shapes |
+| **Splunk On-Call (VictorOps)** | Bounded incident observations in `audit-splunk-oncall` | A complete fatigue feed, historical pagination and notification-delivery counts remain **verify-pending**; do not derive MTTA/MTTR or alert-to-incident ratios from one observed lifecycle |
 | **Zenduty** | incidents list | **entirely UNVERIFIED** (docs migrated to Xurrent) — keep `verify-pending` until re-confirmed |
 
 **Per-provider checklist (run once, on an authorized estate):** (1) run the read

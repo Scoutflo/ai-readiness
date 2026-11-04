@@ -6,7 +6,7 @@ Scoutflo AI Readiness audit runs use Claude models via Claude Code on your machi
 
 ## Approximate baseline costs (Haiku 4.5)
 
-These are **order-of-magnitude baseline figures** to help you plan, not a guaranteed per-run price — actual consumption scales with your estate size (an audit that pages through thousands of rules costs more than the small/medium samples below). The plugin ships **19 scored audit skills** (the full catalog is in the README and `/scoutflo:start`) plus `audit-cost` (ranked-savings, not scored) and `audit-all`; the table below samples a representative subset. Your own numbers are reproducible — see [Reproducing these numbers](#reproducing-these-numbers).
+These are **order-of-magnitude baseline figures** to help you plan, not a guaranteed per-run price — actual consumption scales with your estate size (an audit that pages through thousands of rules costs more than the small/medium samples below). The plugin ships **20 scored audit skills** (the full catalog is in the README and `/scoutflo:start`) plus `audit-cost` (ranked-savings, not scored) and `audit-all`; the table below samples a representative subset. Your own numbers are reproducible — see [Reproducing these numbers](#reproducing-these-numbers).
 
 ### Per-Audit Token Consumption (representative sample)
 
@@ -18,10 +18,13 @@ These are **order-of-magnitude baseline figures** to help you plan, not a guaran
 | `audit-elk` | Medium | ~35K | ~17K | ~52K | ~$0.042 |
 | `audit-jsm` | Small | ~32K | ~16K | ~48K | ~$0.038 |
 | `audit-zenduty` | Small | ~35K | ~16K | ~51K | ~$0.041 |
+| `audit-splunk-oncall` | Small, planning estimate; not measured | ~30K | ~15K | ~45K | ~$0.036 |
 | `audit-groundcover` | Small | ~30K | ~15K | ~45K | ~$0.036 |
 | `audit-grafana` | Medium | ~28K | ~14K | ~42K | ~$0.034 |
 | `audit-sentry` | Small | ~25K | ~13K | ~38K | ~$0.030 |
 | **Average** | **~45K per audit** | — | — | — | **~$0.047** |
+
+Splunk On-Call cost scales with the selected teams, policies and rotations. Optional incident observations use already projected evidence; this skill does not fetch a complete fire history. Its row is an unmeasured planning estimate, not a live-smoke result. Every account in a labeled list adds a separate audit pass. Setup cost depends on the specific reviewed change; unproven write paths are not executed to populate a report.
 
 `audit-cost` (deep per-resource cost) and `/scoutflo:rca` (root-cause analysis) consume on the same order as an audit. `rca` reads reports already on disk as reference and then makes bounded, read-only live checks to confirm the current cause, so its cost depends on how many live probes it runs; with no cluster access it degrades to a report-only answer, which is the cheapest path.
 
