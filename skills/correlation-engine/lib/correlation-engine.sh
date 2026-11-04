@@ -23,7 +23,8 @@ CORRELATION_FILE="${AUDITS_DIR}/correlation.json"
 TOPOLOGY_FILE="${TOPOLOGY_FILE:-$HOME/.scoutflo/topology.json}"
 
 # Collect all findings for one run date across every target directory.
-# Emits a flat JSON array; each finding gains a `target` field from its file.
+# Emits a flat JSON array; each finding gains the canonical target from its
+# report-directory path. Legacy object-shaped envelope targets remain readable.
 # Skips the `all/` combined-report dir, the `cost-analysis/` and `cost/` derived
 # dirs, and the `doctor/` dir, whose findings.json files do not follow the
 # per-audit schema. Globs BOTH the one-level `<target>/<date>/` and the two-level
@@ -34,8 +35,9 @@ correlation_collect_findings() {
   set --
   for f in "$AUDITS_DIR"/*/"$date"/findings.json "$AUDITS_DIR"/*/*/"$date"/findings.json; do
     [ -e "$f" ] || continue
-    case "$f" in
-      */all/*|*/cost-analysis/*|*/cost/*|*/doctor/*) continue ;;
+    relative="${f#"$AUDITS_DIR"/}"
+    case "${relative%%/*}" in
+      all|cost-analysis|cost|doctor) continue ;;
     esac
     set -- "$@" "$f"
   done
@@ -45,13 +47,37 @@ correlation_collect_findings() {
     return 0
   fi
 
-  jq -s '[ .[] | (.target // "unknown") as $t | (.findings // [])[] | . + {target: $t} ]' "$@"
+  jq -n --arg root "$AUDITS_DIR/" --arg suffix "/$date/findings.json" '[ inputs | (input_filename | ltrimstr($root) | rtrimstr($suffix)) as $t | (.findings // [])[] | . + {target: $t} ]' "$@"
+}
+
+# Only observed, open findings support correlation claims. A blocked finding is
+# missing evidence, not a defect; suppressed/resolved findings cannot corroborate
+# active trouble. Missing fields retain historical v1 compatibility. Keep the
+# unfiltered collection for raw counters and never rewrite source artifacts.
+correlation_active_findings() {
+  jq '[ .[] | select(
+    (.status as $s | [null, "configured", "validated-live"] | index($s)) != null
+    and (.lifecycle as $l | [null, "new", "unchanged", "regressed"] | index($l)) != null
+  )
+    # On-Call object slugs belong to the selected account, not a shared estate
+    # identity namespace. Only source-verified service tokens explicitly declared
+    # as a subset of affected can support a cross-target join. Legacy On-Call
+    # artifacts without that declaration stay readable and raw-counted.
+    | if ((.target // "") | split("/")[0]) == "splunk_oncall" then
+        . as $f | .affected =
+          (if ($f.correlation_affected | type)=="array" then
+             [$f.correlation_affected[] | select(type=="string")
+              | select(test("\\S") and (test("^route-[0-9]+$")|not))
+              | select(. as $token | ($f.affected // []) | index($token))] | unique
+           else [] end)
+      else . end
+  ]'
 }
 
 # Overlap: the same affected service appears in findings from two or more
 # different targets — candidate redundant monitoring. Reads findings on stdin.
 correlation_find_overlaps() {
-  jq '
+  correlation_active_findings | jq '
     [ .[] | . as $f | (($f.affected // [])[]) as $svc |
       {service: $svc, target: $f.target, id: $f.id, title: $f.title, severity: $f.severity} ]
     | group_by(.service)
@@ -84,7 +110,7 @@ correlation_find_overlaps() {
 #  - config/cost/dashboard-only findings are excluded as roots.
 # Reads findings on stdin.
 correlation_find_cascades() {
-  jq '
+  correlation_active_findings | jq '
     # A resource token is "concrete" if it is not empty prose — we keep tokens
     # that contain a service/host/db-style name and drop bare count phrases.
     def concrete_tokens:
@@ -131,8 +157,9 @@ correlation_collect_coverage() {
   set --
   for f in "$AUDITS_DIR"/*/"$date"/inventory.json "$AUDITS_DIR"/*/*/"$date"/inventory.json; do
     [ -e "$f" ] || continue
-    case "$f" in
-      */all/*|*/cost-analysis/*|*/cost/*|*/doctor/*) continue ;;
+    relative="${f#"$AUDITS_DIR"/}"
+    case "${relative%%/*}" in
+      all|cost-analysis|cost|doctor) continue ;;
     esac
     set -- "$@" "$f"
   done
@@ -140,7 +167,7 @@ correlation_collect_coverage() {
     echo "[]"
     return 0
   fi
-  jq -s '[ .[] | (.target // "unknown") as $t | ($t | split("/")[0]) as $prov
+  jq -n --arg root "$AUDITS_DIR/" --arg suffix "/$date/inventory.json" '[ inputs | (input_filename | ltrimstr($root) | rtrimstr($suffix)) as $t | ($t | split("/")[0]) as $prov
            | (.items // [])[]
            | {provider: $prov, target: $t, name: (.name // ""), kind: (.kind // ""),
               covers: (.covers // ""), enabled: (.enabled != false), routes_to: (.routes_to // "")} ]' "$@"
@@ -159,7 +186,7 @@ correlation_collect_coverage() {
 # Reads findings on stdin; coverage items passed as $1.
 correlation_find_coverage() {
   cov="$1"
-  jq --argjson cov "$cov" '
+  correlation_active_findings | jq --argjson cov "$cov" '
     def norm: (. // "") | ascii_downcase | gsub("^[[:space:]]+|[[:space:]]+$";"");
     def active($prov):
       # Coverage-bearing kinds: an inventory object that actively WATCHES its `covers`
@@ -179,11 +206,14 @@ correlation_find_coverage() {
     [ .[]
       | . as $f
       | ($f.target | split("/")[0]) as $prov
-      # A finding is a coverage-gap candidate if it carries an explicit coverage_gap
-      # object (the precise, audit-declared signal) OR matches the area+title heuristic
-      # (the fallback when an audit has not yet adopted the optional coverage_gap field).
-      | select( ($f.coverage_gap != null)
-                or ( (($f.area // "") | test("coverage|alert|monitor|metric";"i"))
+      # An explicit gap names a missing signal. Non-scored observations (cost,
+      # topology, incident lineage) are not alert gaps merely because their prose
+      # matches. Legacy/readiness findings retain the historical heuristic.
+      | select( (($f.coverage_gap | type) == "object"
+                    and ($f.coverage_gap.signal | type) == "string"
+                    and ($f.coverage_gap.signal | test("\\S")))
+                or ( (($f.scoring_scope // "readiness") == "readiness")
+                     and (($f.area // "") | test("coverage|alert|monitor|metric";"i"))
                      and (($f.title // "") | test("no |missing|lacks|absent|not configured|no metric|without";"i")) ) )
       | (active($prov)) as $act
       | (($f.affected // [])[]) as $r0
@@ -270,6 +300,7 @@ correlation_save() {
   cascades="$3"
   findings="$4"
   coverage="${5:-[]}"
+  mkdir -p "$AUDITS_DIR"
 
   total_raw=$(printf '%s\n' "$findings" | jq 'length')
   total_overlaps=$(printf '%s\n' "$overlaps" | jq 'length')
@@ -341,7 +372,10 @@ correlation_run() {
   findings=$(correlation_collect_findings "$audit_date")
 
   if [ "$(printf '%s\n' "$findings" | jq 'length')" -eq 0 ]; then
-    echo "[correlation] No findings to correlate for $audit_date"
+    # The root file is reused across dates and same-day reruns. Replace stale
+    # groups with this run's explicit empty result before consumers read it.
+    correlation_save "$audit_date" '[]' '[]' '[]' '[]'
+    echo "[correlation] No findings to correlate for $audit_date; empty result recorded"
     return 0
   fi
 
@@ -356,22 +390,32 @@ correlation_run() {
   echo "[correlation] Done. Ready for cost-analysis and topology-guided setup."
 }
 
-# Read helpers for integration consumers
+# Read helpers for integration consumers. Missing optional output is distinct
+# from a malformed existing artifact; never disguise failed reads as no findings.
+correlation_read_array() {
+  [ -e "$CORRELATION_FILE" ] || { printf '[]\n'; return 0; }
+  if ! jq -e -s --arg key "$1" 'length==1 and (.[0] | type=="object" and (.[$key]==null or (.[$key]|type)=="array"))' "$CORRELATION_FILE" >/dev/null 2>&1; then
+    echo '[correlation] cannot read current correlation artifact; rerun correlation before consuming it' >&2
+    return 1
+  fi
+  jq --arg key "$1" '.[$key] // []' "$CORRELATION_FILE"
+}
+
 correlation_get_overlaps() {
-  jq '.overlaps' "$CORRELATION_FILE" 2>/dev/null || echo "[]"
+  correlation_read_array overlaps
 }
 
 correlation_get_cascades() {
-  jq '.cascades' "$CORRELATION_FILE" 2>/dev/null || echo "[]"
+  correlation_read_array cascades
 }
 
 correlation_get_coverage() {
-  jq '.coverage // []' "$CORRELATION_FILE" 2>/dev/null || echo "[]"
+  correlation_read_array coverage
 }
 
 correlation_find_related() {
   finding_id="$1"
-  jq --arg id "$finding_id" \
-    '[.overlaps[] | select(.findings[].finding_id == $id)] | first // {}' \
-    "$CORRELATION_FILE" 2>/dev/null || echo "{}"
+  related_overlaps="$(correlation_read_array overlaps)" || return 1
+  printf '%s\n' "$related_overlaps" | jq --arg id "$finding_id" \
+    '[.[] | select(any(.findings[]?; .finding_id == $id))] | first // {}'
 }

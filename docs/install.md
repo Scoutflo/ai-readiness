@@ -2,7 +2,7 @@
 
 Three paths: install it yourself, roll it out to a team through a shared repository, or force-enable it across an organization with managed settings. All three end at the same place: run `/scoutflo:start` and follow it.
 
-**Splunk On-Call prerequisites:** the audit and doctor require `curl` 8.4 or newer and `jq`. Description setup additionally requires `shasum` (SHA-256) and `python3` for exclusive local journal creation. The setup preflight stops if either is missing. No Splunk CLI is needed.
+**Splunk On-Call prerequisites:** the audit and doctor require `curl` 8.4 or newer and `jq`. Large-estate audit worklists additionally require `shasum` (SHA-256) for private credential-generation binding. Description setup requires `shasum` and `python3` for exclusive local journal creation. The setup preflight stops if either is missing. No Splunk CLI is needed.
 
 **Every path below that uses a `/plugin ...` command means the standalone `claude` terminal CLI, not Claude.app's chat window.** `/plugin marketplace add`, `/plugin install`, `/plugin` (list/update), `/plugin uninstall`, and `/plugin marketplace remove` are all terminal-CLI-only commands — typing them into Claude.app's chat box fails with "isn't available in this environment." After installation, run `/scoutflo:...` commands in a **Local Claude Code session**: the terminal CLI, the desktop app's **Code tab with Local selected**, or the VS Code / JetBrains Claude Code extensions. The desktop app's Chat tab and claude.ai cannot access the local files and shell commands these skills need. The "Team" and "Enterprise" paths below skip the terminal step entirely — they install via a settings file instead.
 

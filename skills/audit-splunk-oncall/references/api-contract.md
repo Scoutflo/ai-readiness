@@ -50,7 +50,28 @@ RUN_ID="${SCOUTFLO_RUN_ID:?set one fixed run ID and retain it across batches}"
 SELECTED="${SCOUTFLO_TEAMS:-}"
 case "$MODE" in init|batch|finish) ;; *) echo 'invalid batch mode'; exit 1 ;; esac
 case "$RUN_ID" in *[!A-Za-z0-9_-]*|'') echo 'invalid run ID'; exit 1 ;; esac
+[ "${SCOUTFLO_TRIAGE:-0}" = 0 ] || { echo 'Team worklists require an explicit full run'; exit 1; }
+command -v shasum >/dev/null || { echo 'shasum is required for private worklist credential binding'; exit 1; }
+STORE="${SCOUTFLO_ENV_FILE:-}"
+[ -n "$STORE" ] || { if [ -f './.scoutflo/env' ]; then STORE='./.scoutflo/env'; else STORE="$HOME/.scoutflo/env"; fi; }
+store_generation() {
+  if [ -f "$STORE" ]; then
+    HASH_OUTPUT=$(shasum -a 256 < "$STORE") || return 1
+    printf '%s\n' "$HASH_OUTPUT" | awk '{print $1}'
+  else printf 'absent'; fi
+}
+STORE_BEFORE=$(store_generation)
 PLAN=$(sh "${CLAUDE_PLUGIN_ROOT}/skills/audit-splunk-oncall/scripts/collect.sh" --plan)
+[ "$STORE_BEFORE" = "$(store_generation)" ] || { echo 'Credential store changed during preflight; start again'; exit 1; }
+ID_REF=$(printf '%s' "$PLAN" | jq -er '.credential_refs.api_id_env')
+KEY_REF=$(printf '%s' "$PLAN" | jq -er '.credential_refs.api_key_env')
+credential_generation() {
+  HASH_OUTPUT=$(sh -c 'set +x; set -a; if [ -f "$1" ]; then . "$1" >/dev/null 2>&1; fi; a=$(printenv "$2") || exit 1; b=$(printenv "$3") || exit 1; [ -n "$a" ] && [ -n "$b" ] || exit 1; printf "%s\0%s\0" "$a" "$b" | shasum -a 256' _ "$STORE" "$ID_REF" "$KEY_REF") || return 1
+  printf '%s\n' "$HASH_OUTPUT" | awk '{print $1}'
+}
+GENERATION=$(credential_generation)
+printf '%s' "$GENERATION" | LC_ALL=C grep -Eq '^[0-9a-f]{64}$' || { echo 'Cannot bind credential generation'; exit 1; }
+
 SOC_SEG=$(printf '%s' "$PLAN" | jq -er '.target')
 BASE="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/${SOC_SEG}/runs"
 RUN="$BASE/$RUN_ID"; WORK="$RUN/worklist.json"
@@ -69,10 +90,13 @@ if [ "$MODE" = init ]; then
     if ($wanted|length)>0 and all($wanted[]; . as $t | $known|index($t)) then
       {run_id:$run,target:.target,anchor_team:.anchor_team,credential_refs:.credential_refs,scope:"selected-teams",teams:[$wanted[]|{slug:.,state:"pending"}]}
     else error("selected team missing or scope empty") end' > "$WORK"
+  [ "$STORE_BEFORE" = "$(store_generation)" ] && [ "$GENERATION" = "$(credential_generation)" ] || { echo 'Credentials changed; abandon this run'; exit 1; }
+  printf '%s\n' "$GENERATION" > "$RUN/credential.sha256"
   echo "Initialized worklist: $WORK"
   exit 0
 fi
 [ -d "$RUN" ] && [ ! -L "$RUN" ] && [ -f "$WORK" ] && [ ! -L "$WORK" ] || { echo 'Missing or unsafe worklist'; exit 1; }
+[ -f "$RUN/credential.sha256" ] && [ ! -L "$RUN/credential.sha256" ] && [ "$(cat "$RUN/credential.sha256")" = "$GENERATION" ] || { echo 'Credential generation changed or legacy binding missing; start a fresh run'; exit 1; }
 mkdir "$RUN/lock" || { echo 'Another batch owns the lock; do not steal it by age'; exit 1; }
 trap 'rmdir "$RUN/lock"' EXIT HUP INT TERM
 jq -e --arg target "$SOC_SEG" --arg run "$RUN_ID" '.target==$target and .run_id==$run and (.teams|length)>0 and all(.teams[];(.slug|test("^[A-Za-z0-9_-]+$")) and (.state=="pending" or .state=="done"))' "$WORK" >/dev/null
@@ -83,6 +107,7 @@ if [ "$MODE" = batch ]; then
     TMP=$(mktemp "$RUN/.snapshot.XXXXXX")
     if sh "${CLAUDE_PLUGIN_ROOT}/skills/audit-splunk-oncall/scripts/collect.sh" --team "$team" > "$TMP"; then
       jq -e --arg team "$team" --arg target "$SOC_SEG" '.scope==$team and .target==$target and .complete_reads==true' "$TMP" >/dev/null
+      [ "$GENERATION" = "$(credential_generation)" ] || { rm -f "$TMP"; echo 'Credentials changed during batch; work remains pending'; exit 1; }
       mv "$TMP" "$RUN/$team.json"
       NEXT=$(mktemp "$RUN/.worklist.XXXXXX")
       jq --arg team "$team" '.teams |= map(if .slug==$team then .state="done" else . end)' "$WORK" > "$NEXT"
@@ -97,11 +122,14 @@ else
     [ -f "$RUN/$team.json" ] && [ ! -L "$RUN/$team.json" ] || { echo 'Completed snapshot missing'; exit 1; }
     jq -e --arg team "$team" --arg target "$SOC_SEG" '.scope==$team and .target==$target and .complete_reads==true' "$RUN/$team.json" >/dev/null
   done
+  [ "$GENERATION" = "$(credential_generation)" ] || { echo 'Credentials changed during finish; start again'; exit 1; }
   cat "$WORK"
 fi
 ```
 
 A scoped capture retains selected policy rows, intersecting routes and selected current users. A fanout route retains outside targets in `out_of_scope_policies`; never call them missing. This procedure cannot assess orphan routes with no selected policy target. State that limit and block the account-wide portion of SOC-001, even if all selected teams finished. The account anchor is revalidated by every census/collector invocation; a changed credential or anchor requires a fresh run, not reuse of the old worklist.
+
+The private `credential.sha256` file binds the actual selected management credential pair, not only their variable names. It is a local resume guard, never a resource ID, report field or exported artifact. Old worklists without this binding require a fresh run. Changing credentials invalidates completed batches even if the new account has the same team names. Keep the run directory private.
 
 After completion, re-read current coverage before publishing and state the complete observation interval. Do not sum run-local route ordinals across snapshots or invent unique account totals. Build findings from stable policy/team/shift relationships, preserving each batch's evidence reference. Changes in roster/policies between batches are drift requiring refreshed evidence. Completed old snapshots are historical observations, not a current atomic picture. Never merge accounts or skip the zero-pending final check.
 

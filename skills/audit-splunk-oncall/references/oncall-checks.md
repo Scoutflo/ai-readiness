@@ -25,6 +25,8 @@ Do not double-charge a cascade: if SOC-001 identifies a missing policy, SOC-003 
 
 ## SOC-001 — routing key to policy
 
+Use a directly observed target policy slug in `affected`, including an unresolved reference when that is the defect. Keep the route's ordinal alias in evidence only. When no stable impacted object is established, use the explicitly named audited target scope with unknown object/service impact; a secret-derived ID or a guessed team is not a substitute.
+
 **Inputs:** `routes[].alias`, `routes[].policies`, `routes[].out_of_scope_policies` when scoped, and `policies[].slug`. The collector reads `routingKeys[].targets[].policySlug` and drops `routingKey` before persistence.
 
 For each in-scope route, require a nonempty policy target set and exactly one global policy row per target slug. A complete-account absent slug is a configured broken reference. Re-read the route and policy collections before reporting it, because deletion/creation may have occurred between reads. A denied or schema-invalid collection is blocked. An out-of-scope target is blocked in a scoped batch. Duplicate policy rows are ambiguous, never collapsed into a passed join.
@@ -78,15 +80,17 @@ Plan the exact policy/shift/eligible assignment through the [escalation policy p
 
 **Inputs:** an explicit operator/business-context requirement and the unique enrolled usernames in the actual current response paths. Policy count, route fanout count, roster size and invited users are not independent responders.
 
-If the operator explicitly declares that no redundancy requirement applies, this check is not-in-scope (`by-design`, citing that declaration). An unspecified requirement is blocked pending target-profile clarification, never a failed universal two-person rule. If the requirement exists but supported current joins are incomplete, block. When complete, deduplicate usernames across the required policies and compare with the declared minimum; do not add different users who would only appear at unsupported later steps.
+If the operator explicitly declares that no redundancy requirement applies, first record that policy-scoped declaration in the business-context SSOT and its `resource_intent` projection. Only that captured, attributable intent permits not-in-scope (`by-design`, citing the source and affected policy set). An uncaptured conversation or verification selector returning `inapplicable` does not authorize this scored verdict; keep it blocked until provenance is recorded. An unspecified requirement is blocked pending target-profile clarification, never a failed universal two-person rule. If the requirement exists but supported current joins are incomplete, block. When complete, deduplicate usernames across the required policies and compare with the declared minimum; do not add different users who would only appear at unsupported later steps.
 
 Name the required count, observed distinct count, shared user and affected policies. Severity follows the explicitly critical service/coverage need, not the word “production” alone. Plan a genuinely independent eligible path through the [team membership plan](../../setup-splunk-oncall/SKILL.md#teams-and-membership), with the user's approval for membership/contact effects. Done when the supported current join contains the required distinct people. Actual independent device delivery is still unverified.
 
 ## SOC-007 — source to response-path join
 
+When this evidence proves a canonical service identity, include it in both `affected` and `correlation_affected`, citing the source mapping. The latter is an optional subset used for cross-target joins. Policy/team slugs and route aliases never substitute for that service proof; absent mapping means no correlation declaration.
+
 **Inputs:** a source-side audit's current evidence for a concrete alert/monitor, an explicit expected team/policy or service mapping, and an exact routing-key comparison performed only in memory. Management reads alone supply none of these source-side facts.
 
-If there is an expected source but the key/evidence is unavailable, block with that dependency. If the operator explicitly declares no sender integration in scope, not-in-scope with that reason. Do not treat missing evidence as by-design. A complete exact match to the expected valid response path passes the configuration join; mismatch or an observed missing key fails it. This is configuration correlation, not proof an event fired or reached a device.
+If there is an expected source but the key/evidence is unavailable, block with that dependency. If the operator explicitly declares no sender integration in scope, capture the declaration in the business-context SSOT and its `resource_intent` projection before using not-in-scope (`by-design`); cite that source and scope. Do not treat missing evidence as by-design. A complete exact match to the expected valid response path passes the configuration join; mismatch or an observed missing key fails it. This is configuration correlation, not proof an event fired or reached a device.
 
 Keep safe source evidence IDs, check times, expected/actual policy and team slugs, boolean exact-key match, and concrete affected service IDs. Do not persist the key, inbound URL, raw monitor configuration or secret-derived hash. Never assume a `victorops` contact-point type or `@` handle can be transformed into a key. A generic receiver type proves only its type.
 

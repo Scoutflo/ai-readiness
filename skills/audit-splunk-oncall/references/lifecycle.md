@@ -6,6 +6,8 @@ Set `SCOUTFLO_RUN_DATE` to the fixed date of this audit and `SCOUTFLO_LIFECYCLE_
 
 ## Normalize only explicit exemptions
 
+Score deltas and history trends also require matching scope. A missing legacy scope and `account` mean `full`; `triage` is distinct even when the check-set fingerprint matches. Same-ID finding lifecycle remains independent: a deferred blocked check never resolves an earlier failure.
+
 The authoritative file is `${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/exemptions.yaml`. If present, read it and produce a private JSON projection at `SCOUTFLO_EXEMPTIONS_JSON` containing every source entry without adding approval or inferring missing fields. There is no new YAML parser: use the guided session's structured conversion and compare it to the original. Bind it to the exact source bytes using the output of `cksum < exemptions.yaml | awk '{print $1 ":" $2}'`. This checksum detects a stale projection; it is not an approval signature. Never manufacture an exemption because a check is inconvenient.
 
 Projection shape (values here are placeholders): `{"source_cksum":"<crc>:<bytes>","entries":[{"id":"SOC-004","reason":"<your accepted risk>","approved_by":"<optional owner or ticket>","expires":"YYYY-MM-DD"}]}`. Missing id/reason/expiry, invalid calendar dates and duplicate IDs are ignored with an aggregate diagnostic. Expiry is inclusive through the named UTC date. Expired entries reactivate the finding and record `exemption_expired: true`. A blocked check cannot be suppressed. With no source file, no exemption is applied and no projection is needed.
@@ -42,6 +44,11 @@ BASE="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}"
 TARGET="$BASE/$SEG"; OUT="$TARGET/$RUN_DATE"; F="$OUT/findings.json"
 [ -f "$F" ] && [ ! -L "$F" ] && [ ! -L "$OUT" ] || exit 1
 jq -e --arg t "$SEG" --arg d "$RUN_DATE" '.schema=="scoutflo-findings/v2" and .skill=="audit-splunk-oncall" and .target==$t and .run_date==$d' "$F" >/dev/null
+jq -e 'all(.findings[].affected[]?; test("^route-[0-9]+$") | not)' "$F" >/dev/null || { echo 'Run-local route aliases belong in evidence, not affected; use an observed stable object or the explicit audited target scope' >&2; exit 1; }
+jq -e 'all(.findings[]; . as $f | if has("correlation_affected") then
+  if (.correlation_affected|type)!="array" then false else
+    all(.correlation_affected[]; type=="string" and test("\\S") and (test("^route-[0-9]+$")|not) and (. as $token | ($f.affected//[]) | index($token)!=null))
+  end else true end)' "$F" >/dev/null || { echo 'correlation_affected must contain only declared service identities already in affected, never route aliases' >&2; exit 1; }
 mkdir "$TARGET/.oncall-finalize.lock" || { echo 'another finalizer owns this target lock; do not steal it' >&2; exit 1; }
 TMP=$(mktemp -d "$OUT/.lifecycle.XXXXXX")
 trap 'rm -rf "$TMP"; rmdir "$TARGET/.oncall-finalize.lock"' EXIT HUP INT TERM
@@ -65,7 +72,7 @@ if [ "$PHASE" = history ]; then
       fi
     done < "$HISTORY"
   fi
-  jq -c '. as $doc | {run_date,skill,overall:.score.overall,gate:.score.gate,end_to_end:.score.end_to_end,scoring_model:.score.scoring_model,check_set:.score.check_set,assessment_coverage_percent:.score.assessment.coverage_percent,severity_counts,lifecycle_counts:(reduce ["new","unchanged","regressed","suppressed"][] as $k ({resolved:(.delta.resolved|length)}; .[$k]=([$doc.findings[]|select(.lifecycle==$k)]|length)))}' "$F" > "$TMP/row"
+  jq -c '. as $doc | {run_date,skill,scope:(.scope//"full"),overall:.score.overall,gate:.score.gate,end_to_end:.score.end_to_end,scoring_model:.score.scoring_model,check_set:.score.check_set,assessment_coverage_percent:.score.assessment.coverage_percent,severity_counts,lifecycle_counts:(reduce ["new","unchanged","regressed","suppressed"][] as $k ({resolved:(.delta.resolved|length)}; .[$k]=([$doc.findings[]|select(.lifecycle==$k)]|length)))}' "$F" > "$TMP/row"
   cat "$TMP/row" >> "$TMP/history"
   if [ -s "$TMP/rejected" ]; then
     REJECTED=$(mktemp "$TARGET/history-rejected.XXXXXX.jsonl")
@@ -85,7 +92,9 @@ for prior in "$TARGET"/????-??-??/findings.json; do
   [ "$(printf '%s\n%s\n' "$pd" "$RUN_DATE" | LC_ALL=C sort | head -n 1)" = "$pd" ] || continue
   [ ! -L "$prior" ] || exit 1
   jq -e --arg t "$SEG" --arg d "$pd" '.skill=="audit-splunk-oncall" and .target==$t and .run_date==$d and (.findings|type)=="array" and all(.findings[];(.id|type)=="string") and ([.findings[].id]|length==(unique|length))' "$prior" >/dev/null || { echo 'invalid prior artifact; do not guess lifecycle' >&2; exit 1; }
-  jq -c '.' "$prior" >> "$TMP/past.jsonl"
+  # Historical ordinals carry no cross-run identity. Discard only those tokens
+  # in the private comparison projection; never modify the original artifact.
+  jq -c '.findings |= map(.affected = [(.affected//[])[] | select(test("^route-[0-9]+$")|not)])' "$prior" >> "$TMP/past.jsonl"
 done
 jq -s 'sort_by(.run_date)' "$TMP/past.jsonl" > "$TMP/past.json"
 printf '{"entries":[]}\n' > "$TMP/exemptions.json"
@@ -154,7 +163,7 @@ jq --slurpfile past "$TMP/past.json" --slurpfile ex "$TMP/exemptions.json" --arg
 IGNORED=$(jq -r '.lifecycle_metadata.ignored_exemption_entries' "$TMP/derived.json")
 [ "$IGNORED" -eq 0 ] || echo "Ignored $IGNORED malformed or duplicate exemption entries; findings remain open" >&2
 FINGERPRINT=$(jq -r '([.checks[]|"chk\t"+.id+"\t"+.category]+[.score.categories[]|"cat\t"+.name+"\t"+(.weight|tostring)]+["gate\t"+(.score.gate|tostring)])|sort|.[]' "$TMP/derived.json" | LC_ALL=C cksum | awk '{print "cksum-v2:" $1 ":" $2}')
-jq --arg fp "$FINGERPRINT" --slurpfile past "$TMP/past.json" '.score.check_set=$fp | ($past[0][-1]//null) as $p | .delta.score_comparable=($p!=null and $p.score.scoring_model==.score.scoring_model and $p.score.check_set==.score.check_set) | .delta.score_change=(if .delta.score_comparable and .score.overall!=null and $p.score.overall!=null then .score.overall-$p.score.overall else null end)' "$TMP/derived.json" > "$TMP/checked.json"
+jq --arg fp "$FINGERPRINT" --slurpfile past "$TMP/past.json" 'def scope_key: (.scope//"full") | if .=="account" then "full" else . end; .score.check_set=$fp | ($past[0][-1]//null) as $p | .delta.score_comparable=($p!=null and $p.score.scoring_model==.score.scoring_model and $p.score.check_set==.score.check_set and ($p|scope_key)==scope_key) | .delta.score_change=(if .delta.score_comparable and .score.overall!=null and $p.score.overall!=null then .score.overall-$p.score.overall else null end)' "$TMP/derived.json" > "$TMP/checked.json"
 sh "${CLAUDE_PLUGIN_ROOT}/report-standard/check-findings.sh" "$TMP/checked.json"
 mv "$TMP/checked.json" "$F"
 echo "Lifecycle, exemptions and scoring validated: $F"

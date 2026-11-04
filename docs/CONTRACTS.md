@@ -38,6 +38,14 @@ these two classes existed; these steps are what caught them.
 
 ## C1 — Per-audit output: findings.json / report.md / report.html / inventory.json
 
+- **Readiness display:** rollups respect an explicit `score.end_to_end: false`
+  even when score and assessment coverage are both 100. Missing v2 readiness
+  proof fails closed; an absent legacy v1 flag preserves historical rendering.
+  A management-only On-Call score cannot certify device delivery.
+  Score comparisons also require matching scope, not only matching scoring
+  model/check-set. Missing historical scope and explicit `account` mean `full`;
+  triage is incomparable with full. On-Call history retains scope, and both
+  shared visual trends and audit-all's fresh-shell trend recipe enforce it.
 - **Producer:** every `audit-*` (except `audit-all`, `audit-cost` for inventory).
 - **Consumers:** `audit-all`, `correlation-engine`, `cost-analysis`,
   `render-report-viz` (incl. the `exec-summary` mode — the top-of-report executive
@@ -198,12 +206,26 @@ these two classes existed; these steps are what caught them.
   `cost-analysis` dedups via `correlation.json`.
 - **Invariant:** a non-`info` finding with no `affected` is unjoinable — rejected
   at the gate.
+  On-Call `route-N` aliases are run-local display values, never persistent
+  affected identities. Its lifecycle recipe rejects them in current artifacts
+  and ignores historical aliases in resource deltas; correlation excludes them
+  defensively without rewriting source files. On-Call additionally requires an
+  explicit `correlation_affected` subset containing only source-verified canonical
+  service identities. Absent/invalid declarations yield no join tokens, including
+  for historical On-Call artifacts; bare policy/team slugs cannot corroborate
+  another account. Other integrations retain their existing affected contract.
 - **Guards:** `check-findings.sh` (affected required). Tests:
   `skills/correlation-engine/tests/`. Selftest: `layer_capstone` (a shared
   `affected` resource is detected as an overlap across a one- and two-level target).
 
 ## C5 — correlation.json shape (producer ↔ consumer field agreement)
 
+- **Evidence state:** overlap/cascade/coverage claims use only observed open
+  findings (`configured`/`validated-live`, with new/unchanged/regressed lifecycle).
+  Missing status/lifecycle fields remain readable for legacy v1. Blocked,
+  suppressed and resolved rows never support active claims. Raw counters retain
+  all input rows. A zero-finding rerun writes an empty current result instead of
+  leaving an earlier root-level `correlation.json` for consumers.
 - **Producer:** `correlation-engine.sh` writes `overlaps[]`
   `{overlap_id:"OVL-<service>", type, service, targets[], findings[{target,finding_id,title,severity}], recommendation}`
   and `cascades[]`
@@ -308,17 +330,24 @@ these two classes existed; these steps are what caught them.
   documents is drift (a provider that connects but doctor/audit can't read, or
   vice versa). Every audit's finding-ID prefix is registered exactly once in
   `findings-schema.md`.
-- **Guards:** `ci/config-key-agreement-check.sh` (per-provider key + prefix
-  agreement), `ci/coverage-check.sh` (template ↔ providers.md ↔ connect/start),
-  `ci/catalog-consistency-check.sh`, `ci/audit-all-map-check.sh`. Selftest:
-  config-key agreement + prefix-registry cases.
+- **Guards:** `ci/config-key-agreement-check.sh` compares top-level provider
+  blocks in doctor and the config template; it does not compare their subkeys.
+  `ci/optional-key-parity-check.sh` checks declared required/either-or keys in
+  the template, while maintainer review and provider behavior tests check what
+  connect, doctor and audits actually read. `ci/prefix-registry-check.sh` checks
+  emitted prefix membership; registry uniqueness and ownership remain review
+  obligations. `ci/coverage-check.sh` links template blocks to providers.md and
+  audit discovery in connect/start. Catalog and audit-all map gates cover the
+  remaining discovery surfaces. Selftest: config-key agreement + prefix-registry
+  cases.
 
 ## C10 — audit-all coverage & scheduled runs
 
 - **Contract:** every own-block `audit-*` (except the shared-backend exemptions)
   has a row in `audit-all`'s Phase-1 config→audit map; `schedule-audits`
-  delegates entirely to `audit-all`, so an unmapped provider is silently skipped
-  by "audit everything" and every scheduled run.
+  defaults to `audit-all`, so an unmapped provider is silently skipped by
+  "audit everything" and scheduled runs using that default. An explicitly
+  selected single-audit schedule invokes that skill directly.
 - **Brief invariant:** `audit-all` emits exactly **one** combined Slack brief per
   run — titles-only and safe to leak (no evidence values, hostnames, endpoints) —
   and the redaction pass runs over the roll-up report and brief before any send.
@@ -327,11 +356,14 @@ these two classes existed; these steps are what caught them.
 
 ## C11 — Surface/catalog consistency
 
-- **Contract:** every public skill appears in `connect` Step 1 + the `start`
-  catalog + `README`; `marketplace.json` description/keywords track `plugin.json`;
+- **Contract:** every public user-runnable skill appears in the `start` catalog
+  and `README`, with the catalog gate's documented internal-helper exceptions.
+  Every audit except the `audit-all` orchestrator also appears in `connect`
+  Step 1; setup and harness skills do not require provider-picker rows.
+  `marketplace.json` description/keywords track `plugin.json`;
   the stated min CLI version is consistent across docs + `doctor.sh`.
 - **Guards:** `ci/coverage-check.sh`, `ci/catalog-consistency-check.sh`,
-  `ci/manifest-compat-check.sh`, `ci/min-version-consistency` (in structure-check).
+  `ci/manifest-compat-check.sh`, `ci/min-version-consistency-check.sh`.
 - **Directory metadata:** `icon`, `documentationUrl`, `supportUrl`,
   `privacyPolicyUrl`, and `termsOfServiceUrl` belong only in `plugin.json`.
   They are ignored by the supported v2.1.140 runtime; installation and the full
@@ -411,6 +443,10 @@ these two classes existed; these steps are what caught them.
 
 ## C14 — Cross-tool coverage correlation (a gap in one tool covered by another)
 
+- **Source eligibility:** C5's observed/open filter runs before the coverage
+  heuristic, so an unknown responder requirement cannot become a real monitor
+  gap. Non-scored observations require an explicit `coverage_gap` object with a
+  nonempty `signal`; their prose alone is not a coverage-gap declaration.
 - **Producers:** every audit's `inventory.json` records its **active** monitors/
   alerts (`kind` + `covers` + `enabled` + `routes_to`); an audit's coverage-gap
   findings carry the affected resource in `affected[]`, and MAY carry an optional
@@ -517,10 +553,17 @@ these two classes existed; these steps are what caught them.
 
 - **Producer:** `skills/alert-fatigue/lib/alert-fatigue.sh` (`alert_fatigue_run`)
   writes `${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/alert-fatigue.json`
-  (`scoutflo-alert-fatigue/v1`, `scoring_scope: non-scored`). **Config tier** (from
+  (`scoutflo-alert-fatigue/v1`, `scoring_scope: non-scored`). Empty reruns replace
+  stale output with empty config evidence and explicit measured gaps. **Config tier** (from
   the audits' `findings.json`): `AF-001` (noise concentration), `AF-002` (cross-source
-  storm: a service with alerting-noise findings from ≥2 target dirs), `AF-007`
-  (fatigue anti-pattern histogram). **Measured fire-history tier** (from an optional
+  overlap candidate: a service with alerting-noise findings from ≥2 target dirs, not evidence of duplicate pages or delivery), `AF-007`
+  (fatigue anti-pattern histogram). Blocked/unknown/deferred and resolved/suppressed
+  findings cannot establish current noise; absent legacy fields remain accepted.
+  On-Call overlap joins require the explicit source-verified `correlation_affected`
+  subset; local object names and route aliases remain remediation details only.
+  Artifact-directory identities retain distinct labeled and legacy structured
+  targets, consistently in the collector and report enrichment.
+  **Measured fire-history tier** (from an optional
   `fatigue-signals.json`, else `not-in-scope`): `AF-004` (reachability — objects that
   reach nobody), `AF-005` (measured volume/flapping/top-offenders by fatigue impact),
   `AF-006` (chronic/stuck). **Incident-feed tier:** `AF-003` (alert-to-incident ratio +
@@ -536,10 +579,19 @@ these two classes existed; these steps are what caught them.
   Each provider carries `provider_coverage[].verification` (`spec-only` until a first
   live run confirms its flagged fields, then `live-verified`; ledger + per-provider
   checklist in fire-history-reads.md § Live-verification). **Before the roll-up
-  analyzes it**, the lane validates `fatigue-signals.json` with
+  analyzes it**, both the lane and the runtime entry point validate `fatigue-signals.json` with
   [report-standard/check-fatigue-signals.sh](../report-standard/check-fatigue-signals.sh)
-  (schema, field types, the `off_hours_fires ≤ fires` bound, reason-on-`verify-pending`,
-  and the never-fabricate cross-check that every `source_finding_ids` exists in this run).
+  (schema, field types, existing UTC `generated_at` bound to the requested run date,
+  stated window, nonnegative counts, the `off_hours_fires ≤ fires` bound, reason-on-`verify-pending`,
+  and the never-fabricate cross-check that every supplied `source_finding_ids` exists
+  even when this run has no findings). Standalone observations may omit IDs;
+  historical missing measurement provenance is blocked, not silently upgraded.
+  Missing optional input stays unmeasured. Invalid present input produces a fresh
+  blocked canonical result and nonzero exit, clears prior generated Markdown/HTML,
+  and preserves the input for correction. Selected operator counts are validated
+  too. Unknown/blocked metrics render as such; true measured zero stays zero.
+  Date binding and v1 ID existence do not establish same-instant observations or
+  a cross-account service mapping.
 - **Consumers:** `audit-all` Phase 3.6 runs it after correlation; the report
   renderer `render-report-viz.sh` (`alert-fatigue` + `alert-fatigue-html` modes)
   turns `alert-fatigue.json` into the report §7 markdown section and a standalone
@@ -570,7 +622,10 @@ these two classes existed; these steps are what caught them.
   findings, non-scored + cites-source-IDs, the `fatigue.json` ratio path, **and the
   measured tier — AF-004 reachability, AF-005 fatigue-impact ranking, AF-006 chronic,
   AF-007 histogram, live-feed AF-003, verify-pending coverage, and never-fabricate when
-  signals are absent**); `report-standard/check-fatigue-signals.sh` + `tests/test-check-fatigue-signals.sh`
+  signals are absent**); `skills/alert-fatigue/tests/test-current-inputs.sh`
+  (runtime validation, stale/phantom/malformed/impossible inputs, current blocked
+  reruns, operator counts, On-Call identity subsets, legacy targets, reserved labels,
+  and status-aware HTML); `report-standard/check-fatigue-signals.sh` + `tests/test-check-fatigue-signals.sh`
   (validate the model-produced `fatigue-signals.json`: schema, field types incl. the `//`-bool
   trap, off-hours≤fires, reason-on-verify-pending, and the never-fabricate source-id cross-check);
   `tests/test-report-viz.sh` Tests 12–17 (the renderer joins each cited noise finding to its exact
@@ -644,13 +699,15 @@ PR; the live smoke against a real estate is a hard merge gate (`AGENTS.md`).
   non-scored cost/ingest section (`AWSOPT`/`AZROPT`/`DDOPT`/`NROPT`/…) emits
   `scoring_scope: "non-scored"` findings inside its own findings.json.
 - **Consumers:** the `cost-analysis` roll-up (runs inside `audit-all`, and
-  standalone) aggregates across every audit directory — it ALWAYS regenerates
+  standalone) aggregates across every audit directory — it ALWAYS regenerates,
+  including an empty run (`data_status: no-cost-findings`, not proof of zero spend)
   (the 24h skip cache was removed for staleness), globs the two-level
   `<integration>/<label>/<date>/` layout as well as one-level, and skips the
   roll-up dirs' own outputs (`all`/`cost`/`cost-analysis`/`doctor` targets) so
   aggregates never re-aggregate; `render-report-viz` and `audit-all` §7 render
   the combined view.
 - **Invariants:** a per-audit non-scored cost finding joins the roll-up ONLY
+  from open observed findings (legacy absent status/lifecycle accepted) and
   via **`area: "cost-optimization"`** (the aggregator's exact selector — any
   other area silently drops it from the combined report; live-caught on
   audit-newrelic's first emit). **Never invent a dollar** — `estimated_monthly_savings_usd`
@@ -672,6 +729,8 @@ PR; the live smoke against a real estate is a hard merge gate (`AGENTS.md`).
   case and the cost-analysis suite (`skills/cost-analysis/tests/`).
 
 ## C19 — Migration plan (plan-only cross-provider synthesis: scoutflo-migration-plan/v1)
+
+- **Worklist/finalization:** migration-plan keeps `input-basis.json` beside the plan. Identical inputs preserve all enrichment; changed inputs or a legacy unbound plan refuse overwrite. Optional malformed history fails explicitly. Final validation requires equivalence and target shapes on migrating/covered rows plus concrete parallel-run and parity steps; incomplete plans remain local work and cannot retain a stale final Markdown/HTML report. Historical completed v1 plans need no new fields to validate.
 
 - **Producer (deterministic skeleton):** `skills/migration-plan/lib/migration-plan.sh`
   (`migration_plan_run <source> <target> [date]`) writes
@@ -699,7 +758,14 @@ PR; the live smoke against a real estate is a hard merge gate (`AGENTS.md`).
   `fix-then-migrate` **never ships without evidence**, and every cited finding-id
   must exist in this run's source findings; `already-covered` is **forbidden in
   source-only mode** (no fabricated target coverage) and must name its
-  `matched_target`; equivalence classes come only from the pair catalog and an
+  `matched_target`. Its configuration match is unique, monitor-to-alert-rule,
+  exact name plus `covers`, explicitly enabled and routed; detailed query parity
+  still needs verification before cutover. Signals join the exact source provider,
+  audit target, object kind and exact case-sensitive name; findings retain
+  source-target identity and must be open/observed (legacy absent fields accepted). Final
+  rows/evidence preserve `source_target`, and target matches carry additive
+  `matched_target_identity`; renderers keep legacy records readable without them.
+  Equivalence classes come only from the pair catalog and an
   unsupported pair **refuses to run** (no improvised mappings);
   `cutover.historical_telemetry` must equal `"does-not-transfer"` (config carries
   over; history never does — continuity is the dual-write/parallel-run window and
@@ -748,6 +814,9 @@ PR; the live smoke against a real estate is a hard merge gate (`AGENTS.md`).
   findings + `correlation.json` + `topology-export.json` + business context,
   then making **read-only** live checks (via the `live-evidence` lib) for
   current-state evidence.
+- **Probe boundary:** `le_kubectl` limits `config` to `view` / `get-contexts` and `auth` to
+  `can-i`, rejects target/credential overrides and raw-output flags, and always
+  pins the selected context.
 - **Invariants:** every named cause is **evidence-cited** (finding IDs, live
   reads); the answer carries a **confidence level and an honest list of what it
   could not determine**; it never invents a cause, never mutates anything, and

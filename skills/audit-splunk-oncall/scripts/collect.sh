@@ -5,6 +5,8 @@ set +x
 ROOT=$(CDPATH= cd -- "$(dirname "$0")/../../.." && pwd)
 TT="$ROOT/report-standard/toolkit-targets.sh"
 MODE=collect; ONLY_TEAM=""; SOURCE_ENV=""
+TRIAGE="${SCOUTFLO_TRIAGE:-0}"
+case "$TRIAGE" in 0|1) ;; *) echo "SCOUTFLO_TRIAGE must be 0 or 1" >&2; exit 2 ;; esac
 case "${1:-}" in
   --plan) [ "$#" -eq 1 ] || { echo 'Use exactly one collector mode' >&2; exit 2; }; MODE=plan ;;
   --team) [ "$#" -eq 2 ] || { echo 'Use --team with exactly one team slug' >&2; exit 2; }; ONLY_TEAM="$2" ;;
@@ -13,6 +15,9 @@ case "${1:-}" in
   *) echo 'usage: collect.sh [--plan | --team TEAM_SLUG | --source-route-env VARIABLE_NAME]' >&2; exit 2 ;;
 esac
 fail() { echo "splunk-oncall: $1" >&2; exit 1; }
+if [ "$TRIAGE" = 1 ] && { [ -n "$ONLY_TEAM" ] || [ -n "$SOURCE_ENV" ]; }; then
+  fail 'triage supports only the bulk routing census; scoped deep verification requires SCOUTFLO_TRIAGE=0'
+fi
 slug_ok() { case "$1" in ''|*[!A-Za-z0-9_-]*) return 1 ;; esac; }
 [ "${1:-}" != --team ] || slug_ok "$ONLY_TEAM" || fail 'invalid selected team slug'
 CFG="${SCOUTFLO_CONFIG:-}"
@@ -117,7 +122,19 @@ if [ -n "$ONLY_TEAM" ]; then
   ROUTES=$(printf '%s\n' "$ROUTES" "$POLICIES" | jq -sc '(.[1]|map(.slug)) as $selected | [.[0][] | select(any(.policies[]; . as $p | $selected|index($p))) | . + {out_of_scope_policies:[.policies[]|. as $p|select(($selected|index($p))==null)]}]')
 fi
 if [ "$MODE" = plan ]; then
-  printf '%s\n' "$TEAMS" "$POLICIES" "$ROUTES" | jq -sc --arg target "$SOC_SEG" --arg anchor "$TEAM" --arg id_env "$ID_ENV" --arg key_env "$KEY_ENV" '{target:$target,anchor_team:$anchor,credential_refs:{api_id_env:$id_env,api_key_env:$key_env},teams:(.[0]|length),policies:(.[1]|length),routes:(.[2]|length),objects:([.[]|length]|add),team_slugs:[.[0][].slug]}'
+  printf '%s\n' "$TEAMS" "$POLICIES" "$ROUTES" | jq -sc --arg target "$SOC_SEG" --arg anchor "$TEAM" --arg id_env "$ID_ENV" --arg key_env "$KEY_ENV" --argjson triage "$TRIAGE" '{scope:(if $triage==1 then "triage" else "account" end),target:$target,anchor_team:$anchor,credential_refs:{api_id_env:$id_env,api_key_env:$key_env},teams:(.[0]|length),policies:(.[1]|length),routes:(.[2]|length),objects:([.[]|length]|add),team_slugs:[.[0][].slug]}'
+  exit 0
+fi
+# Triage deliberately stops at the bulk routing/ownership census. Empty detail
+# arrays below are omitted reads, not evidence of empty staffing or coverage.
+if [ "$TRIAGE" = 1 ]; then
+  ANCHOR=$(get "/api-public/v1/team/$TEAM")
+  printf '%s' "$ANCHOR" | jq -e --arg team "$TEAM" '.slug==$team' >/dev/null 2>&1 || fail 'identity changed during triage'
+  printf '%s\n' "$TEAMS" "$POLICIES" "$ROUTES" | jq -sc \
+    --arg target "$SOC_SEG" --arg started "$STARTED" --arg finished "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    '{target:$target,started_at:$started,finished_at:$finished,scope:"triage",complete_reads:true,atomic_snapshot:false,
+      assessed_check_ids:["SOC-001","SOC-002"],deferred_check_ids:["SOC-003","SOC-004","SOC-005","SOC-006","SOC-007"],
+      source_match:null,teams:.[0],policies:.[1],routes:.[2],current:[],policy_details:[],team_details:[]}'
   exit 0
 fi
 CURRENT=$(get '/api-public/v1/oncall/current')

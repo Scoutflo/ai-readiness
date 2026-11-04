@@ -92,19 +92,20 @@ score_label() {  # a plain-language band for a 0-100 score; $2 = end_to_end (tru
 trend_scores() {  # $1 = history.jsonl (optional), $2 = current findings.json
   [ -n "${1:-}" ] && [ -f "$1" ] || return 0
   tv_f="${2:-}"
-  tv_model=""; tv_set=""
+  tv_model=""; tv_set=""; tv_scope='"full"'
   if [ -n "$tv_f" ] && [ -f "$tv_f" ]; then
     tv_model="$(jq -r '.score.scoring_model // ""' "$tv_f")"
     tv_set="$(jq -r '.score.check_set // ""' "$tv_f")"
+    tv_scope="$(jq -c '(.scope//"full") | if .=="account" then "full" else . end' "$tv_f")"
   fi
-  if [ -n "$tv_model" ] && [ -n "$tv_set" ]; then
-    tail -n 30 "$1" 2>/dev/null \
-      | jq -r --arg model "$tv_model" --arg set "$tv_set" \
-          'select(.scoring_model == $model and .check_set == $set and (.overall|type)=="number") | .overall' 2>/dev/null \
-      | tail -n 5 | tr '\n' ' '
-  else
-    tail -n 5 "$1" 2>/dev/null | jq -r 'select((.overall|type)=="number") | .overall' 2>/dev/null | tr '\n' ' '
-  fi
+  # Same check IDs do not make a fast subset comparable to a full audit.
+  # Legacy rows without scope mean full/account; preserve their old readability.
+  tail -n 30 "$1" 2>/dev/null \
+    | jq -r --arg model "$tv_model" --arg set "$tv_set" --argjson scope "$tv_scope" '
+        def scope_key: (.scope//"full") | if .=="account" then "full" else . end;
+        select(scope_key==$scope and (.overall|type)=="number"
+          and (($model=="" or $set=="") or (.scoring_model==$model and .check_set==$set))) | .overall' 2>/dev/null \
+    | tail -n 5 | tr '\n' ' '
 }
 
 # --- alert-fatigue: enrich the cited noise findings with their fix text -------
@@ -119,11 +120,16 @@ af_enriched_noise() {  # $1=alert-fatigue.json  $2=audits-dir  $3=run-date -> JS
   set --
   for ae_f in "$ae_d"/*/"$ae_dt"/findings.json "$ae_d"/*/*/"$ae_dt"/findings.json; do
     [ -e "$ae_f" ] || continue
-    case "$ae_f" in */all/*|*/cost-analysis/*|*/cost/*|*/doctor/*|*/alert-fatigue/*) continue ;; esac
+    ae_rel="${ae_f#"$ae_d"/}"
+    case "${ae_rel%%/*}" in all|cost-analysis|cost|doctor|alert-fatigue) continue ;; esac
     set -- "$@" "$ae_f"
   done
   if [ "$#" -eq 0 ]; then ae_all='[]'; else
-    ae_all="$(jq -s '[ .[] | (.target // "unknown") as $t | (.findings // [])[] | . + {target: $t} ]' "$@")"
+    ae_all="$(jq -n --arg root "$ae_d/" --arg suffix "/$ae_dt/findings.json" '[
+      inputs | (.target // "unknown") as $legacy
+      | (input_filename | ltrimstr($root) | rtrimstr($suffix)) as $t
+      | (.findings // [])[] | . + {target:$t, legacy_target:$legacy}
+    ]' "$@")"
   fi
   # A finding target may be a plain string OR a structured object (audit-signoz
   # records {type,host,version,edition}); tdisp normalizes either to one display
@@ -132,7 +138,11 @@ af_enriched_noise() {  # $1=alert-fatigue.json  $2=audits-dir  $3=run-date -> JS
   printf '%s' "$ae_all" | jq --slurpfile af "$ae_afj" '
     def tdisp: if type == "object" then (.host // .name // .type // tojson) else tostring end;
     def s: if type == "string" then . elif . == null then "" else tojson end;
-    (map({key: ((.target | tdisp) + "\u0001" + (.id // "")), value: .}) | from_entries) as $idx
+    # Old roll-ups cite envelope targets; retain their unambiguous aliases.
+    # New roll-ups use file target identities, which always take precedence.
+    ((map({key: ((.legacy_target | tdisp) + "\u0001" + (.id // "")), value: .})
+       | group_by(.key) | map(select(length==1) | .[0]) | from_entries)
+     + (map({key: (.target + "\u0001" + (.id // "")), value:.}) | from_entries)) as $idx
     | ([ $af[0].af_findings[]? | select(.af_id == "AF-001") | .source_findings[]? ]) as $sf
     | [ $sf[] | . as $n
         | ($idx[($n.target | tdisp) + "\u0001" + $n.finding_id] // {}) as $d
@@ -506,8 +516,10 @@ HTMLFOOT
     # Glob BOTH the one-level `<target>/<date>/` and two-level
     # `<integration>/<label>/<date>/` layouts (multi-target labels, and single-block
     # signoz/kubernetes which always nest), mirroring audit-all's Phase-3 loops.
-    # A stack is "end-to-end" only when it clears the score gate AND was fully
-    # assessed (v2 coverage 100%). A high score over a mostly-blocked estate is NOT
+    # A stack is "end-to-end" only when it clears the score gate, was fully
+    # assessed (v2 coverage 100%), and its own explicit readiness flag permits it.
+    # A missing v1 flag keeps legacy behavior; missing v2 proof fails closed.
+    # A high score over a mostly-blocked estate is NOT
     # end-to-end and must not be counted or rendered as if it were (else partial
     # collection reads as a clean bill of health at the leader-facing headline).
     # cov is the v2 assessment coverage percent, or "na" for a v1 stack that has none.
@@ -518,6 +530,7 @@ HTMLFOOT
       case "$tgt" in all|cost|cost-analysis|doctor|"?") continue;; esac
       sc="$(jq -r 'if .score.overall == null then "unassessed" else .score.overall end' "$f" 2>/dev/null)"
       cov="$(jq -r '.score.assessment.coverage_percent // "na"' "$f" 2>/dev/null)"
+      e2e="$(jq -r 'if (.score | has("end_to_end")) then .score.end_to_end elif .schema=="scoutflo-findings/v2" then false else "legacy" end' "$f" 2>/dev/null)"
       total=$((total + 1))
       if [ "$sc" = "unassessed" ]; then
         sort_key=-1
@@ -526,10 +539,12 @@ HTMLFOOT
           *) sort_key="$sc"
              # full coverage: v1 (na) or unparseable is not penalized; v2 must be 100
              full=1; case "$cov" in ''|na|*[!0-9]*) full=1;; *) [ "$cov" -eq 100 ] || full=0;; esac
-             [ "$sc" -ge "$GATE" ] && [ "$full" -eq 1 ] && passing=$((passing + 1));;
+             if [ "$sc" -ge "$GATE" ] && [ "$full" -eq 1 ]; then
+               case "$e2e" in true|legacy) passing=$((passing + 1));; esac
+             fi;;
         esac
       fi
-      ROWS="${ROWS}${sort_key}	${sc}	${cov}	${tgt}
+      ROWS="${ROWS}${sort_key}	${sc}	${cov}	${e2e}	${tgt}
 "
     done
     if [ "$total" -eq 0 ]; then echo "_No completed audits for ${RD}._"; exit 0; fi
@@ -537,7 +552,7 @@ HTMLFOOT
     echo
     echo "| Stack | Score | | |"
     echo "| --- | ---: | --- | --- |"
-    printf '%s' "$ROWS" | sort -t"$(printf '\t')" -k1,1n | while IFS="$(printf '\t')" read -r sort_key sc cov tgt; do
+    printf '%s' "$ROWS" | sort -t"$(printf '\t')" -k1,1n | while IFS="$(printf '\t')" read -r sort_key sc cov e2e tgt; do
       [ -n "$tgt" ] || continue
       if [ "$sc" = "unassessed" ]; then
         echo "| \`${tgt}\` | unassessed | \`░░░░░░░░░░░░\` | ← no readiness score |"
@@ -545,13 +560,14 @@ HTMLFOOT
         full=1; case "$cov" in ''|na|*[!0-9]*) full=1;; *) [ "$cov" -eq 100 ] || full=0;; esac
         if [ "$sc" -lt "$GATE" ]; then flag="← below gate"
         elif [ "$full" -eq 0 ]; then flag="← only ${cov}% assessed — not end-to-end"
+        elif [ "$e2e" != true ] && [ "$e2e" != legacy ]; then flag="← end-to-end not established"
         else flag=""
         fi
         echo "| \`${tgt}\` | ${sc}/100 | \`$(viz_bar "$sc" 100 12)\` | ${flag} |"
       fi
     done
     echo
-    echo "_Worst-first — send the team to the top row. A high score over a partly-assessed estate is flagged, not counted as end-to-end. Never a combined average: one score line per stack._"
+    echo "_Worst-first — send the team to the top row. Partial assessment or an explicit false readiness flag prevents end-to-end credit even at a high score. Missing v1 flags retain legacy behavior. Never a combined average: one score line per stack._"
     ;;
 
   inventory)
@@ -759,11 +775,15 @@ $(jq -r '.totals | "\(.alerting_noise_findings // 0) \(.cross_source_storms // 0
 EOF
     RSTATUS="$(jq -r '.af_findings[]? | select(.af_id=="AF-003") | .status // "not-in-scope"' "$AFJ")"
     FHO="$(jq -r '.totals.fire_history_objects // 0' "$AFJ")"
+    if [ "$(jq -r ' .input_validation.status // ""' "$AFJ")" = "blocked" ]; then
+      jq -r '"**Measured input blocked:** " + .input_validation.reason' "$AFJ"
+      echo
+    fi
     # Only bail when BOTH tiers are empty. A run with zero config-noise findings but
     # measured fire-history (the standalone fire-history case) must still render the
     # measured tier — the whole point of AF-004/005/006 is noise the config can't see.
     if [ "${TN:-0}" -eq 0 ] && [ "${FHO:-0}" -eq 0 ]; then
-      echo "No alerting-noise findings and no measured fire-history for ${RD} — the configured alerting is clean on the checks that ran (or no alerting provider was audited) and the fire-history collection lane did not run. (A true alert-to-incident ratio needs an incident feed.)"
+      echo "No alerting-noise findings and no measured fire-history were supplied for ${RD}. This is not an all-clear: inspect each audit coverage ledger; notification volume, delivery and incident ratios remain unmeasured."
       exit 0
     fi
     if [ "$RSTATUS" = "computed" ]; then
@@ -771,7 +791,7 @@ EOF
     else
       RATIO_LINE="ratio: needs incident feed (not fabricated)"
     fi
-    echo "**At a glance — ${TN} alerting-noise finding(s) across ${TT} tool(s) · ${TS} cross-source storm(s) · ${RATIO_LINE}.**"
+    echo "**At a glance — ${TN} alerting-noise finding(s) across ${TT} tool(s) · ${TS} potential cross-source overlap(s) · ${RATIO_LINE}.**"
     echo
     echo "Read across three honest tiers: **config** (rule hygiene — a real yes/no from the rules), **fire-history** (measured volume/flapping/reachability/chronic from the alert stream), and **incident-feed** (true precision & alert-to-incident ratio — from your incident data, never fabricated). AF-001/002/007 are the config picture; **AF-004/005/006 are the measured fire-history tier** (shown when the collection lane ran, else not-in-scope); the ratio is the incident-feed tier."
     echo
@@ -896,10 +916,10 @@ EOF
       | while IFS="$(printf '\t')" read -r cls cnt; do echo "| ${cls} | ${cnt} |"; done
       echo
     fi
-    echo "### Cross-source alert storms"
+    echo "### Potential cross-source overlap"
     echo
     if [ "${TS:-0}" -gt 0 ]; then
-      echo "One real incident on these services pages through **every** listed tool at once. Consolidate the paging path so one incident is one page:"
+      echo "These audit targets share alerting configuration findings. This does not prove duplicate pages or human delivery. Verify whether they describe one linked path or independent paths before changing routing:"
       echo
       echo "| Service | Tools | Count |"
       echo "| --- | --- | ---: |"
@@ -911,7 +931,7 @@ EOF
           echo "| \`${s}\` | ${tl} | ${c} |"
         done
     else
-      echo "No cross-source storms this run — no single service carries alerting-noise findings from two or more tools. This lights up as you audit more than one alerting provider; it is the cross-tool view no single-vendor tool sees."
+      echo "No shared configuration findings were identified across the audited targets this run. This does not establish absence of duplicate events or pages."
     fi
     echo
     echo "### Alert-to-incident ratio"
@@ -958,8 +978,19 @@ EOF
     read -r SC SH SM SL SI <<EOF
 $(printf '%s' "$NOISE" | jq -r 'reduce .[] as $f ({critical:0,high:0,medium:0,low:0,info:0}; .[$f.severity] += 1) | "\(.critical) \(.high) \(.medium) \(.low) \(.info)"')
 EOF
-    UNREACH="$(jq -r '.totals.unreachable_objects // 0' "$AFJ")"
-    CHRON="$(jq -r '.totals.chronic_objects // 0' "$AFJ")"
+    UNREACH_STATUS="$(jq -r '[.af_findings[]?|select(.af_id=="AF-004")|.status][0] // "not-in-scope"' "$AFJ")"
+    CHRON_STATUS="$(jq -r '[.af_findings[]?|select(.af_id=="AF-006")|.status][0] // "not-in-scope"' "$AFJ")"
+    UNREACH_LABEL="can't reach a human"; CHRON_LABEL="chronic / stuck"
+    UNREACH="not measured"; CHRON="not measured"
+    if [ "$UNREACH_STATUS" = "measured" ]; then
+      UNREACH="$(jq -r '.af_findings[]|select(.af_id=="AF-004")|.unreachable_objects' "$AFJ")"
+      UNREACH_LABEL="$UNREACH_LABEL (measured)"
+    elif [ "$UNREACH_STATUS" = "blocked" ]; then UNREACH="blocked"; fi
+    if [ "$CHRON_STATUS" = "measured" ]; then
+      CHRON="$(jq -r '.af_findings[]|select(.af_id=="AF-006")|.chronic_objects' "$AFJ")"
+      CHRON_LABEL="$CHRON_LABEL (measured)"
+    elif [ "$CHRON_STATUS" = "blocked" ]; then CHRON="blocked"; fi
+    INPUT_NOTICE="$(jq -r 'if .input_validation.status=="blocked" then "<p><strong>Measured input blocked:</strong> " + (.input_validation.reason|@html) + "</p>" else "" end' "$AFJ")"
     FHOBJ="$(jq -r '.totals.fire_history_objects // 0' "$AFJ")"
     {
     cat <<HTMLHEAD
@@ -985,12 +1016,13 @@ code{font-size:12px}
 .footer{color:#a0aec0;font-size:12px;text-align:center;margin:24px 0}
 </style></head><body><div class="wrap">
 <div class="card"><h1>Alert noise &amp; fatigue</h1><div class="sub">Scoutflo AI Readiness · ${RD} (UTC) · read-only, non-scored</div>
+${INPUT_NOTICE}
 <div class="metrics">
 <div class="metric"><span class="n">${TN}</span><span class="l">alerting-noise findings</span></div>
 <div class="metric"><span class="n">${TT}</span><span class="l">tools with noise</span></div>
-<div class="metric"><span class="n">${TS}</span><span class="l">cross-source storms</span></div>
-<div class="metric"><span class="n" style="color:#c53030">${UNREACH}</span><span class="l">can't reach a human (measured)</span></div>
-<div class="metric"><span class="n" style="color:#dd6b20">${CHRON}</span><span class="l">chronic / stuck (measured)</span></div>
+<div class="metric"><span class="n">${TS}</span><span class="l">potential cross-source overlaps</span></div>
+<div class="metric"><span class="n" style="color:#c53030">${UNREACH}</span><span class="l">${UNREACH_LABEL}</span></div>
+<div class="metric"><span class="n" style="color:#dd6b20">${CHRON}</span><span class="l">${CHRON_LABEL}</span></div>
 <div class="metric"><span class="n" style="font-size:18px">${RATIO_TXT}</span><span class="l">alert-to-incident ratio</span></div>
 </div>
 <div class="sev">
@@ -1026,8 +1058,8 @@ HTMLMID
     if [ "${TS:-0}" -gt 0 ]; then
       cat <<'HTMLSTORM'
 </tbody></table></div>
-<div class="card"><h1 style="font-size:16px">Cross-source alert storms</h1>
-<p class="sub">One real incident on these services pages through every listed tool at once — consolidate the paging path so one incident is one page.</p>
+<div class="card"><h1 style="font-size:16px">Potential cross-source overlap</h1>
+<p class="sub">These audit targets share alerting configuration findings. This does not prove duplicate pages or human delivery. Verify linked versus independent paths before changing routing.</p>
 <table><thead><tr><th>Service</th><th>Tools</th><th>Count</th></tr></thead><tbody>
 HTMLSTORM
       jq -r 'def tdisp: if type=="object" then (.host // .name // .type // tojson) else tostring end;
@@ -1185,7 +1217,7 @@ EOF
       echo "| --- | --- | --- | --- |"
       jq -r 'def esc: tostring | gsub("\\|"; "\\|") | gsub("\n"; " ");
         .inventory[] | select(.disposition == "fix-then-migrate")
-        | [ (.name|esc), (.kind|esc), (.disposition_reason|esc),
+        | [ ((if .source_target then .source_target + "/" + .name else .name end)|esc), (.kind|esc), (.disposition_reason|esc),
             ((.evidence // []) | map(.finding_id // ("signal:" + (.object_id // "?"))) | unique | join(", ")) ] | @tsv' "$MP" \
       | while IFS="$(printf '\t')" read -r n k w e; do echo "| \`${n}\` | ${k} | ${w} | ${e} |"; done
       echo
@@ -1199,7 +1231,7 @@ EOF
       echo "| --- | --- | --- | --- |"
       jq -r 'def esc: tostring | gsub("\\|"; "\\|") | gsub("\n"; " ");
         .inventory[] | select(.disposition == "drop-candidate")
-        | [ (.name|esc), (.kind|esc), (.disposition_reason|esc),
+        | [ ((if .source_target then .source_target + "/" + .name else .name end)|esc), (.kind|esc), (.disposition_reason|esc),
             ((.evidence // []) | map(.finding_id // ("signal:" + (.object_id // "?"))) | unique | join(", ")) ] | @tsv' "$MP" \
       | while IFS="$(printf '\t')" read -r n k w e; do echo "| \`${n}\` | ${k} | ${w} | ${e} |"; done
       echo
@@ -1208,7 +1240,7 @@ EOF
       echo "### Already covered on the target (do not double-migrate — and mind double-paging during the parallel run)"
       echo
       jq -r '.inventory[] | select(.disposition == "already-covered")
-        | "- `\(.name)` → matches `\(.matched_target // "?")` on the target"' "$MP"
+        | "- `\(if .source_target then .source_target + "/" + .name else .name end)` → matches `\(if .matched_target_identity then .matched_target_identity.target + "/" + .matched_target_identity.name else (.matched_target // "?") end)` on the target"' "$MP"
       echo
     fi
     echo "### Migrate (with the target shape per the pair catalog)"
@@ -1217,7 +1249,7 @@ EOF
     echo "| --- | --- | --- | --- |"
     jq -r 'def esc: tostring | gsub("\\|"; "\\|") | gsub("\n"; " ");
       .inventory[] | select(.disposition == "migrate")
-      | [ (.name|esc), (.kind|esc),
+      | [ ((if .source_target then .source_target + "/" + .name else .name end)|esc), (.kind|esc),
           ((.equivalence // .equivalence_default // "?")|esc),
           ((.notes // .target_shape.summary // "-")|esc) ] | @tsv' "$MP" \
     | while IFS="$(printf '\t')" read -r n k q o; do echo "| \`${n}\` | ${k} | ${q} | ${o} |"; done
@@ -1294,9 +1326,9 @@ HTMLHEAD
       def drank: {"drop-candidate":0,"fix-then-migrate":1,"no-equivalent":2,"already-covered":3,"migrate":4}[.] // 5;
       def dcol: {"drop-candidate":"#c53030","fix-then-migrate":"#dd6b20","no-equivalent":"#718096","already-covered":"#3182ce","migrate":"#2f855a"}[.] // "#a0aec0";
       .inventory | sort_by((.disposition | drank), .kind, .name) | .[]
-      | "<tr><td><code>\(.name|@html)</code></td><td>\(.kind|@html)</td>"
+      | "<tr><td><code>\((if .source_target then .source_target + "/" + .name else .name end)|@html)</code></td><td>\(.kind|@html)</td>"
         + "<td><span style=\"color:\(.disposition|dcol);font-weight:600\">\(.disposition|@html)</span></td>"
-        + "<td>\(.disposition_reason|@html)</td>"
+        + "<td>\(.disposition_reason|@html)" + (if .matched_target_identity then "<br><code>\((.matched_target_identity.target + "/" + .matched_target_identity.name)|@html)</code>" elif .matched_target then "<br><code>\(.matched_target|@html)</code>" else "" end) + "</td>"
         + "<td>\(((.evidence // []) | map(.finding_id // ("signal:" + (.object_id // "?"))) | unique | join(", "))|@html)</td></tr>"' "$MP"
     cat <<'HTMLMID'
 </tbody></table></div>

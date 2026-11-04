@@ -18,16 +18,22 @@ discipline so a new audit can't silently leak.
 2. **Redaction pass over written artifacts (defense-in-depth).** Before a report
    or brief is finalized, run the redaction filter over it so any secret that
    slipped through capture is masked in place. `audit-all` does this over the
-   combined roll-up (Phase 3.7); a single audit run standalone masks its own
+   combined roll-up (Phase 3.8); a single audit run standalone masks its own
    `report.md` the same way in its final phase.
 
 ## The masking filter
 
 `skills/redaction/lib/redaction.sh` provides `redact_file <path>` (masks in
-place) and `has_secrets <path>` (detects). It masks AWS access keys
+place) and `has_secrets_file <path>` (reads and detects supported patterns in the
+file). Detection returns 0 for a match, 1 for clean content and 2 for a missing,
+non-regular or unreadable file. `has_secrets <content>` retains literal-input
+and existing-file compatibility; use the explicit file helper for path checks.
+It masks AWS access keys
 (`AKIA…`/`ASIA…`), long Bearer tokens, Stripe keys (`sk_live_…`), GitHub PATs
-(`ghp_…`), and generic `token=`/`password=` query params. A clean file passes
-through byte-identical.
+(`ghp_…` and `github_pat_…`), and `token=`/`password=` URL query values. Detection
+uses the same rules as masking. A clean file passes through byte-identical.
+This pattern filter cannot recognize every provider's opaque credential; the
+at-capture rule remains necessary for management keys, routing keys and payloads.
 
 ```bash
 set -eu
@@ -35,7 +41,13 @@ set -eu
 OUT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/<target>/$(date -u +%Y-%m-%d)"
 # After report.md is written and validated, mask any secret that slipped capture:
 redact_file "$OUT/report.md"
-has_secrets "$OUT/report.md" && echo "[redaction] WARNING: residual secret pattern — investigate capture" || echo "[redaction] report clean"
+REDACTION_STATUS=0
+has_secrets_file "$OUT/report.md" || REDACTION_STATUS=$?
+case "$REDACTION_STATUS" in
+  0) echo "[redaction] WARNING: residual secret pattern — investigate capture" ;;
+  1) echo "[redaction] report clean" ;;
+  *) echo "[redaction] blocked: report could not be inspected" >&2; exit 1 ;;
+esac
 ```
 
 ## What each audit must state (the parity contract)

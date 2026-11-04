@@ -41,14 +41,14 @@ JSON
 reset_case() {
   cp "$WORK/base.json" "$WORK/snapshot.json"
   : > "$WORK/calls"
-  check=SOC-001; minimum=1; selected='["policy-one"]'; team=team-one; source_scope=''; source_file=''; failure=''; max_age=3600; clock_skew=60
+  check=SOC-001; minimum=1; selected='["policy-one"]'; team=team-one; source_scope=''; source_file=''; failure=''; max_age=3600; clock_skew=60; triage=0
 }
 mutate() { jq "$1" "$WORK/snapshot.json" > "$WORK/next.json"; mv "$WORK/next.json" "$WORK/snapshot.json"; }
 run() {
   expected=$1
   rc=0
   env -i PATH="$TEST_PATH" HOME="$WORK/home" CLAUDE_PLUGIN_ROOT="$WORK/plugin" \
-    SCOUTFLO_VERIFY_CHECK="$check" SCOUTFLO_VERIFY_POLICY=policy-one SCOUTFLO_VERIFY_TEAM="$team" \
+    SCOUTFLO_TRIAGE="$triage" SCOUTFLO_VERIFY_CHECK="$check" SCOUTFLO_VERIFY_POLICY=policy-one SCOUTFLO_VERIFY_TEAM="$team" \
     SCOUTFLO_VERIFY_POLICIES="$selected" SCOUTFLO_VERIFY_MIN_RESPONDERS="$minimum" \
     SCOUTFLO_VERIFY_SOURCE_EVIDENCE="$source_file" SCOUTFLO_VERIFY_SOURCE_SCOPE="$source_scope" \
     SCOUTFLO_VERIFY_SOURCE_MAX_AGE_SECONDS="$max_age" SCOUTFLO_VERIFY_CLOCK_SKEW_SECONDS="$clock_skew" \
@@ -59,6 +59,7 @@ run() {
   passes=$((passes+1))
 }
 passes=0
+reset_case; triage=1; run 2; [ ! -s "$WORK/calls" ] || { echo "FAIL triage performed deep reads"; exit 1; }
 for check_id in SOC-001 SOC-002 SOC-003 SOC-005; do reset_case; check=$check_id; run 0; done
 reset_case; check=SOC-004; run 3
 reset_case; check=SOC-006; selected='["policy-one","policy-two"]'; minimum=2; run 1

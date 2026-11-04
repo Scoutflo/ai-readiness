@@ -1,47 +1,45 @@
 ---
 name: correlation-engine
-description: 'Harness skill (run it directly, or let audit-all run it for you): after any audit(s) (audit-all, sequential, or targeted 2-3), builds correlation.json that detects redundant monitoring (AWS + Grafana monitoring same metric), cascade risks (A fails → B disabled → C undetected), and business context filtering (staging gaps marked intentional, critical services prioritized). Works incrementally with partial coverage. Run automatically by audit-all (Phase 3.5); its output is also consumed by rca and the topology-guided-setup helper.'
+description: 'Harness skill (run it directly, or let audit-all run it for you): after any audit(s) (audit-all, sequential, or targeted 2-3), builds correlation.json that identifies shared-resource monitoring candidates and possible dependency chains, and advisory cross-tool coverage candidates; downstream consumers apply business context. Works incrementally with partial coverage. Use when the user says correlate my audits, find overlapping monitoring, or review cross-tool coverage. Do not use for provider collection or fixes; use the relevant audit-* or setup-* skill. Run automatically by audit-all (Phase 3.5); its output is also consumed by rca and the topology-guided-setup helper.'
 ---
 
 # Correlation Engine
 
-After you run any audit (full audit-all, or sequential audits over days, or targeted 2-3 audits), the correlation engine analyzes findings across all skills to detect overlaps, cascade risks, and apply business context intelligence.
+After you run any audit (full audit-all, or sequential audits for the same run date, or targeted 2-3 audits), the correlation engine analyzes findings across all skills to detect overlaps, cascade risks, and apply business context intelligence.
 
 Output: `scoutflo-audits/correlation.json` — machine-readable deduplication + prioritization. It is written once at the audit-dir root (not under a per-date subdir); the per-audit `findings.json` files it reads are target-first (`<target>/<date>/findings.json`).
 
 ## How it works
 
 ### Scenario 1: Full audit-all run
-```bash
+```text
 /scoutflo:audit-all
-→ 13 audit skills produce findings.json
+→ Configured audit skills produce findings.json
 → correlation engine runs automatically
 → correlation.json written with all overlaps + cascades detected
 ```
 
-### Scenario 2: Sequential audits over time
-```text
-Day 1: /scoutflo:audit-aws
-→ AWS findings → correlation.json (v1)
+### Scenario 2: Sequential audits for one date
 
-Day 2: /scoutflo:audit-grafana
-→ Grafana findings + existing AWS findings → correlation.json (v2, merged)
-→ New overlaps detected: "AWS CloudWatch + Grafana rule both monitor payment-svc"
-
-Day 3: /scoutflo:audit-sentry
-→ Sentry findings + existing AWS + Grafana → correlation.json (v3, merged)
-→ New cascade detected: "Sentry can't route alerts if AWS SNS is misconfigured"
-```
+Run the provider audits under the same `RUN_DATE`, then invoke the manual block below with that date. Each rerun rebuilds from that date's available artifacts. It does not merge findings from earlier dates; stale observations cannot become current evidence merely because a later audit ran.
 
 ### Scenario 3: Targeted 2-3 audits
-```bash
+```text
 /scoutflo:audit-aws /scoutflo:audit-grafana /scoutflo:audit-kubernetes
 → Only these 3 audits run
 → Correlation engine detects overlaps + cascades within this subset
-→ Cost-aware: "You only need to fix K8s network policy (Grafana rules already cover networking)"
+→ Review candidate shared resources; verify signal equivalence before changing either paging path
 ```
 
 ## What correlation.json contains
+
+### Source eligibility and identity
+
+Use only observed, open findings for overlaps, cascades and coverage claims. `status: blocked` means evidence is missing; `lifecycle: suppressed` or `resolved` cannot corroborate active trouble. Missing status/lifecycle fields retain legacy v1 compatibility. Canonical target identity comes from the report-directory path, including for legacy object-shaped target envelopes. The raw finding counter still includes all source rows; excluded rows remain in their original reports and are never rewritten. A rerun with no findings writes an empty current correlation result, replacing earlier groups.
+
+Non-scored cost and topology observations can participate in overlaps, but their titles alone cannot declare a coverage gap. A non-scored finding needs an explicit `coverage_gap` object with a nonempty `signal` to support that classification. Readiness and legacy findings retain the area/title fallback after source eligibility is checked.
+
+On-Call uses only its explicit `correlation_affected` subset of `affected` for cross-target joins. That field names canonical service identities verified by independent source evidence; policy/team slugs belong to an account, and `route-N` aliases belong to a run. Neither establishes shared service identity. Without a valid declaration, even a historical On-Call finding contributes no join tokens and remains visible in its own report/raw counts. The consumer rejects tokens outside `affected` and route aliases. Other providers retain their existing `affected` behavior.
 
 ### Overlaps: Redundant Monitoring
 
@@ -54,14 +52,14 @@ Day 3: /scoutflo:audit-sentry
   "findings": [
     {
       "target": "aws",
-      "finding_id": "AWS-023",
-      "title": "CloudWatch Alarms Not Configured",
+      "finding_id": "AWS-034",
+      "title": "Database resource-pressure alarm is missing",
       "severity": "high"
     },
     {
       "target": "grafana",
-      "finding_id": "GRAFANA-045",
-      "title": "Alert Rule Missing for Payment Service",
+      "finding_id": "GRAF-004",
+      "title": "Datasource returns no usable data for the service",
       "severity": "medium"
     }
   ],
@@ -77,23 +75,23 @@ The `overlap_id` is `OVL-<service>` and `service` is the single shared affected 
 
 ```json
 {
-  "cascade_id": "CASC-AWS-055",
+  "cascade_id": "CASC-AWS-030",
   "root_cause": {
-    "finding_id": "AWS-055",
-    "title": "MySQL Master Instance Unhealthy",
+    "finding_id": "AWS-030",
+    "title": "Production database lacks engine-appropriate availability coverage",
     "target": "aws",
     "shared_resources": ["mysql-primary"]
   },
   "effects": [
     {
-      "finding_id": "GRAFANA-022",
-      "title": "Alert Rule Disabled",
+      "finding_id": "GRAF-004",
+      "title": "Datasource returns no usable data",
       "target": "grafana",
       "condition": "shares a resource with the datastore finding; verify its signal survives if that datastore degrades"
     },
     {
-      "finding_id": "PAGERDUTY-008",
-      "title": "Incident Cannot Be Created",
+      "finding_id": "PD-008",
+      "title": "High-urgency notification rules delay the first page",
       "target": "pagerduty",
       "condition": "shares a resource with the datastore finding; verify its signal survives if that datastore degrades"
     }
@@ -103,7 +101,7 @@ The `overlap_id` is `OVL-<service>` and `service` is the single shared affected 
 
 The `cascade_id` is `CASC-<root finding id>`. `shared_resources` are the concrete affected tokens the root names; each effect is emitted only because it shares one of those tokens (a real join, not a keyword guess), so `condition` is the same fixed sentence on every effect. There is no `chain_length`, `service`, `impact`, or `step` field.
 
-**Interpretation:** Fixing the root cause (MySQL) prevents cascading failures. Fix order matters: prioritize root-cause findings.
+**Interpretation:** Shared resources identify a dependency hypothesis to investigate. The field is named `root_cause` for compatibility; this heuristic does not establish causation or prove that one fix prevents another failure. Verify the dependency and its signal path before choosing a fix order.
 
 ## Business Context Applied
 
@@ -144,17 +142,7 @@ cascades.
 
 ## Integration with Topology-Guided Setup
 
-After correlation.json is written:
-
-```bash
-/scoutflo:setup-aws --finding AWS-023 --topology-guided
-```
-
-Setup skill reads correlation.json:
-1. Find AWS-023 in overlaps → "This overlaps with GRAFANA-045"
-2. Check cascades → "Fixing this prevents downstream Sentry failures"
-3. Read business_context → "payment-svc is critical; dry-run first"
-4. Calculate tokens → "15K tokens, $0.08. OK to proceed? (y/n)"
+After correlation.json is written, read its date and source findings before passing a candidate to an appropriate setup skill. Use that skill's documented selectors and explicit confirmation gate. Correlation does not authorize a write, prove downstream delivery, or provide an accurate token-price estimate.
 
 ## Output Structure
 
@@ -210,24 +198,27 @@ There is no `confidence` or `business_context_applied` field — the engine does
 
 **Automatic:**
 - After `/scoutflo:audit-all` completes
-- After `/scoutflo:audit-<service>` with existing earlier findings
+- Individual audits follow their own documented orchestration; invoke this block explicitly when needed.
 
 **Manual (if needed):**
 ```bash
-# Force re-correlate all findings from date
-correlation_run 2026-07-30
+set -eu
+: "${CLAUDE_PLUGIN_ROOT:?Set the installed plugin root}"
+RUN_DATE="${RUN_DATE:-$(date -u +%F)}"
+. "${CLAUDE_PLUGIN_ROOT}/skills/correlation-engine/lib/correlation-engine.sh"
+correlation_run "$RUN_DATE"
 ```
 
 ## Limitations
 
 - **Overlaps** are exact: two findings are grouped only when they name the same `affected` service, so a grouped overlap is a real shared-resource match, not a guess. The engine assigns no confidence percentage.
 - **Cascade detection uses heuristics** (database → monitoring → incident response) and is not exhaustive.
-- **Cross-date correlations** (audit-aws on day 1 vs audit-grafana on day 5) still work but skip time-based cascade detection.
+- **One run date only.** Cross-date merging is unsupported; rerun audits for a common date before comparing current observations.
 - Requires `jq` on PATH.
 - Every referenced `finding_id` in the output exists in the current run's findings (no invented references) — that is the grounding guarantee, verified by the `method` note above.
 
 ## See also
 
 - `/scoutflo:start` — orientation + skill catalog
-- `/scoutflo:setup-aws --finding <ID> --topology-guided` — use correlation to guide fixes
+- `/scoutflo:setup-aws` — use its documented confirmation flow for AWS changes
 - `/scoutflo:business-context` — metadata that weights correlation prioritization

@@ -98,6 +98,8 @@ Green = read-only (safe, changes nothing) · amber = write, gated behind your co
 
 ## What's new (latest release)
 
+- **Combined reports keep uncertainty visible.** Blocked evidence cannot become a confirmed gap, empty reruns replace stale summaries, and matching local names do not prove shared paging or migration coverage. On-Call also supports a bounded routing-only triage pass.
+
 - **Splunk On-Call paging has its own audit and setup flow.** Trace routing keys through escalation policies to staffed coverage, and keep unknown reads separate from failures. Setup plans paging changes and can apply or restore a team description after confirmation; routing, policy, schedule and ingestion changes remain planning-only. VictorOps is the same paging product; Splunk's data platform is a separate integration.
 
 - **Saved business context is protected during imports.** Replacing it requires confirmation; validation happens before replacement, with backups and rollback on failure.
@@ -317,7 +319,7 @@ Secrets live only in environment variables you export yourself. `~/.scoutflo/too
 
 Beyond each audit's own alert-hygiene scoring, `/scoutflo:audit-all` runs a cross-cutting **alert noise & fatigue** analysis that answers the question no single tool can: *across all your alerting, how much of your paging is noise, and does one incident page through several tools at once?* It reports three honest tiers and never fabricates a number:
 
-- **Config tier** (always available) — where alerting-noise findings concentrate by tool, and **cross-source storms** (one service paged by two or more tools), classified into named failure modes.
+- **Config tier** (always available) — where alerting-noise findings concentrate by tool, and **potential cross-source overlap** (shared alerting findings to investigate; duplicate events and delivery remain unverified), classified into named failure modes.
 - **Measured fire-history tier** (when the read-only fire-history lane runs) — how each alert actually *behaved*: real fire counts, flapping, chronic/stuck alarms, and **how many alerting objects can't reach a human by construction** (a page that pages nobody). A provider it can't read is marked `verify-pending`; a provider read from a not-yet-live-confirmed spec is marked `spec-only` — never a guessed number.
 - **Incident-feed tier** (when you connect a paging tool) — the true alert-to-incident ratio, MTTA/MTTR, and %-actionable from your incident stream. Absent that feed it stays `not-in-scope` — the toolkit never invents an actionability percentage.
 

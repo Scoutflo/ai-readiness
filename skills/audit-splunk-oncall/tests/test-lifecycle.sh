@@ -87,5 +87,26 @@ with tempfile.TemporaryDirectory(prefix='oncall-lifecycle-') as td:
  ok('fully blocked run stays unassessed and never resolves missing findings',d['score']['overall'] is None and d['score']['state']=='unassessed' and d['delta']['resolved']==[])
  f=target/'2026-11-08/findings.json';wrong=doc('2026-11-08');wrong['target']='splunk_oncall/other';f.write_text(json.dumps(wrong));before=f.read_bytes();run('2026-11-08',expect=1)
  ok('mismatched current artifact target fails before replacement',f.read_bytes()==before)
+ seed('2026-11-08',{n:'blocked' for n in range(1,8)});run('2026-11-08')
+ seed('2026-11-09',{4:'fail'});aliased=doc('2026-11-09');aliased['findings'][0]['affected']=['route-1']
+ current_file=target/'2026-11-09/findings.json';current_file.write_text(json.dumps(aliased));before=current_file.read_bytes();p=run('2026-11-09',expect=1)
+ ok('current run-local route aliases are rejected before publishing',current_file.read_bytes()==before and 'Run-local route aliases' in p.stderr)
+ seed('2026-11-09',{4:'fail'});old=doc('2026-11-08');old['findings'][3]['affected']=['policy-a','route-1']
+ old_file=target/'2026-11-08/findings.json';old_file.write_text(json.dumps(old));before=old_file.read_bytes();run('2026-11-09')
+ ok('historical aliases do not become resource changes or rewrite history',doc('2026-11-09')['delta']['affected_changes']==[] and old_file.read_bytes()==before)
+ seed('2026-11-10',{4:'fail',5:'fail',6:'fail',7:'fail'});run('2026-11-10')
+ seed('2026-11-11',{n:'blocked' for n in range(3,8)},scope='triage');run('2026-11-11');d=doc('2026-11-11')
+ ok('triage and full scores are incomparable despite identical check sets',d['score']['check_set']==doc('2026-11-10')['score']['check_set'] and not d['delta']['score_comparable'] and d['delta']['score_change'] is None and d['delta']['resolved']==[])
+ report('2026-11-11');run('2026-11-11','history');rows=[json.loads(x) for x in history.read_text().splitlines()]
+ ok('history retains scope for downstream compatible-score filtering',next(r for r in rows if r['run_date']=='2026-11-11')['scope']=='triage')
+ seed('2026-11-12',{n:'blocked' for n in range(3,8)},scope='triage');run('2026-11-12')
+ ok('same-scope triage remains comparable',doc('2026-11-12')['delta']['score_comparable'] and doc('2026-11-12')['delta']['score_change']==0)
+ seed('2026-11-13',{4:'fail'},scope='account');run('2026-11-13');seed('2026-11-14',{4:'fail'});run('2026-11-14')
+ ok('legacy missing scope and explicit full-account scope remain comparable',doc('2026-11-14')['delta']['score_comparable'])
+ seed('2026-11-15',{4:'fail'});bound=doc('2026-11-15');bound['findings'][0]['affected']=['policy-a','checkout'];bound['findings'][0]['correlation_affected']=['unobserved-service']
+ bound_file=target/'2026-11-15/findings.json';bound_file.write_text(json.dumps(bound));before=bound_file.read_bytes();run('2026-11-15',expect=1)
+ ok('correlation service binding must be a subset of affected',bound_file.read_bytes()==before)
+ bound['findings'][0]['correlation_affected']=['checkout'];bound_file.write_text(json.dumps(bound));run('2026-11-15')
+ ok('declared service binding is preserved after lifecycle validation',doc('2026-11-15')['findings'][0]['correlation_affected']==['checkout'])
  print(f'On-Call lifecycle: {passed} passed, 0 failed')
 PY

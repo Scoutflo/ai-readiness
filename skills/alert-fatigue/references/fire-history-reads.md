@@ -67,13 +67,26 @@ Write it to `${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/fatigue-signals.json`:
 
 Only emit a field you actually measured. A missing field is honest; a fabricated one is a bug.
 
+`generated_at` is the UTC collection timestamp and `window` states the observation
+window. Any nonempty signals or collected incident feed must carry both. The
+validator binds the timestamp to the requested run date; missing or older
+provenance is blocked until recollected. This date binding cannot prove two
+same-day snapshots are simultaneous. Signal `target`, when supplied, is the
+audit directory identity, including its optional label (`signoz/primary`). Legacy
+signals without it retain the provider label for joins; they cannot identify an
+arbitrary named target. Config findings with structured envelope targets remain
+readable via their artifact directory. `source_finding_ids` may be omitted or empty
+for standalone observations, but every supplied ID must exist in current findings,
+including when that set is empty. The v1 ID-existence check does not prove an
+account or service mapping; those require independently verified target identity.
+
 **Validate before analyzing.** After writing `fatigue-signals.json`, run
 [`report-standard/check-fatigue-signals.sh`](../../../report-standard/check-fatigue-signals.sh)
 `<fatigue-signals.json> <audits-dir> <run-date>` — it fails closed on a malformed
-schema, a wrong field type, an `off_hours_fires > fires` impossibility, a
+schema, absent/stale measurement provenance, negative counts, a wrong field type, an `off_hours_fires > fires` impossibility, a
 `verify-pending` with no reason, or a `source_finding_ids` entry that cites a
 finding absent from this run (the never-fabricate cross-check). Do not feed a file
-that does not print `FATIGUE-SIGNALS-OK` into the analysis.
+that does not print `FATIGUE-SIGNALS-OK` into the analysis. The roll-up entry point enforces this gate again on a local snapshot before autoload, so bypassing the manual step cannot turn rejected input into measurements. A signal also cannot contradict an explicit non-collected provider coverage entry. Historical missing coverage entries remain readable; that omission does not establish coverage of the whole estate.
 
 ## Live-verification status & checklist (the measured tier is doc-verified, not yet live-proven)
 

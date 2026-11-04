@@ -147,14 +147,14 @@ JSON
   cat > "$WORK/responses/rotations-b.json" <<'JSON'
 {"rotations":[]}
 JSON
-  CFG="$WORK/single.yaml"; TARGET=; CASE_MODE=healthy
+  CFG="$WORK/single.yaml"; TARGET=; CASE_MODE=healthy; TRIAGE=0
   EXPECT_ID=fixture-first-id; EXPECT_KEY=fixture-first-key
 }
 run() {
   : > "$WORK/calls"
   (cd "$WORK" && env -i HOME="$WORK/home" PATH="$WORK/bin:/usr/bin:/bin" \
     SCOUTFLO_CONFIG="$CFG" SCOUTFLO_ENV_FILE="$WORK/home/.scoutflo/env" \
-    SCOUTFLO_TARGET="$TARGET" CASE_DIR="$WORK" CASE_MODE="$CASE_MODE" \
+    SCOUTFLO_TARGET="$TARGET" SCOUTFLO_TRIAGE="$TRIAGE" CASE_DIR="$WORK" CASE_MODE="$CASE_MODE" \
     EXPECT_ID="$EXPECT_ID" EXPECT_KEY="$EXPECT_KEY" \
     /bin/sh "$COLLECT" "$@") > "$WORK/out" 2> "$WORK/err"
 }
@@ -319,6 +319,16 @@ fixtures; CFG="$WORK/list.yaml"; TARGET=first
 sed '/  - label: second/,$d; s/- label: first/- api_id_env: FIRST_ID/' "$CFG" > "$WORK/change"; mv "$WORK/change" "$CFG"
 TARGET=splunk_oncall
 must_reject_before_call 'single-item list requires explicit label'
+
+# Fast-pass regression: count transport calls, not just a metadata label.
+fixtures; TRIAGE=1
+if run && assert_json '.scope=="triage" and .assessed_check_ids==["SOC-001","SOC-002"] and (.deferred_check_ids|length)==5 and .current==[] and .policy_details==[] and .team_details==[]' && [ "$(wc -l < "$WORK/calls" | tr -d ' ')" -eq 5 ] && ! grep -Eq '/(members|rotations|current)$|/policies/' "$WORK/calls"; then ok 'triage bulk subset makes five reads and no detail fanout'; else bad 'triage ran deep or misstated scope'; fi
+fixtures; TRIAGE=1
+if run --plan && assert_json '.scope=="triage"' && [ "$(wc -l < "$WORK/calls" | tr -d ' ')" -eq 4 ]; then ok 'triage plan exposes subset scope'; else bad 'triage plan'; fi
+fixtures; TRIAGE=1; CASE_MODE=identity-drift; must_reject 'triage final identity changed'
+fixtures; TRIAGE=1; must_reject_before_call 'triage refuses scoped deep batch' --team team-a
+fixtures; TRIAGE=1; must_reject_before_call 'triage refuses deep source selector' --source-route-env SOURCE_ROUTE
+fixtures; TRIAGE=invalid; must_reject_before_call 'unknown triage setting'
 
 # Mutation control: the same wrong-team input must escape an intentionally
 # disabled identity predicate. The immutable copy never alters shipped code.

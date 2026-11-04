@@ -137,3 +137,11 @@ GitHub issues on this repository. Include the skill name and the terminal output
 ## connect says it can't write toolkit.yaml (Claude Desktop app)
 
 The Desktop app runs shell commands in an OS sandbox scoped to your working directory, so shell writes to `~/.scoutflo/` are denied there (the CLI prompts and allows them — that's why it "works in the terminal"). This is handled: `connect` probes first and walks a write ladder — file-tool write to your home (approve the prompt once), else project-local `./.scoutflo/` (auto-git-ignored). Every skill resolves config as `$SCOUTFLO_CONFIG` → `./.scoutflo/toolkit.yaml` → `~/.scoutflo/toolkit.yaml`, so whichever location connect lands in just works. Same for the secret store (`$SCOUTFLO_ENV_FILE` → `./.scoutflo/env` → `~/.scoutflo/env`). One caveat: in web/cloud sessions the "home" is the session sandbox, not your machine — run connect in the CLI or Desktop app for durable setup.
+
+### Can combined reports prove that several tools page the same person?
+
+Shared configuration findings identify a potential overlap to investigate. They do not prove duplicate events, pages or human delivery. Blocked, suppressed and resolved evidence cannot establish a current gap. Explicit limits on end-to-end readiness remain visible in combined reports, and empty reruns replace old summaries.
+
+### What does an On-Call triage pass assess?
+
+Only bulk routing-key references and policy ownership. Staffing, current responders and source joins are deferred and marked blocked. Reports carry `scope: "triage"`; their scores must not be compared with full assessments. Run the full audit for those deeper checks.

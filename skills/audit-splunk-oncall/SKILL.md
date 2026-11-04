@@ -13,7 +13,7 @@ Read [the check catalog](references/oncall-checks.md), [the API evidence contrac
 
 ## Doctor gate
 
-Required tools: POSIX shell, curl and jq. Use curl 8.4 or newer so `--max-filesize` also bounds bodies whose length was not advertised. Required config keys: `splunk_oncall.api_id_env`, `splunk_oncall.api_key_env`, `splunk_oncall.team_slug`. The first two name variables, never values. Use the provider's read-only key. `setup_api_key_env` is optional and is never read by this audit.
+Required tools: POSIX shell, curl and jq; large-estate worklists also require shasum for private credential-generation binding. Use curl 8.4 or newer so `--max-filesize` also bounds bodies whose length was not advertised. Required config keys: `splunk_oncall.api_id_env`, `splunk_oncall.api_key_env`, `splunk_oncall.team_slug`. The first two name variables, never values. Use the provider's read-only key. `setup_api_key_env` is optional and is never read by this audit.
 
 One connection block identifies one account in one environment. `team_slug` is a known existing team used as an identity anchor, **not** a claim that the API exposes an authenticated organization ID and **not** a team scope filter. A list of labeled `splunk_oncall` connections requires explicit `SCOUTFLO_TARGET`; `/scoutflo:audit-all` enumerates labels and invokes the full flow once per label. The reader uses the shared `report-standard/toolkit-targets.sh` enumerator. Every request resolves that label's own pair. An absent, mismatched or unselected label stops rather than falling back to target zero.
 
@@ -62,6 +62,12 @@ fi
 
 Use the shared [scope checkpoint](../../report-standard/estate-scope-checkpoint.md). Apply exclusions to the actual team/service join, not merely the printed plan. Small and medium accounts need no batching. Large accounts use the [worklist procedure](references/api-contract.md#large-estates): stable run ID, selected label and anchor binding, one row per selected team, exclusive lock and saved per-team snapshots. A failed read remains pending/blocked; never count it as an empty team. A narrower operator scope must be named in the report, including route targets that leave that scope. Never claim account-wide completeness from one scoped batch.
 
+## Triage fast pass
+
+Follow [triage-mode.md](../../report-standard/triage-mode.md). With `SCOUTFLO_TRIAGE=1`, skip the deep sizing/worklist flow and run the fixed collection block below once for the explicitly selected target. The collector makes five bounded GETs: the anchor twice and three bulk inventories. The fresh-shell collection block also obtains its output target through a four-read plan, so that block makes nine GETs; the earlier preflight adds four, for thirteen through preflight and collection. The separate report-validation recipe makes another four-read plan, so those published phases total seventeen GETs. A confirming census is additional only if an apparent broken reference needs rechecking. It never reads current responders, policy details, membership or rotations and never backgrounds a sweep. Apply any proved critical-service mapping to interpretation; without one, disclose that the bulk routing census has no service-criticality filter.
+
+Assess only SOC-001 and SOC-002 (routing references and ownership). `complete_reads: true` applies only to that census. Detail arrays are deliberately uncollected, never empty-staff evidence. Keep all seven check rows: SOC-003–SOC-007 are `blocked` with “Deferred by triage; run a full audit”, not `not-in-scope` or pass. Stamp `findings.json` with `scope: "triage"`, show assessment coverage and TRIAGE in both reports, and never issue an all-clear. Omit schedule/current-user inventory claims. Keep full-run history separate in interpretation: a deferred check cannot resolve a prior finding or establish score comparability. Deep selectors and team batches require an explicit full run with `SCOUTFLO_TRIAGE=0`.
+
 ## Collect and preserve evidence
 
 **Fixed.** The collector reads the full routing and policy catalogs, supported policy details, team membership, v1 rotation identifiers, v2 rotation rosters and current on-call. It asserts collection shapes and identities before projecting. It drops route key values, personal names/contact addresses, raw alerts and provider links before output. Usernames are retained only to identify actual responders and deduplicate them; these operational identifiers remain in local reports.
@@ -80,7 +86,7 @@ mkdir -p "$OUT"
 TMP=$(mktemp "$OUT/.snapshot.XXXXXX")
 trap 'rm -f "$TMP"' EXIT HUP INT TERM
 sh "${CLAUDE_PLUGIN_ROOT}/skills/audit-splunk-oncall/scripts/collect.sh" > "$TMP"
-jq -e --arg target "$SOC_SEG" '.target==$target and .complete_reads==true and .scope=="account"' "$TMP" >/dev/null
+jq -e --arg target "$SOC_SEG" --arg triage "${SCOUTFLO_TRIAGE:-0}" '.target==$target and .complete_reads==true and .scope==(if $triage=="1" then "triage" else "account" end)' "$TMP" >/dev/null
 mv "$TMP" "$OUT/snapshot.json"
 echo "Safe management snapshot: $OUT/snapshot.json"
 ```
@@ -104,6 +110,10 @@ Use the fixed selector recipe in [verify-path.md](references/verify-path.md) to 
 The flagship finding names the exact broken policy/team/rotation, the affected services supported by source evidence, the number of distinct lost responder paths, a precise setup/manual fix and a read that proves it. If the source mapping is unavailable, state that service impact is unknown and report only the configured paging consequence. Config secrets discovered upstream belong to that upstream audit. Non-production sharing a production paging handle is not inherently wrong; require a stated environment policy and an observed consequence.
 
 ## Inventory, coverage and topology
+
+Keep run-local `route-N` aliases in display evidence and route inventory only, never in a finding's `affected` list. Use observed policy/team/shift identifiers or independently verified service identities there. If no stable impacted object is known, name the explicitly configured audit target and state that object/service impact is unknown; do not invent an identity. Lifecycle finalization rejects aliases in current findings and ignores them in historical resource deltas.
+
+Set optional `correlation_affected` only to canonical service identities independently established by source evidence, and only as a subset of `affected`. Cite that mapping in the finding evidence. Never include a policy/team slug merely because two targets use the same string. Without a verified service mapping, omit the field or leave it empty: correlation then makes no cross-target claim from this On-Call finding. The local object identities remain available for remediation.
 
 Emit `scoutflo-inventory/v1` with team, escalation_policy, schedule and route items. Retain policy/team slugs, numeric group/shift identity, supported entry type, and current users needed by the finding. Routes carry safe aliases and policy targets, never raw keys. `routes_to` describes the observed next hop; `covers` contains only service identities established by source evidence. Routes and escalation policies **must not** be labeled `monitor`, `alert_rule` or other coverage-countable kinds. Do not synthesize a monitor from an incident.
 

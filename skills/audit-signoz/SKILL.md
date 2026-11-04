@@ -424,7 +424,13 @@ sh "${CLAUDE_PLUGIN_ROOT}/report-standard/check-report.sh" "$OUT/report.md"
 # Defense-in-depth: mask any secret that slipped capture before the report is shared.
 . "${CLAUDE_PLUGIN_ROOT}/skills/redaction/lib/redaction.sh"
 redact_file "$OUT/report.md"
-has_secrets "$OUT/report.md" && echo "[redaction] WARNING: residual secret pattern — investigate capture" || echo "[redaction] report clean"
+REDACTION_STATUS=0
+has_secrets_file "$OUT/report.md" || REDACTION_STATUS=$?
+case "$REDACTION_STATUS" in
+  0) echo "[redaction] WARNING: residual secret pattern — investigate capture" ;;
+  1) echo "[redaction] report clean" ;;
+  *) echo "[redaction] blocked: report could not be inspected" >&2; exit 1 ;;
+esac
 ls -l "$OUT"
 ```
 

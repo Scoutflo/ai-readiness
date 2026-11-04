@@ -79,6 +79,17 @@ BADEQ="$(jq -r '
     | .name ] | .[0:5] | join(", ")' "$PLAN")"
 [ -z "$BADEQ" ] || bad "equivalence outside direct|approximate|manual|none: $BADEQ"
 
+# A disposition skeleton is useful local work, never a shareable final plan.
+# Legacy completed plans need no new fields; only the documented enrichment is required.
+jq -e '
+  def concrete: type == "string" and test("\\S") and (test("^\\s*(pending|todo|tbd|placeholder|unknown)"; "i") | not);
+  all(.inventory[] | select(.disposition == "migrate" or .disposition == "fix-then-migrate" or .disposition == "already-covered");
+    (.equivalence | IN("direct","approximate","manual"))
+    and (.target_shape | if type == "object" then length > 0 else concrete end))
+  and (.cutover.parallel_run | concrete)
+  and (.cutover.audit_parity_gate | concrete)
+' "$PLAN" >/dev/null || bad 'unfinished plan: migrating/covered objects need equivalence and target_shape, and cutover needs a concrete parallel_run and audit_parity_gate'
+
 # every no-equivalent object has a real alternative (its own, or a gaps[] row for its kind)
 NOALT="$(jq -r '
   (.gaps // []) as $g

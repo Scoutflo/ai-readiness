@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.240
+
+**Keep cross-audit conclusions tied to eligible, current evidence.**
+
+- Prevent blocked, suppressed or resolved findings and local routing aliases from becoming corroborated coverage gaps. Empty reruns replace stale correlation, cost and alert-fatigue summaries, and labeled targets keep their own identities.
+- Preserve explicit limits on end-to-end readiness. On-Call triage reads only bulk routing and ownership evidence, marks deeper checks deferred, and keeps subset scores separate from full-run trends. Intent-based exclusions require business-context provenance.
+- Require provider, target, object kind and exact identity for migration evidence. Target coverage requires an enabled, routed matching alert; shared names and configuration findings do not prove duplicate pages or delivery.
+- Preserve completed migration worklists on identical inputs and refuse changed-input overwrites. Reject unfinished plans at finalization; stale, malformed or impossible supplied history cannot become current measurements.
+- Detect secrets in report files as well as literal strings, including documented GitHub tokens and URL query credentials. Restrict Kubernetes live-evidence config/auth subcommands to reads.
+- Preserve legacy report inputs while adding regressions for the new evidence boundaries. Provider notification delivery and broad On-Call setup remain separately verified capabilities.
+
 ## 0.1.239
 
 **Trace Splunk On-Call paging configuration from routing keys to staffed coverage.**

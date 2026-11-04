@@ -5,6 +5,7 @@ set -u
 
 DIR="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 LIB="$DIR/lib/alert-fatigue.sh"
+export CLAUDE_PLUGIN_ROOT="$(CDPATH= cd -- "$DIR/../.." && pwd)"
 [ -f "$LIB" ] || { echo "FAIL: lib not found at $LIB"; exit 1; }
 
 WORK="${TMPDIR:-/tmp}/af-test.$$"
@@ -93,7 +94,7 @@ check "AF-003 alerts_per_incident = 120"    "$(jq -r '.af_findings[] | select(.a
 # 8. MEASURED fire-history tier — a fatigue-signals.json drives AF-004/005/006 and
 #    a live incident_feed drives AF-003 (preferred over the operator fatigue.json).
 cat > "$SCOUTFLO_AUDIT_DIR/fatigue-signals.json" <<'JSON'
-{ "schema":"scoutflo-fatigue-signals/v1","window":"30d",
+{ "schema":"scoutflo-fatigue-signals/v1","generated_at":"2026-08-29T12:00:00Z","window":"30d",
   "signals":[
     {"provider":"alertmanager","target":"alertmanager","object_id":"checkout-flap","object_kind":"prometheus_alert","fires":40,"flapping":true,"stuck":false,"off_hours_fires":20,"reaches_human":false,"reach_reason":"routes to a black-hole receiver","source_finding_ids":["ALR-012"]},
     {"provider":"grafana","target":"grafana","object_id":"checkout-stuck","object_kind":"grafana_rule","fires":1,"flapping":false,"stuck":true,"stuck_since":"2025-11-01T00:00:00Z","stuck_days":311,"reaches_human":true,"source_finding_ids":["GRAF-021"]}
@@ -122,6 +123,33 @@ alert_fatigue_run "$DATE" >/dev/null 2>&1
 check "AF-004 not-in-scope without signals"    "$(jq -r '.af_findings[]|select(.af_id=="AF-004")|.status' "$OUT")" "not-in-scope"
 check "AF-005 not-in-scope without signals"    "$(jq -r '.af_findings[]|select(.af_id=="AF-005")|.status' "$OUT")" "not-in-scope"
 check "AF-006 not-in-scope without signals"    "$(jq -r '.af_findings[]|select(.af_id=="AF-006")|.status' "$OUT")" "not-in-scope"
+
+# Shared configuration findings are not evidence that any page was delivered.
+AF_TWO=$(jq -r '.af_findings[] | select(.af_id=="AF-002") | .summary, .storms[]?.note' "$OUT")
+if printf '%s' "$AF_TWO" | grep -Eq 'one incident.*pages through|incident there pages'; then
+  bad "configuration overlap asserted actual paging delivery"
+else ok "configuration overlap never asserts actual paging delivery"; fi
+
+# A second run with no source findings/signals must not retain the previous noise.
+rm -rf "$SCOUTFLO_AUDIT_DIR/alertmanager" "$SCOUTFLO_AUDIT_DIR/grafana" "$SCOUTFLO_AUDIT_DIR/aws" "$SCOUTFLO_AUDIT_DIR/kubernetes"
+rm -f "$SCOUTFLO_AUDIT_DIR/fatigue.json"
+alert_fatigue_run "$DATE" >/dev/null 2>&1
+check "empty rerun replaces stale noise total" "$(jq -r '.totals.alerting_noise_findings' "$OUT")" "0"
+check "empty rerun replaces stale overlap total" "$(jq -r '.totals.cross_source_storms' "$OUT")" "0"
+check "empty rerun preserves unknown measured volume" "$(jq -r '.af_findings[] | select(.af_id=="AF-005") | .status' "$OUT")" "not-in-scope"
+
+# Unobserved or closed rows are not current noise; historical missing fields work.
+for extra in '{"status":"blocked"}' '{"status":"unknown"}' '{"status":"deferred"}' '{"lifecycle":"suppressed"}' '{"lifecycle":"resolved"}'; do
+  rows=$(jq -nc --argjson extra "$extra" '[{id:"SOC-003",target:"splunk_oncall",title:"Paging unavailable",area:"paging",affected:["checkout"]} + $extra]')
+  check "unobserved/closed row is not noise" "$(printf '%s' "$rows" | alert_fatigue_select_noise | jq length)" "0"
+done
+rows='[{"id":"SOC-003","target":"splunk_oncall","title":"Paging unavailable","area":"paging","affected":["checkout"]}]'
+check "legacy row stays eligible" "$(printf '%s' "$rows" | alert_fatigue_select_noise | jq length)" "1"
+# Reserved names are only skipped at the integration level, not labels/root names.
+AUDITS_DIR="$WORK/all/audits"; mkdir -p "$AUDITS_DIR/splunk_oncall/doctor/$DATE" "$AUDITS_DIR/all/$DATE"
+printf '%s\n' '{"target":"splunk_oncall/doctor","findings":[{"id":"SOC-003"}]}' > "$AUDITS_DIR/splunk_oncall/doctor/$DATE/findings.json"
+printf '%s\n' '{"target":"all","findings":[{"id":"COMBINED"}]}' > "$AUDITS_DIR/all/$DATE/findings.json"
+check "reserved parent/label names preserve real audit" "$(alert_fatigue_collect_findings "$DATE" | jq -r 'map(.id)|join(",")')" "SOC-003"
 
 echo "alert-fatigue: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

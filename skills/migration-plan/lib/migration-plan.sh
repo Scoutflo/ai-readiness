@@ -72,16 +72,33 @@ migration_plan_collect() {
     set -- "$@" "$f"
   done
   if [ "$#" -eq 0 ]; then echo "[]"; return 0; fi
-  if [ "$mp_what" = "inventory" ]; then
-    jq -s '[ .[] | (.items // [])[] ]' "$@"
-  else
-    jq -s '[ .[] | (.findings // [])[] ]' "$@"
-  fi
+  # Preserve the artifact target while flattening, so identical names in two
+  # labeled source accounts cannot borrow each others findings or history.
+  jq -n --arg root "$AUDITS_DIR/" --arg suffix "/$mp_date/$mp_what.json" --arg what "$mp_what" '
+    [ inputs | (input_filename | ltrimstr($root) | rtrimstr($suffix)) as $target
+      | (if $what == "inventory" then (.items // []) else (.findings // []) end)[]
+      | . + {_audit_target: $target} ]' "$@"
 }
 
 migration_plan_load_signals() {
-  if [ -f "$SIGNALS_FILE" ]; then
-    jq '(.signals // [])' "$SIGNALS_FILE" 2>/dev/null || echo "[]"
+  if [ -e "$SIGNALS_FILE" ]; then
+    if ! jq -e -s 'length == 1 and (.[0] | type == "object" and .schema == "scoutflo-fatigue-signals/v1" and (.signals | type == "array") and all(.signals[]; type == "object"))' "$SIGNALS_FILE" >/dev/null 2>&1; then
+      echo '[migration-plan] optional fatigue signals are unreadable or malformed; repair or explicitly remove that input before rebuilding' >&2
+      return 4
+    fi
+    mp_signal_validator="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/check-fatigue-signals.sh"
+    if [ ! -f "$mp_signal_validator" ]; then
+      echo '[migration-plan] signals validator unavailable; set CLAUDE_PLUGIN_ROOT to the installed plugin' >&2
+      return 4
+    fi
+    if ! sh "$mp_signal_validator" "$SIGNALS_FILE" "$AUDITS_DIR" "${1:-${RUN_DATE:-$(date -u +%F)}}" >&2; then
+      echo '[migration-plan] optional measured evidence failed validation; existing plan is preserved' >&2
+      return 4
+    fi
+    jq '(.provider_coverage // []) as $coverage
+      | [ (.signals // [])[] | . as $signal
+          | select([ $coverage[] | select(.provider==$signal.provider
+              and (.tier // "fire-history")=="fire-history" and .status!="collected") ] | length==0) ]' "$SIGNALS_FILE"
   else
     echo "[]"
   fi
@@ -92,20 +109,30 @@ migration_plan_load_signals() {
 # Precedence per object: kind no-equivalent > already-covered > drop-candidate
 # > fix-then-migrate > kind default. drop/fix only WITH evidence, by construction.
 migration_plan_dispositions() {
-  mp_items="$1"; mp_findings="$2"; mp_signals="$3"; mp_titems="$4"; mp_mode="$5"
+  mp_items="$1"; mp_findings="$2"; mp_signals="$3"; mp_titems="$4"; mp_mode="$5"; mp_source="${6:-datadog}"
   printf '%s' "$mp_items" | jq \
     --argjson findings "$mp_findings" \
     --argjson signals "$mp_signals" \
     --argjson titems "$mp_titems" \
     --argjson kindmap "$(migration_plan_kind_map)" \
-    --arg mode "$mp_mode" '
+    --arg source "$mp_source" --arg mode "$mp_mode" '
     def norm: (. // "") | ascii_downcase | gsub("^\\s+|\\s+$"; "");
-    ([ $titems[] | (.name | norm) ]) as $tnames
-    | [ .[]
+    [ .[]
         | . as $it
-        | (($it.name // "") | norm) as $n
-        | ([ $findings[] | select((.affected // []) | map(norm) | index($n)) ]) as $ev
-        | ([ $signals[] | select(((.object_id // "") | norm) == $n) ]) as $sig
+        | ($it.name // "") as $n
+        | ($it._audit_target // $source) as $source_target
+        | ([ $findings[] | select((._audit_target // $source)==$source_target)
+             | select(((.status as $s | [null, "configured", "validated-live"] | index($s)) != null
+           and (.lifecycle as $l | [null, "new", "unchanged", "regressed"] | index($l)) != null))
+             | select((.affected // []) | index($n)) ]) as $ev
+        | ([ $signals[] | select(.provider==$source and (.target // .provider)==$source_target
+             and .object_kind==($it.kind // "monitor") and ((.object_id // "") == $n)) ]) as $sig
+        # Only the cataloged monitor -> alert_rule pair can establish an alert
+        # coverage match here. Detailed query parity remains a cutover gate.
+        | ([ $titems[] | select($it.kind=="monitor" and .kind=="alert_rule")
+             | select(.name==$n and .enabled==true)
+             | select(((.covers | norm) | IN("","none","null","-","unknown") | not) and .covers==$it.covers)
+             | select((.routes_to | type)=="string" and ((.routes_to | norm) | IN("","none","null","-","unknown") | not)) ]) as $matches
         | ($ev | map((.title // "") | ascii_downcase) | join(" | ")) as $evtitles
         | (($kindmap[$it.kind // "monitor"] // {disposition: "migrate", equivalence_default: "manual"})) as $kd
         | (
@@ -118,10 +145,11 @@ migration_plan_dispositions() {
           | (if $kd.disposition == "no-equivalent" then
                {disposition: "no-equivalent",
                 disposition_reason: ("kind " + ($it.kind // "?") + " has no native equivalent on the target; see the pair catalog for the alternative")}
-             elif ($mode == "full") and ($tnames | index($n)) != null then
+             elif ($mode == "full") and ($matches | length)==1 then
                {disposition: "already-covered",
-                disposition_reason: "an object with this name already exists on the target - migrating it would double-page during the parallel run",
-                matched_target: $it.name}
+                disposition_reason: "one enabled, routed target alert matches the source name, cataloged kind and exact coverage; verify detailed query equivalence before cutover",
+                matched_target: $matches[0].name,
+                matched_target_identity: {target: ($matches[0]._audit_target // "signoz"), kind: $matches[0].kind, name: $matches[0].name}}
              elif (($dropev | length) > 0) or (($dropsig | length) > 0) then
                {disposition: "drop-candidate",
                 disposition_reason: "the audit/fire-history evidence says this object is dead weight - migration is the moment to shed it, pending your confirmation"}
@@ -132,16 +160,16 @@ migration_plan_dispositions() {
                {disposition: $kd.disposition, disposition_reason: ("kind default for " + ($it.kind // "monitor"))}
              end)
           ) as $d
-        | {kind: ($it.kind // "monitor"),
+        | {source_target: $source_target, kind: ($it.kind // "monitor"),
            name: ($it.name // "(unnamed)"),
            covers: ($it.covers // null),
            enabled: (if $it.enabled == false then false else true end),
            routes_to: ($it.routes_to // null),
            flags: (if $it.enabled == false then ["disabled-at-source"] else [] end),
            equivalence_default: $kd.equivalence_default,
-           evidence: ([ $ev[] | {finding_id: .id, severity: (.severity // "info"), title: (.title // "")} ]
-                      + [ $sig[] | {signal: true, object_id: .object_id,
-                                    fires: (.fires // null), reaches_human: (.reaches_human // null),
+           evidence: ([ $ev[] | {target: $source_target, finding_id: .id, severity: (.severity // "info"), title: (.title // "")} ]
+                      + [ $sig[] | {signal: true, provider: .provider, target: $source_target, object_kind: .object_kind, object_id: .object_id,
+                                    fires: (.fires // null), reaches_human: (if has("reaches_human") then .reaches_human else null end),
                                     source_finding_ids: (.source_finding_ids // [])} ])}
           + $d
       ]'
@@ -185,7 +213,7 @@ migration_plan_save() {
           audit_parity_gate: "re-run the source and target audits + correlation; sunset the source only when target coverage parity holds and no true-gap regressions appear"
         },
         method: "deterministic disposition skeleton from artifacts on disk (inventory + findings + optional fatigue-signals); zero provider calls in this library; drop/fix dispositions carry evidence by construction; the skill enriches target shapes + equivalence per the pair catalog and check-migration-plan.sh gates the result"
-      }' > "$mp_out"
+      }' > "$mp_out.tmp" && mv "$mp_out.tmp" "$mp_out"
   echo "$mp_out"
 }
 
@@ -198,10 +226,28 @@ migration_plan_run() {
     return 2
   fi
   echo "[migration-plan] Building ${mp_src} -> ${mp_tgt} disposition skeleton for ${mp_date}..."
-  s_items="$(migration_plan_collect "$mp_src" "$mp_date" inventory)"
-  s_findings="$(migration_plan_collect "$mp_src" "$mp_date" findings)"
-  t_items="$(migration_plan_collect "$mp_tgt" "$mp_date" inventory)"
-  signals="$(migration_plan_load_signals)"
+  s_items="$(migration_plan_collect "$mp_src" "$mp_date" inventory)" || return 4
+  s_findings="$(migration_plan_collect "$mp_src" "$mp_date" findings)" || return 4
+  t_items="$(migration_plan_collect "$mp_tgt" "$mp_date" inventory)" || return 4
+  # Snapshot optional evidence once so validation, consumption and the resume
+  # basis all refer to the same document, including its measurement window.
+  signal_document=null
+  if [ -e "$SIGNALS_FILE" ]; then
+    signal_document="$(jq -c . "$SIGNALS_FILE" 2>/dev/null)" || {
+      echo '[migration-plan] optional fatigue signals are unreadable or malformed; repair or explicitly remove that input before rebuilding' >&2
+      return 4
+    }
+    signal_snapshot="$(mktemp)" || return 4
+    if ! printf '%s\n' "$signal_document" > "$signal_snapshot"; then rm -f "$signal_snapshot"; return 4; fi
+    if signals="$(SIGNALS_FILE="$signal_snapshot" migration_plan_load_signals "$mp_date")"; then
+      rm -f "$signal_snapshot"
+    else
+      rm -f "$signal_snapshot"
+      return 4
+    fi
+  else
+    signals='[]'
+  fi
   s_n="$(printf '%s' "$s_items" | jq 'length')"
   t_n="$(printf '%s' "$t_items" | jq 'length')"
   if [ "$s_n" -eq 0 ]; then
@@ -210,8 +256,22 @@ migration_plan_run() {
   fi
   sfound=1
   if [ "$t_n" -gt 0 ]; then mode="full"; tfound=1; else mode="source-only"; tfound=0; fi
-  inv="$(migration_plan_dispositions "$s_items" "$s_findings" "$signals" "$t_items" "$mode")"
+  # The plan is the editable worklist. Never regenerate over completed detail
+  # enrichment. Compare the complete artifact inputs, including target evidence;
+  # a changed or legacy unbound input needs an explicit new run, not a blind merge.
+  basis="$(jq -n --argjson source "$s_items" --argjson findings "$s_findings" --argjson target "$t_items" --argjson signals "$signals" --argjson signal_document "$signal_document" '{source:$source,findings:$findings,target:$target,signals:$signals,signals_document:$signal_document}')"
+  plan_dir="$AUDITS_DIR/migration-plans/${mp_src}-to-${mp_tgt}/${mp_date}"
+  if [ -e "$plan_dir/migration-plan.json" ]; then
+    if [ -f "$plan_dir/input-basis.json" ] && jq -e --argjson current "$basis" '. == $current' "$plan_dir/input-basis.json" >/dev/null 2>&1; then
+      echo "[migration-plan] unchanged inputs; preserved existing worklist at $plan_dir/migration-plan.json; resume its unfinished enrichment"
+      return 0
+    fi
+    echo '[migration-plan] existing worklist preserved: inputs changed or its legacy input basis is absent. Review the existing plan and use a new dated audit run for a rebuild.' >&2
+    return 4
+  fi
+  inv="$(migration_plan_dispositions "$s_items" "$s_findings" "$signals" "$t_items" "$mode" "$mp_src")"
   out="$(migration_plan_save "$mp_src" "$mp_tgt" "$mp_date" "$mode" "$inv" "$sfound" "$tfound")"
+  printf '%s\n' "$basis" > "$plan_dir/input-basis.json.tmp" && mv "$plan_dir/input-basis.json.tmp" "$plan_dir/input-basis.json"
   # bash-3.2: precompute summary scalars; never nest several $(...) in one string.
   sum_total="$(printf '%s' "$inv" | jq 'length')"
   sum_drop="$(printf '%s' "$inv" | jq '[ .[] | select(.disposition == "drop-candidate") ] | length')"

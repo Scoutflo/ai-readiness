@@ -75,4 +75,51 @@ printf '%s' "$OUT" | jq -e 'any(.[]; .id=="R-001")' >/dev/null \
 dupes="$(printf '%s' "$OUT" | jq '[.[] | select(.id=="X-001")] | length')"
 [ "$dupes" = "1" ] || fail "R3: X-001 collected $dupes times — a skipped derived dir (all/cost/cost-analysis) leaked in"
 
-echo "=== cost-analysis self-test passed (R1 one-level, R2 two-level, R3 skips, R4 area filter) ==="
+# R5: a same-date empty rerun regenerates an explicit empty roll-up, so old savings
+# are never presented as current after the last source finding is removed.
+BC_JSON="$TMP_ROOT/no-context.json"; TOPOLOGY_FILE="$TMP_ROOT/no-topology.json"
+cost_analysis_run "$DATE" >/dev/null
+REPORT="$TMP_ROOT/cost-analysis/$DATE/findings.json"
+jq -e '.summary.monthly_savings_identified==300' "$REPORT" >/dev/null || fail "R5 initial roll-up"
+write_findings "aws" "aws" '[]'
+write_findings "azure/prod-core" "azure/prod-core" '[]'
+cost_analysis_run "$DATE" >/dev/null
+jq -e '.summary.total_findings==0 and .summary.monthly_savings_identified==0 and .summary.annual_savings_identified==0 and .data_status=="no-cost-findings"' "$REPORT" >/dev/null || fail "R5 empty rerun kept stale savings or implied assessed zero spend"
+
+# R6: blocked/closed opportunities cannot inflate current savings.
+for extra in '{"status":"blocked"}' '{"status":"unknown"}' '{"status":"deferred"}' '{"lifecycle":"suppressed"}' '{"lifecycle":"resolved"}'; do
+  row=$(jq -nc --argjson extra "$extra" '[{id:"X-003",title:"Unused fixture",area:"cost-optimization",estimated_monthly_savings_usd:999} + $extra]')
+  write_findings "aws" "aws" "$row"
+  [ "$(cost_analysis_aggregate_findings "$DATE" | jq length)" -eq 0 ] || fail "R6 unobserved/closed row inflated savings"
+done
+# R7: reserved names apply to integrations only, never a report root or target label.
+AUDITS_DIR="$TMP_ROOT/all/reports"; mkdir -p "$AUDITS_DIR/azure/cost/$DATE" "$AUDITS_DIR/all/$DATE"
+printf '%s\n' '{"target":"azure/cost","findings":[{"id":"X-004","area":"cost-optimization","estimated_monthly_savings_usd":1}]}' > "$AUDITS_DIR/azure/cost/$DATE/findings.json"
+printf '%s\n' '{"target":"all","findings":[{"id":"COMBINED","area":"cost-optimization"}]}' > "$AUDITS_DIR/all/$DATE/findings.json"
+[ "$(cost_analysis_aggregate_findings "$DATE" | jq -r 'map(.id)|join(",")')" = X-004 ] || fail "R7 reserved parent/label name dropped real audit or included roll-up"
+
+# R8: the same check ID in another labeled target is a different finding.
+# Monitoring overlap annotates the matching target; it cannot discount dollars.
+CORRELATION_FILE="$TMP_ROOT/correlation.json"
+PAIR='[{"id":"X-005","source_target":"aws/prod","estimated_monthly_savings_usd":100},{"id":"X-005","source_target":"aws/dev","estimated_monthly_savings_usd":200}]'
+jq -n --arg date "$DATE" '{audit_date:$date,overlaps:[{findings:[{target:"aws/prod",finding_id:"X-005"},{target:"grafana",finding_id:"GRAF-099"}],recommendation:"Review matching service evidence"}]}' > "$CORRELATION_FILE"
+ANNOTATED=$(cost_analysis_deduplicate "$PAIR" "$DATE")
+printf '%s\n' "$ANNOTATED" | jq -e 'length==2 and any(.[]; .source_target=="aws/prod" and .deduplicated==true) and any(.[]; .source_target=="aws/dev" and .deduplicated==false)' >/dev/null || fail "R8 overlap leaked across labeled targets sharing a check ID"
+cost_analysis_build_report "$DATE" "$ANNOTATED" '{}' | jq -e '.summary.monthly_savings_identified==300 and .summary.annual_savings_identified==3600 and .summary.deduplicated_overlaps==1 and (.note|contains("not proven unique savings"))' >/dev/null || fail "R8 monitoring overlap changed native amounts or claimed unique savings"
+
+# R9: stale or undated correlation cannot attest overlap in this run.
+jq '.audit_date="2025-12-31"' "$CORRELATION_FILE" > "$TMP_ROOT/stale-correlation.json"
+mv "$TMP_ROOT/stale-correlation.json" "$CORRELATION_FILE"
+cost_analysis_deduplicate "$PAIR" "$DATE" | jq -e 'all(.[]; .deduplicated==false)' >/dev/null || fail "R9 stale correlation annotated current savings"
+jq 'del(.audit_date)' "$CORRELATION_FILE" > "$TMP_ROOT/undated-correlation.json"
+mv "$TMP_ROOT/undated-correlation.json" "$CORRELATION_FILE"
+cost_analysis_deduplicate "$PAIR" "$DATE" | jq -e 'all(.[]; .deduplicated==false)' >/dev/null || fail "R9 undated correlation annotated current savings"
+
+# R10: malformed optional correlation keeps the native findings and announces
+# that overlap evidence is unavailable, rather than inventing an annotation.
+printf '%s\n' 'not-json' > "$CORRELATION_FILE"
+ANNOTATED=$(cost_analysis_deduplicate "$PAIR" "$DATE" 2> "$TMP_ROOT/correlation-warning.txt")
+printf '%s\n' "$ANNOTATED" | jq -e 'length==2 and (map(.estimated_monthly_savings_usd)|add)==300 and all(.[]; .deduplicated!=true)' >/dev/null || fail "R10 malformed correlation lost findings or invented overlap"
+grep -q 'overlap annotation unavailable' "$TMP_ROOT/correlation-warning.txt" || fail "R10 malformed correlation was silently ignored"
+
+echo "=== cost-analysis self-test passed (R1-R10: layouts, eligibility, empty rerun, target/date-bound overlap, native amounts, degraded correlation) ==="

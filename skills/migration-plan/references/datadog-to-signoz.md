@@ -10,30 +10,28 @@ The audit's `inventory.json` carries monitors/SLOs/downtimes as rows; the plan's
 
 ```bash
 set -eu
-# shellcheck disable=SC1090
-[ -f "$HOME/.scoutflo/env" ] && . "$HOME/.scoutflo/env"
-: "${DATADOG_API_KEY:?run /scoutflo:connect — never send an empty auth header}"
-: "${DATADOG_APP_KEY:?run /scoutflo:connect — never send an empty auth header}"
+. "${CLAUDE_PLUGIN_ROOT}/skills/migration-plan/scripts/datadog-context.sh"
+# Same configured target/site and selected store as the doctor; ambient DD_SITE is ignored.
 # Monitors (full definitions incl. options/thresholds/message) — reuse the audit's pull if kept
-curl -fsS "https://api.${DD_SITE:-datadoghq.com}/api/v1/monitor?page_size=1000" \
+curl -q -fsS --max-time 25 --max-redirs 0 "https://api.${DD_SITE}/api/v1/monitor?page_size=1000" \
   -H "DD-API-KEY: ${DATADOG_API_KEY}" -H "DD-APPLICATION-KEY: ${DATADOG_APP_KEY}"
 # Dashboards: list (custom/cloned only — presets are NOT returned), then N+1 full pulls
-curl -fsS "https://api.${DD_SITE:-datadoghq.com}/api/v1/dashboard" -H "DD-API-KEY: ${DATADOG_API_KEY}" -H "DD-APPLICATION-KEY: ${DATADOG_APP_KEY}"
-curl -fsS "https://api.${DD_SITE:-datadoghq.com}/api/v1/dashboard/{dashboard_id}" -H "DD-API-KEY: ${DATADOG_API_KEY}" -H "DD-APPLICATION-KEY: ${DATADOG_APP_KEY}"
+curl -q -fsS --max-time 25 --max-redirs 0 "https://api.${DD_SITE}/api/v1/dashboard" -H "DD-API-KEY: ${DATADOG_API_KEY}" -H "DD-APPLICATION-KEY: ${DATADOG_APP_KEY}"
+curl -q -fsS --max-time 25 --max-redirs 0 "https://api.${DD_SITE}/api/v1/dashboard/{dashboard_id}" -H "DD-API-KEY: ${DATADOG_API_KEY}" -H "DD-APPLICATION-KEY: ${DATADOG_APP_KEY}"
 # SLOs (with the linked SLO-alert monitor ids — the join to the monitor inventory)
-curl -fsS "https://api.${DD_SITE:-datadoghq.com}/api/v1/slo?limit=1000" -H "DD-API-KEY: ${DATADOG_API_KEY}" -H "DD-APPLICATION-KEY: ${DATADOG_APP_KEY}"
-curl -fsS "https://api.${DD_SITE:-datadoghq.com}/api/v1/slo/{slo_id}?with_configured_alert_ids=true" -H "DD-API-KEY: ${DATADOG_API_KEY}" -H "DD-APPLICATION-KEY: ${DATADOG_APP_KEY}"
+curl -q -fsS --max-time 25 --max-redirs 0 "https://api.${DD_SITE}/api/v1/slo?limit=1000" -H "DD-API-KEY: ${DATADOG_API_KEY}" -H "DD-APPLICATION-KEY: ${DATADOG_APP_KEY}"
+curl -q -fsS --max-time 25 --max-redirs 0 "https://api.${DD_SITE}/api/v1/slo/{slo_id}?with_configured_alert_ids=true" -H "DD-API-KEY: ${DATADOG_API_KEY}" -H "DD-APPLICATION-KEY: ${DATADOG_APP_KEY}"
 # Synthetics: list, then the typed per-test GET (api|browser|mobile); monitor_id joins the paired monitor
-curl -fsS "https://api.${DD_SITE:-datadoghq.com}/api/v1/synthetics/tests" -H "DD-API-KEY: ${DATADOG_API_KEY}" -H "DD-APPLICATION-KEY: ${DATADOG_APP_KEY}"
+curl -q -fsS --max-time 25 --max-redirs 0 "https://api.${DD_SITE}/api/v1/synthetics/tests" -H "DD-API-KEY: ${DATADOG_API_KEY}" -H "DD-APPLICATION-KEY: ${DATADOG_APP_KEY}"
 # Logs config: pipelines (+ processors), indexes (+ exclusion filters/retention), archives, log-based metrics
-curl -fsS "https://api.${DD_SITE:-datadoghq.com}/api/v1/logs/config/pipelines" -H "DD-API-KEY: ${DATADOG_API_KEY}" -H "DD-APPLICATION-KEY: ${DATADOG_APP_KEY}"
-curl -fsS "https://api.${DD_SITE:-datadoghq.com}/api/v1/logs/config/indexes" -H "DD-API-KEY: ${DATADOG_API_KEY}" -H "DD-APPLICATION-KEY: ${DATADOG_APP_KEY}"
-curl -fsS "https://api.${DD_SITE:-datadoghq.com}/api/v2/logs/config/metrics" -H "DD-API-KEY: ${DATADOG_API_KEY}" -H "DD-APPLICATION-KEY: ${DATADOG_APP_KEY}"
+curl -q -fsS --max-time 25 --max-redirs 0 "https://api.${DD_SITE}/api/v1/logs/config/pipelines" -H "DD-API-KEY: ${DATADOG_API_KEY}" -H "DD-APPLICATION-KEY: ${DATADOG_APP_KEY}"
+curl -q -fsS --max-time 25 --max-redirs 0 "https://api.${DD_SITE}/api/v1/logs/config/indexes" -H "DD-API-KEY: ${DATADOG_API_KEY}" -H "DD-APPLICATION-KEY: ${DATADOG_APP_KEY}"
+curl -q -fsS --max-time 25 --max-redirs 0 "https://api.${DD_SITE}/api/v2/logs/config/metrics" -H "DD-API-KEY: ${DATADOG_API_KEY}" -H "DD-APPLICATION-KEY: ${DATADOG_APP_KEY}"
 # Downtimes v2 (mute inventory)
-curl -fsS "https://api.${DD_SITE:-datadoghq.com}/api/v2/downtime" -H "DD-API-KEY: ${DATADOG_API_KEY}" -H "DD-APPLICATION-KEY: ${DATADOG_APP_KEY}"
+curl -q -fsS --max-time 25 --max-redirs 0 "https://api.${DD_SITE}/api/v2/downtime" -H "DD-API-KEY: ${DATADOG_API_KEY}" -H "DD-APPLICATION-KEY: ${DATADOG_APP_KEY}"
 # Metric migration sizing: actively-queried metrics, per-metric blast radius (assets), volumes, top custom metrics
-curl -fsS "https://api.${DD_SITE:-datadoghq.com}/api/v2/metrics?filter%5Bqueried%5D=true" -H "DD-API-KEY: ${DATADOG_API_KEY}" -H "DD-APPLICATION-KEY: ${DATADOG_APP_KEY}"
-curl -fsS "https://api.${DD_SITE:-datadoghq.com}/api/v2/metrics/{metric_name}/assets" -H "DD-API-KEY: ${DATADOG_API_KEY}" -H "DD-APPLICATION-KEY: ${DATADOG_APP_KEY}"
+curl -q -fsS --max-time 25 --max-redirs 0 "https://api.${DD_SITE}/api/v2/metrics?filter%5Bqueried%5D=true" -H "DD-API-KEY: ${DATADOG_API_KEY}" -H "DD-APPLICATION-KEY: ${DATADOG_APP_KEY}"
+curl -q -fsS --max-time 25 --max-redirs 0 "https://api.${DD_SITE}/api/v2/metrics/{metric_name}/assets" -H "DD-API-KEY: ${DATADOG_API_KEY}" -H "DD-APPLICATION-KEY: ${DATADOG_APP_KEY}"
 ```
 
 Notification-handle **enumerability matrix** (for cross-checking the `@handles` harvested from monitor messages): Slack channels — listable (`GET /api/v1/integration/slack/configuration/accounts/{account}/channels`; account discovery is the deprecated v1 GET, **UNVERIFIED payload**); MS Teams handles — listable (`GET /api/v2/integration/ms-teams/configuration/tenant-based-handles` + `workflows-webhook-handles`); Opsgenie services — listable (`GET /api/v2/integration/opsgenie/services`); **PagerDuty and Webhooks have NO list-all** — harvest `@pagerduty-*`/`@webhook-*` from messages, then confirm each by the per-name GET. Handles hide inside `{{#is_alert}}…{{/is_alert}}` conditionals and template variables (`@slack-{{owner.name}}`) — parse the whole `message`, and treat a template-built handle as `manual` routing.
@@ -98,7 +96,7 @@ SigNoz channels (verified list): Slack, Webhook, Incident.io, Rootly, Zenduty, P
 
 SigNoz's own dashboards-migration page: "Datadog dashboards need to be recreated … due to differences in query languages and dashboard schemas." Three paths: the **Import JSON** flow / dashboards **v2 API** (`SIGNOZ-API-KEY`; self-host ≥ v0.135.0; Perses-style spec — do not hand-craft the legacy v1 shape), the `SigNoz/dashboards` template repo, and the official **Datadog Migration Tool** (LLM-based dashboard-JSON converter — **SigNoz Cloud paid plans only**; per-widget fidelity is UNVERIFIED — never present it as bundled with self-hosted). No community converter exists (verified-absence, 2026-09-17).
 
-Widget wire-type → SigNoz panel matrix (DD taxonomy = 41 verified wire strings; SigNoz panels = timeseries, value, table, list, bar, pie, histogram, text; **no heatmap** — their page says "coming soon" — and **no SLO widget**):
+Widget wire-type → SigNoz panel matrix (40 wire strings listed in this dated catalog; unknown or newer strings need a manual mapping; SigNoz panels = timeseries, value, table, list, bar, pie, histogram, text; **no heatmap** — their page says "coming soon" — and **no SLO widget**):
 
 | DD `definition.type` | SigNoz panel | Class |
 | --- | --- | --- |

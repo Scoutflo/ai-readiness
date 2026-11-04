@@ -5,13 +5,18 @@ description: Read-only, evidence-cited migration PLAN between two configured obs
 
 # migration-plan
 
-A migration is the one moment an estate gets to shed years of accumulated alerting debt — and the moment a naive lift-and-shift copies every dead monitor, broken handle, and flapping threshold into the new tool. This skill produces the **plan**: a complete, evidence-cited inventory of what to migrate, what to fix first, what to drop (with proof), what the target already covers, and what has no equivalent — plus the parallel-run/cutover playbook. It is **plan-only and strictly read-only on both sides**: it creates, modifies, and deletes nothing. Executing the plan is a human/service engagement (or a future setup-lane skill), never this one.
+A migration is the one moment an estate gets to shed years of accumulated alerting debt — and the moment a naive lift-and-shift copies every dead monitor, broken handle, and flapping threshold into the new tool. This skill produces the **plan**: a complete, evidence-cited inventory of what to migrate, what to fix first, what to drop (with proof), what the target already covers, and what has no equivalent — plus the parallel-run/cutover playbook. It is **plan-only and strictly read-only on both sides**: it creates, modifies, and deletes nothing. Your team executes the plan through a separate, explicitly confirmed setup workflow.
 
 **Supported pairs** (a pair without a catalog fails honestly — this skill never improvises a mapping):
 
 | Source → Target | Pair catalog |
 | --- | --- |
 | `datadog` → `signoz` | [references/datadog-to-signoz.md](references/datadog-to-signoz.md) |
+
+Current conclusions use only open, observed findings: `configured` or `validated-live`,
+with lifecycle `new`, `unchanged` or `regressed`. Missing status/lifecycle fields
+remain compatible with historical artifacts; blocked, unknown, deferred, resolved
+or suppressed rows cannot establish current noise, savings or migration defects.
 
 ## Prerequisites
 
@@ -24,27 +29,15 @@ A migration is the one moment an estate gets to shed years of accumulated alerti
 
 ## Doctor gate
 
-Source the home-anchored secret store exactly as `/scoutflo:doctor` does, then confirm reachability read-only. The **target being unreachable is not a failure** — it selects source-only mode.
+Resolve the selected source and its configured credential names through the shared target parser, then confirm reachability read-only. Each fresh detail pull resolves the same label, site and store again; for multiple artifact targets select each target explicitly before its detail reads. The **target being unreachable is not a failure** — it selects source-only mode.
 
 ```bash
 set -eu
-CFG=""
-for c in "${SCOUTFLO_CONFIG:-}" ./.scoutflo/toolkit.yaml "$HOME/.scoutflo/toolkit.yaml"; do
-  [ -n "$c" ] && [ -f "$c" ] && CFG="$c" && break
-done
-[ -n "$CFG" ] || { echo "no toolkit.yaml — run /scoutflo:connect first"; exit 1; }
-# shellcheck disable=SC1090
-[ -f "$HOME/.scoutflo/env" ] && . "$HOME/.scoutflo/env"
-: "${DATADOG_API_KEY:?source key missing — run /scoutflo:connect (never send an empty auth header)}"
-: "${DATADOG_APP_KEY:?source app key missing — run /scoutflo:connect}"
-# Identity + target, verified before any real pull: the key must validate against
-# the CONFIGURED site (the same canonical probe /scoutflo:doctor uses). Stop on
-# mismatch — never proceed on "probably the right org".
-DD_SITE_CFG="$(awk '/^datadog:/{f=1; next} /^[^ #]/{f=0} f && $1=="site:"{print $2; exit}' "$CFG")"
-DD_SITE="${DD_SITE_CFG:-datadoghq.com}"
-VALID="$(curl -fsS --max-time 15 "https://api.${DD_SITE}/api/v1/validate" -H "DD-API-KEY: ${DATADOG_API_KEY}" | jq -r '.valid // false')"
+. "${CLAUDE_PLUGIN_ROOT}/skills/migration-plan/scripts/datadog-context.sh"
+VALID_BODY=$(curl -q -fsS --max-time 15 --max-redirs 0 "https://api.${DD_SITE}/api/v1/validate" -H "DD-API-KEY: ${DATADOG_API_KEY}") || { echo 'Datadog validation read failed'; exit 1; }
+VALID=$(printf '%s' "$VALID_BODY" | jq -er -s 'length==1 and (.[0]|type)=="object" and .[0].valid==true') || { echo 'Datadog validation is not a complete positive JSON response'; exit 1; }
 [ "$VALID" = "true" ] || { echo "identity gate: key does NOT validate against site ${DD_SITE} — wrong site or key; stopping"; exit 1; }
-echo "doctor gate: config at $CFG; source = datadog @ ${DD_SITE} (key validated); target = signoz (optional — absent selects source-only mode)"
+echo "doctor gate: config at $CFG; source = ${DD_TARGET} @ ${DD_SITE} (key validated; organization identity still follows the selected configuration); target = signoz (optional — absent selects source-only mode)"
 ```
 
 Run `/scoutflo:doctor` for the full per-provider probes if anything is unclear. The plan needs the **source audit artifacts** more than it needs live source access — a fresh audit run is the real doctor here, and Phase 1's artifacts must come from the same configured target this gate just verified.
@@ -113,22 +106,41 @@ jq '.totals = {
 
 Every appended object follows the same rules: a drop/fix needs evidence; a kind with no equivalent gets the catalog's alternative.
 
-**Resume rule (large estates).** The plan file itself is the worklist: enrichment is idempotent over `migration-plan.json`, so on re-entry (a new session, an interrupted run) enrich **only** the objects still missing `equivalence`/`target_shape` and pull **only** their details — never re-pull or re-enrich objects already carrying them. `jq '[.inventory[] | select(.disposition == "migrate" and (has("equivalence") | not)) | .name]' "$PLAN"` lists exactly what remains.
+**Evidence identity:** a history signal applies only to the same source provider,
+resolved audit target, object kind and exact case-sensitive object name. A different account or paging
+provider cannot make a source monitor a drop candidate. Source findings retain
+their artifact target during joins. Explicitly uncollected or spec-unverified
+fire-history coverage is not measured evidence; historical signals without that
+optional metadata retain their original provenance requirements: current UTC `generated_at`, a stated window, valid counts and existing source-finding references. The same shared validator gates both migration and alert-fatigue reads. `already-covered` requires exactly one
+cataloged monitor-to-alert-rule match with the same name and exact `covers`,
+explicitly enabled and with a non-placeholder route. Missing or ambiguous target
+metadata stays a migration candidate; a same-name dashboard is not coverage.
+Final rows and cited evidence retain `source_target`; target matches additionally
+carry `matched_target_identity` (target, kind, name). Both reports display those
+labels so same-name objects remain distinguishable. These additive fields do not
+change the v1 schema; renderers still accept historical records without them.
+Observed false reachability remains false in the evidence projection. An absent optional signal file is allowed; an unreadable or malformed supplied file stops the build with a diagnostic.
+Even this configuration match requires detailed query equivalence at cutover.
+
+**Resume rule (large estates).** The plan is the worklist. Phase 1 records its artifact inputs in adjacent `input-basis.json`. Rerunning with identical inputs preserves the entire enriched plan; changed inputs or a legacy plan without that basis stop with the existing plan untouched. Review the existing worklist, or collect a new dated audit run to rebuild. Do not delete a completed plan to force a rerun. Resume detail pulls only for unfinished `migrate`, `fix-then-migrate` and `already-covered` objects. Both `equivalence` and `target_shape` are required; either may still be missing. List their target, kind and name, so duplicate names in different accounts remain distinct.
 
 ## Phase 3 — Equivalence enrichment (the pair catalog is the only source of truth)
 
-For each `migrate` object, set from the catalog: `equivalence` (`direct/approximate/manual/none`), a `target_shape` sketch (e.g. the SigNoz rule type, windowed match-type, channel mapping), and `notes` naming anything manual. This is also where the **best-practice bias** lands: a migrated alert adopts the target-side hygiene the methodology doctrine prescribes (windowed evaluation instead of a flappy default, no broadcast handles, severity labels that route) — each improvement noted on the object, never silently applied. Fill every `gaps[].alternative` with the catalog's real alternative (a `pending-catalog` placeholder fails validation), and write `cutover.parallel_run` from the catalog's cutover playbook.
+For each `migrate`, `fix-then-migrate` or `already-covered` object, set from the catalog: `equivalence` (`direct/approximate/manual/none`), a `target_shape` sketch (e.g. the SigNoz rule type, windowed match-type, channel mapping), and `notes` naming anything manual. This is also where the **best-practice bias** lands: a migrated alert adopts the target-side hygiene the methodology doctrine prescribes (windowed evaluation instead of a flappy default, no broadcast handles, severity labels that route) — each improvement noted on the object, never silently applied. Fill every `gaps[].alternative` with the catalog's real alternative (a `pending-catalog` placeholder fails validation), and write `cutover.parallel_run` from the catalog's cutover playbook.
 
 ## Phase 4 — Validate, then render
 
-The validator is a hard gate before anything is shown or shared:
+The validator is a hard gate before a plan is rendered or shared as complete. A skeleton remains editable local work: every migrating or already-covered row needs equivalence and a concrete target shape, and the parallel-run and audit-parity steps must be filled. A failed finalization removes stale derived reports, while preserving the worklist:
 
 ```bash
 set -eu
 AUDITS_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}"
 RUN_DATE="${RUN_DATE:-$(date -u +%F)}"
 PLAN="$AUDITS_DIR/migration-plans/datadog-to-signoz/${RUN_DATE}/migration-plan.json"
-sh "${CLAUDE_PLUGIN_ROOT}/report-standard/check-migration-plan.sh" "$PLAN" "$AUDITS_DIR" "$RUN_DATE"
+if ! sh "${CLAUDE_PLUGIN_ROOT}/report-standard/check-migration-plan.sh" "$PLAN" "$AUDITS_DIR" "$RUN_DATE"; then
+  rm -f "$(dirname "$PLAN")/migration-plan.md" "$(dirname "$PLAN")/migration-plan.html"
+  exit 1
+fi
 VIZ="${CLAUDE_PLUGIN_ROOT}/report-standard/render-report-viz.sh"
 sh "$VIZ" migration-plan      "$PLAN" > "$(dirname "$PLAN")/migration-plan.md"
 sh "$VIZ" migration-plan-html "$PLAN" "$(dirname "$PLAN")/migration-plan.html"
@@ -158,5 +170,5 @@ Show the operator the rendered plan (worst-first: fix-then-migrate and drop-cand
 | An evidence-free drop, or evidence citing a finding that does not exist in this run | The validator requires evidence on every drop/fix and cross-checks each cited finding-id against this run's source findings (fail-closed) |
 | "No data loss" read as "history transfers" | `cutover.historical_telemetry` must equal `does-not-transfer` (validator-enforced); continuity is the dual-write/parallel-run plan, and sunset waits for the audit-parity gate |
 | Double-paging during the parallel run | `already-covered` rows and the cutover section call it out; the plan tells the operator which side holds paging duty during shakedown |
-| Executing the migration from this skill | Out of scope by design — plan-only; the plan is the input to a confirm-then-verify setup engagement, never a mutation from here |
+| Executing the migration from this skill | Out of scope by design — plan-only; the plan is the input to a confirm-then-verify setup workflow, never a mutation from here |
 | Re-pulling what the audit already read | Artifact-first: the skeleton builds from `inventory.json`/`findings.json`/`fatigue-signals.json` on disk; detail pulls are bounded to what the plan needs |
