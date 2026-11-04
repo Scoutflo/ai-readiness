@@ -88,6 +88,11 @@ these two classes existed; these steps are what caught them.
   the finding-ID prefix-registry check (see C9). Selftest: `layer_validators`,
   `report-real:*`.
 
+Inventory activation is observed data: an absent activation field displays as
+`unknown`, not `yes`; `tests/test-inventory-unknown-state.sh` guards the renderer
+while preserving explicit true/false values. On-Call inventory also distinguishes
+forward routing from upstream policy references.
+
 ## C2 — Output directory layout (single vs multi-target, and always-nested audits)
 
 - **Producer:** an audit writes `<integration>/<date>/` for a single block, or
@@ -433,7 +438,9 @@ these two classes existed; these steps are what caught them.
   environment against the store; `setup-sentry` keeps its elevated-token bind),
   `migration-plan` (its multi-target plan reads every label), the Slack webhook, and
   identity selectors such as key-file paths.
-- **Guards:** `ci/scope-checkpoint-check.sh`, `ci/redaction-parity-check.sh`,
+- **Guards:** `skills/redaction/tests/test-oncall-redaction.sh` (known On-Call
+  credential headers, incoming URL credentials and the canonical findings adapter),
+  `ci/scope-checkpoint-check.sh`, `ci/redaction-parity-check.sh`,
   `ci/env-load-parity-check.sh` (asserts the layered resolver in every `audit-*`
   **and** in `doctor.sh`), `ci/leak-scan.sh`,
   `tests/test-connect-addsecret.sh` (writer round-trip incl. special chars,
@@ -587,7 +594,12 @@ these two classes existed; these steps are what caught them.
   the roll-up **library** still makes zero provider calls (it only reads local files).
   The collection workflow harness `skills/alert-fatigue/lib/collection-workflow.sh`
   selects one configured target, invokes fresh doctor/identity checks per batch,
-  and binds an immutable plan, target, observation window and object list.
+  and binds an immutable plan, target, observation window, object list and selected
+  credential generation. Private salted credential fingerprints are checked before
+  preflight, result reuse and assembly; changed credentials require a new run.
+  Legacy single-target credential defaults follow their owning audits; explicit
+  missing custom names cannot fall back. DigitalOcean retains its owning config
+  audit lane outside the native history harness.
   Private job claims and verified-result hashes allow unchanged completed work
   to resume; changed input or ambiguous claims stop reuse. Fixed provider queries
   remain in the reference recipes. Prometheus sampled active-since values are
@@ -635,7 +647,9 @@ these two classes existed; these steps are what caught them.
   registered **non-scored** prefix (findings-schema), like `COST`.
 - **SSOT:** `skills/alert-fatigue/SKILL.md`; the fire-history read spec +
   `fatigue-signals.json` contract in `skills/alert-fatigue/references/fire-history-reads.md`.
-- **Guards:** `skills/alert-fatigue/tests/test-collection-workflow.sh` (selected-target
+- **Guards:** `skills/alert-fatigue/tests/test-collection-auth.sh` (credential swaps,
+  exclusive binding, missing legacy bindings, token defaults and DigitalOcean lane);
+  `skills/alert-fatigue/tests/test-collection-workflow.sh` (selected-target
   preflight, immutable resume, owned claims, integrity checks and exact outgoing
   Prometheus selectors, including quoted identities);
   `skills/alert-fatigue/tests/test-alert-fatigue.sh` (run by

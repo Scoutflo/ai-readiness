@@ -194,7 +194,7 @@ unless a complete transition log proves no intervening clear.
 
 Before this block, run the [collection workflow](collection-workflow.md) doctor
 and explicit deployment-identity recipe in the same selected run. The five-minute
-receipt is checked again. Each new read also repeats doctor and the fixed identity query with the same freshly loaded credentials used for its history query; a token changed in another shell cannot reuse an earlier identity proof. `AF_JOB_ID` names
+receipt is checked again. Each new read also repeats doctor and the fixed identity query with the same freshly loaded credentials used for its history query; a changed credential generation requires a new run and cannot reuse earlier results, even if scope labels match. `AF_JOB_ID` names
 one pending inventory object. A completed receipt skips the provider call.
 
 ```bash

@@ -30,7 +30,12 @@ non-regular or unreadable file. `has_secrets <content>` retains literal-input
 and existing-file compatibility; use the explicit file helper for path checks.
 It masks AWS access keys
 (`AKIA…`/`ASIA…`), long Bearer tokens, Stripe keys (`sk_live_…`), GitHub PATs
-(`ghp_…` and `github_pat_…`), and `token=`/`password=` URL query values. Detection
+(`ghp_…` and `github_pat_…`), `token=`/`password=` URL query values,
+On-Call `X-VO-Api-Id`/`X-VO-Api-Key` header values and explicit `routingKey`
+fields, and credential-bearing paths after the known VictorOps incoming-alert
+endpoint. Both integration and routing credentials in that path are removed;
+management API URLs remain readable. Reports, briefs and the findings adapter
+use this same filter. Detection
 uses the same rules as masking. A clean file passes through byte-identical.
 This pattern filter cannot recognize every provider's opaque credential; the
 at-capture rule remains necessary for management keys, routing keys and payloads.

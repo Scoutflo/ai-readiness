@@ -26,14 +26,15 @@ It runs automatically in `/scoutflo:audit-all` (Phase 3.6, right after correlati
 When the user asks for an alert-noise/fatigue read on **one integration** (or a few) without running the whole estate, this skill produces it directly by driving that provider's **own alerting-lane checks**; the read-only config + fire-history checks already shipped in `audit-<provider>`; then rolling the result up. It never re-implements a provider's alert reads; it invokes the existing ones (DRY), so there is a single source of truth per provider.
 
 **Doctor gate, live-safety gate and resume are mandatory for provider reads.**
-Follow [collection-workflow.md](references/collection-workflow.md) first. It
-selects one configured target, pins the intended identity and observation window,
-runs doctor against only that target, verifies a live identity response and keeps
-an immutable per-object worklist. Every fresh request block reloads its named
-credentials; no empty auth header or ambient cloud target is permitted. A failed
-gate stops collection before checks. Local roll-up mode makes no provider calls
-and does not need this preflight. Use the same completed receipts when resuming;
-changed config/window/object scope starts a new run and preserves old evidence.
+For config-lane checks, first run the owning audit's complete selected-target
+preflight, auth, live-safety and resume steps. This path stays **outside the history harness**;
+DigitalOcean's DO-017/026/073 config lane remains supported. Native DigitalOcean
+history is unavailable here: mark that measured tier `verify-pending`, then use
+its config findings. For supported measured reads, follow
+[collection-workflow.md](references/collection-workflow.md) to freeze the target,
+window, worklist and credential generation. Changed credentials require a new
+run; fresh identity labels alone cannot permit mixed-account results. Same-key
+completed receipts resume without extra reads. Local roll-up has no provider calls.
 
 **Steps:**
 1. **Resolve the configured alerting providers** from `~/.scoutflo/toolkit.yaml` (the same config every audit resolves). The alerting-lane providers and the audit whose checks own their noise reads:

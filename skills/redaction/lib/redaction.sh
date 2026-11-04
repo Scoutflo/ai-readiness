@@ -6,6 +6,11 @@ set -eu
 
 # Redaction patterns (in order of specificity)
 REDACTION_PATTERNS='
+s/\([Xx]-[Vv][Oo]-[Aa][Pp][Ii]-[Ii][Dd]["'"'"'\\]*[[:space:]]*[:=][[:space:]]*["'"'"'\\]*\)[^[:space:]<>"'"'"'`,;\\][^<>"'"'"'`,;\\]*/\1[REDACTED]/g;
+s/\([Xx]-[Vv][Oo]-[Aa][Pp][Ii]-[Kk][Ee][Yy]["'"'"'\\]*[[:space:]]*[:=][[:space:]]*["'"'"'\\]*\)[^[:space:]<>"'"'"'`,;\\][^<>"'"'"'`,;\\]*/\1[REDACTED]/g;
+s/\([Rr][Oo][Uu][Tt][Ii][Nn][Gg][_-]\{0,1\}[Kk][Ee][Yy]["'"'"'\\]*[[:space:]]*[:=][[:space:]]*["'"'"'\\]*\)[^[:space:]<>"'"'"'`,;\\][^<>"'"'"'`,;\\]*/\1[REDACTED]/g;
+s@\(https\{0,1\}://[Aa][Ll][Ee][Rr][Tt]\.[Vv][Ii][Cc][Tt][Oo][Rr][Oo][Pp][Ss]\.[Cc][Oo][Mm]/integrations/[^/[:space:]<>"'"'"']\{1,\}/[0-9]\{8\}/alert/\)[^?#[:space:]<>"'"'"'`)]\{1,\}@\1[REDACTED]@g;
+s@\(https\{0,1\}:\\/\\/[Aa][Ll][Ee][Rr][Tt]\.[Vv][Ii][Cc][Tt][Oo][Rr][Oo][Pp][Ss]\.[Cc][Oo][Mm]\\/integrations\\/[^/[:space:]<>"'"'"']\{1,\}\\/[0-9]\{8\}\\/alert\\/\)[^?#[:space:]<>"'"'"'`)]\{1,\}@\1[REDACTED]@g;
 s/AKIA[0-9A-Z]\{16\}/AKIA[REDACTED]/g;
 s/NRAK-[A-Za-z0-9]\{20,\}/NRAK-[REDACTED]/g;
 s/sk_live_[A-Za-z0-9]\{24,\}/sk_live_[REDACTED]/g;

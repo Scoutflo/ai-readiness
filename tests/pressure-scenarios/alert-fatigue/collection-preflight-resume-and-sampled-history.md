@@ -7,8 +7,8 @@ unless a fixture stub handles the exact expected read.
    one named target. The projected doctor config must contain only that target;
    absent/ambiguous label, missing named token, failed/empty doctor output and a
    wrong observed scope all stop before history reads. A token changed after a
-   prior shell's identity proof requires a new identity check with the same token
-   the history request will use. No secret value enters config snapshots/logs.
+   prior shell's identity proof must stop that run before a new history read,
+   even if both credentials return the same scope label. Use a new run for changed credentials. No secret value enters config snapshots/logs.
 2. Run the exact cookbook blocks in fresh shells. Record one object's verified
    result, interrupt another read, then resume. The first object's provider read
    must not repeat. Failed calls/invalid bodies do not create success receipts;
@@ -35,3 +35,14 @@ unless a fixture stub handles the exact expected read.
    PromQL label strings must be escaped once; double-encoded strings select a
    different alert even if a permissive fixture returns the expected sample.
    The fixture must reject a wrong selector before supplying history data.
+7. Switch a selected named credential between completed jobs while both tenants
+   return the same expected identity label. Reject load, gate, receipt reuse and
+   assembly; do not mix the results. Repeat for each basic/paired-key member and
+   every configured LGTM token. Missing binding around old evidence or a legacy
+   receipt must fail closed. Same credentials resume without extra provider calls,
+   and neither credential values nor private binding state belongs in reports.
+8. Use an owning audit's supported default token in a historical single-map config.
+   It must still work; an explicit custom variable that is absent and a labeled
+   target without its own credential must not borrow that default. DigitalOcean
+   config checks must continue through their owning audit's gates outside this
+   history harness; native history stays `verify-pending` without an invented API.

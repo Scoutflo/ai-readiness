@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.243
+
+Keep resumed alert-history collection within one credential generation, including
+when the same variable name changes accounts behind a shared endpoint. Preserve
+verified completed results and require a new run after credentials change; private
+bindings contain no credential values. Restore the owning audits' legacy token
+name defaults and keep DigitalOcean configuration analysis available without
+claiming unsupported native event history. Mask On-Call management credentials
+and incoming-alert URL credentials across shared redaction consumers. Render
+unobserved inventory activation as unknown and clarify forward routing evidence.
+
 ## 0.1.242
 
 **Configure and verify the supported Splunk On-Call paging path.**

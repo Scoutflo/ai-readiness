@@ -600,7 +600,7 @@ HTMLFOOT
       echo "| name | covers | severity | routes to | enabled |"
       echo "| --- | --- | --- | --- | --- |"
       jq -r --arg k "$kind" 'def esc: tostring | gsub("\\|"; "\\|");   # escape pipes so a value never breaks the table
-        .items[] | select(.kind == $k) | [ ((.name // "") | esc), ((.covers // "-") | esc), ((.severity // "-") | esc), ((.routes_to // "-") | esc), (if .enabled == false then "no" else "yes" end) ] | @tsv' "$INV" 2>/dev/null \
+        .items[] | select(.kind == $k) | [ ((.name // "") | esc), ((.covers // "-") | esc), ((.severity // "-") | esc), ((.routes_to // "-") | esc), (if .enabled == true then "yes" elif .enabled == false then "no" else "unknown" end) ] | @tsv' "$INV" 2>/dev/null \
       | while IFS="$(printf '\t')" read -r nm cov sev rt en; do
           echo "| \`${nm}\` | ${cov} | ${sev} | ${rt} | ${en} |"
         done

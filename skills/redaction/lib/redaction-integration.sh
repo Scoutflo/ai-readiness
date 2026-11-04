@@ -41,16 +41,15 @@ redaction_integration_findings() {
 
   [ -f "$findings_file" ] || return 0
 
-  # Read findings, redact descriptions, write back
-  jq '.findings[] |= (
-    .description |= (
-      gsub("AKIA[0-9A-Z]{16}"; "AKIA[REDACTED]") |
-      gsub("sk_live_[A-Za-z0-9]{24,}"; "sk_live_[REDACTED]") |
-      gsub("Bearer [A-Za-z0-9._-]{40,}"; "Bearer [REDACTED]")
-    )
-  )' "$findings_file" > "$findings_file.tmp"
-
-  mv "$findings_file.tmp" "$findings_file"
+  # Share the canonical patterns with reports and briefs; a second short regex
+  # list silently omitted newer credential families and evidence fields.
+  jq -e 'type=="object" and (.findings|type)=="array"' "$findings_file" >/dev/null || return 1
+  redaction_tmp=$(umask 077; mktemp "${findings_file}.redacted.XXXXXX") || return 1
+  if ! redact_content < "$findings_file" > "$redaction_tmp" ||
+     ! jq -e 'type=="object" and (.findings|type)=="array"' "$redaction_tmp" >/dev/null; then
+    rm -f "$redaction_tmp"; return 1
+  fi
+  mv "$redaction_tmp" "$findings_file"
 }
 
 # --- Usage in audit skills ---

@@ -1,6 +1,13 @@
 # Bounded collection, identity and resume
 
-This is the execution path for standalone collection. Local roll-up mode needs no
+This is the execution path for supported measured-history collection. The
+configuration-audit lane remains outside the history harness: execute the owning
+`audit-*` skill's complete selected-target doctor, auth, live-safety and resume
+steps before its alerting checks. In particular, `audit-digitalocean` DO-017/026/073
+remains supported even though this harness has no native DigitalOcean history
+adapter. Mark that measured tier `verify-pending` with the unsupported-history
+reason, retain its config findings and continue the local roll-up. Do not attempt
+to open a DigitalOcean history plan or invent a new API. Local roll-up mode needs no
 provider preflight. Keep provider reads in the fixed recipes in
 [fire-history-reads.md](fire-history-reads.md), with the owning `audit-*` as the
 source of truth for transport and identity. The workflow harness handles only
@@ -66,6 +73,28 @@ Expected: one selected target and run directory under
 are never copied. Reopening the same plan resumes. A changed target, config,
 window, limits, identity expectation or object set requires a new run ID and
 preserves the old run. A legacy run without a basis cannot be silently reused.
+
+The first successful named-credential load creates an exclusive private
+`.auth-binding/` containing a random seed and a salted SHA-256 digest of the
+selected credential names and values. Raw values go through stdin only for this
+binding; they never enter its arguments, files or diagnostics. The binding is
+immutable and every credential load, gate, completed-receipt reuse and assembly
+checks it. This includes both basic-auth fields, paired API keys and all selected
+LGTM component token names. A changed value, missing binding around existing job
+evidence, or old receipt without its generation fails closed. Preserve that run
+and start a new run ID for a rotated key, even if the new key returns the same
+scope label. Same credentials can reuse completed evidence without new API reads.
+The seed/digest is private run state, not report content; never publish it.
+
+For historical single-map configurations only, preserve the owning audit's
+existing defaults: `GRAFANA_TOKEN`, `SENTRY_TOKEN`, `PAGERDUTY_TOKEN`,
+`ZENDUTY_TOKEN`, `KIBANA_API_KEY`, `GROUNDCOVER_API_KEY`, `SIGNOZ_API_KEY`,
+`NEW_RELIC_USER_API_KEY`, and Datadog's `DATADOG_API_KEY`/`DATADOG_APP_KEY`.
+The resolved names enter the immutable selected config. An explicitly named but
+missing custom variable never falls back, and a labeled target must name its own
+credentials. Cloud profile/CLI credential chains still require the owning audit's
+identity checks: binding a named `role_env` or `credentials_env` value does not
+prove the identity behind a mutable file, CLI session or external credential chain.
 
 ## Doctor gate and live-safety gate
 
@@ -149,7 +178,7 @@ Use only the fixed provider operation from `fire-history-reads.md`, with explici
 window, page size and a bounded page counter. Reload auth with `afc_load_auth` in
 the same shell as the request. Repeat the target’s doctor and identity read with
 those same loaded credentials for each fresh request block; a prior receipt alone
-does not authorize a token that changed since the earlier check. Capture the provider command's exit before jq;
+cannot permit a changed credential generation in the same run. Capture the provider command's exit before jq;
 HTTP failure, non-JSON, missing/wrong wrapper, repeated cursor, page cap, scope
 mismatch or absent required field keeps the job pending with a safe error record.
 Never let an exhausted page budget mean a complete empty history. Save only
