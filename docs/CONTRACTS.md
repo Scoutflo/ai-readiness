@@ -152,12 +152,21 @@ these two classes existed; these steps are what caught them.
   team's identity at the fixed management origin. The setup-only
   `setup_api_key_env` is optional for audits and must never be their fallback.
   A successful team read does not establish complete visibility or alert delivery.
-  Description setup stores a credential-bound plan, exact before/after metadata,
-  attempt markers and readback receipts in the private per-target
-  `setup-<run-id>/` folder. Action/checksum confirmation, fresh drift checks and
-  exclusive journal creation gate each PUT; raw credentials never enter those
-  files. SSOT: `skills/setup-splunk-oncall/references/team-description.md`;
-  guard: `skills/setup-splunk-oncall/tests/test-team-description.sh`.
+  Setup stores credential-bound plans, exact safe before/after state, attempt
+  markers and readback receipts in private per-target `setup-<run-id>/` folders.
+  Action/checksum confirmation, complete dependency reads, fresh drift checks and
+  exclusive journals gate writes. Roster changes preserve the approved scheduled
+  responder; retirement requires creation ownership and complete consumer checks.
+  Routing values remain protected and are privately bound by value, not merely
+  by variable name. Attended verification separates actual management reads from
+  fresh UI-observed fields; neither substitutes for unobservable preservation.
+  Native Alertmanager setup additionally binds the configured Kubernetes target
+  and preserves the complete original receiver/configuration state. SSOTs:
+  `skills/setup-splunk-oncall/references/team-description.md`,
+  `team-rotation-workflows.md`, `policy-routing-workflows.md`,
+  `attended-verification.md` and `alertmanager-source.md` in that same directory;
+  matching suites under `skills/setup-splunk-oncall/tests/` exercise the literal
+  recipes. These local setup artifacts never change the audit's finding schema.
 
 - **Setup skills (v0.1.217):** `setup-lgtm`, `-aws`, `-azure`, `-gcp`,
   `-digitalocean` and `-sentry` resolve their live-safety-gate target (and, except
@@ -576,6 +585,15 @@ these two classes existed; these steps are what caught them.
   `incident_feed`). The provider calls happen in this audit-lane, per
   [skills/alert-fatigue/references/fire-history-reads.md](../skills/alert-fatigue/references/fire-history-reads.md);
   the roll-up **library** still makes zero provider calls (it only reads local files).
+  The collection workflow harness `skills/alert-fatigue/lib/collection-workflow.sh`
+  selects one configured target, invokes fresh doctor/identity checks per batch,
+  and binds an immutable plan, target, observation window and object list.
+  Private job claims and verified-result hashes allow unchanged completed work
+  to resume; changed input or ambiguous claims stop reuse. Fixed provider queries
+  remain in the reference recipes. Prometheus sampled active-since values are
+  observations, not exact fire counts, episode counts or continuous stuck duration.
+  Publication still obeys the shared calendar-date validator; an interrupted run
+  cannot relabel older measurements as today's evidence.
   Each provider carries `provider_coverage[].verification` (`spec-only` until a first
   live run confirms its flagged fields, then `live-verified`; ledger + per-provider
   checklist in fire-history-reads.md § Live-verification). **Before the roll-up
@@ -617,7 +635,10 @@ these two classes existed; these steps are what caught them.
   registered **non-scored** prefix (findings-schema), like `COST`.
 - **SSOT:** `skills/alert-fatigue/SKILL.md`; the fire-history read spec +
   `fatigue-signals.json` contract in `skills/alert-fatigue/references/fire-history-reads.md`.
-- **Guards:** `skills/alert-fatigue/tests/test-alert-fatigue.sh` (run by
+- **Guards:** `skills/alert-fatigue/tests/test-collection-workflow.sh` (selected-target
+  preflight, immutable resume, owned claims, integrity checks and exact outgoing
+  Prometheus selectors, including quoted identities);
+  `skills/alert-fatigue/tests/test-alert-fatigue.sh` (run by
   `ci/run-tests.sh`: storm detection, noise selection incl. exclusion of non-alerting
   findings, non-scored + cites-source-IDs, the `fatigue.json` ratio path, **and the
   measured tier — AF-004 reachability, AF-005 fatigue-impact ranking, AF-006 chronic,

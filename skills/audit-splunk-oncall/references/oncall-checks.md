@@ -35,7 +35,7 @@ For each in-scope route, require a nonempty policy target set and exactly one gl
 - **Partial:** some fully assessed routes resolve and some do not.
 - **Fail:** none of the applicable configured routes has a valid target set.
 - **Impact:** count the affected route-policy paths; name services only with independently proved source mappings. Without source evidence, say “configured route is broken; active sender usage unknown.”
-- **Fix:** select the exact key privately, review its complete target set and acknowledgment behavior in the [setup routing plan](../../setup-splunk-oncall/SKILL.md#routing-keys). Never rewrite the default route automatically or treat absent `isMultiResponder` as false.
+- **Fix:** select the exact key privately, review its complete target set and acknowledgment behavior in the [setup routing workflow](../../setup-splunk-oncall/SKILL.md#routing-keys). Never rewrite the default route automatically or treat absent `isMultiResponder` as false.
 - **Done when:** fresh routing inventory matches the approved target set, every target resolves uniquely, and unrelated/default route mappings are unchanged. Restoring only a key string is not a full rollback.
 
 ## SOC-002 — policy ownership
@@ -44,7 +44,7 @@ For each in-scope route, require a nonempty policy target set and exactly one gl
 
 Assess only policies referenced by selected routes. Require exactly one owner mapping and one real team. If the team disappeared, re-read global policy and team inventories. A complete, repeated absent owner is a broken ownership reference;403 is unknown, not absence. Do not infer ownership from policy names, routing key text or URLs.
 
-Pass/partial/fail follow all/some/none of the fully assessed referenced policies resolving. `affected` includes the concrete policy slug and known team slug, with actual dependent services only when mapped. Repair through the [setup policy plan](../../setup-splunk-oncall/SKILL.md#escalation-policies) after reading current consumers. Verify the global ownership join again; a successful team rename does not repair a foreign-key problem.
+Pass/partial/fail follow all/some/none of the fully assessed referenced policies resolving. `affected` includes the concrete policy slug and known team slug, with actual dependent services only when mapped. Repair through the [setup policy workflow](../../setup-splunk-oncall/SKILL.md#escalation-policies) after reading current consumers. Verify the global ownership join again; a successful team rename does not repair a foreign-key problem.
 
 ## SOC-003 — supported escalation targets resolve
 
@@ -54,7 +54,7 @@ Require at least one step with at least one understood eligible target. Resolve 
 
 Unknown execution type, missing typed identifier, unsupported later-step/timing semantics or ambiguous ID join blocks interpretation of that path. Do not call an empty ignored entry a valid escalation step. A supported target proven missing in complete reads is a failure. Preserve `timeout` values as observed; no unit conversion or estimated time-to-human until timing semantics are independently proven.
 
-Name the exact policy and failed target; count affected route-policy paths. Repair an escalation entry through the [setup policy plan](../../setup-splunk-oncall/SKILL.md#escalation-policies) with full replacement semantics, existing personal-paging behavior and all consumers reviewed. Done when a fresh policy detail matches the intended entries and their referenced user/rotation identities resolve. Do not delete a policy to repair it: deletion may remove routing keys that target only that policy.
+Name the exact policy and failed target; count affected route-policy paths. Repair an escalation entry through the [setup policy workflow](../../setup-splunk-oncall/SKILL.md#escalation-policies) with full replacement semantics, existing personal-paging behavior and all consumers reviewed. Done when a fresh policy detail matches the intended entries and their referenced user/rotation identities resolve. Do not delete a policy to repair it: deletion may remove routing keys that target only that policy.
 
 ## SOC-004 — referenced rotation has eligible staff
 
@@ -64,7 +64,7 @@ Only judge rotations referenced by a routed, otherwise resolvable policy. A deli
 
 An empty roster proven by complete data means no assigned person in that shift. Which effective paging windows it affects is a separate schedule semantic; absent that proof, phrase the finding as an unstaffed configured shift, not a fabricated week-long outage. A policy with a staffed alternate path must be described accurately. Re-read at current boundaries before escalating severity.
 
-The [rotations and shifts plan](../../setup-splunk-oncall/SKILL.md#rotations-and-shifts) identifies the exact rotation group and shift and the intended eligible members. Adding a shift member can also change team membership; confirm that side effect in setup. Done when the roster readback matches the approved users, eligibility is verified and the effective current assignment agrees. Future continuity/DST and notification delivery remain separate tests.
+The [rotations and shifts workflow](../../setup-splunk-oncall/SKILL.md#rotations-and-shifts) identifies the exact rotation group and shift and the intended eligible members. The setup recipe requires verified existing team membership before adding a shift member, preventing an implicit membership side effect. Done when the roster readback matches the approved users, eligibility is verified and the effective current assignment agrees. Future continuity/DST and notification delivery remain separate tests.
 
 ## SOC-005 — current assigned responder
 
@@ -74,7 +74,7 @@ For each supported routed policy, require one unambiguous current policy row for
 
 If no current person is reported, repeat the relevant current/roster reads after at least one second and record both observation times. Repeated complete empty current data with an expected active supported path is a gap at those times. A refused read, unknown override or unsupported target is blocked. One current person says nothing about tomorrow, repeated escalation or mobile receipt.
 
-Plan the exact policy/shift/eligible assignment through the [escalation policy plan](../../setup-splunk-oncall/SKILL.md#escalation-policies) and [rotation plan](../../setup-splunk-oncall/SKILL.md#rotations-and-shifts). Done when fresh current data returns the intended eligible user for the same policy/team and the supporting roster or approved override resolves. Do not send a test page from this audit.
+Plan the exact policy/shift/eligible assignment through the [escalation policy workflow](../../setup-splunk-oncall/SKILL.md#escalation-policies) and [rotation workflow](../../setup-splunk-oncall/SKILL.md#rotations-and-shifts). Done when fresh current data returns the intended eligible user for the same policy/team and the supporting roster or approved override resolves. Do not send a test page from this audit.
 
 ## SOC-006 — declared independent responders
 
@@ -82,7 +82,7 @@ Plan the exact policy/shift/eligible assignment through the [escalation policy p
 
 If the operator explicitly declares that no redundancy requirement applies, first record that policy-scoped declaration in the business-context SSOT and its `resource_intent` projection. Only that captured, attributable intent permits not-in-scope (`by-design`, citing the source and affected policy set). An uncaptured conversation or verification selector returning `inapplicable` does not authorize this scored verdict; keep it blocked until provenance is recorded. An unspecified requirement is blocked pending target-profile clarification, never a failed universal two-person rule. If the requirement exists but supported current joins are incomplete, block. When complete, deduplicate usernames across the required policies and compare with the declared minimum; do not add different users who would only appear at unsupported later steps.
 
-Name the required count, observed distinct count, shared user and affected policies. Severity follows the explicitly critical service/coverage need, not the word “production” alone. Plan a genuinely independent eligible path through the [team membership plan](../../setup-splunk-oncall/SKILL.md#teams-and-membership), with the user's approval for membership/contact effects. Done when the supported current join contains the required distinct people. Actual independent device delivery is still unverified.
+Name the required count, observed distinct count, shared user and affected policies. Severity follows the explicitly critical service/coverage need, not the word “production” alone. Plan a genuinely independent eligible path through the [team membership workflow](../../setup-splunk-oncall/SKILL.md#teams-and-membership), with the user's approval for membership/contact effects. Done when the supported current join contains the required distinct people. Actual independent device delivery is still unverified.
 
 ## SOC-007 — source to response-path join
 
@@ -108,4 +108,4 @@ One incident can establish a selected source/policy/recipient lineage. It cannot
 
 Every provider operation in this audit is a GET on the management API. No incoming-alert POST, team update, routing edit, policy creation/deletion, invitation, acknowledgment, resolution, maintenance, shift change, credential activation or test notification is permitted. A refused read does not justify a write probe or switching to an elevated credential.
 
-Setup sections for team membership, rotations, policies and routing currently prepare plans only; their execution/readback/rollback gates remain pending. The executable setup action in this version is description-only team metadata. Do not imply these plans automatically repair a paging finding.
+Setup exposes guarded API recipes and attended provider workflows with executable before/after assertions. These require separate exact change approval and their own current evidence; an audit recommendation never repairs a finding by itself.

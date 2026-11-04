@@ -145,3 +145,7 @@ Shared configuration findings identify a potential overlap to investigate. They 
 ### What does an On-Call triage pass assess?
 
 Only bulk routing-key references and policy ownership. Staffing, current responders and source joins are deferred and marked blocked. Reports carry `scope: "triage"`; their scores must not be compared with full assessments. Run the full audit for those deeper checks.
+
+### Does On-Call setup apply changes?
+
+Yes. Confirmed API recipes cover supported team, membership, rotation, shift, policy and routing changes, with fresh dependency reads and exact verification. Provider-editor workflows use asserted management reads and separate fresh UI evidence where a field is visible only in the editor. Missing fields or unsupported preservation stop that action. Deleting an owned object is a separately approved retirement, not a promise to recreate its identity. Source configuration and human notification delivery remain separate proofs.

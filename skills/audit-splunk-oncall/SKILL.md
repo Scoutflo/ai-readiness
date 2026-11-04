@@ -198,7 +198,7 @@ When context is available, apply it per [BUSINESS-CONTEXT-INTEGRATION-v0168.md](
 
 ## Remediation pointers
 
-Use `/scoutflo:setup-splunk-oncall` for an explicit reviewed change plan. Missing staffing maps to its rotations/shifts and team membership workflow; invalid escalation references map to its policy workflow; route creation/repair follows its routing-specific proof boundary. A suggestion is not permission to execute it. The audit never loads the elevated key or repairs its own findings.
+Use `/scoutflo:setup-splunk-oncall` for a reviewed change through its guarded API recipes or attended provider editor workflows. Missing staffing maps to its rotations/shifts and team membership workflow; invalid escalation references map to its policy workflow; route creation/repair follows its routing-specific proof boundary. A suggestion is not permission to execute it. The audit never loads the elevated key or repairs its own findings.
 
 ### Clarify responder requirement
 

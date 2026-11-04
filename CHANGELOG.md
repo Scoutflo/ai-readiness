@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.242
+
+**Configure and verify the supported Splunk On-Call paging path.**
+
+- Add guarded team, membership, rotation, shift, escalation-policy and routing-key workflows with exact approval, complete dependency checks, current-duty preservation and readback. Owned retirement is separate from restoration; unknown outcomes cannot replay writes.
+- Add asserted attended verification for provider editor workflows. Bind private routing identities to their actual credential generation, preserve hidden-mode evidence separately, and stop unsupported shapes or unavailable preservation checks.
+- Document native Alertmanager source configuration with protected credentials, configured cluster identity, preserved existing receivers, installed-version validation and verified rollback.
+- Make alert-history collection resumable with selected-target preflight, fixed observation windows and immutable completed results. Prometheus state samples remain observations; they do not become invented fire or episode counts.
+- Keep paging benchmarks contextual to service objectives, shifts and the selected window. Preserve legacy reports, skill names and read-only audit credentials.
+
 ## 0.1.241
 
 Preserve validated migration measurements for each target when another account

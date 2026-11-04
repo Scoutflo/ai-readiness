@@ -1,6 +1,6 @@
 # Verify a repaired paging path
 
-This is a read-only verification recipe for [SOC-001 through SOC-007](oncall-checks.md). It runs the shipped collector again and asserts a named, current relationship. It does not change configuration, emit a score or turn a false predicate into a finding. A failed verification needs the catalog's completeness, scope and confirming-read rules before a finding can be authored. An `inapplicable` selector result is not permission to emit a scored `by-design` exclusion: that needs the business-context SSOT and `resource_intent` provenance. Triage does not run these deep selectors. Setup's planning-only capabilities remain planning-only.
+This is a read-only verification recipe for [SOC-001 through SOC-007](oncall-checks.md). It runs the shipped collector again and asserts a named, current relationship. It does not change configuration, emit a score or turn a false predicate into a finding. A failed verification needs the catalog's completeness, scope and confirming-read rules before a finding can be authored. An `inapplicable` selector result is not permission to emit a scored `by-design` exclusion: that needs the business-context SSOT and `resource_intent` provenance. Triage does not run these deep selectors. Setup executes its guarded recipes or attended editor workflows under separate change approval. These verification reads never authorize or perform their mutations.
 
 ## Select the exact verification
 

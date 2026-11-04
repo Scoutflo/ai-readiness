@@ -26,7 +26,7 @@ These are **order-of-magnitude baseline figures** to help you plan, not a guaran
 
 On-Call triage avoids per-team and per-policy detail sweeps. Its collector uses five bounded reads; the published preflight, collection and report-validation phases include repeated four-read plans, seventeen reads in total before any confirming census. This is a request count, not a measured token or wall-time saving.
 
-Splunk On-Call cost scales with the selected teams, policies and rotations. Optional incident observations use already projected evidence; this skill does not fetch a complete fire history. Its row is an unmeasured planning estimate, not a live-smoke result. Every account in a labeled list adds a separate audit pass. Setup cost depends on the specific reviewed change; unproven write paths are not executed to populate a report.
+Splunk On-Call cost scales with the selected teams, policies and rotations. Optional incident observations use already projected evidence; this skill does not fetch a complete fire history. Its row is an unmeasured planning estimate, not a live-smoke result. Every account in a labeled list adds a separate audit pass. Setup cost includes planning, dependency reads, immediate verification and any approved restoration. Those reads grow with the selected policy and routing graph; no fixed setup token saving is claimed.
 
 `audit-cost` (deep per-resource cost) and `/scoutflo:rca` (root-cause analysis) consume on the same order as an audit. `rca` reads reports already on disk as reference and then makes bounded, read-only live checks to confirm the current cause, so its cost depends on how many live probes it runs; with no cluster access it degrades to a report-only answer, which is the cheapest path.
 

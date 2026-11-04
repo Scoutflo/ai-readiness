@@ -938,7 +938,7 @@ EOF
     echo
     if [ "$RSTATUS" = "computed" ]; then
       jq -r '.af_findings[]? | select(.af_id=="AF-003")
-        | "**\(.alerts_per_incident):1** — \(.alerts_fired) alerts fired to \(.incidents) real incident(s) over \(.window). The SRE-canon goal is 1:1 (Google SRE, *Being On-Call*); higher is paging fatigue. " + (.note // "")' "$AFJ"
+        | "**\(.alerts_per_incident):1** — \(.alerts_fired) alerts fired to \(.incidents) real incident(s) over \(.window). Compare this with the declared paging budget and service objectives for this window. " + (.note // "")' "$AFJ"
     else
       jq -r '.af_findings[]? | select(.af_id=="AF-003")
         | "**Needs your incident feed.** " + (.reason // "No incident/ack stream supplied, so the true alert-to-incident ratio and %-actionable are not computed — and never fabricated. Provide a fatigue.json signal block ({window, alerts_fired, incidents}) to compute it.")' "$AFJ"
@@ -949,7 +949,8 @@ EOF
     echo "### What \"good\" looks like (cited — score against these, never invent one)"
     echo
     echo "- **Every page actionable; page on symptoms, not causes.** (Google SRE, *Monitoring Distributed Systems*)"
-    echo "- **<= 2 incidents per 12-hour shift**, on-call <= 25% of time. Above this is the fatigue red flag. (Google SRE, *Being On-Call*)"
+    echo "- **<= 2 incidents per 12-hour shift**, on-call <= 25% of time, is a published operating example. (Google SRE, *Being On-Call*)"
+    echo "Research and vendor benchmarks provide context, not universal pass/fail thresholds. Compare the declared service objectives, shift length, paging budget and observation window before setting an action threshold."
     echo "- **Alert on SLO burn-rate, not static thresholds** — multi-window 14.4 (1h/5m) + 6 (6h/30m); short window ~ 1/12 the long, long <= 48h. (SRE Workbook, *Alerting on SLOs*)"
     echo "- **Target 1:1 alert-to-incident**; group (~30-min default) and dedup (~24h default) so one incident is one page. (incident.io / FireHydrant / Opsgenie)"
     echo "- **AIOps compression sweet spot ~ 70-85%** — higher over-groups and hides real signal. (BigPanda / Splunk)"

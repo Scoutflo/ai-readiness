@@ -282,7 +282,7 @@ alert_fatigue_ratio() {
       mtta_seconds: (.mtta_seconds // null),
       mttr_seconds: (.mttr_seconds // null),
       actionable_pct: (.actionable_pct // null),
-      note: "alert-to-incident ratio computed from a live, read-only incident/ack feed collected in the fire-history lane; the 1:1 target is the Google-SRE goal (Being On-Call), higher means paging fatigue."
+      note: "Alert-to-incident ratio computed from the collected read-only incident/ack feed. Assess actionability against the declared service objectives, paging budget, shift and observation window; no universal ratio alone establishes fatigue."
     }'
   # (2) operator-supplied count
   elif printf '%s' "$AF_OPERATOR_DOCUMENT" | jq -e 'has("alerts_fired") and has("incidents")' >/dev/null; then

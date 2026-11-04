@@ -82,7 +82,7 @@ Green = read-only (safe, changes nothing) · amber = write, gated behind your co
 | You want to… | Do this |
 | --- | --- |
 | Score one stack's health | an `audit-*` skill (step ②) |
-| Check your Splunk On-Call paging path | `/scoutflo:audit-splunk-oncall`, then `/scoutflo:setup-splunk-oncall` to plan paging changes or apply/restore a team description |
+| Check and configure your Splunk On-Call paging path | `/scoutflo:audit-splunk-oncall`, then `/scoutflo:setup-splunk-oncall` for confirmed team, schedule, escalation, routing and source changes |
 | Score everything at once | `/scoutflo:audit-all` |
 | Find where you're wasting cloud spend | `/scoutflo:audit-cost` |
 | Ask *"why is `<service>` failing — give me the RCA?"* | `/scoutflo:rca` (step ③, after audits + topology + business-context) |
@@ -100,7 +100,7 @@ Green = read-only (safe, changes nothing) · amber = write, gated behind your co
 
 - **Combined reports keep uncertainty visible.** Blocked evidence cannot become a confirmed gap, empty reruns replace stale summaries, and matching local names do not prove shared paging or migration coverage. On-Call also supports a bounded routing-only triage pass.
 
-- **Splunk On-Call paging has its own audit and setup flow.** Trace routing keys through escalation policies to staffed coverage, and keep unknown reads separate from failures. Setup plans paging changes and can apply or restore a team description after confirmation; routing, policy, schedule and ingestion changes remain planning-only. VictorOps is the same paging product; Splunk's data platform is a separate integration.
+- **Splunk On-Call paging has its own audit and setup flow.** Trace routing keys through escalation policies to staffed coverage. Configure teams, rotations, shifts, policies and routing through confirmed API recipes; verify attended provider-editor changes and native Alertmanager setup with explicit evidence. Unknown state stops the affected action. VictorOps is the same paging product; Splunk's data platform is a separate integration.
 
 - **Saved business context is protected during imports.** Replacing it requires confirmation; validation happens before replacement, with backups and rollback on failure.
 - **Large Kubernetes and cost audits can resume.** Persistent target-bound worklists retain completed evidence and protect the previous completed report when a run stops.
@@ -306,7 +306,7 @@ Secrets live only in environment variables you export yourself. `~/.scoutflo/too
 | `/scoutflo:setup-grafana` | Datasources, dashboards, contact points, notification policies, alert rules |
 | `/scoutflo:setup-sentry` | Projects, environments, privacy scrubbing, alert routing, monitors |
 | `/scoutflo:setup-newrelic` | Workflow wiring for uncaught policies (incl. the auto-created SLO default), per-service conditions from golden metrics, tiering/loss-of-signal fixes, muting schedules, SLOs, ownership tags, synthetics, change tracking |
-| `/scoutflo:setup-splunk-oncall` | Plan Splunk On-Call paging changes; apply/restore team descriptions with a separate elevated key, confirmation, drift checks and readback |
+| `/scoutflo:setup-splunk-oncall` | Configure teams, schedules, escalation, routing and sources with separate setup credentials, exact confirmation, dependency checks and verified results |
 | `/scoutflo:setup-digitalocean` | Alert destinations, uptime checks, App Platform and database alerting |
 | `/scoutflo:setup-gcp` | Notification channels, uptime checks, alert policies, dashboards |
 | `/scoutflo:setup-azure` | Action groups, metric/log/activity alerts, AKS monitoring, diagnostic settings |
