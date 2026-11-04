@@ -41,6 +41,9 @@ unless a fixture stub handles the exact expected read.
    every configured LGTM token. Missing binding around old evidence or a legacy
    receipt must fail closed. Same credentials resume without extra provider calls,
    and neither credential values nor private binding state belongs in reports.
+   Force the hash command to fail with empty and valid-looking output, return a
+   malformed digest, or fail the credential stream. Initialization, resume and
+   completion must refuse; existing binding and completed evidence stay intact.
 8. Use an owning audit's supported default token in a historical single-map config.
    It must still work; an explicit custom variable that is absent and a labeled
    target without its own credential must not borrow that default. DigitalOcean

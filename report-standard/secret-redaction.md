@@ -34,7 +34,9 @@ It masks AWS access keys
 On-Call `X-VO-Api-Id`/`X-VO-Api-Key` header values and explicit `routingKey`
 fields, and credential-bearing paths after the known VictorOps incoming-alert
 endpoint. Both integration and routing credentials in that path are removed;
-management API URLs remain readable. Reports, briefs and the findings adapter
+management API URLs remain readable. URL schemes and hosts are matched without
+case sensitivity, and JSON quote/slash escapes are preserved, including URLs
+quoted inside findings descriptions. Reports, briefs and the findings adapter
 use this same filter. Detection
 uses the same rules as masking. A clean file passes through byte-identical.
 This pattern filter cannot recognize every provider's opaque credential; the

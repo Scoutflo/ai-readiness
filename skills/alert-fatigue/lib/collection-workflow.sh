@@ -4,7 +4,15 @@
 set -eu
 
 afc_fail() { printf 'alert-fatigue collection: %s\n' "$*" >&2; return 1; }
-afc_hash() { shasum -a 256 < "$1" | awk '{print $1}'; }
+# Capture shasum itself: a successful formatter must never hide a hash failure.
+afc_sha256_stdin() {
+  afc_sha_raw=$(shasum -a 256) || { afc_fail 'SHA-256 command failed'; return 1; }
+  afc_sha_digest=${afc_sha_raw%% *}
+  [ "${#afc_sha_digest}" -eq 64 ] && [ "$afc_sha_raw" = "$afc_sha_digest  -" ] || { afc_fail 'SHA-256 output is malformed'; return 1; }
+  case "$afc_sha_digest" in *[!0123456789abcdef]*) afc_fail 'SHA-256 output is malformed'; return 1;; esac
+  printf '%s\n' "$afc_sha_digest"
+}
+afc_hash() { afc_sha256_stdin < "$1"; }
 afc_open() {
   AFC_PLAN="${1:?collection plan JSON}"
   AFC_ROOT="${CLAUDE_PLUGIN_ROOT:?CLAUDE_PLUGIN_ROOT}"
@@ -117,7 +125,9 @@ afc_open() {
   fi
   rm -rf "$afc_tmp"
   AFC_PLAN="$AFC_RUN/plan.json"
-  AFC_BASIS="$(afc_hash "$AFC_PLAN")/$(afc_hash "$AFC_RUN/config.yaml")"
+  afc_plan_hash=$(afc_hash "$AFC_PLAN") || return 1
+  afc_config_hash=$(afc_hash "$AFC_RUN/config.yaml") || return 1
+  AFC_BASIS="$afc_plan_hash/$afc_config_hash"
   mkdir -p "$AFC_RUN/jobs"
   printf 'collection target: %s; config: %s; run: %s\n' "$AFC_TARGET" "$AFC_CONFIG" "$AFC_RUN"
 }
@@ -155,12 +165,28 @@ afc_load_auth() {
 afc_auth_stream() {
   printf '%s\000%s\000' "$afc_auth_seed" "$AFC_BASIS"
   for afc_auth_key in token_env api_key_env app_key_env api_id_env basic_user_env basic_pass_env prometheus_token_env alertmanager_token_env vmalert_token_env role_env credentials_env; do
-    afc_auth_name=$(afc_get "$afc_auth_key")
+    afc_auth_name=$(afc_get "$afc_auth_key") || return 1
     [ -n "$afc_auth_name" ] || continue
     printf '%s\000%s\000' "$afc_auth_key" "$afc_auth_name"
-    printenv "$afc_auth_name"
+    printenv "$afc_auth_name" || return 1
     printf '\000'
   done
+}
+# The only temporary artifact is the producer's numeric exit status. Credential
+# bytes stay in the pipe; check BOTH producer and consumer without pipefail.
+afc_auth_hash() {
+  afc_auth_hash_dir=$(mktemp -d "$AFC_RUN/.auth-hash.XXXXXX") || return 1
+  afc_auth_hash_rc=0
+  afc_auth_hash_digest=$(
+    { afc_stream_rc=0; afc_auth_stream || afc_stream_rc=$?
+      printf '%s\n' "$afc_stream_rc" > "$afc_auth_hash_dir/status"
+      exit "$afc_stream_rc"
+    } | afc_sha256_stdin
+  ) || afc_auth_hash_rc=$?
+  afc_auth_stream_rc=$(cat "$afc_auth_hash_dir/status" 2>/dev/null) || afc_auth_stream_rc=1
+  rm -rf "$afc_auth_hash_dir"
+  [ "$afc_auth_hash_rc" -eq 0 ] && [ "$afc_auth_stream_rc" = 0 ] || { afc_fail 'credential hashing failed'; return 1; }
+  printf '%s\n' "$afc_auth_hash_digest"
 }
 afc_auth_refuse() {
   rm -f "$AFC_RUN/identity.json" "$AFC_RUN/preflight.json"
@@ -180,7 +206,7 @@ afc_auth_binding() {
       afc_auth_seed=$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')
       [ "${#afc_auth_seed}" -eq 64 ] || { rm -rf "$afc_auth_tmp"; rmdir "$AFC_RUN/.auth-init-lock"; afc_fail 'cannot initialize private credential binding'; return 1; }
       printf '%s\n' "$afc_auth_seed" > "$afc_auth_tmp/seed"
-      AFC_AUTH_GENERATION=$(afc_auth_stream | shasum -a 256 | awk '{print $1}')
+      AFC_AUTH_GENERATION=$(afc_auth_hash) || { rm -rf "$afc_auth_tmp"; rmdir "$AFC_RUN/.auth-init-lock"; return 1; }
       jq -n --arg basis "$AFC_BASIS" --arg target "$AFC_TARGET" --arg digest "$AFC_AUTH_GENERATION" '{schema:"scoutflo-collection-auth/v1",basis:$basis,target:$target,digest:$digest}' > "$afc_auth_tmp/binding.json"
       mv "$afc_auth_tmp" "$afc_auth_dir"
     fi
@@ -189,7 +215,7 @@ afc_auth_binding() {
   [ -f "$afc_auth_dir/seed" ] && [ -f "$afc_auth_dir/binding.json" ] || { afc_auth_refuse 'credential binding is incomplete'; return 1; }
   afc_auth_seed=$(cat "$afc_auth_dir/seed")
   printf '%s' "$afc_auth_seed" | LC_ALL=C grep -Eq '^[a-f0-9]{64}$' || { afc_auth_refuse 'credential binding seed is invalid'; return 1; }
-  AFC_AUTH_GENERATION=$(afc_auth_stream | shasum -a 256 | awk '{print $1}')
+  AFC_AUTH_GENERATION=$(afc_auth_hash) || return 1
   jq -e --arg basis "$AFC_BASIS" --arg target "$AFC_TARGET" --arg digest "$AFC_AUTH_GENERATION" '.schema=="scoutflo-collection-auth/v1" and .basis==$basis and .target==$target and .digest==$digest' "$afc_auth_dir/binding.json" >/dev/null || { afc_auth_refuse 'selected credential generation changed or binding is invalid'; return 1; }
 }
 
@@ -272,7 +298,8 @@ afc_receipt_ok() {
   afc_load_auth existing || return 1
   afc_dir="$AFC_RUN/jobs/$1"
   [ -f "$afc_dir/result.json" ] || { afc_fail 'completed job lost its result; preserve run for investigation'; return 1; }
-  jq -e --arg basis "$AFC_BASIS" --arg generation "$AFC_AUTH_GENERATION" --arg hash "$(afc_hash "$afc_dir/result.json")" '.basis==$basis and .auth_generation==$generation and .result_hash==$hash' "$afc_dir/complete.json" >/dev/null || { afc_fail 'completed evidence changed; refusing silent reuse or re-pull'; return 1; }
+  afc_receipt_hash=$(afc_hash "$afc_dir/result.json") || return 1
+  jq -e --arg basis "$AFC_BASIS" --arg generation "$AFC_AUTH_GENERATION" --arg hash "$afc_receipt_hash" '.basis==$basis and .auth_generation==$generation and .result_hash==$hash' "$afc_dir/complete.json" >/dev/null || { afc_fail 'completed evidence changed; refusing silent reuse or re-pull'; return 1; }
 }
 # Commit only after the fixed read, pagination, field assertions and normalizer
 # succeeded. A failed/partial read has no complete receipt and remains resumable.
@@ -295,8 +322,11 @@ afc_complete() {
   rm -f "$afc_candidate"
   mkdir -p "$afc_dir"; mkdir "$afc_dir/.lock" 2>/dev/null || { afc_fail 'job already active'; return 1; }
   if [ -f "$afc_dir/complete.json" ]; then rmdir "$afc_dir/.lock"; afc_receipt_ok "$afc_id"; return; fi
-  cp "$afc_result" "$afc_dir/result.json"
-  jq -n --arg basis "$AFC_BASIS" --arg hash "$(afc_hash "$afc_dir/result.json")" --arg generation "$AFC_AUTH_GENERATION" --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '{basis:$basis,auth_generation:$generation,result_hash:$hash,completed_at:$at}' > "$afc_dir/complete.tmp"
+  afc_result_stage=$(mktemp "$afc_dir/.result.XXXXXX") || { rmdir "$afc_dir/.lock"; return 1; }
+  cp "$afc_result" "$afc_result_stage" || { rm -f "$afc_result_stage"; rmdir "$afc_dir/.lock"; return 1; }
+  afc_result_hash=$(afc_hash "$afc_result_stage") || { rm -f "$afc_result_stage"; rmdir "$afc_dir/.lock"; return 1; }
+  jq -n --arg basis "$AFC_BASIS" --arg hash "$afc_result_hash" --arg generation "$AFC_AUTH_GENERATION" --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '{basis:$basis,auth_generation:$generation,result_hash:$hash,completed_at:$at}' > "$afc_dir/complete.tmp"
+  mv "$afc_result_stage" "$afc_dir/result.json"
   mv "$afc_dir/complete.tmp" "$afc_dir/complete.json"; rmdir "$afc_dir/.lock"
 }
 afc_assemble() {

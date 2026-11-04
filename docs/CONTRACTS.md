@@ -649,6 +649,8 @@ forward routing from upstream policy references.
   `fatigue-signals.json` contract in `skills/alert-fatigue/references/fire-history-reads.md`.
 - **Guards:** `skills/alert-fatigue/tests/test-collection-auth.sh` (credential swaps,
   exclusive binding, missing legacy bindings, token defaults and DigitalOcean lane);
+  `skills/alert-fatigue/tests/test-collection-hash.sh` (failed or malformed hashes
+  and failed credential streams refuse publication and preserve prior evidence);
   `skills/alert-fatigue/tests/test-collection-workflow.sh` (selected-target
   preflight, immutable resume, owned claims, integrity checks and exact outgoing
   Prometheus selectors, including quoted identities);

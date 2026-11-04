@@ -39,6 +39,9 @@ check 'single inbound path credential' "$prefix$vo_ingestion" "${prefix}[REDACTE
 check 'incoming Markdown plus safe query' "[incoming]($incoming?keep=yes#section)" "[incoming](${prefix}[REDACTED]?keep=yes#section)"
 upper=$(printf '%s' "$incoming" | sed 's/alert.victorops.com/ALERT.VICTOROPS.COM/')
 check 'case insensitive incoming host' "$upper" "$(printf '%s' "$prefix" | sed 's/alert.victorops.com/ALERT.VICTOROPS.COM/')[REDACTED]"
+upper_scheme=$(printf '%s' "$incoming" | sed 's/^https:/HTTPS:/')
+upper_prefix=$(printf '%s' "$prefix" | sed 's/^https:/HTTPS:/')
+check 'case insensitive incoming scheme' "$upper_scheme" "${upper_prefix}[REDACTED]"
 escaped=$(printf '%s' "$incoming" | sed 's@/@\\/@g')
 escaped_prefix=$(printf '%s' "$prefix" | sed 's@/@\\/@g')
 check 'JSON escaped URL' "\"$escaped\"" "\"${escaped_prefix}[REDACTED]\""
@@ -62,6 +65,30 @@ jq -n --arg description "$nested" --arg url "$incoming" --arg value "$vo_key" '{
 redaction_integration_findings "$work/findings.json"
 if grep -F -e "$vo_id" -e "$vo_key" -e "$vo_ingestion" -e "$vo_route" "$work/findings.json" >/dev/null; then bad 'findings adapter leaked'; else ok 'findings adapter shares all canonical masks'; fi
 jq -e '.findings[0].id=="SOC-001" and .findings[0].safe_count==7 and .findings[0].evidence.headers["X-VO-Api-Key"]=="[REDACTED]"' "$work/findings.json" >/dev/null && ok 'findings JSON remains valid and safe fields preserved' || bad 'findings JSON or safe fields damaged'
+# Reproduce ordinary report prose after JSON serialization, where quote escapes
+# and escaped slashes have a different byte representation from the raw URL.
+check_findings_description() {
+  label=$1; description=$2; expected_description=$3
+  jq -n --arg description "$description" '{findings:[{id:"SOC-001",description:$description,safe_count:7}]}' > "$work/description.json"
+  if redaction_integration_findings "$work/description.json" 2> "$work/description.stderr"; then
+    ok "$label findings adapter succeeds"
+  else
+    bad "$label findings adapter failed"
+  fi
+  jq -e . "$work/description.json" >/dev/null && ok "$label valid JSON" || bad "$label invalid JSON"
+  jq -e --arg expected "$expected_description" '.findings[0].description==$expected' "$work/description.json" >/dev/null && ok "$label decoded prose and delimiters preserved" || bad "$label decoded prose changed or leaked"
+  jq -e '.findings[0].id=="SOC-001" and .findings[0].safe_count==7' "$work/description.json" >/dev/null && ok "$label safe fields preserved" || bad "$label safe fields damaged"
+  if grep -F -e "$vo_ingestion" -e "$vo_route" "$work/description.json" >/dev/null; then bad "$label path credentials leaked"; else ok "$label both path credentials masked"; fi
+  cp "$work/description.json" "$work/description.before.json"
+  if redaction_integration_findings "$work/description.json" 2>/dev/null && cmp -s "$work/description.json" "$work/description.before.json"; then
+    ok "$label findings adapter idempotent"
+  else
+    bad "$label findings adapter idempotence"
+  fi
+}
+check_findings_description 'quoted incoming URL' "curl \"$incoming\"" "curl \"${prefix}[REDACTED]\""
+check_findings_description 'nested escaped incoming URL' "curl \"$escaped\"" "curl \"${escaped_prefix}[REDACTED]\""
+check_findings_description 'uppercase incoming scheme' "$upper_scheme" "${upper_prefix}[REDACTED]"
 printf '{invalid' > "$work/invalid.json"; cp "$work/invalid.json" "$work/before.json"
 if redaction_integration_findings "$work/invalid.json" 2>/dev/null; then bad 'invalid JSON accepted'; else ok 'invalid JSON refused'; fi
 cmp -s "$work/invalid.json" "$work/before.json" && ok 'invalid JSON unchanged' || bad 'invalid JSON overwritten'

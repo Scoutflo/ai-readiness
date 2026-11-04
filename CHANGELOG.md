@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.244
+
+Refuse alert-history initialization or resume when credential hashing fails or
+returns an invalid fingerprint. Preserve existing bindings on failure. Mask
+On-Call incoming credentials inside quoted JSON strings and case-insensitive
+HTTP schemes while keeping the resulting findings valid JSON.
+
 ## 0.1.243
 
 Keep resumed alert-history collection within one credential generation, including

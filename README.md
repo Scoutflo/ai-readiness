@@ -98,6 +98,9 @@ Green = read-only (safe, changes nothing) · amber = write, gated behind your co
 
 ## What's new (latest release)
 
+- **Alert-history resume stays bound to the selected credentials.** Completed work is reused only with the same credential generation; changed credentials or a failed fingerprint require a safe stop. Existing single-target token defaults remain supported.
+- **On-Call secrets are covered by shared redaction.** Management headers and incoming-alert URL credentials are masked in reports and briefs, including quoted JSON evidence. Inventory activation remains unknown unless the provider actually reports it.
+
 - **Combined reports keep uncertainty visible.** Blocked evidence cannot become a confirmed gap, empty reruns replace stale summaries, and matching local names do not prove shared paging or migration coverage. On-Call also supports a bounded routing-only triage pass.
 
 - **Splunk On-Call paging has its own audit and setup flow.** Trace routing keys through escalation policies to staffed coverage. Configure teams, rotations, shifts, policies and routing through confirmed API recipes; verify attended provider-editor changes and native Alertmanager setup with explicit evidence. Unknown state stops the affected action. VictorOps is the same paging product; Splunk's data platform is a separate integration.
