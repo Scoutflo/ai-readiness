@@ -73,9 +73,11 @@ if '/api/v2/status' in url:
  if os.environ.get('ALR_BAD')=='refused':code='403'
  if os.environ.get('ALR_BAD')=='malformed':body='fixture-routing-canary malformed'
  if os.environ.get('ALR_BAD')=='header':ct='text/html fixture-routing-canary'
-elif 'buildinfo' in url: body=json.dumps({'data':{'version':'3.0.0'}})
+elif 'buildinfo' in url: body=json.dumps({'status':'success','data':{'version':'3.0.0'}})
 elif '/api/v2/alerts' in url:body='[]'
-elif '/api/v1/query' in url:body=json.dumps({'data':{'result':[{'metric':{},'value':[0,'1']}]}})
+elif '/api/v1/query' in url:
+ query=' '.join(a); value=str(int(time.time())) if 'last_reload_success_timestamp_seconds' in query else '1'
+ body=json.dumps({'status':'success','data':{'resultType':'vector','result':[{'metric':{'instance':'fixture'},'value':[int(time.time()),value]}]}})
 if '-o' in a:pathlib.Path(a[a.index('-o')+1]).write_text(body)
 else:sys.stdout.write(body)
 if '-w' in a:sys.stdout.write(a[a.index('-w')+1].replace('\\\\n','\\n').replace('%{http_code}',code).replace('%{content_type}',ct))

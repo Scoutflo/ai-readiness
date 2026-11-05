@@ -454,6 +454,10 @@ forward routing from upstream policy references.
   `skills/audit-alertmanager/tests/test-config-projection.sh` (native and
   Operator shapes, credential-bearing text, nine literal fresh-shell status
   blocks, dependency failures and safe refusal);
+  `skills/audit-alertmanager/tests/test-scope-contract.sh` (config-bound identity,
+  loaded-rule sizing, isolated credential import and all SKILL command blocks);
+  `skills/audit-alertmanager/tests/test-verification-workflow.sh` (fresh-shell
+  reference reads, safe failures and evidence-before-completion rule batches);
   `skills/redaction/tests/test-oncall-redaction.sh` (known On-Call
   credential headers, incoming URL credentials and the canonical findings adapter),
   `ci/scope-checkpoint-check.sh`, `ci/redaction-parity-check.sh`,
@@ -472,6 +476,12 @@ forward routing from upstream policy references.
   the selected targets, retain successful evidence before marking work done,
   and refuse final publication while required work remains pending. Kubernetes
   sizes the selected context and persists that count for fresh-shell steps.
+  Alertmanager counts successful loaded alert-rule and receiver responses at its
+  checkpoint. Its large-rule worklist requires a fresh matching scope receipt and
+  refuses unresolved exclusions; it binds endpoints and selected rule identities.
+  Collection and attended, hash-bound review precede completion. Saved observations
+  remain dated evidence: resume does not revalidate completed rules or bind a
+  credential generation. Missing or changed saved evidence prevents completion.
 
 ## C14 — Cross-tool coverage correlation (a gap in one tool covered by another)
 

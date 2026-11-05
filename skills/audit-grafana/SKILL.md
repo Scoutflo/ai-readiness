@@ -1,6 +1,6 @@
 ---
 name: audit-grafana
-description: 'Read-only scored audit of the Grafana application layer: datasource health and credentials, dashboard panel semantics (scope-leak and stale-datasource checks), alert rule wiring and receiver delivery, query hygiene, usage and cost visibility; writes findings.json and report.md and changes nothing. Use when the user mentions auditing or scoring Grafana, Grafana dashboards, Grafana alert rules, contact points, notification policies, or panel queries. Do not use for Loki, Tempo, Mimir, or VictoriaMetrics backend health (use audit-lgtm), for proving a page reaches a human (use audit-alertmanager), for Sentry (use audit-sentry), for DigitalOcean (use audit-digitalocean), or for Google Cloud (use audit-gcp).'
+description: 'Read-only scored audit of the Grafana application layer: datasource health and credentials, dashboard panel semantics (scope-leak and stale-datasource checks), alert rule wiring and receiver delivery, query hygiene, usage and cost visibility; writes findings.json and report.md and changes nothing. Use when the user mentions auditing or scoring Grafana, Grafana dashboards, Grafana alert rules, contact points, notification policies, or panel queries. Do not use for Loki, Tempo, Mimir, or VictoriaMetrics backend health (use audit-lgtm), for Alertmanager source routing (use audit-alertmanager), for Splunk On-Call escalation or staffing (use audit-splunk-oncall), for Sentry (use audit-sentry), for DigitalOcean (use audit-digitalocean), or for Google Cloud (use audit-gcp).'
 ---
 
 # Audit Grafana
@@ -560,7 +560,7 @@ The checks:
    ```
 
 5. **Annotations (GRAF-054).** Paging rules need `summary` and `runbook_url` annotations; a page without a runbook link slows the responder at the worst moment.
-6. **Delivery proof (GRAF-055).** A route with no evidence of a live delivery is `configured`, never working. Flag it and point at `audit-alertmanager` for end-to-end proof or `setup-grafana` for a confirmed routed test.
+6. **Delivery proof (GRAF-055).** A route with no observed delivery remains `configured`. Use `audit-alertmanager` only when Alertmanager is actually on that route. For a Splunk On-Call contact point, use `audit-splunk-oncall` to assess the downstream policy and current responder, with a fresh exact protected routing-key match. Neither audit's configuration nor provider dispatch metadata proves human receipt. A controlled routed test belongs in the confirmed setup workflow; record matching destination evidence and human receipt separately.
 7. **Noise controls (GRAF-056).** Grouping, group wait, and repeat interval left at defaults on high-volume routes predict alert fatigue.
 
 ## Phase 4b: Alert hygiene (noise signals)
