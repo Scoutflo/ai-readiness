@@ -30,6 +30,8 @@ Splunk On-Call cost scales with the selected teams, policies and rotations. Opti
 
 `audit-cost` (deep per-resource cost) and `/scoutflo:rca` (root-cause analysis) consume on the same order as an audit. `rca` reads reports already on disk as reference and then makes bounded, read-only live checks to confirm the current cause, so its cost depends on how many live probes it runs; with no cluster access it degrades to a report-only answer, which is the cheapest path.
 
+Alertmanager configuration projection runs locally and emits structural metadata instead of raw receiver configuration. It adds no provider request by itself; Python 3 with PyYAML is required. No measured token-saving claim is made. These execution estimates are separate from provider subscription billing, which the On-Call audit does not assess.
+
 ### Full Suite (all configured audits)
 
 **Token consumption (same for all models):** on the order of ~700K–1M tokens for a full multi-audit suite, scaling with how many integrations you configured and your estate size.

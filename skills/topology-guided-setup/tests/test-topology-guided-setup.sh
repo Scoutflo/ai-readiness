@@ -13,6 +13,10 @@ trap 'rm -rf "$WORK"' EXIT
 
 export SCOUTFLO_AUDIT_DIR="$WORK/audits"
 export TOPOLOGY_FILE="$WORK/topology.json"
+# This suite exercises the legacy topology-context fallback. Keep the preferred
+# business-context projection absent inside the fixture, independent of the
+# operator's home directory or an inherited BC_JSON override.
+export BC_JSON="$WORK/business_context.json"
 mkdir -p "$SCOUTFLO_AUDIT_DIR"
 
 fail() { echo "FAIL: $1" >&2; exit 1; }

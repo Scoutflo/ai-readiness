@@ -1,6 +1,6 @@
 {
   "name": "scoutflo",
-  "version": "0.1.244",
+  "version": "0.1.245",
   "description": "Audit cloud, Kubernetes, observability and Splunk On-Call paging setups from Claude Code. Find monitoring and routing gaps, review local evidence reports, and prioritize fixes. Use read-only audits with your credentials; approve supported setup changes before execution.",
   "author": {
     "name": "Scoutflo",

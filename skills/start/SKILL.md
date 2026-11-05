@@ -62,7 +62,7 @@ This toolkit audits, hardens, and monitors your infrastructure and observability
 | `/scoutflo:setup-kubernetes` | setup | Guided hardening for `audit-kubernetes` findings: PSA labels, RBAC tightening, network policies, resource limits, PDBs |
 | `/scoutflo:setup-sentry` | setup | Projects, environments, alert taxonomy, integrations |
 | `/scoutflo:setup-newrelic` | setup | Wire workflows to uncaught policies, per-service conditions from golden metrics, loss-of-signal, muting schedules, SLOs, tags, synthetics |
-| `/scoutflo:setup-splunk-oncall` | setup | Plan paging changes; apply/restore team descriptions with a separate elevated key, confirmation, drift checks and readback |
+| `/scoutflo:setup-splunk-oncall` | setup | Configure teams, schedules, escalation, routing and sources with separate setup credentials, exact confirmation, dependency checks and verified results |
 | `/scoutflo:audit-alertmanager` | audit | Proves your paging path is live, rule to receiver (the Prometheus→Alertmanager→receiver walk) |
 | `/scoutflo:audit-digitalocean` | audit | App Platform, managed databases, uptime, alert routing |
 | `/scoutflo:setup-digitalocean` | setup | Alert policies, uptime checks, database and app hardening |

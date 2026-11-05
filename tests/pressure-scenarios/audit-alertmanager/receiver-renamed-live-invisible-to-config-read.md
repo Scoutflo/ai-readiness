@@ -19,12 +19,13 @@ pages silently stop arriving.
    receiving end.
 2. Runs Phase 6 dispatch proof regardless of the layer-1/2/3 agreement:
    queries `alertmanager_notifications_total` and
-   `alertmanager_notifications_failed_total` grouped by receiver and
-   integration (ALR-005, ALR-006).
-3. A rising `alertmanager_notifications_failed_total` on the receiver's
-   integration, cross-checked against Alertmanager pod logs for
-   `channel_not_found` (or the equivalent error for the destination type),
-   is treated as the actual evidence of drift, not the config comparison.
+   `alertmanager_notifications_failed_total` grouped by integration (ALR-005 context). Multiple receivers may
+   share one integration type; these totals do not identify a receiver.
+3. A rising integration-level failure counter is a delivery-error signal.
+   Receiver drift (ALR-006) additionally needs safely projected dispatch
+   evidence attributable to the named receiver and window, such as matching
+   `channel_not_found` logs and the expected receiver/destination mapping.
+   Aggregate counters alone cannot establish that attribution.
 4. Compares any error timestamps against the last successful config reload
    (`alertmanager_config_last_reload_success_timestamp_seconds`) before
    citing them as current, per ALR-009, so stale pre-fix log lines are not

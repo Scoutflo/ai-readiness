@@ -1,6 +1,6 @@
 ---
 name: audit-alertmanager
-description: Read-only proof that the paging path works and is not drowning in noise; follows each alert rule through Alertmanager routes to a live receiver, scores delivery gaps, and scores alert-hygiene gaps (flapping, permanently-firing rules, missing `for` debounce, missing grouping or inhibition, duplicate delivery, resolve-noise) as findings. Use when the user asks whether alerts reach a human, or mentions the Prometheus/Alertmanager paging path, silent alerts, missed pages, dead receivers, routing trees, mute timings, notification delivery, alert noise, alert fatigue, flapping alerts, or noisy paging. Do not use for a full metrics/logs/traces audit (use audit-lgtm), for rule presence, rule-evaluation health, or the Prometheus server plane (use audit-prometheus), Grafana-managed alerting (use audit-grafana), error-tracker depth (use audit-sentry), or to change routing (use setup-lgtm or setup-grafana).
+description: Read-only audit of paging configuration, observed dispatch, and structural alert noise; follows each alert rule through Alertmanager routes to a live receiver, scores delivery gaps, and scores alert-hygiene gaps (flapping, permanently-firing rules, missing `for` debounce, missing grouping or inhibition, duplicate delivery, resolve-noise) as findings. Use when the user asks whether alerts reach a human, or mentions the Prometheus/Alertmanager paging path, silent alerts, missed pages, dead receivers, routing trees, mute timings, notification delivery, alert noise, alert fatigue, flapping alerts, or noisy paging. Do not use for a full metrics/logs/traces audit (use audit-lgtm), for rule presence, rule-evaluation health, or the Prometheus server plane (use audit-prometheus), Grafana-managed alerting (use audit-grafana), error-tracker depth (use audit-sentry), or to change routing (use setup-lgtm or setup-grafana).
 ---
 
 # audit-alertmanager
@@ -10,12 +10,12 @@ Deep, read-only audit of the Prometheus-to-Alertmanager paging path. It answers 
 The audit walks a fixed verification chain. Each link converts one assumption into evidence:
 
 1. The alert rules you rely on exist and evaluate — a precondition proven by `/scoutflo:audit-prometheus` (rule presence + health, `PROM-022` / `PROM-020/021`), consumed here as input, not re-scored.
-2. The Alertmanager config you declared is the config that is live, rendered on disk, and running in memory.
+2. Supported non-secret configuration fields agree across declared, live, rendered and running layers; destination/credential equality stays unassessed by redacted summaries.
 3. Alerts are actually firing, with the labels you think they have.
 4. The route tree resolves those alerts to the intended receiver.
 5. Dispatch counters prove notifications leave on that receiver, with failure counters flat.
 6. The alert payload carries enough metadata that a responder or automation can act on it without tribal knowledge.
-7. The alert stream is signal, not noise: rules do not flap or fire forever, related alerts group into one page, and no single rule floods the receiver.
+7. Observed structural noise stays within your declared thresholds: rules do not flap or remain stuck, related alerts group as intended, and volume is not concentrated unexpectedly. This is not an actionability or human-receipt measurement.
 
 Every command in this audit is read-only: `kubectl get`, `kubectl logs`, GET requests, and query calls that execute reads and store nothing. `kubectl exec` (to read a rendered file) and `kubectl port-forward` (to reach an unexposed API) change no cluster state and are classified read-only by effect; both are declared in the doctor gate and each has a fallback. Firing a controlled test notification is a mutation and lives in the setup lane.
 
@@ -29,7 +29,7 @@ Outputs, per the [report standard](../../report-standard/README.md):
 
 - `./scoutflo-audits/alertmanager/<YYYY-MM-DD>/findings.json` per the [findings schema](../../report-standard/findings-schema.md)
 - `./scoutflo-audits/alertmanager/<YYYY-MM-DD>/report.md` per the [report template](../../report-standard/report-template.md), including the `## Inventory` section (the `render-report-viz.sh inventory` output)
-- `./scoutflo-audits/alertmanager/<YYYY-MM-DD>/inventory.json` per the [inventory schema](../../report-standard/inventory-schema.md) (`scoutflo-inventory/v1`): the complete Phase-1 catalog — one item per alert rule, Alertmanager receiver, route, and silence — each with its `kind` (`alert_rule`, `receiver`, `route`, `silence`), `covers` (the topology service the alert maps to), `enabled`, `severity` (the object's own, or null), and `routes_to` for alerting objects. Built from the raw pull, never invented; redacted at capture, never a secret value.
+- `./scoutflo-audits/alertmanager/<YYYY-MM-DD>/inventory.json` per the [inventory schema](../../report-standard/inventory-schema.md) (`scoutflo-inventory/v1`): the observed catalog within the declared scope — one item per alert rule, Alertmanager receiver, route, and silence — each with its `kind` (`alert_rule`, `receiver`, `route`, `silence`), `covers` (the topology service the alert maps to), `enabled`, `severity` (the object's own, or null), and `routes_to` for alerting objects. Built from safe capture projections, never invented; record missing surfaces and any subset explicitly, never secret values.
 - One appended line in `./scoutflo-audits/alertmanager/history.jsonl`
 - One Slack brief, when `slack.webhook_env` is configured
 
@@ -49,11 +49,12 @@ Sentry is required only when your alerts claim an error-tracker handoff (ALR-008
 
 ```bash
 set -eu
+set +x
 CFG="${SCOUTFLO_CONFIG:-}"
 [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done
 [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
 if [ ! -f "$CFG" ]; then
-  # Multi-environment setup: a customer running prod+nonprod often has no default
+  # Your prod+nonprod setup may have no default
   # toolkit.yaml but named variants (toolkit-prod.yaml, toolkit-nonprod.yaml). List
   # them so the choice is directed, not a dead stall — but NEVER auto-pick an
   # environment (auditing the wrong one is worse than asking).
@@ -72,7 +73,7 @@ fi
 # sets *_env variables; no secret value is printed. A profile that already sources it makes
 # this a no-op. This mirrors what /scoutflo:doctor does, so doctor and this audit agree.
 SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.scoutflo/env" ]; then SCOUTFLO_ENV="./.scoutflo/env"; else SCOUTFLO_ENV="$HOME/.scoutflo/env"; fi; }
-[ -f "$SCOUTFLO_ENV" ] && . "$SCOUTFLO_ENV" || true
+if [ -f "$SCOUTFLO_ENV" ]; then set -a; . "$SCOUTFLO_ENV"; set +a; fi
 command -v curl >/dev/null || { echo "curl not installed"; exit 1; }
 command -v jq   >/dev/null || { echo "jq not installed"; exit 1; }
 command -v kubectl >/dev/null || echo "WARN: kubectl missing; only the cluster-side chain links (Alertmanager-in-cluster, port-forward fallback) are blocked — the Prometheus/Alertmanager HTTP checks still run. ALR-010 reachability decides what is actually blocked."
@@ -80,18 +81,53 @@ command -v kubectl >/dev/null || echo "WARN: kubectl missing; only the cluster-s
 # PROM_TOKEN is optional for open endpoints; SENTRY_TOKEN only if sentry.* is configured.
 ```
 
-Then one cheap live call per integration: `GET /api/v1/status/buildinfo` on Prometheus, `GET /api/v2/status` on Alertmanager (commands in [references/verification-chain.md](references/verification-chain.md) section 2). `/scoutflo:doctor` runs the same checks standalone.
+Then one cheap live call per integration: `GET /api/v1/status/buildinfo` on Prometheus, `GET /api/v2/status` on Alertmanager (commands in [references/verification-chain.md](references/verification-chain.md) section 2). `/scoutflo:doctor` runs the same checks standalone. Status/config reads first check Python 3 with PyYAML through the shipped projection helper; a missing dependency stops before provider access. Raw status responses can contain credentials and remain in memory only.
 
-Live-safety gate. Print what you are pointed at and compare it to the config before the first real check:
+Live-safety gate. Resolve the selected target from the config before any provider read. Shared-backend audits require a single Prometheus block; for a list, provide a config containing only the intended target. An API-shaped response proves reachability, not which estate an arbitrary URL represents. The configured endpoint is the target boundary; validate its ownership with your approved environment record before proceeding. Do not substitute an ambient URL or Kubernetes context.
 
 ```bash
 set -eu
-KUBE_CONTEXT="your-kube-context"   # kubernetes.context
-kubectl config current-context
-kubectl --context "$KUBE_CONTEXT" auth whoami 2>/dev/null || kubectl --context "$KUBE_CONTEXT" version
+set +x
+CFG="${SCOUTFLO_CONFIG:-}"
+[ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done
+sh "${CLAUDE_PLUGIN_ROOT}/skills/audit-alertmanager/scripts/project-config.sh" check
+python3 - "$CFG" <<'PY_GATE'
+import json, subprocess, sys
+from urllib.parse import urlsplit
+import yaml
+try:
+    cfg = yaml.safe_load(open(sys.argv[1]))
+    prom = cfg.get("prometheus")
+    assert isinstance(prom, dict), "select one prometheus block"
+    for key in ("url", "alertmanager_url"):
+        u = urlsplit(prom[key])
+        assert u.scheme in ("http", "https") and u.hostname and not (u.username or u.password or u.query or u.fragment), "invalid configured endpoint"
+        print(key + " configured host: " + u.hostname) # no paths or credentials
+    kube = cfg.get("kubernetes")
+    if kube is None:
+        print("Kubernetes not configured: cluster-layer comparisons blocked; HTTP checks remain available")
+    else:
+        assert isinstance(kube, dict), "select one kubernetes block"
+        context, namespace = kube["context"], kube["monitoring_namespace"]
+        assert isinstance(context,str) and context and isinstance(namespace,str) and namespace
+        def read(args):
+            r = subprocess.run(["kubectl", "--context", context] + args, capture_output=True, text=True, timeout=20)
+            assert r.returncode == 0, "configured Kubernetes read unavailable"
+            return json.loads(r.stdout)
+        view = read(["config", "view", "--minify", "-o", "json"])
+        assert len(view["contexts"]) == 1 and view["contexts"][0]["name"] == context, "context mismatch"
+        selected = view["contexts"][0]["context"]
+        assert selected["cluster"] in [x["name"] for x in view["clusters"]], "cluster mismatch"
+        assert selected["user"] in [x["name"] for x in view["users"]], "credential binding mismatch"
+        observed = read(["get", "namespace", namespace, "-o", "json"])
+        assert observed["metadata"]["name"] == namespace, "namespace mismatch"
+        print("Configured context, cluster/credential references and live namespace match")
+except Exception:
+    sys.exit("Live-safety gate blocked: verify the selected config, context, namespace and read access; no raw response retained")
+PY_GATE
 ```
 
-If the resolved context or API identity differs from what `toolkit.yaml` names, stop and report the mismatch. Never proceed on "probably the right cluster". Every command names its target explicitly: `kubectl --context "$KUBE_CONTEXT"`, `curl` against a URL resolved from the config.
+A mismatch or denied configured read stops this gate. If Kubernetes is intentionally unavailable, record the cluster evidence as blocked and use a config without that block for the HTTP-only run. Every later reference block must use these same configured endpoints/context, including the declared local port-forward when needed; never treat an example placeholder as an alternative target. Do not weaken TLS verification or follow redirects to make a probe pass.
 
 ## Ground rules
 
@@ -131,115 +167,143 @@ One permanent ID per check. IDs never change or get reused; retired checks keep 
 | ALR-019 | Route matching | No route/inhibition matcher pins `le`/`quantile` to an integer value that Prometheus 3.x normalizes to a float | high |
 | ALR-020 | Config integrity | No receiver on the deprecated `msteams_configs` delivery path (retired Office 365 connector) | medium |
 | ALR-021 | (retired v0.1.158) | Rule-evaluation health moved to `/scoutflo:audit-prometheus` (PROM-020/PROM-021); ID retired, never reused | — |
-| ALR-022 | Dispatch proof | No paging-severity alert is silently suppressed right now (a silence or inhibition swallowing a live page) | high |
+| ALR-022 | Dispatch proof | No unintended suppression removes required paging coverage (approved silences/inhibition need policy evidence) | high |
 | ALR-023 | Route matching | Paging routes do not delay or mute the first page (large `group_wait`, or a mute interval active at the current clock) | medium |
 
 Category weights for scoring:
 
-| Category | Weight | IDs |
-| --- | ---: | --- |
-| Config integrity | 22 | ALR-002, ALR-003, ALR-020 |
-| Dispatch proof | 25 | ALR-005, ALR-006, ALR-009, ALR-022 |
-| Route matching | 18 | ALR-004, ALR-011, ALR-019, ALR-023 |
-| Alert hygiene | 17 | ALR-012, ALR-013, ALR-014, ALR-015, ALR-016, ALR-017, ALR-018 |
-| Triage metadata | 12 | ALR-007, ALR-008 |
-| Reachability | 6 | ALR-010 |
+| Category | Weight | IDs | Target profile: 100/100 on assessed, applicable checks |
+| --- | ---: | --- | --- |
+| Config integrity | 22 | ALR-002, ALR-003, ALR-020 | Declared/live/rendered/running supported fields agree; reload succeeded; paging destinations are real and the configured receiver type is supported. Masked destinations remain unassessed. |
+| Dispatch proof | 25 | ALR-005, ALR-006, ALR-009, ALR-022 | Recent observed attempts use the intended receiver, failures are absent over a complete counter window, log evidence is current, and no unintended suppression prevents the required page. No traffic remains unproven; human receipt is separate. |
+| Route matching | 18 | ALR-004, ALR-011, ALR-019, ALR-023 | Every in-scope service has an intentional route/default; observed alerts select it; timing/mutes match your paging requirement; matchers match the detected Prometheus version. |
+| Alert hygiene | 17 | ALR-012, ALR-013, ALR-014, ALR-015, ALR-016, ALR-017, ALR-018 | Sufficient retained observations show no excessive flapping/stuck firing or volume concentration against your thresholds; debounce, grouping, inhibition, repeats, HA dedup and resolves match your stated policy. |
+| Triage metadata | 12 | ALR-007, ALR-008 | Each paging rule has proven service/environment identity, readable impact, and a confirmation query; any claimed error-tracker handoff resolves to the exact accessible project/query. |
+| Reachability | 6 | ALR-010 | The configured, validated target hosts resolve and answer with the expected API schema through the intended access path; this proves reachability, not human delivery. |
 
 The former **Rule presence** category (retired `ALR-001` + `ALR-021`, weight 15) moved to `/scoutflo:audit-prometheus` (PROM-022 presence, PROM-020/021 health); its weight was redistributed across the six categories above (they sum to 100). This audit consumes rule presence/health as a precondition and never re-scores it.
 
-## Estate sizing
+## Estate sizing and scope checkpoint
 
-Count before judging, and declare the path in the terminal output. The natural batch unit here is the alert rule: Phase 3 (rule presence) and Phase 7 (triage metadata) both do per-rule work, and receiver counts almost never dominate rule counts in practice.
+Count **loaded alerting rules** from a successful Prometheus `/api/v1/rules` response plus Alertmanager receivers. This works independently of Operator/GMP CRD availability. Recording rules are not alert work items. A successful empty list is zero; forbidden, malformed, partial, oversized or failed reads are unavailable and stop sizing. These counts choose workload only and never prove quality or change score.
+
+When a credential alias is omitted or null, this block preserves the legacy `PROM_TOKEN` / `PROM_BASIC_USER` / `PROM_BASIC_PASS` values already in the shell. A named alias is authoritative: missing custom credentials stop the read, never fall back to a default.
+
+This single fresh-shell block recomputes counts immediately before the checkpoint; it never trusts an inherited `TOTAL`. `SMALL_MAX_OBJECTS=20`, `MEDIUM_MAX_OBJECTS=80`, `ALR_BATCH_SIZE=20` are tunable estate examples, not readiness targets. Use the same values on resume. The 2 MiB response cap is a parser safety ceiling; a larger response requires a narrower supported scope, never truncation.
 
 ```bash
 set -eu
+set +x
+CFG="${SCOUTFLO_CONFIG:-}"
+[ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done
 SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.scoutflo/env" ]; then SCOUTFLO_ENV="./.scoutflo/env"; else SCOUTFLO_ENV="$HOME/.scoutflo/env"; fi; }
-_SF_CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$_SF_CFG" ] || for _sf_c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_sf_c" ] && { _SF_CFG="$_sf_c"; break; }; done
-_SF_TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
-if [ "$(sh "$_SF_TT" "$_SF_CFG" prometheus kind 2>/dev/null || true)" = seq ]; then _sf_i=0; while [ "$_sf_i" -lt "$(sh "$_SF_TT" "$_SF_CFG" prometheus count 2>/dev/null || echo 0)" ]; do [ -z "$(sh "$_SF_TT" "$_SF_CFG" prometheus get "$_sf_i" token_env 2>/dev/null || true)" ] || { echo "prometheus in ${_SF_CFG} is a list of targets that each name their own token_env, and this step reads PROM_TOKEN by its default name, so it cannot tell which target's value to use. It stops instead of guessing: give that target a config of its own where prometheus is a single block, and run with SCOUTFLO_CONFIG set to that file (and SCOUTFLO_AUDIT_DIR to its own folder)."; exit 1; }; _sf_i=$((_sf_i+1)); done; fi
-_sf_tv="$(sh "$_SF_TT" "$_SF_CFG" prometheus get 0 token_env 2>/dev/null || true)"; if [ -n "$_sf_tv" ] && [ "$(sh "$_SF_TT" "$_SF_CFG" prometheus kind 2>/dev/null || true)" != seq ]; then _sf_v="$(sh -c '( [ -f "$1" ] && . "$1" >/dev/null 2>&1; printenv -- "$2" ) 2>/dev/null || printenv -- "$2"' _ "$SCOUTFLO_ENV" "$_sf_tv" 2>/dev/null || true)"; if [ -n "$_sf_v" ]; then PROM_TOKEN="$_sf_v"; export PROM_TOKEN; else unset PROM_TOKEN; echo "note: ${_sf_tv} (named by prometheus.token_env) is not set in the secret store or the shell" >&2; fi; fi
-if [ "$(sh "$_SF_TT" "$_SF_CFG" prometheus kind 2>/dev/null || true)" = seq ]; then _sf_i=0; while [ "$_sf_i" -lt "$(sh "$_SF_TT" "$_SF_CFG" prometheus count 2>/dev/null || echo 0)" ]; do [ -z "$(sh "$_SF_TT" "$_SF_CFG" prometheus get "$_sf_i" basic_user_env 2>/dev/null || true)" ] || { echo "prometheus in ${_SF_CFG} is a list of targets that each name their own basic_user_env, and this step reads PROM_BASIC_USER by its default name, so it cannot tell which target's value to use. It stops instead of guessing: give that target a config of its own where prometheus is a single block, and run with SCOUTFLO_CONFIG set to that file (and SCOUTFLO_AUDIT_DIR to its own folder)."; exit 1; }; _sf_i=$((_sf_i+1)); done; fi
-_sf_tv="$(sh "$_SF_TT" "$_SF_CFG" prometheus get 0 basic_user_env 2>/dev/null || true)"; if [ -n "$_sf_tv" ] && [ "$(sh "$_SF_TT" "$_SF_CFG" prometheus kind 2>/dev/null || true)" != seq ]; then _sf_v="$(sh -c '( [ -f "$1" ] && . "$1" >/dev/null 2>&1; printenv -- "$2" ) 2>/dev/null || printenv -- "$2"' _ "$SCOUTFLO_ENV" "$_sf_tv" 2>/dev/null || true)"; if [ -n "$_sf_v" ]; then PROM_BASIC_USER="$_sf_v"; export PROM_BASIC_USER; else unset PROM_BASIC_USER; echo "note: ${_sf_tv} (named by prometheus.basic_user_env) is not set in the secret store or the shell" >&2; fi; fi
-if [ "$(sh "$_SF_TT" "$_SF_CFG" prometheus kind 2>/dev/null || true)" = seq ]; then _sf_i=0; while [ "$_sf_i" -lt "$(sh "$_SF_TT" "$_SF_CFG" prometheus count 2>/dev/null || echo 0)" ]; do [ -z "$(sh "$_SF_TT" "$_SF_CFG" prometheus get "$_sf_i" basic_pass_env 2>/dev/null || true)" ] || { echo "prometheus in ${_SF_CFG} is a list of targets that each name their own basic_pass_env, and this step reads PROM_BASIC_PASS by its default name, so it cannot tell which target's value to use. It stops instead of guessing: give that target a config of its own where prometheus is a single block, and run with SCOUTFLO_CONFIG set to that file (and SCOUTFLO_AUDIT_DIR to its own folder)."; exit 1; }; _sf_i=$((_sf_i+1)); done; fi
-_sf_tv="$(sh "$_SF_TT" "$_SF_CFG" prometheus get 0 basic_pass_env 2>/dev/null || true)"; if [ -n "$_sf_tv" ] && [ "$(sh "$_SF_TT" "$_SF_CFG" prometheus kind 2>/dev/null || true)" != seq ]; then _sf_v="$(sh -c '( [ -f "$1" ] && . "$1" >/dev/null 2>&1; printenv -- "$2" ) 2>/dev/null || printenv -- "$2"' _ "$SCOUTFLO_ENV" "$_sf_tv" 2>/dev/null || true)"; if [ -n "$_sf_v" ]; then PROM_BASIC_PASS="$_sf_v"; export PROM_BASIC_PASS; else unset PROM_BASIC_PASS; echo "note: ${_sf_tv} (named by prometheus.basic_pass_env) is not set in the secret store or the shell" >&2; fi; fi
-SMALL_MAX_OBJECTS="20"    # example, tune to your environment
-MEDIUM_MAX_OBJECTS="80"   # example, tune to your environment
-BATCH_SIZE="20"           # alert rules per batch on the large path; example, tune it
-KUBE_CONTEXT="your-kube-context"            # kubernetes.context
-AM_URL="https://alertmanager.example.com"   # prometheus.alertmanager_url
-PROM_TOKEN="${PROM_TOKEN:-}"                # value of the var named by prometheus.token_env, if set
-AUTH="Authorization: Bearer ${PROM_TOKEN}"
-[ -n "$PROM_TOKEN" ] || AUTH="Accept: application/json"
-if [ -n "${PROM_BASIC_USER:-}" ] && [ -n "${PROM_BASIC_PASS:-}" ]; then AUTH="Authorization: Basic $(printf '%s:%s' "$PROM_BASIC_USER" "$PROM_BASIC_PASS" | base64 | tr -d '\n')"; fi   # prom basic_user_env/basic_pass_env override (basic auth beats bearer)
-
-RULES="$(kubectl --context "$KUBE_CONTEXT" get prometheusrule -A -o json 2>/dev/null \
-  | jq '[.items[]?.spec.groups[]?.rules[]?] | length' 2>/dev/null || echo 0)"
-# Capture the HTTP code — a 401/403 on /api/v2/receivers is an auth finding, not a zero
-# estate. Bare `curl -s | jq length` would return the key-count of a JSON error body
-# (e.g. 2 for {"error":...,"code":401}) or, on a plain-text 401 body, make jq error and
-# abort the whole sizing block under set -eu. Neither is the "stop and report auth" behavior.
-REC_CODE="$(curl -s -o /tmp/alr-receivers.json -w '%{http_code}' -H "$AUTH" --max-time 10 "${AM_URL}/api/v2/receivers")"
-if [ "$REC_CODE" = "401" ] || [ "$REC_CODE" = "403" ]; then
-  echo "BLOCKED: ${AM_URL}/api/v2/receivers returned ${REC_CODE} — Alertmanager read token lacks access. Stop and report an auth-scope finding; do NOT size the estate from an empty count."
-  exit 1
-elif [ "$REC_CODE" != "200" ]; then
-  echo "BLOCKED: /api/v2/receivers returned HTTP ${REC_CODE}; cannot size the estate. Record as blocked."
-  exit 1
-fi
-RECEIVERS="$(jq 'if type=="array" then length else 0 end' /tmp/alr-receivers.json)"
-TOTAL=$((RULES + RECEIVERS))
-echo "alert_rules=${RULES} receivers=${RECEIVERS} scored_objects=${TOTAL}"
-
-# Guided-walkthrough drift check, per report-standard/README.md#using-topology-and-prior-runs-as-a-guided-walkthrough:
-# compare against the last run rather than a blank slate. State the result in the executive summary;
-# never silently omit it. This never skips a live check - every check in later phases still runs fresh.
+sh "${CLAUDE_PLUGIN_ROOT}/skills/audit-alertmanager/scripts/project-config.sh" check
+SMALL_MAX_OBJECTS="${SMALL_MAX_OBJECTS:-20}"; MEDIUM_MAX_OBJECTS="${MEDIUM_MAX_OBJECTS:-80}"; ALR_BATCH_SIZE="${ALR_BATCH_SIZE:-20}"
+COUNTS="$(python3 - "$CFG" "$SMALL_MAX_OBJECTS" "$MEDIUM_MAX_OBJECTS" "$ALR_BATCH_SIZE" "$SCOUTFLO_ENV" <<'PY_SIZE'
+import base64, hashlib, json, os, re, subprocess, sys
+from urllib.parse import urlsplit
+import yaml
+try:
+    assert all(re.fullmatch(r"[1-9][0-9]*", x) for x in sys.argv[2:5])
+    small, medium, batch = map(int, sys.argv[2:5])
+    assert 0 < small <= medium and batch > 0
+    cfg = yaml.safe_load(open(sys.argv[1])); p = cfg.get("prometheus")
+    assert isinstance(p, dict), "select one prometheus target"
+    urls = [p[k].rstrip("/") for k in ("url", "alertmanager_url")]
+    for raw in urls:
+        u = urlsplit(raw)
+        assert u.scheme in ("http", "https") and u.hostname and not (u.username or u.password or u.query or u.fragment)
+    def secret(field):
+        name = p.get(field)
+        if name is None:
+            # Legacy single-target inputs remain valid when no alias is named.
+            default = {"token_env":"PROM_TOKEN", "basic_user_env":"PROM_BASIC_USER", "basic_pass_env":"PROM_BASIC_PASS"}[field]
+            value = os.environ.get(default, "")
+            assert "\n" not in value and "\r" not in value, "invalid legacy credential"
+            return value
+        assert isinstance(name,str) and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name)
+        # Import only this config-named credential. Store variables such as
+        # KUBECONFIG or SCOUTFLO_AUDIT_DIR stay confined to the child process.
+        r = subprocess.run(["/bin/sh", "-c", 'set -ea; if [ -f "$1" ]; then . "$1" >/dev/null 2>&1; fi; printenv "$2"', "_", sys.argv[5], name], capture_output=True, text=True, timeout=5)
+        value = r.stdout.rstrip("\n")
+        assert r.returncode == 0 and value and "\n" not in value and "\r" not in value, "configured credential unavailable"
+        return value
+    token, user, password = [secret(k) for k in ("token_env", "basic_user_env", "basic_pass_env")]
+    assert bool(user) == bool(password), "incomplete basic credentials"
+    auth = "Accept: application/json"
+    if token: auth = "Authorization: Bearer " + token
+    if user: auth = "Authorization: Basic " + base64.b64encode((user+":"+password).encode()).decode()
+    def read(url):
+        r = subprocess.run(["curl", "-q", "-sS", "--proto", "=http,https", "--max-redirs", "0", "--connect-timeout", "5", "--max-time", "15", "--max-filesize", "2097152", "-H", auth, "-w", "\n%{http_code} %{content_type}", url], capture_output=True, timeout=20)
+        if r.returncode != 0:
+            print("Sizing transport blocked: curl exit " + str(r.returncode), file=sys.stderr)
+            raise ValueError()
+        assert len(r.stdout) <= 2097252, "response safety bound"
+        body, meta = r.stdout.rsplit(b"\n",1)
+        code = meta.split(b" ",1)[0]
+        assert re.fullmatch(b"[0-9]{3}", code), "invalid response metadata"
+        print("Sizing HTTP status: " + code.decode(), file=sys.stderr)
+        assert code == b"200", "API status unavailable"
+        if b"json" not in meta.lower():
+            print("Sizing response blocked: unsupported content type", file=sys.stderr)
+            raise ValueError()
+        try: return json.loads(body)
+        except Exception:
+            print("Sizing response blocked: invalid JSON", file=sys.stderr)
+            raise ValueError()
+    rules = read(urls[0]+"/api/v1/rules")
+    assert isinstance(rules,dict) and rules.get("status") == "success" and not rules.get("warnings"), "rules unavailable or partial"
+    groups = rules["data"]["groups"]; assert isinstance(groups,list)
+    count = 0
+    for group in groups:
+        assert isinstance(group,dict) and isinstance(group.get("rules"),list)
+        for rule in group["rules"]:
+            assert isinstance(rule,dict) and rule.get("type") in ("alerting", "recording")
+            assert isinstance(rule.get("name"),str) and rule["name"]
+            if rule["type"] == "alerting": count += 1
+    receivers = read(urls[1]+"/api/v2/receivers")
+    assert isinstance(receivers,list) and all(isinstance(x,dict) and isinstance(x.get("name"),str) and x["name"] for x in receivers)
+    binding = hashlib.sha256(json.dumps(urls).encode()).hexdigest()
+    print(count, len(receivers), binding)
+except Exception:
+    sys.exit("Estate sizing blocked: configured target/auth, successful complete API responses and valid schemas are required; counts unavailable, never zero")
+PY_SIZE
+)"
+RULES="$(printf '%s' "$COUNTS" | cut -d' ' -f1)"; RECEIVERS="$(printf '%s' "$COUNTS" | cut -d' ' -f2)"; TARGET_BINDING="$(printf '%s' "$COUNTS" | cut -d' ' -f3)"
+TOTAL=$((RULES + RECEIVERS)); AUDIT_PATH=large
+if [ "$TOTAL" -le "$SMALL_MAX_OBJECTS" ]; then AUDIT_PATH=small; elif [ "$TOTAL" -le "$MEDIUM_MAX_OBJECTS" ]; then AUDIT_PATH=medium; fi
+printf 'estate: alert_rules=%s receivers=%s total=%s path=%s (small<=%s medium<=%s batch=%s)\n' "$RULES" "$RECEIVERS" "$TOTAL" "$AUDIT_PATH" "$SMALL_MAX_OBJECTS" "$MEDIUM_MAX_OBJECTS" "$ALR_BATCH_SIZE"
 TARGET_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/alertmanager"
-PREV_RUN="$(find "$TARGET_DIR" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort | tail -1)"
-DRIFT="first run"
-if [ -n "$PREV_RUN" ] && [ -f "${PREV_RUN}/findings.json" ]; then
-  PREV_TOTAL="$(jq -r '.estate.objects // empty' "${PREV_RUN}/findings.json")"
-  if [ -n "$PREV_TOTAL" ]; then
-    if [ "$PREV_TOTAL" -eq "$TOTAL" ]; then
-      DRIFT="estate unchanged since ${PREV_RUN##*/} (${PREV_TOTAL} objects then, ${TOTAL} now)"
-    else
-      DRIFT="estate changed since ${PREV_RUN##*/}: ${PREV_TOTAL} -> ${TOTAL} objects"
-    fi
-  else
-    DRIFT="previous run recorded no estate data; treating as first run"
-  fi
+mkdir -p "$TARGET_DIR"
+PREV_RUN="$(find "$TARGET_DIR" -mindepth 1 -maxdepth 1 -type d -name '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]' | sort | tail -1)"
+if [ -n "$PREV_RUN" ] && [ -f "$PREV_RUN/findings.json" ]; then
+  PREV_TOTAL="$(jq -r '.estate.objects | select(type=="number" and .>=0 and floor==.)' "$PREV_RUN/findings.json")"
+  [ -z "$PREV_TOTAL" ] || printf 'prior recorded estate: %s objects; current: %s (compare only for the same target and scope)\n' "$PREV_TOTAL" "$TOTAL"
 fi
-echo "drift: ${DRIFT}"
-```
-
-`kubectl get prometheusrule` reads 0 rules, not an error, on any cluster that doesn't run the Prometheus Operator's CRD — Google Managed Prometheus (GMP) uses its own family (`rules.monitoring.googleapis.com`, `clusterrules`, `globalrules`) instead. When `alert_rules=0` but the cluster clearly has alerting (Alertmanager has receivers, or `/api/v1/rules` in Phase 3 returns real groups), treat the count as a floor, not the truth, and size from the live `/api/v1/rules` response instead. This only affects the sizing pre-check; Phase 3's own live-rules check (below) already reads from `/api/v1/rules` and is unaffected either way.
-
-- **Small** (`TOTAL <= SMALL_MAX_OBJECTS`): one pass over everything. No worklist, no batching; a dozen rules do not need bookkeeping.
-- **Medium** (`TOTAL <= MEDIUM_MAX_OBJECTS`): per-category passes (rule presence, config drift, route matching, dispatch proof, triage metadata), completed in one run.
-- **Large**: work alert rules in batches of `BATCH_SIZE` against a run-ID-keyed worklist with a lock, so an interrupted run resumes instead of restarting, and the report is assembled incrementally as batches complete. Commands, resume scan, and lock mechanics are in [references/verification-chain.md section 12](references/verification-chain.md#12-large-path-worklist-alert-rule-batches).
-
-Record the chosen path and counts in `findings.json` as `estate: {objects, path}` (per the [findings schema](../../report-standard/findings-schema.md)); the guided-walkthrough drift check above reads `.estate.objects` from the previous run, and `audit-all` reads them to roll up this target's size. Never silently truncate: if the run judged a subset, the report names what was skipped and the coverage denominators reflect it. A `401`/`403` on either count call is an auth problem, not a zero-object estate; stop and report it per the auth-header discipline above rather than declaring a small path from an empty count.
-
-### Scope checkpoint
-
-On a large estate this audit pauses to let you scope before spending tokens, per the shared [estate-sizing scope checkpoint](../../report-standard/estate-scope-checkpoint.md). After the sizing step above computes the object count, run the shared checkpoint block:
-
-```bash
-set -eu
-# The Estate sizing step above sets TOTAL to this audit's object count.
-TOTAL="${TOTAL:?estate sizing must set TOTAL before the scope checkpoint}"
 . "${CLAUDE_PLUGIN_ROOT}/skills/cli-interactive/lib/cli-interactive.sh"
-. "${CLAUDE_PLUGIN_ROOT}/skills/checkpoint/lib/checkpoint.sh"
-SCOPE="$(checkpoint_load_scope)"                # reuse a saved scope, or "all"
-[ "$SCOPE" = "all" ] || echo "[checkpoint] reusing saved audit scope: ${SCOPE}"
-if [ "${TOTAL}" -ge 501 ]; then
-  echo "estate: ${TOTAL} objects (large path) — pausing to let you scope before spending tokens"
-  cli_pause_before_audit "${TOTAL}"             # confirm before a large run
-  cli_prompt_exclude_services                   # offer service/region exclusions
-  echo "[checkpoint] narrow scope any time with /scoutflo:checkpoint; reset with /scoutflo:checkpoint --reset-scope"
+EXCLUDED=""
+if [ "$AUDIT_PATH" = large ]; then
+  # The shared helper only pauses at 1000; explicitly confirm smaller large estates too.
+  if [ "$TOTAL" -ge 1000 ]; then cli_pause_before_audit "$TOTAL"; else cli_confirm_proceed "Audit ${TOTAL} objects on the large path?"; fi
+  printf 'Services to exclude (comma-separated, blank for none; use only verified service identities): '
+  read -r EXCLUDED
 fi
+# This local receipt binds the choice to these endpoints; do not reuse global scope from another estate.
+OBSERVED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+jq -n --arg at "$OBSERVED_AT" --argjson objects "$TOTAL" --arg path "$AUDIT_PATH" --arg binding "$TARGET_BINDING" --arg exclusions "$EXCLUDED" --argjson batch "$ALR_BATCH_SIZE" \
+  '{observed_at:$at,objects:$objects,path:$path,target_binding:$binding,batch_size:$batch,excluded_services:($exclusions|split(",")|map(gsub("^ +| +$";"")|select(length>0)))}' > "$TARGET_DIR/estate-sizing.json"
+if ! jq -e '.excluded_services | length == 0' "$TARGET_DIR/estate-sizing.json" >/dev/null; then
+  echo 'Scope blocked: exclusions recorded, but the bulk runner cannot enforce service-to-rule filtering; do not seed or collect batches and do not discard exclusions to proceed'
+  exit 2
+fi
+echo 'Current whole-target scope recorded; the batch runner verifies this receipt before rule reads'
 ```
 
-The large-path phases then run against the scoped set; the report names anything scoped out.
+- **Small:** one complete pass. **Medium:** per-category passes in one run. **Large:** sequential batches of `ALR_BATCH_SIZE`, after confirmation. The shipped batch runner supports the whole configured target only; nonempty service exclusions stop safely because verified service-to-rule filtering is not implemented. `/scoutflo:checkpoint` can record a narrower request, but does not make that unsupported batch scope executable. Never ignore exclusions to continue.
+- Large worklists use one loaded alert-rule identity (`file`, `group`, `name`) per item. [Reference section 12](references/verification-chain.md#12-large-path-worklist-alert-rule-batches) binds `ALR_RUN_ID` to the endpoints and selected file/group/name identities, refuses concurrent claims, and records a saved observation plus your attended review receipt before marking an item done. Its observation hash proves review of that dated snapshot; it does not bind credentials, detect changes in completed rule definitions, or prove live-current state. If target identity, authorization scope or a relevant rule definition changes, declare a new scope/run and re-review. A failed read stays pending; done never means an automatic pass or proof of paging.
+- The batch runner requires a current `estate-sizing.json` with matching target binding, `path: large`, UTC `observed_at` and empty exclusions. `ALR_SIZING_MAX_AGE_SECONDS` defaults to `3600` (a tunable freshness example); stale or mismatched receipts stop before seed/deep reads. Recompute sizing to renew it.
+- Run rule-to-route mapping, metadata, and per-rule hygiene against that worklist. Config, receiver, counter and silence checks are separate global passes. The final pending-zero gate proves that every seeded item has a dated attended review, not that current state was rechecked; report the observation dates and partial work explicitly.
+- Write `estate: {objects, path}` from the receipt. Record requested exclusions and any blocked execution explicitly; never present them as applied by this runner. Leave unmapped rules visible and record the selected scope and omitted surfaces in findings and inventory. A subset cannot earn an end-to-end label. Counts are not readiness credit.
 
 ## Phase 1: Service context and alert-to-service mapping
 
@@ -266,7 +330,9 @@ The presence/health *verdict* is audit-prometheus's; the routing/delivery verdic
 
 ## Phase 4: Config drift across three layers (ALR-002, ALR-003, ALR-009)
 
-Alertmanager config exists in three places that can disagree: the declared objects (`AlertmanagerConfig` CRDs plus the base config, or a plain Secret/ConfigMap), the rendered file on disk (`/etc/alertmanager/config_out/alertmanager.env.yaml` in operator-managed installs), and the running config in memory (`api/v2/status`, `.config.original`). Read all three, redacting secret values, and compare receivers, channels, and the route block. Commands and the redaction filter are in sections 4 and 5 of the reference.
+Alertmanager config exists in three places that can disagree: the declared objects (`AlertmanagerConfig` CRDs plus the base config, or a plain Secret/ConfigMap), the rendered file on disk (`/etc/alertmanager/config_out/alertmanager.env.yaml` in operator-managed installs), and the running config in memory (`api/v2/status`, `.config.original`). Parse each in memory through the bounded projection helper before it reaches output or a file. Compare receiver names/types, supported channel names and route structure. Credential/destination equality remains unassessed by these safe summaries; two masked values never prove equality. Commands and supported projection fields are in sections 4 and 5 of the reference. Unsupported fields remain unknown, not absent or passing.
+
+Native `victorops_configs` and Operator `victoropsConfigs` are Splunk On-Call receivers. Their presence establishes a configured downstream type only. Retain upstream alert and receiver identities here; the separate [On-Call source join](../audit-splunk-oncall/references/verify-path.md#source-side-evidence-for-soc-007) requires verified source metadata, protected exact-key comparison, expected policy/team and a current responder. Never derive the key from a receiver name or treat a paging policy as an upstream alert rule.
 
 Two rules keep this phase honest:
 
@@ -291,10 +357,10 @@ Then compare three sets:
 
 ## Phase 6: Dispatch proof and receiver liveness (ALR-005, ALR-006)
 
-Query `alertmanager_notifications_total` and `alertmanager_notifications_failed_total` grouped by integration and by receiver, both lifetime and as `increase()` over `RECENT_WINDOW` (example value, tune to your alert volume). Commands in section 8 of the reference. Verdicts:
+Query `alertmanager_notifications_total` and `alertmanager_notifications_failed_total` by their actually exposed labels, both lifetime and as `increase()` over `RECENT_WINDOW` (example value, tune to your alert volume). The reference queries aggregate by integration; they do not identify an individual receiver. Receiver attribution requires an exposed receiver identity label or independent protected source evidence; otherwise ALR-006 remains unverified. Commands in section 8 of the reference. Verdicts:
 
 - Failure counters above zero inside the recent window: delivery is breaking right now (ALR-005). Group by `reason` where your Alertmanager version exposes it.
-- The receiver your routes point at flat at zero while another receiver climbs: an integration or route mismatch (ALR-006), and the classic shape of a silent migration gone wrong.
+- Only with verified receiver attribution: the expected receiver stays flat while another climbs despite alerts requiring its dispatch. That supports an integration/route mismatch (ALR-006). Integration-only totals cannot establish this; missing receiver attribution blocks the check.
 - A receiver with no traffic and no firing alerts routed to it is unproven: status `configured`, never `pass`.
 - Classify receivers from the redacted config: a null receiver or a placeholder host class (loopback, `example.com`) on any route that paging severities can reach is an ALR-002 finding at critical.
 
@@ -306,14 +372,14 @@ A firing alert that reaches a human with only a name is a page that starts an in
 
 Two deeper checks:
 
-- Run each rule's confirmation-query annotation against Prometheus. A triage query that returns nothing is a dead handoff, and an app-metric query against telemetry that does not exist fails here too; prefer kube-state and kubelet signals when app metrics are absent.
+- Run each rule's confirmation-query annotation against Prometheus. A valid empty result does not prove a dead handoff: distinguish no matching current events from missing telemetry, wrong labels or query errors. Require observed supporting telemetry before crediting the handoff; prefer kube-state and kubelet signals when app metrics are absent.
 - If annotations claim an error-tracker handoff, verify the named project and query with a read-only API call using `SENTRY_TOKEN` (section 10 of the reference). A DSN in a workload secret proves the SDK was configured once, not that issues arrive (ALR-008). The full error-tracking audit is `/scoutflo:audit-sentry`.
 
-Then render the Scoutflo Topology Readiness section per [topology-readiness.md](../../report-standard/topology-readiness.md): evaluate T1 to T6 per critical service from `./scoutflo-audits/topology-export.json`, read-only. An edge this audit verified live (for example a `MONITORED_BY` edge to an Alertmanager receiver Phase 6 confirmed actually dispatches, not just a configured route) counts toward T6. Gaps that map to an existing finding reference its ID; gaps with no finding get a `TOPO-` row pointing at `/scoutflo:map-topology`. Render check names and confidence per the standard: plain-English column headers (T-codes only in the legend line), confidence as `n/10`, and — whenever any service is below ready — the ticket-ready sync-readiness action plan table from [topology-readiness.md](../../report-standard/topology-readiness.md). If the export or topology.md is missing, or exists but describes a different target than this audit covers (wrong `cluster_id`, non-overlapping services), the section renders the matching state from topology-readiness.md with its one-line unlock (run `/scoutflo:map-topology` against the right estate, or hand-author the export per `scoutflo-export.md` for non-Kubernetes estates); it never guesses and never says a bare "unavailable". Readiness is reported, never folded into the 0-100 score.
+Render the shared Scoutflo Topology Readiness section using [topology-readiness.md](../../report-standard/topology-readiness.md) and a matching local `topology-export.json`, read-only. Follow its T1–T6 evidence requirements, display rules and missing/wrong-target states. Reuse only source-proven service mappings; route names or a dispatch counter do not establish a platform edge or service identity. Reference existing finding IDs for overlapping gaps; otherwise emit non-scored `TOPO-*` gaps with the exact local mapping/export action. This section assesses the supplied local export; it makes no claim about current platform graph schema or backend ingestion. It never changes the audit score.
 
 ## Phase 8: Alert hygiene (ALR-012 to ALR-018)
 
-The prior phases prove a page can reach a human. This phase asks the opposite: is the volume and quality of what reaches them sustainable, or has the alert stream become noise that buries the real page? Every check here is read-only and reuses data the earlier phases already reach — the range-query form of the `ALERTS` series, the notification counters, and the rendered Alertmanager config. Full commands are in [references/verification-chain.md](references/verification-chain.md) section 13.
+The prior phases establish configuration and any observed dispatch evidence; they cannot prove human receipt. This phase checks structural noise that could bury an important notification. Every check here is read-only and reuses data the earlier phases already reach — the range-query form of the `ALERTS` series, the notification counters, and the rendered Alertmanager config. Full commands are in [references/verification-chain.md](references/verification-chain.md) section 13.
 
 Honest ceiling, stated in the report every run:
 
@@ -324,10 +390,10 @@ Honest ceiling, stated in the report every run:
 Checks:
 
 - **ALR-012 (flapping / churn).** Reconstruct each rule's firing episodes from a `query_range` over `ALERTS{alertstate="firing"}` across `LOOKBACK`. A paging-severity rule with more than `FLAP_EPISODES` (example value, tune it) firing episodes and `keepFiringFor == 0` on its definition is a strobe with no damping — it trains responders to ignore it.
-- **ALR-013 (permanently-firing / stale silences).** The same range read gives each rule's firing fraction; a paging rule firing more than `STUCK_FRACTION` of the window (example value) is always-on wallpaper. Also read `GET /api/v2/silences`: a silence with a very long or effectively permanent `endsAt` is hiding real alerts, not managing noise — flag it with its matcher and `createdBy`.
+- **ALR-013 (permanently-firing / stale silences).** The same range read gives each rule's firing fraction; a paging rule firing more than `STUCK_FRACTION` of the window (example value) is always-on wallpaper. Also read `GET /api/v2/silences`: a long or effectively permanent silence is a review candidate. Flag it only when its scope or lifetime contradicts your declared policy and removes required coverage; retain matcher and owner evidence. Approved maintenance suppression is not automatically a defect.
 - **ALR-014 (missing `for`).** `GET /api/v1/rules` carries `duration` per rule. A paging-severity rule with `duration == 0` fires on a single scrape blip that may self-correct before anyone looks. A `for` matched to the signal's volatility is the fix.
-- **ALR-015 (volume concentration).** Rank rules by notification volume: `increase(alertmanager_notifications_total[LOOKBACK])` by receiver, and `count_over_time(ALERTS{alertstate="firing"}[LOOKBACK])` by alertname. When a few rules generate the bulk of a paging receiver's traffic, name them — they are the highest-leverage tuning targets. A very short `route.repeat_interval` on a paging route is a re-page storm and belongs here too.
-- **ALR-016 (grouping and inhibition).** From the rendered config (`config.original`), a paging route with no meaningful `group_by` pages once per alert during a broad outage. Note the semantics exactly: an absent `group_by` **and** the special value `['...']` both defeat aggregation — `['...']` means "group by every label", which yields one group per distinct alert, the opposite of grouping. At least one `inhibit_rule` should suppress the redundant downstream alerts a single root cause fans out into.
+- **ALR-015 (volume concentration).** Read `count_over_time(ALERTS{alertstate="firing"}[LOOKBACK])` as firing-sample concentration and `increase(alertmanager_notifications_total[LOOKBACK])` by integration as notification totals. These are separate candidate signals, not a per-rule delivery count. Named receiver or per-rule volume conclusions require an actual source/routing attribution join and your noise policy; otherwise retain that attribution as unverified. Compare `route.repeat_interval` with the intended repeat policy before flagging excessive re-paging.
+- **ALR-016 (grouping and inhibition).** From the rendered config (`config.original`), evaluate effective inherited `group_by`: an absent child value inherits its parent, explicit `[]` groups all alerts together, and `['...']` groups by every label, disabling aggregation. Compare that behavior with your declared paging policy. Missing inhibition is a gap only where your policy requires suppressing redundant downstream alerts; do not invent a universal minimum.
 - **ALR-017 (duplicate delivery / dedup health).** A route with `continue: true` that reaches more than one paging receiver delivers the same alert twice. And Alertmanager's own dedup only holds while its HA cluster is healthy — `GET /api/v2/status` `cluster.status` must be `ready` with the expected peer count; a split-brain cluster re-introduces the duplicates dedup exists to remove.
 - **ALR-018 (resolve-noise).** A paging receiver with `send_resolved: true` emits two notifications per incident — the fire and the resolve — roughly doubling its volume. That is often deliberate, so this is `info` unless the resolved traffic is materially inflating a receiver already flagged by ALR-015, where it rises to `medium`. The global `resolve_timeout` (default 5m) governs how quickly an alert with no explicit resolve is considered cleared.
 
@@ -338,15 +404,19 @@ Per-rule hygiene (ALR-012, ALR-014) batches with the same alert-rule worklist as
 Score per [severity-and-scoring.md](../../report-standard/severity-and-scoring.md): each check yields `pass` (1.0), `partial` (0.5), or `fail` (0). `blocked` is unassessed and leaves the readiness denominator; `not-in-scope` leaves both readiness and assessment-coverage denominators. Category score is the assessed-credit ratio times 100, rounded down; overall is the weight-normalized sum over categories with at least one assessed check. Show assessment coverage separately. A fully blocked run is `unassessed` with `overall: null`, never 0/100. Score conservatively: when unsure between a defect and missing evidence, use `blocked` and state the exact evidence-unlock action.
 
 - ❌ `Scored ALR-005 fail: "the expected receiver stayed flat at zero" (the query actually 403'd; the audit never saw a real counter value).`
-- ✅ `Marked ALR-005 blocked, not fail: the query returned 403 on a missing token scope, so dispatch was never actually observed either way. Per the scoring model a blocked check still scores 0 unless the whole Dispatch proof category is blocked, but the finding text and remediation point at the token, not at the receiver, so the fix effort lands in the right place.`
+- ✅ `Marked ALR-005 blocked, not fail: the query returned 403 on a missing token scope, so dispatch was not observed. The blocked check leaves the readiness denominator and lowers assessment coverage. Record the exact auth-scope unlock; do not assign zero credit to an unassessed receiver.`
 
-Coverage matrix, one row per critical service:
+Object counts are never readiness evidence. ❌ “25 rules and 3 receivers exist, so routing is 100/100.” ✅ “Counts select the medium path; ALR-004 remains blocked until source-proven alert labels, route/default resolution and the declared service scope are compared.” Empty findings, missing telemetry, and a successful collector do not imply a pass.
+
+Coverage matrix, one row per critical service. The Rule column references Prometheus's independent verdict and is not scored here; Ready counts only this audit's applicable Route/Dispatch/Metadata cells:
 
 | Service | Ready | Rule | Route | Dispatch | Metadata | Owner | Gap |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| checkout | 3/4 | pass | pass | pass | partial | Known | no confirmation query on 2 rules |
+| checkout | 2/3 | PROM-022 pass (external) | pass | pass | partial | Known | no confirmation query on 2 rules |
 
-End-to-end gate: claim end-to-end only when the overall score is at or above 85, assessment coverage is 100%, every critical service passes every applicable row, and no category was excluded. Below the gate, write "good base coverage", never "end to end".
+End-to-end gate: claim end-to-end only when the overall score is at or above 85, assessment coverage is 100%, every critical service passes every applicable row, and no category was excluded or scope narrowed. This is the shared audit readiness label, not a human-delivery assertion; even a qualifying run states that human receipt requires separate controlled-test evidence. Below the gate, state the actual evidence boundary or “readiness unassessed”; never describe blocked coverage as good.
+
+Before emitting, keep a compact **ID / Title / Priority** index under `## Findings`: titles only, without raw evidence, hosts, endpoints or credential-bearing values. Follow it with the detailed What/Where/Why/How cards required by the report template. Put each redacted command and observed output once in the Evidence appendix, keyed by ID; the index and cards reference it rather than duplicating raw output. `REPORT_MAX_FINDINGS` defaults to 25 and `SLACK_MAX_FINDINGS` to 5 (tunable display limits); the canonical JSON and appendix remain complete, and any omitted cards are counted with a pointer to JSON.
 
 Emit and verify:
 
@@ -368,8 +438,8 @@ grep -q '^# ' "$OUT/report.md" && echo "report.md present"
 # Output conformance: the emitted report.md must match report-standard/report-template.md.
 # This catches header/score-line/section drift before the run is declared done.
 sh "${CLAUDE_PLUGIN_ROOT}/report-standard/check-findings.sh" "$OUT/findings.json"
-# Inventory (scoutflo-inventory/v1): the complete Phase-1 catalog of what exists,
-# built from the raw pull (never invented, redacted). counts.total must reconcile
+# Inventory (scoutflo-inventory/v1): the observed catalog within declared scope,
+# built from capture projections; unknown/subset surfaces stay explicit. counts.total must reconcile
 # with items; the ## Inventory section of report.md IS this render.
 jq -e '.schema == "scoutflo-inventory/v1" and (.items | type == "array") and (.counts.total == (.items | length))' "$OUT/inventory.json" >/dev/null && echo "inventory.json valid"
 sh "${CLAUDE_PLUGIN_ROOT}/report-standard/render-report-viz.sh" inventory "$OUT/inventory.json" >/dev/null && echo "inventory section renders"
@@ -414,7 +484,8 @@ if [ -n "${SCOUTFLO_SLACK_WEBHOOK:-}" ]; then
   ASSESSMENT="$(jq -r '.score.assessment | "\(.assessed_checks)/\(.applicable_checks) (\(.coverage_percent)%) assessed, \(.scored_checks) scored, \(.blocked_checks) blocked, \(.suppressed_checks) suppressed"' "$OUT/findings.json")"
   E2E="$(jq -r 'if .score.end_to_end then "end-to-end" else "not end-to-end" end' "$OUT/findings.json")"
   COUNTS="$(jq -r '.severity_counts | "\(.critical) critical, \(.high) high, \(.medium) medium, \(.low) low"' "$OUT/findings.json")"
-  TOP="$(jq -r '[.findings[] | select((.lifecycle // "new") != "suppressed") | "\(.id) \(.title)"] | .[0:5] | join("\n")' "$OUT/findings.json")"
+  SLACK_MAX_FINDINGS="${SLACK_MAX_FINDINGS:-5}"
+  TOP="$(jq -r --argjson cap "$SLACK_MAX_FINDINGS" '[.findings[] | select((.lifecycle // "new") != "suppressed") | "\(.id) \(.title)"] | .[0:$cap] | join("\n")' "$OUT/findings.json")"
   PREV="$(find "$TARGET_DIR" -mindepth 1 -maxdepth 1 -type d -name '[0-9]*-[0-9]*-[0-9]*' | sort | tail -2 | head -1)"
   MOVE=""; DELTA="first run"
   if [ -n "$PREV" ] && [ "$PREV" != "$OUT" ]; then
@@ -466,8 +537,8 @@ Before writing `findings.json` and `report.md`, since `findings.json` requires t
    `scoring_scope: "non-scored"`, and keep zero readiness points.
 3. Every findings area and coverage cell carries its denominator
    (`passed/total checks`); the scorecard states the suppressed count.
-4. Emit one `checks[]` row for every stable `ALR-*` catalog check, including Every `not-in-scope` row additionally carries `not_in_scope_reason` — one of `inapplicable` (nothing of the kind exists on this target), `target-gone` (proven decommissioned), `by-design` (the customer declared it) or `covered-elsewhere` (verified on the plane that owns it) — per [not-in-scope-reasons.md](../../report-standard/not-in-scope-reasons.md). A row you cannot evidence is `blocked`, not `not-in-scope`.
-   passes, partials, failures, blockers, and not-in-scope checks (the retired
+4. Emit one `checks[]` row for every active stable `ALR-*` catalog check; every `not-in-scope` row additionally carries `not_in_scope_reason` — one of `inapplicable` (nothing of the kind exists on this target), `target-gone` (proven decommissioned), `by-design` (you declared it) or `covered-elsewhere` (verified on the plane that owns it) — per [not-in-scope-reasons.md](../../report-standard/not-in-scope-reasons.md). A row you cannot evidence is `blocked`, not `not-in-scope`.
+   Include passes, partials, failures, blockers, and not-in-scope checks (the retired
    `ALR-001` / `ALR-021` are never emitted). Derive category counts, readiness,
    assessment coverage, and `score.check_set` from that complete ledger; never
    write them independently. `TOPO-*` topology-readiness findings stay outside
@@ -525,7 +596,7 @@ fi
 # its per-resource action/escalation/sla refine (never weaken) the workspace rule for that one resource.
 ```
 
-When context is available, apply it per [BUSINESS-CONTEXT-INTEGRATION-v0168.md](../../docs/BUSINESS-CONTEXT-INTEGRATION-v0168.md): **exclude** resources matched by an exclusion (record them `not-in-scope` with `not_in_scope_reason: "by-design"` (the exclusion is the customer's declaration) and the exclusion as the `reason`, never a fail); **escalate** findings on a `critical_dependencies` service; reduce severity for a gap that exists only in a non-production `environment`; and apply `cost_sensitivity` to ordering. With no context, run neutral defaults and say so — never invent a business rule.
+When context is available, apply it per [BUSINESS-CONTEXT-INTEGRATION-v0168.md](../../docs/BUSINESS-CONTEXT-INTEGRATION-v0168.md): **exclude** resources matched by an exclusion (record them `not-in-scope` with `not_in_scope_reason: "by-design"` (the exclusion is your declaration) and the exclusion as the `reason`, never a fail); **escalate** findings on a `critical_dependencies` service; reduce severity for a gap that exists only in a non-production `environment`; and apply `cost_sensitivity` to ordering. With no context, run neutral defaults and say so — never invent a business rule.
 
 ## Remediation pointers
 
@@ -559,7 +630,7 @@ All windows and thresholds named in this skill (`RECENT_WINDOW`, `LONG_FIRING_HO
 | Old delivery-error log lines read as current failure | Compare every error timestamp to the last successful reload before concluding |
 | Operator receiver-name prefixing flagged as drift | Expect `<namespace>/<config>/<receiver>` naming and auto-added namespace matchers in rendered config |
 | Route matcher scope excludes app namespaces | Compare matchers against the live firing-namespace distribution, not against intentions |
-| Expected receiver silent while another climbs | Group notification counters by receiver and integration; check `increase()` over a recent window, not lifetime totals |
+| Expected receiver silent while another climbs | Require an exposed receiver label or independent protected attribution, then compare recent increases; integration-only totals leave ALR-006 unverified |
 | Configured receiver counted as working | Zero-traffic receivers stay `configured`; only observed dispatch upgrades them, and test-firing is a setup-lane action |
 | Alert rules reference nonexistent app metrics | Run the confirmation query before crediting the rule; prefer kube-state and kubelet signals when app metrics are absent |
 | Legacy rule names assumed present | Discover the live PrometheusRule inventory and select rules by owning labels |

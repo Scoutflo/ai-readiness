@@ -98,6 +98,9 @@ Green = read-only (safe, changes nothing) · amber = write, gated behind your co
 
 ## What's new (latest release)
 
+- **Monitoring is not responder coverage.** An alert in Grafana or another source cannot cover a missing On-Call responder. Scoped reports keep their scope through inventory, roll-ups and the executive summary.
+- **Alertmanager configuration is projected before capture.** Loaded configuration can contain native VictorOps routing keys. Audit recipes discard credential values in memory; doctor never saves its raw status body. Configuration inspection needs Python 3 with PyYAML and curl 8.4 or newer.
+- **Alertmanager scope and completion require evidence.** Failed inventory reads cannot become an empty estate. Large-rule batches need collected observations and attended review; saved evidence stays dated and unresolved exclusions stop collection.
 - **Alert-history resume stays bound to the selected credentials.** Completed work is reused only with the same credential generation; changed credentials or a failed fingerprint require a safe stop. Existing single-target token defaults remain supported.
 - **On-Call secrets are covered by shared redaction.** Management headers and incoming-alert URL credentials are masked in reports and briefs, including quoted JSON evidence. Inventory activation remains unknown unless the provider actually reports it.
 
@@ -293,7 +296,7 @@ Secrets live only in environment variables you export yourself. `~/.scoutflo/too
 | `/scoutflo:audit-splunk-oncall` | **Splunk On-Call (VictorOps)** paging: routing key → escalation policy → staffed on-call coverage, with evidence-bound incident observations |
 | `/scoutflo:audit-groundcover` | groundcover monitors: per-monitor firing hygiene (`pendingFor` debounce, hysteresis resolve threshold, auto-resolve, no-data and execution-error state), notification noise (re-notification storms, resolve-churn, route-bypass, detect-but-page-nobody), paused monitors and open-ended recurring silences, and dead workflow destinations — honest about groundcover's no-grouping/no-inhibition/no-dedup ceiling |
 | `/scoutflo:audit-kubernetes` | Kubernetes security and configuration: pod security policies, RBAC rules, network policies, resource limits, cluster exposure |
-| `/scoutflo:audit-alertmanager` | Proves an alert actually reaches a human — rule → Alertmanager → receiver, live — and scores **alert noise / alert fatigue**: flapping, permanently-firing rules, missing `for` debounce, missing grouping or inhibition, duplicate delivery, resolve noise |
+| `/scoutflo:audit-alertmanager` | Audits rule → Alertmanager → receiver configuration and observed dispatch, with separate human-receipt evidence; scores **structural alert noise**: flapping, long-firing rules, debounce, grouping, inhibition, duplicate delivery and resolve traffic |
 | `/scoutflo:audit-digitalocean` | App Platform, managed databases, uptime checks, alert routing |
 | `/scoutflo:audit-gcp` | Cloud Monitoring, uptime checks, GKE telemetry, logging, load-balancer health |
 | `/scoutflo:audit-azure` | Azure Monitor alerts + action groups, AKS (Container Insights, managed Prometheus), Log Analytics, VM/VMSS, App Gateway/LB; non-scored Azure cost |

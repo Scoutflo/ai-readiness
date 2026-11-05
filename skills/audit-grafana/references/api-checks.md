@@ -311,7 +311,7 @@ Permanent IDs. Never renumber, never reuse a retired ID; deltas depend on stabil
 | GRAF-102 | Alerting | low | Muting hygiene: every route-referenced mute timing resolves to a definition, and no active Grafana silence has a far-future or perpetually-renewed `endsAt` hiding real alerts |
 | GRAF-103 | Alerting | low | Paging contact points set `disableResolveMessage` deliberately; always-on resolved-message traffic roughly doubles a paging integration's notification volume |
 
-Remediation pointers: every GRAF finding points at `setup-grafana`, anchored to the section that fixes that class of defect (for example `setup-grafana#contact-points` for GRAF-050). GRAF-055 may alternatively point at `audit-alertmanager`, which proves delivery paths end to end.
+Remediation pointers: every GRAF finding points at `setup-grafana`, anchored to the section that fixes that class of defect (for example `setup-grafana#contact-points` for GRAF-050). For GRAF-055, point at `audit-alertmanager` only for routes that use Alertmanager, or `audit-splunk-oncall` for an On-Call destination. Source wiring, provider dispatch and human receipt are separate evidence layers; no configuration read proves the last one.
 
 ## Paused rules and public dashboards (GRAF-057, GRAF-007)
 

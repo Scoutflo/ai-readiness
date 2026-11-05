@@ -380,6 +380,38 @@ http_hint() {
 live_check() {
   lc_int="$1"; lc_chk="$2"; lc_url="$3"; lc_env="$4"; lc_tok="$5"; lc_jq="${6:-}"
   note "doctor: checking ${lc_int} ${lc_chk}: GET ${lc_url}"
+  # Alertmanager status embeds loaded YAML, including incoming routing keys.
+  # Keep this response in memory: even a temporary raw file breaks capture safety.
+  if [ "$lc_int" = alertmanager ] && [ "$lc_chk" = status ]; then
+    lc_curl_version="$(curl --version 2>/dev/null | awk 'NR==1 {print $2}')"
+    if ! printf '%s\n' "$lc_curl_version" | awk -F. '$1>8 || ($1==8 && $2>=4) {ok=1} END {exit !ok}'; then
+      row "$lc_int" "$lc_chk" yes "$lc_env" fail - 'curl 8.4 or newer is required for bounded Alertmanager status reads'
+      return
+    fi
+    CURL_RC=0
+    if [ -n "$lc_tok" ]; then
+      lc_response="$(curl -q -s --connect-timeout "$CONNECT_TIMEOUT" --max-time "$MAX_TIME" \
+        --proto '=http,https' --max-filesize 2097152 --max-redirs 0 -H "Authorization: Bearer ${lc_tok}" \
+        -w '\n%{http_code} %{content_type}' "$lc_url")" || CURL_RC=$?
+    else
+      lc_response="$(curl -q -s --connect-timeout "$CONNECT_TIMEOUT" --max-time "$MAX_TIME" \
+        --proto '=http,https' --max-filesize 2097152 --max-redirs 0 -w '\n%{http_code} %{content_type}' "$lc_url")" || CURL_RC=$?
+    fi
+    lc_meta="$(printf '%s\n' "$lc_response" | tail -n 1)"
+    HTTP_CODE="${lc_meta%% *}"; HTTP_CT="${lc_meta#* }"
+    if [ "$CURL_RC" -ne 0 ]; then
+      row "$lc_int" "$lc_chk" yes "$lc_env" fail "000" "$(transport_hint "$CURL_RC")"
+    elif [ "$HTTP_CODE" != 200 ]; then
+      row "$lc_int" "$lc_chk" yes "$lc_env" fail "$HTTP_CODE" "$(http_hint "$HTTP_CODE")"
+    elif printf '%s' "$HTTP_CT" | grep -qi json && \
+      printf '%s\n' "$lc_response" | sed '$d' | jq -e -s "length == 1 and (.[0] | (${lc_jq}))" >/dev/null 2>&1; then
+      row "$lc_int" "$lc_chk" yes "$lc_env" pass "$HTTP_CODE" "-"
+    else
+      row "$lc_int" "$lc_chk" yes "$lc_env" fail "$HTTP_CODE" '200 but not the expected Alertmanager JSON; no raw response retained'
+    fi
+    unset lc_response lc_meta
+    return
+  fi
   if [ -z "$lc_jq" ]; then
     http_get "$lc_url" "$lc_tok"
     if [ "$CURL_RC" -ne 0 ]; then

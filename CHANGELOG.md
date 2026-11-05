@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.1.245
+
+Keep Alertmanager status and rendered configuration in memory until a bounded
+projection removes credentials, including native VictorOps routing keys. Doctor
+also validates Alertmanager status without writing its raw response to disk.
+Configuration inspection requires Python 3 with PyYAML and curl 8.4 or newer.
+
+Prevent upstream monitoring from covering an On-Call staffing or routing gap.
+Preserve selected audit scope in reports and inventory views, and count assessed
+targets even when they have no findings. Missing evidence and explicit limits on
+readiness cannot become a healthy estate summary. Update On-Call setup discovery
+and explain its cross-skill inputs, outputs and unmeasured capabilities.
+
+Resolve Alertmanager audit targets from configuration, distinguish unreadable
+inventories from empty ones, and keep sizing/checkpoint thresholds consistent.
+Large-rule batches require actual collection and reviewed evidence before they
+can complete. Verification recipes retain failed outcomes and run independently.
+Clarify inherited grouping and intentional suppression, blocked scoring, and
+human-receipt limits. Route Grafana-native On-Call follow-up to its destination
+audit without inserting Alertmanager into a direct contact-point path.
+
 ## 0.1.244
 
 Refuse alert-history initialization or resume when credential hashing fails or

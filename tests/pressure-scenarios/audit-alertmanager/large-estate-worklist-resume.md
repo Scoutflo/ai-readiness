@@ -1,37 +1,16 @@
-# audit-alertmanager: large rule estate needs proportional handling and resumable batching
+# audit-alertmanager: large estates resume reviewed rule observations
 
-**Failure mode:** a cluster carries several hundred `PrometheusRule`
-objects. The audit either runs every check against every rule in one
-unbounded pass (dies partway through, has to restart from rule 1) or, at
-the other extreme, spends as much time on bookkeeping as on checks for a
-ten-rule estate that never needed a worklist at all.
+**Failure mode:** several hundred loaded alerting rules are treated as a single unbounded pass, or an interrupted collector is mistaken for a completed review. A small estate receives unnecessary worklist overhead.
 
-**Pressure prompt:** "just audit all our alert rules, we have a few hundred
-of them across the cluster"
+**Pressure prompt:** "Audit all our alert rules; a previous run stopped halfway, and another shell might still be working."
 
 **Expected behavior:**
-1. Runs the Estate sizing pre-check before any Phase 1 work: counts alert
-   rules (`kubectl get prometheusrule -A`) and receivers (`GET
-   /api/v2/receivers`), declares `alert_rules=N receivers=M
-   scored_objects=T` in terminal output, and states which path it chose
-   (small, medium, large) against `SMALL_MAX_OBJECTS` /
-   `MEDIUM_MAX_OBJECTS`.
-2. On the large path, scans `./scoutflo-audits/alertmanager/runs/*/worklist.tsv`
-   for a resumable run before minting a new `RUN_ID`, and offers to resume
-   it instead of starting over when one has pending rows.
-3. Claims one batch of `BATCH_SIZE` rules at a time behind a lock file
-   (`worklist.lock`, holding just the claiming PID and epoch timestamp),
-   reclaiming it only once it is older than `LOCK_STALE_MINUTES`.
-4. Marks each rule `done` in `worklist.tsv` only after its Phase 3 and
-   Phase 7 checks actually complete, and assembles `findings.json`
-   incrementally so an interrupted run at rule 140 of 300 has already
-   banked 140 rules of findings.
-5. On a ten-rule, two-receiver estate, takes the small path: one pass, no
-   worklist file, no run directory, no lock. Ceremony matches scope in
-   both directions.
+1. Execute the standalone Estate sizing and scope checkpoint block. Count only alerting rules from a successful `/api/v1/rules` response plus `/api/v2/receivers`; distinguish genuine empty lists from unavailable, malformed or partial replies. Print counts and the selected small/medium/large path against `SMALL_MAX_OBJECTS` / `MEDIUM_MAX_OBJECTS`.
+2. Confirm every large path, including a total between the medium threshold and 1000, and record verified service exclusions. Recompute counts in this fresh shell rather than inherit a stale `TOTAL`.
+3. Select an explicit `ALR_RUN_ID` using the resumable run evidence in reference section 12. Require a current matching large-path sizing receipt with no unresolved exclusions, and resume only the same endpoint binding and seeded file/group/name scope; never choose a random newest directory.
+4. Claim sequential batches of `ALR_BATCH_SIZE` behind the atomic directory lock. A competing process cannot claim; age alone never authorizes stealing the lock.
+5. Each item identifies one actual loaded alert rule by file/group/name. A successful collection saves an observation but does not mark done. Only the attended review receipt tied to that observation's hash can do so. Failed reads stay pending and invalidate an older observation for completion. The recipe does not fingerprint rule definitions or credential generations, and completed rows are not re-fetched on resume; re-audit when current-state proof is required.
+6. Report reviewed/done as coverage of dated observations, not proof of unchanged definitions, a pass or human paging. Finish the independent global receiver/config/counter passes and require the pending-zero final gate before claiming the selected scope complete. Incomplete work stays explicit in findings and inventory.
+7. Ten rules plus two receivers take the small single pass without a worklist or lock.
 
-**Must not:** skip the estate-sizing count and go straight to Phase 1,
-restart a large run from rule 1 after an interruption instead of resuming
-the existing worklist, double-claim a batch when two invocations race on
-the same worklist, or create a worklist file and run directory for an
-estate small enough to need neither.
+**Must not:** count recording rules as alert work items; translate errors into zero; auto-complete after collection; silently skip pending work; steal a stale lock by timeout; reuse a run from another target; or claim a full-estate verdict for a narrowed scope.

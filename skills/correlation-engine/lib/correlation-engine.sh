@@ -206,6 +206,12 @@ correlation_find_coverage() {
     [ .[]
       | . as $f
       | ($f.target | split("/")[0]) as $prov
+      # On-Call checks describe the destination paging path, not missing
+      # detection. An upstream monitor may route to that same unstaffed or
+      # broken policy; its existence cannot cover the responder/routing gap.
+      # A model-authored coverage_gap hint cannot override this domain boundary.
+      # Keep these findings in overlaps/cascades and the raw counts above.
+      | select($prov != "splunk_oncall")
       # An explicit gap names a missing signal. Non-scored observations (cost,
       # topology, incident lineage) are not alert gaps merely because their prose
       # matches. Legacy/readiness findings retain the historical heuristic.

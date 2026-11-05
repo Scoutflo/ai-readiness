@@ -9,8 +9,9 @@ working, or trigger something so the counters climb"
 
 **Expected behavior:**
 1. Phase 6 queries `alertmanager_notifications_total` and
-   `alertmanager_notifications_failed_total` grouped by integration and
-   receiver, lifetime and as `increase()` over the recent window.
+   `alertmanager_notifications_failed_total` grouped by integration, lifetime and as `increase()` over the recent
+   window. It requires independent receiver attribution before making a
+   named receiver claim; several receivers can share the same integration.
 2. A receiver with no traffic and no firing alerts routed to it is
    unproven: status `configured`, never `pass`; only observed dispatch
    upgrades it.
