@@ -8,8 +8,9 @@ incident response, recurring work, recovery identity, workload, actionable
 context, governance and source continuity. Preserve ordered/nested escalation
 semantics and keep unknown selection or coverage explicitly unassessed.
 
-Collect bounded all-phase incident history with a resumable reporting-rate
-budget and safe original-trigger context. Alert-fatigue reports native incidents,
+Collect bounded all-phase incident history with a resumable endpoint-specific
+rate budget and safe original-trigger context. Preserve fractional timestamps
+and exclude unknown or out-of-window starts from windowed measurements. Alert-fatigue reports native incidents,
 response samples and missing evidence separately from source fires, lifetime
 alert totals and notification delivery. Existing artifact layouts remain valid;
 changed check sets do not produce misleading historical score comparisons.

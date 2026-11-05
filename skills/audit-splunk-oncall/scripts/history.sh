@@ -32,12 +32,14 @@ def decode(value):
     try: return json.loads(value, object_pairs_hook=pairs, parse_constant=lambda _: (_ for _ in ()).throw(Stop('non-finite JSON number')))
     except (ValueError, UnicodeError, RecursionError): raise Stop('invalid JSON document')
 def stamp(value):
-    if not isinstance(value, str) or not re.fullmatch(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})', value): return None
+    # datetime silently truncates precision beyond microseconds. Reject that
+    # input instead; unknown provider times must not become rounded evidence.
+    if not isinstance(value, str) or not re.fullmatch(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:?\d{2})', value): return None
     try:
         v = dt.datetime.fromisoformat(value.replace('Z', '+00:00'))
         return v.astimezone(UTC)
     except ValueError: return None
-def iso(value): return value.isoformat(timespec='seconds').replace('+00:00', 'Z')
+def iso(value): return value.isoformat().replace('+00:00', 'Z')
 def now(): return dt.datetime.now(UTC)
 def integer(value): return type(value) is int and value >= 0
 def number(value): return type(value) in (int, float) and math.isfinite(value) and value >= 0
@@ -152,15 +154,19 @@ def validate_snapshot(doc, run_date=None, target=None):
 
 def summarize(doc):
     validate_snapshot(doc)
-    rows=doc['incidents']; c=doc['collection']; start=stamp(doc['window']['started_after']); end=stamp(doc['window']['started_before']); collected=stamp(doc['generated_at'])
+    collected_rows=doc['incidents']; c=doc['collection']; start=stamp(doc['window']['started_after']); end=stamp(doc['window']['started_before']); collected=stamp(doc['generated_at'])
+    # A provider response is not proof that every row belongs to its requested
+    # cohort. Keep the safe projection intact, but exclude unknown/outside
+    # starts from every measurement labeled incidents-started-in-window.
+    missing=sum(stamp(r['started_at']) is None for r in collected_rows)
+    outside=sum(stamp(r['started_at']) is not None and not start < stamp(r['started_at']) < end for r in collected_rows)
+    rows=[r for r in collected_rows if stamp(r['started_at']) is not None and start < stamp(r['started_at']) < end]
     phase_counts=collections.Counter(r['phase'] or 'unknown' for r in rows)
-    ack_samples=[]; resolve_samples=[]; aged=[]; missing=0; outside=0; invalid=0; no_ack_resolved=[]
+    ack_samples=[]; resolve_samples=[]; aged=[]; invalid=0; no_ack_resolved=[]
     groups=collections.defaultdict(list); responders=collections.Counter(); team_assignments=collections.Counter()
     for r in rows:
         st=stamp(r['started_at']); transitions=r['transitions']
-        if st is None: missing+=1
-        elif not start < st < end: outside+=1
-        if r['phase'] in ('UNACKED','ACKED') and st and st<=collected: aged.append({'incident_number':r['incident_number'],'phase':r['phase'],'age_seconds':int((collected-st).total_seconds())})
+        if r['phase'] in ('UNACKED','ACKED') and st<=collected: aged.append({'incident_number':r['incident_number'],'phase':r['phase'],'age_seconds':(collected-st).total_seconds()})
         ts=[] if transitions is None else [(t['phase'],stamp(t['at'])) for t in transitions]
         # Only documented phase spellings survive projection. Missing/unknown
         # names/times keep the response denominator explicit, never a zero.
@@ -172,8 +178,8 @@ def summarize(doc):
         if bad or missing_terminal or r['phase'] is None: invalid+=1
         if st and not bad:
             ack=[at for p,at in ts if p=='ACKED']; resolved=[at for p,at in ts if p=='RESOLVED']
-            if ack: ack_samples.append(int((min(ack)-st).total_seconds()))
-            if resolved: resolve_samples.append(int((min(resolved)-st).total_seconds()))
+            if ack: ack_samples.append((min(ack)-st).total_seconds())
+            if resolved: resolve_samples.append((min(resolved)-st).total_seconds())
             if r['phase']=='RESOLVED' and not ack: no_ack_resolved.append(r['incident_number'])
         if r['entity_ref']:
             groups[(r['entity_ref'],r['service_ref'],r['host_ref'])].append(r)
@@ -186,6 +192,8 @@ def summarize(doc):
     all_counts=all(r['provider_alert_count'] is not None for r in rows)
     summary={'target':doc['target'],'window':doc['window'],'generated_at':doc['generated_at'],'status':'measured' if cohort_ok else 'blocked',
       'complete_window':cohort_ok,'observed_incidents':len(rows),'population_incidents':len(rows) if cohort_ok else None,'expected_incidents':c['expected_total'],
+      'collected_incidents':len(collected_rows),'excluded_incidents':missing+outside,
+      'reason':f"Collected {len(collected_rows)} incident rows; {len(rows)} have verified starts strictly inside the requested window; {missing+outside} excluded ({missing} missing or unverified start, {outside} outside the exclusive window). Collection status: {c['status']}.",
       'count_unit':'incidents-started-in-window','phase_counts':dict(phase_counts),'incidents_without_start':missing,'incidents_outside_window':outside,
       'provider_alert_count':sum(r['provider_alert_count'] for r in rows) if rows and all_counts else None,
       'provider_alert_count_unit':'alerts-received-over-incident-lifetime','notification_attempts':None,'human_receipts':None,
@@ -229,7 +237,7 @@ def resolve_config():
 
 def collect(args):
     start,end=stamp(args.start),stamp(args.end)
-    need(start is not None and end is not None and start<end<=now(),'supply a closed ISO8601 start/end window in the past')
+    need(start is not None and end is not None and start<end<=now(),'supply a closed ISO8601 start/end window in the past with at most six fractional digits')
     need(args.state_dir and 1<=args.page_budget<=20,'use a private state directory and page budget 1..20')
     need(not args.context_incident or ident(args.context_incident),'invalid selected incident number')
     need(not args.workload_team or slug(args.workload_team),'invalid selected workload team')

@@ -3,7 +3,7 @@
 set -eu
 ROOT=$(CDPATH= cd -- "$(dirname "$0")/../../.." && pwd)
 python3 - "$ROOT" <<'PY'
-import datetime as dt, json, os, pathlib, shutil, subprocess, sys, tempfile
+import copy, datetime as dt, json, math, os, pathlib, shutil, subprocess, sys, tempfile
 root=pathlib.Path(sys.argv[1]); reader=root/'skills/audit-splunk-oncall/scripts/history.sh'
 with tempfile.TemporaryDirectory(prefix='oncall-history-tests-') as temp:
     base=pathlib.Path(temp); bins=base/'bin'; bins.mkdir(); home=base/'home'; home.mkdir()
@@ -28,6 +28,10 @@ def row(n):
  if n==2:r.update(currentPhase='triggered',alertCount=2,transitions=[{'name':'triggered','at':iso(st)}])
  if n==3:r.update(alertCount=1,transitions=[{'name':'triggered','at':iso(st)},{'name':'resolved','at':iso(st+dt.timedelta(seconds=30))}])
  if scenario=='unknown' and n==1:r['transitions'][1]['name']='some-unknown-state'
+ if scenario=='fractional':
+  st=dt.datetime.fromisoformat(os.environ['FIXTURE_INCIDENT_START'].replace('Z','+00:00'))
+  r.update(startTime=iso(st),lastAlertTime=iso(st+dt.timedelta(microseconds=400003)),transitions=[{'name':'triggered','at':iso(st)},{'name':'acknowledged','at':iso(st+dt.timedelta(microseconds=100001))},{'name':'resolved','at':iso(st+dt.timedelta(microseconds=400003))}])
+ if scenario=='unsupported-time':r['startTime']=iso(start).replace('Z','.1234567Z')
  return r
 if u.path=='/api-public/v1/team/test-team':
  counter=base/(scenario+'-anchors');a=int(counter.read_text()) if counter.exists() else 0;counter.write_text(str(a+1))
@@ -36,12 +40,14 @@ if u.path=='/api-public/v1/team/test-team':
 elif u.path=='/api-reporting/v2/incidents':
  assert q['currentPhase']==['resolved,triggered,acknowledged'] and q['limit']==['100'] and q['startedAfter']==[os.environ['FIXTURE_START']] and q['startedBefore']==[os.environ['FIXTURE_END']]
  counter=base/'history-count';calls=int(counter.read_text()) if counter.exists() else 0;counter.write_text(str(calls+1));offset=int(q['offset'][0]);total=101 if scenario in ['multi','changed','duplicate'] else 3
+ if scenario in ['fractional','unsupported-time']:total=1
+ if scenario=='zero':total=0
  if scenario=='changed' and offset:total=102
  rows=[row(n+1) for n in range(offset,min(offset+100,total))]
  if scenario=='duplicate' and offset:rows[0]['incidentNumber']='1'
  if scenario=='short':rows=rows[:-1]
  out={'offset':offset,'limit':100,'total':total,'incidents':rows}
- if scenario=='bad-json':print('{"offset":0,"offset":0}\\n200',end='');sys.exit(0)
+ if scenario=='bad-json':print('{"offset":0,"offset":0,"limit":100,"total":0,"incidents":[]}\\n200',end='');sys.exit(0)
  if scenario=='denied':print('{"secret":"never print body"}\\n429',end='');sys.exit(0)
 elif u.path=='/api-public/v1/incidents/7':out={'incidentNumber':'7','firstAlertUuid':'11111111-1111-1111-1111-111111111111','lastAlertId':'22222222-2222-2222-2222-222222222222'}
 elif u.path=='/api-public/v1/alerts/11111111-1111-1111-1111-111111111111':out={'messageType':'CRITICAL','entityId':'one-condition','stateMessage':'sensitive description','monitoringTool':'Prometheus','entityDisplayName':'private name','apiKey':'hidden-ingestion-key','raw':json.dumps({'service':'api','environment':'qa','owner':'private owner','runbook_url':'https://example.test/private/hidden-ingestion-key','routing_key':'hidden-routing-credential'})}
@@ -79,9 +85,75 @@ print(json.dumps(out));print('200',end='')
     assert summary['response']['ack_samples']==1 and summary['response']['unacknowledged_or_censored']==2 and summary['response']['mean_ack_seconds_observed_subset']==60
     assert summary['recurrence']['ranked_entities'][0]['incidents']==2 and summary['recovery']['resolved_without_observed_ack']==['3']
     assert summary['workload']['fairness'] is None and summary['recovery']['end_to_end_delivery_proved'] is False
+    assert summary['collected_incidents']==3 and summary['excluded_incidents']==0
+    # Preserve microsecond query, binding, projection and response precision.
+    # Two distinct fractional windows must never reuse one completed cache.
+    def fraction(name,lo,hi,st,okay=True):
+        return run(['--start',iso(lo),'--end',iso(hi),'--state-dir',str(base/name)],
+            {'SCENARIO':'fractional','FIXTURE_START':iso(lo),'FIXTURE_END':iso(hi),'FIXTURE_INCIDENT_START':iso(st)},okay)
+    lo=start+dt.timedelta(microseconds=100000); hi=lo+dt.timedelta(seconds=1); st=start+dt.timedelta(microseconds=500001)
+    precise=json.loads(fraction('fractional',lo,hi,st).stdout)
+    assert precise['window']['started_after']==iso(lo) and precise['window']['started_before']==iso(hi), 'fractional query window changed'
+    assert precise['incidents'][0]['started_at']==iso(st), 'fractional incident start changed'
+    assert precise['incidents'][0]['transitions'][1]['at']==iso(st+dt.timedelta(microseconds=100001)), 'fractional transition changed'
+    snapshot.write_text(json.dumps(precise)); s=json.loads(run(['--summarize',str(snapshot)]).stdout)
+    assert s['status']=='measured' and s['incidents_outside_window']==0 and s['observed_incidents']==1
+    assert math.isclose(s['response']['mean_ack_seconds_observed_subset'],0.100001,abs_tol=1e-12), 'ack latency precision lost'
+    assert math.isclose(s['response']['mean_resolution_seconds_observed_subset'],0.400003,abs_tol=1e-12), 'resolution latency precision lost'
+    before=base.joinpath('requests').read_text(); saved=(base/'fractional/state.json').read_text()
+    fraction('fractional',start+dt.timedelta(microseconds=900000),start+dt.timedelta(seconds=1,microseconds=900000),st,okay=False)
+    assert base.joinpath('requests').read_text()==before and (base/'fractional/state.json').read_text()==saved, 'changed fractional window reused cache'
+    subsecond=json.loads(fraction('subsecond',start+dt.timedelta(microseconds=250000),start+dt.timedelta(microseconds=950000),st).stdout)
+    snapshot.write_text(json.dumps(subsecond)); s=json.loads(run(['--summarize',str(snapshot)]).stdout)
+    assert s['status']=='measured' and s['observed_incidents']==1, 'subsecond window collapsed'
+    # More than six digits is unsupported, never rounded by datetime. Reject
+    # request/local-evidence timestamps; an unsupported provider start is unknown.
+    for key in ('--start','--end'):
+        args=['--start',iso(start),'--end',iso(end),'--state-dir',str(base/'unsupported-window')]
+        args[args.index(key)+1]=args[args.index(key)+1].replace('Z','.1234567Z')
+        before=base.joinpath('requests').read_text(); run(args,okay=False)
+        assert base.joinpath('requests').read_text()==before, 'unsupported precision performed a read'
+    for where in ('window','incident','transition'):
+        bad=copy.deepcopy(normal)
+        if where=='window':bad['window']['started_after']=iso(start).replace('Z','.1234567Z')
+        elif where=='incident':bad['incidents'][0]['started_at']=iso(start).replace('Z','.1234567Z')
+        else:bad['incidents'][0]['transitions'][0]['at']=iso(start).replace('Z','.1234567Z')
+        snapshot.write_text(json.dumps(bad)); run(['--summarize',str(snapshot)],okay=False)
+    unsupported=collect('unsupported-time',{'SCENARIO':'unsupported-time'})
+    assert unsupported['incidents'][0]['started_at'] is None
+    snapshot.write_text(json.dumps(unsupported)); s=json.loads(run(['--summarize',str(snapshot)]).stdout)
+    assert s['incidents_without_start']==1 and s['observed_incidents']==0 and s['response']['ack_samples']==0
+    # A rejected row remains in raw evidence but contributes to no selected
+    # incident cohort metric. Duty/context proof has its own selection/window.
+    mixed=copy.deepcopy(normal); mixed['incidents']=[copy.deepcopy(normal['incidents'][0])]
+    for n,started in enumerate((None,iso(start-dt.timedelta(hours=1)),iso(start),iso(end)),11):
+        r=copy.deepcopy(normal['incidents'][0]);r.update(incident_number=str(n),started_at=started)
+        mixed['incidents'].append(r)
+    open_outside=copy.deepcopy(normal['incidents'][1]);open_outside.update(incident_number='15',started_at=iso(start-dt.timedelta(hours=1)))
+    mixed['incidents'].append(open_outside);mixed['collection'].update(expected_total=6,next_offset=6)
+    snapshot.write_text(json.dumps(mixed)); s=json.loads(run(['--summarize',str(snapshot)]).stdout)
+    assert len(json.loads(snapshot.read_text())['incidents'])==6, 'summary changed raw projection'
+    assert s['status']=='blocked' and s['population_incidents'] is None and s['observed_incidents']==1 and s['collected_incidents']==6 and s['excluded_incidents']==5
+    assert s['incidents_without_start']==1 and s['incidents_outside_window']==4 and '5 excluded' in s['reason']
+    assert s['phase_counts']=={'RESOLVED':1} and s['provider_alert_count']==7
+    assert s['response']['observed_incidents']==1 and s['response']['ack_samples']==1 and s['response']['resolution_samples']==1
+    assert s['response']['mean_ack_seconds_observed_subset']==60 and s['response']['mean_resolution_seconds_observed_subset']==120
+    assert s['response']['unacknowledged_or_censored']==0 and s['response']['open_aging']==[]
+    assert s['recurrence']['ranked_entities'][0]['incidents']==1 and s['recurrence']['ranked_entities'][0]['incident_numbers']==['1']
+    assert s['workload']['incident_assignment_counts'][0]['incidents']==1 and s['workload']['team_assignment_counts'][0]['incidents']==1
+    assert s['workload']['assignment_time']==normal['workload'] and s['context']==normal['context']
+    rejected=copy.deepcopy(mixed);rejected['incidents']=rejected['incidents'][1:];rejected['collection'].update(expected_total=5,next_offset=5)
+    snapshot.write_text(json.dumps(rejected)); s=json.loads(run(['--summarize',str(snapshot)]).stdout)
+    assert s['status']=='blocked' and s['observed_incidents']==0 and s['collected_incidents']==5 and s['excluded_incidents']==5
+    assert s['population_incidents'] is None and s['response']['ack_samples']==0 and s['response']['mean_ack_seconds_observed_subset'] is None
+    assert s['recurrence']['ranked_entities']==[] and s['workload']['incident_assignment_counts']==[] and s['recovery']['resolved_without_observed_ack']==[]
+    zero=collect('zero',{'SCENARIO':'zero'});snapshot.write_text(json.dumps(zero));s=json.loads(run(['--summarize',str(snapshot)]).stdout)
+    assert s['status']=='measured' and s['population_incidents']==0 and s['observed_incidents']==0 and s['collected_incidents']==0 and s['excluded_incidents']==0
     # The old default resolved-only bug cannot hide an unresolved row.
     assert summary['phase_counts']['UNACKED']==1
     partial=collect('multi',{'SCENARIO':'multi'}); assert not partial['collection']['complete'] and partial['collection']['next_offset']==100
+    snapshot.write_text(json.dumps(partial));s=json.loads(run(['--summarize',str(snapshot)]).stdout)
+    assert s['status']=='blocked' and s['observed_incidents']==100 and s['collected_incidents']==100 and s['excluded_incidents']==0 and s['population_incidents'] is None
     # Changed credentials cannot resume or cause another request.
     before=base.joinpath('requests').read_text()
     assert collect('multi',{'SCENARIO':'multi','TEST_API_KEY':'different-fixture-key'},okay=False) is None
@@ -116,5 +188,5 @@ print(json.dumps(out));print('200',end='')
         bad=json.loads(encoded);bad['incidents'][0]['transitions']=missing;snapshot.write_text(json.dumps(bad))
         s=json.loads(run(['--summarize',str(snapshot)]).stdout)
         assert s['response']['missing_or_unverified_transitions']==1 and s['response']['ack_samples']==0
-    print('PASS: history privacy, cohort/pagination, resume binding, throttling, lowercase phases, censored response, context, workload and hostile evidence')
+    print('PASS: history privacy, exclusive/fractional cohorts, microsecond response, pagination/duplicate JSON, resume binding, throttling, censored response, context, workload and hostile evidence')
 PY

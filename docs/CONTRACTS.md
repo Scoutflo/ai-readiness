@@ -651,9 +651,13 @@ forward routing from upstream policy references.
   `status`, `total_fires`, `objects_with_history` and fire rankings retain their
   original meaning. Each valid native summary carries `target`, `generated_at`,
   `window` (start/end and query phases), `status`, `complete_window`,
-  `observed_incidents`, `population_incidents`, `expected_incidents` and
-  `count_unit: incidents-started-in-window`. An incomplete cohort has no
-  population total. `provider_alert_count` uses the separate unit
+  `collected_incidents`, `observed_incidents`, `population_incidents`,
+  `expected_incidents` and `count_unit: incidents-started-in-window`. Observed
+  incident measurements include only verified starts strictly inside the window.
+  Collected counts and missing/outside-start diagnostics expose excluded rows;
+  selected duty and context observations retain their independent scope. Accepted
+  timestamp precision is preserved through query, resume binding and measurement.
+  An incomplete or rejected cohort has no population total. `provider_alert_count` uses the separate unit
   `alerts-received-over-incident-lifetime`; it is not a source-window event count,
   notification attempt or human receipt. `response` carries observed counts,
   `ack_samples`, `resolution_samples`, missing/unverified transitions and means
