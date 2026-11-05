@@ -56,7 +56,7 @@ This toolkit audits, hardens, and monitors your infrastructure and observability
 | `/scoutflo:audit-elk` | audit | Kibana Alerting: rule delivery, execution health, noise controls, coverage per space |
 | `/scoutflo:audit-jsm` | audit | JSM Operations paging: escalation and routing, on-call schedules, notification-policy noise, heartbeats, unacked aging |
 | `/scoutflo:audit-zenduty` | audit | Zenduty (Xurrent IMR) paging: escalation and on-call, collation dedup and alert-rule noise, routing, and analytics-backed MTTA/MTTR |
-| `/scoutflo:audit-splunk-oncall` | audit | **Splunk On-Call (VictorOps)** paging: routing key → escalation policy → staffed on-call coverage, with evidence-bound incident observations |
+| `/scoutflo:audit-splunk-oncall` | audit | **Splunk On-Call (VictorOps)** setup quality and AI SRE readiness: effective paging paths, notification policies, maintenance, alert rules, current/future coverage, incident response and recurrence, workload and diagnostic context; missing evidence or objectives stay blocked |
 | `/scoutflo:audit-groundcover` | audit | groundcover monitors: per-monitor firing hygiene (pendingFor, hysteresis, no-data/error state), notification noise, silence hygiene, and destination liveness |
 | `/scoutflo:audit-kubernetes` | audit | Kubernetes security and reliability: Pod Security Admission, RBAC over-permissioning, network policies, resource limits, disruption budgets |
 | `/scoutflo:setup-kubernetes` | setup | Guided hardening for `audit-kubernetes` findings: PSA labels, RBAC tightening, network policies, resource limits, PDBs |

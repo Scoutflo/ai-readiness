@@ -18,9 +18,9 @@ Use the same `SCOUTFLO_CONFIG` and `SCOUTFLO_TARGET` as the audit. The collector
 | `SCOUTFLO_VERIFY_CLOCK_SKEW_SECONDS` | Positive integer allowance for source clock skew; example default `60`. Set from the observed clock accuracy. |
 | `SCOUTFLO_VERIFY_SOURCE_SCOPE` | Literal `none` only for an explicit declaration that no sender is in scope; never set from missing evidence |
 
-SOC-001 examines routes that contain the named policy and requires nonempty, unique target sets resolving uniquely in the global policy census. It does not prove an approved route-key mapping or preservation of unrelated/default routes: those need exact private-key comparison and before/after change evidence. SOC-002 verifies the exact intended team. SOC-003 verifies one supported immediate escalation step and its user/rotation identities. Additional steps or nonzero delays remain blocked rather than receiving invented timing semantics.
+SOC-001 examines routes that contain the named policy and requires nonempty, unique target sets resolving uniquely in the global policy census. It does not prove an approved route-key mapping or preservation of unrelated/default routes: those need exact private-key comparison and before/after change evidence. SOC-002 verifies the exact intended team. SOC-003 verifies the complete bounded ordered escalation graph, including minute-valued relative delays, nested policies and observed current/next/previous rotation identities. The shared [effective-quality evaluator](effective-quality.md) preserves intentional delays and only applies a timing goal when explicitly declared. Unobserved prior assignments, effective overrides and unsupported notification semantics stay explicit. No audit writes are introduced.
 
-SOC-004 checks referenced rotation rosters and any reported current assignment, not future coverage. A policy with no rotation is inapplicable for this verification. Unknown modes and a current assignment outside the roster are blocked. SOC-005 requires current users to agree with eligible direct targets or the referenced rotations' current assignments. An unexplained override is blocked. A known unstaffed alternate shift does not erase a separately verified current direct-user path; keep that SOC-004 defect separate. Repeat missing-current observations after at least one second before reporting a gap, and name both observation times; one verification failure is not that confirmation.
+SOC-004 checks referenced rotation rosters and any reported current assignment, not future coverage. A policy with no rotation is inapplicable for this verification. Unknown modes and a current assignment outside the roster require effective override evidence. Standard, period-handoff, custom and follow-the-sun membership are distinguished from rendered future coverage (SOC-016). SOC-005 requires current users to agree with eligible direct targets or the referenced rotations' current assignments. An unexplained override is blocked. A known unstaffed alternate shift does not erase a separately verified current direct-user path; keep that SOC-004 defect separate. Repeat missing-current observations after at least one second before reporting a gap, and name both observation times; one verification failure is not that confirmation.
 
 SOC-006 deduplicates actual current users across the explicitly selected policy set. Two policies reaching one person count as one person. SOC-007 additionally requires one exact source-key match and the expected policy/team/current path. None of these predicates proves notification delivery, independent devices, tomorrow's schedule or incident-history completeness.
 
@@ -72,88 +72,13 @@ if [ "$CHECK" = SOC-007 ]; then
 else
   SNAPSHOT=$(sh "$READER") || { echo 'Current path read is blocked'; exit 2; }
 fi
-RESULT=$(printf '%s' "$SNAPSHOT" | jq -ce -s --arg check "$CHECK" --arg policy "$POLICY" --arg team "$TEAM" --argjson selected "$POLICY_SET" --argjson minimum "$MINIMUM" '
-  def outcome($s;$why): {status:$s,reason:$why};
-  def blocked($why): outcome("blocked";$why);
-  def unmet($why): outcome("not-met";$why);
-  def passed: outcome("verified";"Requested current relationship is verified");
-  def eligible($d;$u): [$d.members[]|select(.username==$u)] | length==1 and .[0].verified==true;
-  def routes($s;$p): [$s.routes[]|select(.policies|index($p))];
-  def routing($s;$p): routes($s;$p) as $r |
-    if ($r|length)==0 then unmet("No configured route targets the selected policy")
-    elif any($r[]; ((.out_of_scope_policies//[])|length)>0 or (.policies|length!=(unique|length))) then blocked("Route targets are ambiguous or outside the complete scope")
-    elif all($r[]; (.policies|length)>0 and all(.policies[]; . as $id | [$s.policies[]|select(.slug==$id)] | length==1)) then passed
-    elif any($r[].policies[]; . as $id | [$s.policies[]|select(.slug==$id)] | length>1) then blocked("Policy identity is ambiguous")
-    else unmet("A configured route target does not resolve") end;
-  def ownership($s;$p): [$s.policies[]|select(.slug==$p)] as $owners |
-    if ($owners|length)>1 then blocked("Policy owner mapping is ambiguous")
-    elif ($owners|length)==0 then unmet("Selected policy is absent from complete ownership inventory")
-    else [$s.teams[]|select(.slug==$owners[0].team)] as $teams |
-      if ($teams|length)>1 then blocked("Owning team identity is ambiguous")
-      elif ($teams|length)==0 then unmet("Owning team is absent from complete inventory")
-      else passed + {owner:$owners[0].team} end end;
-  def path($s;$p): routing($s;$p) as $route | ownership($s;$p) as $own |
-    if $route.status!="verified" then blocked("Routing prerequisite is not verified")
-    elif $own.status!="verified" then $own
-    else [$s.policy_details[]|select(.slug==$p)] as $details | [$s.team_details[]|select(.team==$own.owner)] as $td |
-      if ($details|length)!=1 or ($td|length)!=1 then blocked("Policy or team detail is missing or ambiguous")
-      elif ($td[0].members|map(.username)|length!=(unique|length)) then blocked("Member identity is ambiguous")
-      elif ($details[0].steps|length)==0 then unmet("No escalation step exists")
-      elif ($details[0].steps|length)!=1 or $details[0].steps[0].timeout!=0 then blocked("Later-step or delay semantics are not verified")
-      else $details[0].steps[0].entries as $entries |
-        if ($entries|length)==0 then unmet("No escalation target exists")
-        elif any($entries[];.type!="user" and .type!="rotation_group") then blocked("Unsupported escalation target type")
-        elif any($entries[]; .type=="user" and (eligible($td[0];.user)|not)) then unmet("A direct user is not one verified enrolled member")
-        elif any($entries[]; .type=="rotation_group" and (.rotation as $id | [$td[0].groups[]|select(.slug==$id and .teamSlug==$own.owner)] | length>1)) then blocked("Rotation slug is ambiguous")
-        elif any($entries[]; .type=="rotation_group" and (.rotation as $id | [$td[0].groups[]|select(.slug==$id and .teamSlug==$own.owner)] | length==0)) then unmet("Referenced rotation does not resolve")
-        else [$entries[]|select(.type=="rotation_group")|.rotation as $id|$td[0].groups[]|select(.slug==$id)]|unique_by(.groupId) as $groups |
-          if any($groups[]; .groupId as $id | [$td[0].rotations[]|select(.groupId==$id)] | length!=1) then blocked("Numeric rotation identity is missing or ambiguous")
-          else passed + {owner:$own.owner,entries:$entries,data:$td[0],rotations:[$groups[]|.groupId as $id|$td[0].rotations[]|select(.groupId==$id)]} end
-        end
-      end
-    end;
-  def staffing($p):
-    if $p.status!="verified" then $p
-    elif ($p.rotations|length)==0 then outcome("inapplicable";"Selected policy has no rotation target")
-    elif any($p.rotations[].shifts[];.shifttype!="std" and .shifttype!="pho") then blocked("Unknown shift mode")
-    elif any($p.rotations[].shifts[];.current_user!=null and (.current_user as $u|.members|index($u)==null)) then blocked("Current assignment may be an unverified override")
-    elif any($p.rotations[];(.shifts|length)==0) or any($p.rotations[].shifts[];(.members|length)==0 or any(.members[];eligible($p.data;.)|not)) then unmet("A referenced shift lacks eligible enrolled staff")
-    else passed end;
-  def current_path($s;$id): path($s;$id) as $p |
-    if $p.status!="verified" then blocked("Supported escalation prerequisite is not verified")
-    elif ($p.rotations|length)>0 and staffing($p).status=="blocked" then blocked("Referenced rotation semantics or override is not verified")
-    else [$s.current[]|select(.policy==$id)] as $now |
-      if ($now|length)>1 then blocked("Current policy row is ambiguous")
-      elif ($now|length)==0 or ($now[0].users|length)==0 then unmet("No current responder observed; confirm with another read before a finding")
-      elif $now[0].team!=$p.owner then blocked("Current policy owner disagrees")
-      elif any($now[0].users[];eligible($p.data;.)|not) then unmet("Current responder is not an eligible enrolled team member")
-      else ([$p.entries[]|select(.type=="user")|.user]+[$p.rotations[].shifts[].current_user|select(.!=null)]|unique) as $expected |
-        if any($now[0].users[];. as $u|$expected|index($u)==null) then blocked("Current assignment differs from the supported path; override proof required")
-        else passed + {owner:$p.owner,users:($now[0].users|unique)} end
-      end
-    end;
-  if length!=1 then blocked("Collector returned an ambiguous document set") else .[0] as $s |
-    if $s.complete_reads!=true or $s.scope!="account" or ([$s.teams,$s.policies,$s.routes,$s.current,$s.policy_details,$s.team_details]|all(type=="array")|not) then blocked("A complete account snapshot is required")
-    elif $check=="SOC-001" then routing($s;$policy)
-    elif $check=="SOC-002" then ownership($s;$policy) | if .status=="verified" and .owner!=$team then unmet("Owner differs from the explicitly intended team") else . end
-    elif $check=="SOC-003" then path($s;$policy)
-    elif $check=="SOC-004" then staffing(path($s;$policy))
-    elif $check=="SOC-005" then current_path($s;$policy)
-    elif $check=="SOC-006" then [$selected[]|current_path($s;.)] as $paths |
-      if any($paths[];.status!="verified") then blocked("A required current policy path is not verified")
-      else ([$paths[].users[]]|unique|length) as $n | (if $n>=$minimum then passed else unmet("Distinct current eligible responders are below the explicit requirement") end)+{observed_responders:$n,required_responders:$minimum} end
-    else current_path($s;$policy) as $p |
-      if ($s.source_match|type)!="object" or ($s.source_match.route_aliases|type)!="array" or ($s.source_match.policies|type)!="array" then blocked("Exact source-key comparison is unavailable")
-      elif ($s.source_match.route_aliases|length)>1 then blocked("Source key matched multiple route identities")
-      elif ($s.source_match.route_aliases|length)==0 or ($s.source_match.policies|index($policy))==null then unmet("Exact source key does not select the intended policy")
-      elif $p.status!="verified" then blocked("Expected response path is not verified")
-      elif $p.owner!=$team then unmet("Source path owner differs from intended team")
-      else passed end
-    end
-  end | {check:$check,policy:$policy,status,reason} + (if has("observed_responders") then {observed_responders,required_responders} else {} end)
-' 2>/dev/null) || { echo 'Verification blocked by an unsupported snapshot shape'; exit 2; }
+# Execute the single shipped cookbook so audit and setup verification cannot drift.
+EVALUATOR=$(awk '/oncall-effective-quality:start/ {active=1;next} /oncall-effective-quality:end/ {active=0} active && /^```bash/ {fence=1;next} active && /^```/ {fence=0;next} active && fence {print}' "${CLAUDE_PLUGIN_ROOT}/skills/audit-splunk-oncall/references/effective-quality.md")
+[ -n "$EVALUATOR" ] || { echo 'Effective-quality cookbook is unavailable'; exit 2; }
+RC=0
+RESULT=$(printf '%s' "$SNAPSHOT" | SCOUTFLO_ONCALL_SNAPSHOT='' sh -c "$EVALUATOR") || RC=$?
 printf '%s\n' "$RESULT"
-case "$(printf '%s' "$RESULT" | jq -r '.status')" in verified) exit 0;; not-met) exit 1;; inapplicable) exit 3;; *) exit 2;; esac
+exit "$RC"
 ```
 <!-- oncall-verify-path:end -->
 

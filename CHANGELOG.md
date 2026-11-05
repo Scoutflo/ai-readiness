@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.1.246
+
+Expand Splunk On-Call from routing and current staffing into 18 scored checks for
+effective notification policies, suppression, transformations, future coverage,
+incident response, recurring work, recovery identity, workload, actionable
+context, governance and source continuity. Preserve ordered/nested escalation
+semantics and keep unknown selection or coverage explicitly unassessed.
+
+Collect bounded all-phase incident history with a resumable reporting-rate
+budget and safe original-trigger context. Alert-fatigue reports native incidents,
+response samples and missing evidence separately from source fires, lifetime
+alert totals and notification delivery. Existing artifact layouts remain valid;
+changed check sets do not produce misleading historical score comparisons.
+
+Strengthen attended setup verification for actual contact envelopes, custom
+paging masks/order and observed global enforcement. Tie UI evidence to the
+selected target, credential generation and configuration; require fresh before
+and after state. Validate nested policy team identities and reconcile interrupted creation
+readbacks without retrying the write. Add outcome-specific remediation and provider best-practice
+guidance while keeping audit credentials read-only and setup changes explicit.
+
 ## 0.1.245
 
 Keep Alertmanager status and rendered configuration in memory until a bounded

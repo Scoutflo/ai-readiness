@@ -256,7 +256,7 @@ def policy_catalog():
 def checked_policy(slug):
     detail=request('GET','/api-public/v1/policies/'+slug)
     need(isinstance(detail,dict) and set(detail)<={'slug','name','ignoreCustomPagingPolicies','steps','_selfUrl'} and detail.get('slug')==slug and isinstance(detail.get('steps'),list),'Policy dependency detail unavailable')
-    entries=[]
+    entries=[]; target_owners=None
     for step in detail['steps']:
         need(isinstance(step,dict) and set(step)<={'timeout','entries'} and isinstance(step.get('entries'),list),'Policy dependency step unsupported')
         if 'timeout' in step:need(number(step['timeout']),'Policy dependency timeout unsupported')
@@ -268,9 +268,15 @@ def checked_policy(slug):
         need(field is not None and set(entry)=={'executionType',field} and isinstance(entry[field],dict),'Policy dependency target shape unsupported')
         obj=entry[field]
         key={'user':'username','rotationGroup':'slug','webhook':'slug','email':'address','targetPolicy':'policySlug'}[field]
-        allowed={'user':{'username','firstName','lastName'},'rotationGroup':{'slug','label'},'webhook':{'slug','label'},'email':{'address'},'targetPolicy':{'policySlug','policyName'}}[field]
+        allowed={'user':{'username','firstName','lastName'},'rotationGroup':{'slug','label'},'webhook':{'slug','label'},'email':{'address'},'targetPolicy':{'policySlug','policyName','name','teamSlug'}}[field]
         need(set(obj)<=allowed and isinstance(obj.get(key),str) and bool(obj[key].strip()),'Policy dependency identity missing')
         if field!='email':ident(obj[key])
+        if field=='targetPolicy':
+            need(all(isinstance(v,str) for v in obj.values()),'Nested policy metadata is not a string')
+            if 'teamSlug' in obj:
+                if target_owners is None: target_owners={p['slug']:p['team'] for p in policy_catalog()}
+                target=obj['policySlug']; returned_team=ident(obj['teamSlug'])
+                need(target in target_owners and target_owners[target]==returned_team,'Nested policy target team contradicts the ownership census')
     return detail,entries
 def dependencies(team,gid=None):
     rows=[];target=[] if gid is None else [x['slug'] for x in group_list(team) if x['id']==gid]

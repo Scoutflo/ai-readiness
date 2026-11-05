@@ -152,6 +152,27 @@ alert_fatigue_signal_coverage() {
   printf '%s\n' "$AF_SIGNALS_DOCUMENT" | jq '(.provider_coverage // [])'
 }
 
+# A native On-Call incident cohort has different units from source alert fires.
+# Validate and summarize the safe local artifact; never relabel incidents or
+# incident-lifetime alertCount as `fires` or manufacture an AF-003 ratio.
+alert_fatigue_oncall_history() {
+  AF_ONCALL_HISTORY='[]'
+  af_history_reader="${CLAUDE_PLUGIN_ROOT:-.}/skills/audit-splunk-oncall/scripts/history.sh"
+  for af_history_file in "$AUDITS_DIR"/splunk_oncall/"$audit_date"/oncall-history.json "$AUDITS_DIR"/splunk_oncall/*/"$audit_date"/oncall-history.json; do
+    [ -e "$af_history_file" ] || [ -L "$af_history_file" ] || continue
+    af_relative="${af_history_file#"$AUDITS_DIR"/}"
+    af_target="${af_relative%/"$audit_date"/oncall-history.json}"
+    if [ -f "$af_history_reader" ] && af_history_summary=$(sh "$af_history_reader" --summarize "$af_history_file" --run-date "$audit_date" --target "$af_target" 2>/dev/null); then
+      :
+    else
+      af_history_summary=$(jq -n --arg t "$af_target" '{target:$t,status:"blocked",complete_window:false,population_incidents:null,reason:"native incident history failed target, date, projection or completeness validation; retain and recollect the input"}')
+      AF_INPUT_STATE=blocked
+      AF_INPUT_REASON='native On-Call incident history failed validation; correct or recollect it for this target and run date'
+    fi
+    AF_ONCALL_HISTORY=$(printf '%s\n%s\n' "$AF_ONCALL_HISTORY" "$af_history_summary" | jq -sc '.[0]+[.[1]]') || return 1
+  done
+}
+
 # Operator counts have no collection timestamp in their legacy contract. Check
 # their declared window and numeric bounds when they are the selected ratio input.
 alert_fatigue_prepare_operator() {
@@ -293,13 +314,13 @@ alert_fatigue_ratio() {
       alerts_fired: .alerts_fired,
       incidents: .incidents,
       alerts_per_incident: (if (.incidents // 0) > 0 then ((.alerts_fired) / (.incidents) | (.*100|round)/100) else null end),
-      note: "alert-to-incident ratio from the operator-provided fatigue.json signal block; a high ratio means many alerts per real incident (fatigue). This is the only actionability number this roll-up will state, and only because you supplied the counts."
+      note: "Alert-to-incident ratio from operator-provided counts. Verify matching source-event and incident cohorts, units, window and mapping before comparing with your paging budget. The ratio alone is not an actionability or fatigue verdict."
     }'
   else
     jq -n '{
       status: "not-in-scope",
-      reason: "no live incident feed (fatigue-signals.json .incident_feed) and no operator fatigue.json ({window, alerts_fired, incidents}) — the true alert-to-incident ratio, MTTA/MTTR, and %-actionable need the paging tool incident/ack stream and are never fabricated.",
-      note: "config-tier (AF-001/002/007) and — where the fire-history lane ran — measured volume/reachability/chronic (AF-004/005/006) are still reported; only the incident-feed tier needs this."
+      reason: "No validated matching source-event and incident counts from an incident_feed or operator fatigue.json; AF-003 cannot compute a comparable alert-to-incident ratio.",
+      note: "Configuration, source-fire and native incident-history tiers retain their independent measurements. Native response samples do not require this ratio; actionability needs reviewed labels and recall needs independent missed-event ground truth."
     }'
   fi
 }
@@ -328,6 +349,7 @@ alert_fatigue_save() {
     --argjson volume "$volume" \
     --argjson chronic "$chronic" \
     --argjson antipatterns "$antipatterns" \
+    --argjson incident_history "${AF_ONCALL_HISTORY:-[]}" \
     --argjson total_noise "$total_noise" \
     --argjson total_storms "$total_storms" \
     --argjson tools_with_noise "$tools_with_noise" \
@@ -363,7 +385,11 @@ alert_fatigue_save() {
           severity: "info",
           summary: (if $volume.status == "measured"
                     then (($volume.total_fires|tostring) + " measured fires across " + ($volume.objects_with_history|tostring) + " object(s); " + ($volume.flapping_objects|tostring) + " flapping; top offenders ranked by fatigue impact")
-                    else "measured volume not available this run (no fire-history signal)" end)} + $volume),
+                    elif any($incident_history[]; .status=="measured")
+                    then "native On-Call incident history measured separately below; source fire totals remain unavailable"
+                    else "measured volume not available this run (no fire-history signal)" end),
+          incident_history:$incident_history,
+          incident_history_status:(if any($incident_history[]; .status=="blocked") then "blocked" elif any($incident_history[]; .status=="measured") then "measured" else "not-in-scope" end)} + $volume),
         ({af_id: "AF-006", type: "chronic-stuck-alerts",
           severity: (if ($chronic.chronic_objects // 0) > 0 then "medium" else "info" end),
           summary: (if $chronic.status == "measured"
@@ -373,7 +399,7 @@ alert_fatigue_save() {
          summary: (($antipatterns.total|tostring) + " noise findings classified into " + (($antipatterns.histogram|length)|tostring) + " named failure modes"),
          histogram: $antipatterns.histogram}
       ],
-      method: "non-scored alert-fatigue ANALYSIS over two local sources: (1) each audit findings.json (config-tier structural noise → AF-001/002/007), and (2) an optional fatigue-signals.json produced by the skills read-only fire-history collection lane (measured tier → AF-004 reachability, AF-005 volume/flapping, AF-006 chronic/stuck; AF-003 ratio from a live incident feed or operator counts). This library makes ZERO provider calls; it never mutates a finding or its severity; every source_finding id exists in this run; a tier with no data is not-in-scope/verify-pending, never fabricated."
+      method: "non-scored alert-fatigue ANALYSIS over local audit findings, optional validated fatigue-signals.json, and optional validated native On-Call history. AF-005 preserves incident-cohort counts separately from source fires, incident-lifetime alerts, notification attempts and human receipt. AF-003 requires independently supported matching units and cohorts. This library makes ZERO provider calls and never changes an audit finding or its severity."
     }' > "$FATIGUE_FILE.tmp.$$" || { rm -f "$FATIGUE_FILE.tmp.$$"; return 1; }
   mv "$FATIGUE_FILE.tmp.$$" "$FATIGUE_FILE" || return 1
   # Precompute the summary scalars into vars first — bash 3.2 (macOS /bin/sh)
@@ -396,6 +422,7 @@ alert_fatigue_run() {
   findings=$(alert_fatigue_collect_findings "$audit_date") || return 1
   alert_fatigue_prepare_signals || return 1
   alert_fatigue_prepare_operator || return 1
+  alert_fatigue_oncall_history || return 1
   signals=$(alert_fatigue_load_signals) || return 1
   coverage=$(alert_fatigue_signal_coverage) || return 1
   if [ "$(printf '%s\n' "$findings" | jq 'length')" -eq 0 ] && [ "$(printf '%s\n' "$signals" | jq 'length')" -eq 0 ]; then

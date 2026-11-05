@@ -525,6 +525,16 @@ saving. The shared doctor reads that exact team and requires its returned
 connection. The team anchor proves access to this team; it does not establish a
 provider-wide organization identity, complete visibility or delivery to a person.
 
+Deeper assessment can read notification policies, future schedules, maintenance,
+alert rules and selected incident history using the same read-only management
+credential. Access and returned fields vary by endpoint and account plan. An
+optional read denial blocks that evidence lane; do not broaden the audit key or
+fall back to setup credentials. Global paging enforcement and some effective UI
+settings require a separate attended check. Choose a history window, coverage
+horizon and your response/staffing objectives in the audit; no extra key or new
+required config field is implied. The [history recipe](../../audit-splunk-oncall/references/history-quality.md)
+states pagination, per-operation pacing and completeness requirements.
+
 Multiple On-Call accounts in ONE environment: make `splunk_oncall` a YAML list,
 with a unique label and a distinct key pair plus known team for each account:
 

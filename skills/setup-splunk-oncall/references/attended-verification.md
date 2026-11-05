@@ -13,12 +13,14 @@ The attended editor procedures use this read-only verifier before and after a sa
 | `overrides` | Complete override list: identities, user, timezone, interval and all assignment references | `interval_start`, `interval_end`, `coverage_matches` for the affected rendered interval |
 | `maintenance` | Complete active instances: identities, global flag and exact keyed routing identities | `end_mechanism_present`; its concrete owner/provider expiry remains in the approved plan |
 | `alert-rules` | Complete ordered rules: predicate, rank, stop flag, route and annotation digests; no volatile update timestamps | `positive_match` and `negative_match` from the provider preview; false is a failed intended test |
-| `paging` | Selected user's complete ordered policy steps, timeouts, rule types and contact IDs/types | None; contact verification is a separate check |
-| `contacts` | Contact collections: type and keyed identity/label; verified when the API exposes it | `selected_contact_hash`, `selected_contact_present` and `selected_contact_verified` for the exact selected contact; omitted API verification remains null, never false |
+| `paging` | Selected user's complete primary ordered policy steps, timeouts, rule types and contact IDs/types (v1) | None; contact verification is a separate check |
+| `paging-v2` | All selected-user personal policies, exact priority/time masks, complete steps and observed `repeat_last_step` terminal behavior (v2) | None; effective timed selection/global precedence remains an audit observation |
+| `global-paging` | Identity anchor only; no invented global-paging API | Complete global settings and effective user policy record after propagation; whole observed user scope must be present |
+| `contacts` | Contact collections: type, native ID/rank and keyed identity/label/value; boolean or observed string verification normalized with exact raw-state digest | `selected_contact_hash`, `selected_contact_present` and `selected_contact_verified` for the exact selected contact; omitted API verification remains null, never false |
 | `incoming` | Exact management routing mapping for the source's protected route reference | `integration_enabled`; the sender's loaded-config check stays in its owning source workflow |
 | `value-digest` | No object read beyond the identity anchor; compute the keyed digest of one protected proposed value | None; supplies an expected hash for a changed private predicate, annotation, email or routing value |
 
-`SOC_OBJECT_ID` is the policy slug for `policy`, or enrolled username for `paging`/`contacts`. `SOC_GROUP_ID` and `SOC_SHIFT_ID` select a shift. Route/incoming assertions take `SOC_ROUTE_ENV`, the name of a protected secret-store variable. Their binding also includes `route_value_hash`, the private HMAC of that variable's actual value. Changing the protected routing value requires a new baseline and approval even when the variable name and routing configuration stay identical. `value-digest` takes `SOC_VALUE_ENV`, also a variable name, never a literal value; it can supply this same digest for the UI observation's object binding. Hashes are private HMACs bound to the read credential; rotation of that credential requires a new baseline. Raw routing values are never retained in the receipt.
+`SOC_OBJECT_ID` is the policy slug for `policy`, or enrolled username for `paging`/`paging-v2`/`contacts`. `SOC_GROUP_ID` and `SOC_SHIFT_ID` select a shift. Route/incoming assertions take `SOC_ROUTE_ENV`, the name of a protected secret-store variable. Their binding also includes `route_value_hash`, the private HMAC of that variable's actual value. Changing the protected routing value requires a new baseline and approval even when the variable name and routing configuration stay identical. `value-digest` takes `SOC_VALUE_ENV`, also a variable name, never a literal value; it can supply this same digest for the UI observation's object binding. Hashes are private HMACs bound to the read credential; rotation of that credential requires a new baseline. Raw routing values are never retained in the receipt.
 
 The verifier accepts only the declared fields and types. If a provider variant differs, stop and name that shape gap; do not reduce the comparator to a count or manually mark it matched. New IDs allocated by an attended create must come from the saved provider object view and be bound into the expected record; they are not guessed. Deletion is checked through complete parent collections. A missing object or a failed GET is not a successful comparison.
 
@@ -33,6 +35,10 @@ The verifier accepts only the declared fields and types. If a provider variant d
 ## Capture UI-only facts
 
 `SOC_UI_OBSERVATION` points to a private JSON observation written from the current trusted browser-tool output or a human's current provider view. It has exactly `source` (`provider-ui`), `observer` (`browser-tool` or `human`), `observed_at` (UTC epoch seconds), `object` (the baseline's exact `binding` object), `evidence_file` (private redacted tool/view record), `evidence_sha256` (hash of that actual record), and `values` (only the fields in the table for this kind). The observation must be at most five minutes old. Capture no credentials, addresses, device tokens or full integration URLs. The evidence digest binds the observation to a file; it does **not** authenticate the human assertion or convert UI evidence into API data. Record the actual tool/view provenance, never manufacture a file to satisfy the guard. If a control is hidden or unreadable, do not save the change.
+
+For `global-paging`, `values` contains exactly `enforced`, `propagation_complete`, `scope_complete`, `usernames`, `policies` and `effective_users`. All three flags are booleans; complete scope and completed propagation must be true. Each policy is `{id,rank,steps,terminal_action}`; steps are `{index,timeout,rules}` with whole-minute timeout, and rules are `{index,type,selection,contact_hash}`. Types are `email`, `phone`, `sms`, `push`; selectors are `first_verified`, `specific`, `all_devices`. Only `specific` carries a private HMAC contact digest. Each effective-user record is `{username,policy_id,steps,terminal_action}`; its rules use `{index,type,contact_hash,available}` instead of a selector. Capture every observed user and its actual effective contacts after propagation, including unavailable contacts. Effective users must exactly cover `usernames` when enforced; disabled enforcement has no effective-global-user rows. Both current verified comparators support the observed `repeat_last_step` terminal action; other terminal semantics require fresh grounding before a save. These are exact complete UI observations, not a synthetic substitute for missing API fields. Do not enable global enforcement to perform a read.
+
+The `contacts` comparator accepts the observed `{contactMethods:[...],_selfUrl}` subcollection and the legacy bare array. It never compares a contact by display label alone: the selected `extId` digest, complete keyed value, ID, type, rank and verification state all remain in the before/after record. Use `paging-v2` alongside `paging` after a personal-policy change so a matching primary cannot hide altered custom policies, order or terminal behavior. Rerun SOC-009 on fresh audit evidence afterward; setup equality alone is not notification receipt.
 
 For an intended enabled/verified/covered/matching result, the corresponding boolean must be true in the after-file. Disabling an integration or ending maintenance is a separately approved inverse with its exact intended state. The end procedure must be established before beginning maintenance; the verifier cannot supply a missing timer or absent operator.
 
@@ -151,17 +157,28 @@ def route():
     require(len(matches)==1,'Selected route is absent or ambiguous');return matches[0]
 def policy():
     raw=shape(get('/api-public/v1/policies/'+ident(object_id)),('slug','name','steps','ignoreCustomPagingPolicies'),('_selfUrl',));require(raw['slug']==object_id,'Policy identity differs')
-    steps=[]
+    steps=[]; target_owners=None
     for s in array(raw['steps']):
         shape(s,('timeout','entries'));entries=[]
         for e in array(s['entries']):
             k=e.get('executionType');field={'user':'user','rotation_group':'rotationGroup','rotation_group_next':'rotationGroup','rotation_group_previous':'rotationGroup','policy_routing':'targetPolicy','webhook':'webhook','email':'email'}.get(k)
             require(field is not None,'Unknown policy target type');shape(e,('executionType',field));v=e[field]
             if field=='user':shape(v,('username',),('firstName','lastName'));ref=ident(v['username'])
-            elif field=='targetPolicy':shape(v,('policySlug',),('policyName',));ref=ident(v['policySlug'])
+            elif field=='targetPolicy':
+                shape(v,('policySlug',),('policyName','name','teamSlug'));ref=ident(v['policySlug'])
+                for display in ('name','policyName'):
+                    if display in v:string(v[display])
+                if 'teamSlug' in v:
+                    if target_owners is None:
+                        census=shape(get('/api-public/v1/policies'),('policies',),('_selfUrl',));target_owners={}
+                        for row in array(census['policies']):
+                            require(isinstance(row,dict) and isinstance(row.get('policy'),dict) and isinstance(row.get('team'),dict),'Policy ownership census is incomplete')
+                            target=ident(row['policy'].get('slug'));owner=ident(row['team'].get('slug'))
+                            require(target not in target_owners,'Policy ownership census is ambiguous');target_owners[target]=owner
+                    require(ref in target_owners and ident(v['teamSlug'])==target_owners[ref],'Nested target team contradicts the policy ownership census')
             elif field=='email':shape(v,('address',));ref=digest(string(v['address']))
             else:shape(v,('slug',),('label',));ref=ident(v['slug'])
-            entries.append({'kind':k,'identity':ref})
+            entries.append({'kind':k,'identity':ref,**({'target_team':v['teamSlug']} if field=='targetPolicy' and 'teamSlug' in v else {})})
         steps.append({'timeout':integer(s['timeout']),'entries':entries})
     return {'name':safe_text(raw['name']),'ignore_custom_paging':boolean(raw['ignoreCustomPagingPolicies']),'steps':steps}
 def members():
@@ -211,25 +228,80 @@ def rules():
         require(r['matchType'] in ('WILDCARD','REGEX'),'Unknown match type')
         rows.append({'id':integer(r['id']),'field':safe_text(r['alertField']),'match_hash':digest(string(r['alertValueMatch'])),'match_type':r['matchType'],'rank':integer(r['rank']),'stop':boolean(r['stopFlag']),'route_hash':digest(string(r.get('routeKey',''))),'annotations':ann})
     return {'rules':sorted(rows,key=lambda x:(x['rank'],x['id']))}
-def paging():
-    raw=shape(get('/api-public/v1/profile/'+ident(object_id)+'/policies'),('steps',),('_selfUrl',));steps=[]
-    for s in array(raw['steps']):
+def paging_steps(raw):
+    steps=[]
+    for s in array(raw):
         shape(s,('index','timeout','rules'));rs=[]
         for r in array(s['rules']):
             shape(r,('index','type','contact'));c=shape(r['contact'],('id','type'));require(r['type'] in ('push','email','sms','phone'),'Unknown paging rule')
             rs.append({'index':integer(r['index']),'type':r['type'],'contact':{'id':integer(c['id']),'type':safe_text(c['type'])}})
-        steps.append({'index':integer(s['index']),'timeout':integer(s['timeout']),'rules':rs})
-    return {'steps':steps}
+        require(len({r['index'] for r in rs})==len(rs),'Duplicate notification rule index')
+        steps.append({'index':integer(s['index']),'timeout':integer(s['timeout']),'rules':sorted(rs,key=lambda r:r['index'])})
+    require(len({s['index'] for s in steps})==len(steps),'Duplicate notification step index')
+    return sorted(steps,key=lambda s:s['index'])
+def paging():
+    raw=shape(get('/api-public/v1/profile/'+ident(object_id)+'/policies'),('steps',),('_selfUrl',))
+    return {'steps':paging_steps(raw['steps'])}
+def paging_v2():
+    raw=shape(get('/api-public/v2/profile/'+ident(object_id)+'/policies'),('policies',));out=[]
+    for p in array(raw['policies']):
+        shape(p,('name','slug','rank','timeMask','steps','terminalAction'),('_selfUrl',))
+        mask=shape(p['timeMask'],('sunday','monday','tuesday','wednesday','thursday','friday','saturday','timeZone','startTime','endTime'))
+        for k in ('sunday','monday','tuesday','wednesday','thursday','friday','saturday'):boolean(mask[k])
+        safe_text(mask['timeZone'])
+        for k in ('startTime','endTime'):require(re.fullmatch(r'(?:[01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](?:\.[0-9]{1,3})?',string(mask[k])),'Unsupported custom-policy clock')
+        require(p['terminalAction']=='repeat_last_step','Unsupported terminal action; ground it before changing this policy')
+        out.append({'slug':ident(p['slug']),'name_hash':digest(string(p['name'])),'rank':integer(p['rank']),'time_mask':mask,'steps':paging_steps(p['steps']),'terminal_action':p['terminalAction']})
+    require(len({p['slug'] for p in out})==len(out) and len({p['rank'] for p in out})==len(out),'Ambiguous personal policy identity or priority')
+    return {'policies':sorted(out,key=lambda p:(p['rank'],p['slug']))}
 def contacts():
-    raw=shape(get('/api-public/v1/user/'+ident(object_id)+'/contact-methods'),('devices','emails','phones'));out={}
+    raw=shape(get('/api-public/v1/user/'+ident(object_id)+'/contact-methods'),('devices','emails','phones'),('_selfUrl',));out={}
     for kind in ('devices','emails','phones'):
+        collection=raw[kind]
+        if isinstance(collection,dict):collection=shape(collection,('contactMethods',),('_selfUrl',))['contactMethods']
         rows=[]
-        for c in array(raw[kind]):
-            shape(c,('label','extId'),('deviceType','_selfUrl','id','verified'))
-            rows.append({'identity_hash':digest(string(c['extId'])),'label_hash':digest(string(c['label'])),'type':safe_text(c.get('deviceType',kind)),'verified':boolean(c['verified']) if 'verified' in c else None})
+        for c in array(collection):
+            shape(c,('label','extId'),('deviceType','contactType','_selfUrl','id','verified','value','rank'))
+            verification=c.get('verified')
+            require(verification is None or type(verification) is bool or isinstance(verification,str),'Unsupported contact verification field')
+            require(not isinstance(verification,str) or verification in ('true','false','verified','unverified'),'Unsupported present contact verification state; do not save')
+            verified=verification if type(verification) is bool else True if verification in ('true','verified') else False if verification in ('false','unverified') else None
+            rows.append({'identity_hash':digest(string(c['extId'])),'label_hash':digest(string(c['label'])),'type':safe_text(c.get('contactType',c.get('deviceType',kind))),'native_id':integer(c['id']) if 'id' in c else None,'value_hash':digest(string(c['value'])) if 'value' in c else None,'rank':integer(c['rank']) if 'rank' in c else None,'verified':verified,'verification_state_hash':digest(verification)})
+        require(len({r['identity_hash'] for r in rows})==len(rows),'Duplicate contact identity')
         out[kind]=sorted(rows,key=lambda x:x['identity_hash'])
     return out
-UI_FIELDS={'value-digest':{},'route-mode':{'isMultiResponder':bool},'policy':{},'membership':{},'shift':{'interval_start':str,'interval_end':str,'coverage_matches':bool},'overrides':{'interval_start':str,'interval_end':str,'coverage_matches':bool},'maintenance':{'end_mechanism_present':bool},'alert-rules':{'positive_match':bool,'negative_match':bool},'paging':{},'contacts':{'selected_contact_hash':str,'selected_contact_present':bool,'selected_contact_verified':bool},'incoming':{'integration_enabled':bool}}
+# Global enforcement has no established public management endpoint. This
+# comparator validates the complete selected UI record, never a guessed read.
+def global_values(v):
+    shape(v,('enforced','propagation_complete','scope_complete','usernames','policies','effective_users'))
+    for k in ('enforced','propagation_complete','scope_complete'):boolean(v[k])
+    require(v['scope_complete'] and v['propagation_complete'],'Global scope or propagation is incomplete; do not save')
+    users=[ident(u) for u in array(v['usernames'])];require(len(set(users))==len(users),'Duplicate global-policy user')
+    policy_ids=[];ranks=[]
+    def global_steps(steps,effective):
+        indices=[]
+        for step in array(steps):
+            shape(step,('index','timeout','rules'));indices.append(integer(step['index']));integer(step['timeout']);rules=[]
+            for rule in array(step['rules']):
+                shape(rule,('index','type','contact_hash','available') if effective else ('index','type','selection','contact_hash'))
+                rules.append(integer(rule['index']));require(rule['type'] in ('email','phone','sms','push'),'Unknown global notification type')
+                h=rule['contact_hash'];require(h is None or isinstance(h,str) and re.fullmatch(r'[a-f0-9]{64}',h),'Invalid private contact digest')
+                if effective:boolean(rule['available'])
+                else:
+                    require(rule['selection'] in ('first_verified','specific','all_devices'),'Unknown global contact selection')
+                    require((rule['selection']=='specific')==(h is not None),'Global specific selection needs exactly one private contact digest')
+            require(len(set(rules))==len(rules),'Duplicate global rule index')
+        require(len(set(indices))==len(indices),'Duplicate global step index')
+    for p in array(v['policies']):
+        shape(p,('id','rank','steps','terminal_action'));policy_ids.append(ident(p['id']));ranks.append(integer(p['rank']));require(p['terminal_action']=='repeat_last_step','Unsupported global terminal action');global_steps(p['steps'],False)
+    require(len(set(policy_ids))==len(policy_ids) and len(set(ranks))==len(ranks),'Ambiguous global policy identity/order')
+    observed=[]
+    for u in array(v['effective_users']):
+        shape(u,('username','policy_id','steps','terminal_action'));observed.append(ident(u['username']));require(ident(u['policy_id']) in policy_ids,'Effective user references an unobserved global policy');require(u['terminal_action']=='repeat_last_step','Unknown effective terminal behavior');global_steps(u['steps'],True)
+    require(len(set(observed))==len(observed),'Duplicate effective global-policy user')
+    require((set(observed)==set(users) and len(users)>0 and len(policy_ids)>0) if v['enforced'] else len(observed)==0,'Effective global policy does not cover the full observed user scope')
+    return v
+UI_FIELDS={'value-digest':{},'route-mode':{'isMultiResponder':bool},'policy':{},'membership':{},'shift':{'interval_start':str,'interval_end':str,'coverage_matches':bool},'overrides':{'interval_start':str,'interval_end':str,'coverage_matches':bool},'maintenance':{'end_mechanism_present':bool},'alert-rules':{'positive_match':bool,'negative_match':bool},'paging':{},'paging-v2':{},'global-paging':{'enforced':bool,'propagation_complete':bool,'scope_complete':bool,'usernames':list,'policies':list,'effective_users':list},'contacts':{'selected_contact_hash':str,'selected_contact_present':bool,'selected_contact_verified':bool},'incoming':{'integration_enabled':bool}}
 def ui_observation():
     fields=UI_FIELDS[kind]
     if not fields:return None
@@ -241,6 +313,7 @@ def ui_observation():
     require(hashlib.sha256(e.read_bytes()).hexdigest()==r['evidence_sha256'],'UI evidence checksum differs')
     shape(r['values'],fields)
     for key,typ in fields.items():require(type(r['values'][key]) is typ,'UI observed field has wrong type')
+    if kind=='global-paging':global_values(r['values'])
     for val in r['values'].values():
         if isinstance(val,str):safe_text(val)
     return {k:r[k] for k in ('source','observer','observed_at','evidence_sha256','values')}
@@ -255,7 +328,7 @@ try:
         require(route_key,'Set the protected route variable');binding['route_value_hash']=digest(string(route_key))
     fingerprint=digest([os.environ['SOC_ID'],os.environ['SOC_READ']])
     anchor=get('/api-public/v1/team/'+team);require(isinstance(anchor,dict) and anchor.get('slug')==team,'Team anchor differs')
-    projections={'value-digest':lambda:{'value_hash':digest(string(os.environ['SOC_VALUE_SECRET']))},'route-mode':route,'incoming':route,'policy':policy,'membership':members,'shift':shift,'overrides':overrides,'maintenance':maintenance,'alert-rules':rules,'paging':paging,'contacts':contacts}
+    projections={'value-digest':lambda:{'value_hash':digest(string(os.environ['SOC_VALUE_SECRET']))},'route-mode':route,'incoming':route,'policy':policy,'membership':members,'shift':shift,'overrides':overrides,'maintenance':maintenance,'alert-rules':rules,'paging':paging,'paging-v2':paging_v2,'global-paging':lambda:{'state_source':'provider-ui','public_api':'not-established'},'contacts':contacts}
     current=projections[kind]();ui=ui_observation();now=int(time.time())
     if kind=='route-mode' and current['api_mode'] is not None:require(ui['values']['isMultiResponder']==current['api_mode'],'UI and API responder mode disagree')
     if kind=='contacts':

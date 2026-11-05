@@ -18,11 +18,27 @@ Populated management shapes below were observed in a test account in November202
 | `/api-public/v2/team/{team}/rotations` | `rotations[].groupId`, `shifts[].shiftId/shifttype/timezone/shiftMembers[].username/current.username` |
 | `/api-public/v1/oncall/current` | `teamsOnCall[].team.slug`, `.oncallNow[].escalationPolicy.slug`, `.users[].onCalluser.username` |
 
+The additive `quality` projection records optional read availability separately from `complete_reads` (the core census/detail contract). Core completeness does not imply quality completeness. Triage does not collect quality; bounded exhaustion or denial blocks the dependent quality checks.
+
+| Additional fixed GET | Evidence and interpretation |
+| --- | --- |
+| `/api-public/v1/profile/{user}/policies` and `/api-public/v2/profile/{user}/policies` | Primary steps; ranked custom policies, time masks, ordered steps/rules and terminal action. A step owns its timeout. Provider contact type `Email` and channel `email` are distinct fields. |
+| `/api-public/v1/user/{user}/contact-methods` | `emails/phones/devices.contactMethods[]`; IDs/types/verified state only, no addresses/tokens. Known string verification values are normalized; unfamiliar values stay unknown. |
+| `/api-public/v1/maintenancemode` | `activeInstances[]`, scope, started time and route matches. No automatic end is inferred. |
+| `/api-public/v1/alertRules` | Safe ordered predicate/action structure and secret-free route matches; unknown shapes do not become empty rules. |
+| `/api-public/v2/team/{team}/oncall/schedule` | Explicit `daysForward`, `daysSkip`, `step`; observed rolls/intervals and users. No speculative pagination or coverage before/after returned intervals. |
+| `/api-public/v1/overrides` and `/api-public/v1/team/{team}/admins` | Override assignments and owner continuity. A pending absence is distinct from effective coverage. |
+| `/api-reporting/v2/incidents` | Explicit all-phase historical start-window cohort with offset, limit and total; normalized known phases/transitions, safe grouping references and samples. |
+| `/api-public/v1/incidents/{number}` then `/api-public/v1/alerts/{firstAlertUuid}` | Selected original-alert identity and field-presence observations; strictly bounded and no raw payload output. |
+| `/api-reporting/v1/team/{team}/oncall/log` | Selected bounded duty interval and reported hour/minute components, distinct from notifications and subject to reporting lag. |
+
+Global enforcement, effective selection, control intent and some rendered/provider-match semantics require [fresh attended evidence](effective-quality.md#attended-evidence-for-state-the-api-cannot-establish). No undocumented endpoint is assumed. Populated November 2026 observations include personal policy masks/steps, verified contact wrappers, future schedule rolls, duty logs and four historical QA incidents; maintenance/rule/override empty responses establish envelopes only. Each newly populated variant must still pass its current shape and interpretation guards.
+
 All collection paths are constructed from constants and validated identifiers. Never dereference `_selfUrl`, `_teamUrl` or a response-provided next URL. The known account team proves consistency with the operator's anchor, not a cryptographic tenant ID. Both keys are confidential header values. A route key is also a secret, even when the provider calls it a name and a read-only key can list it. The optional `--source-route-env VARIABLE_NAME` mode resolves an independently verified source key from the protected store and returns only `source_match.route_aliases` and `.policies`; no match stays empty, ambiguity remains visible, and neither outcome invents source-side provenance.
 
 ## Transport and projection
 
-The reader makes serial GETs at least one second apart (the selected endpoints document at most two calls/second). It never retries on429. Stop and record a blocked check; a later bounded rerun must respect provider Retry-After if available. Do not burst or probe the limit. History, if separately introduced, requires its own one-call-per-minute budget and populated pagination proof; the core recipe does not call history.
+The reader makes serial GETs at least one second apart (the selected endpoints document at most two calls/second). It never retries on429. Stop and record a blocked check; a later bounded rerun must respect provider Retry-After if available. Do not burst or probe the limit. The separate [history recipe](history-quality.md) enforces a persistent one-call-per-minute reporting budget; the core recipe does not call reporting. A complete small live cohort does not prove large populated pagination behavior; adversarial multipage fixtures and each real cohort’s completeness assertions remain separate evidence.
 
 Curl has fixed HTTPS origin, identity encoding, no redirects, max25seconds, max2MiB and complete JSON parsing. Curl8.4+ is required for the unknown-length body bound. Missing/rejected auth,3xx,404,429,5xx, oversized/truncated bodies and malformed JSON are distinct from a successful empty collection. Diagnostics retain only a status/class. No provider errors, credentials or unprojected JSON go to files or the model.
 
@@ -34,7 +50,7 @@ Do not run curl with tracing, verbose headers, shell xtrace or a user-provided p
 
 Core audit collection intentionally does not fetch alert detail. `GET /api-public/v1/alerts/{uuid}` may expose actual `apiKey`, `routingKey` and JSON-string `raw` containing the inbound credential and URL. Read-only permission does not make that output safe. If a selected investigation needs it, keep the raw response only in memory and allowlist the exact necessary non-secret fields before any model/log/file output. Never save first and regex-scrub later. Do not treat arbitrary JSON-string payloads as harmless text.
 
-A safe lineage projection contains the known incident/alert identity, message-state type, original source-evidence reference, policy/team slugs, captured recipient identity and booleans confirming the expected key/source match. Omit keys, inbound URLs, raw payloads, arbitrary messages, personal contact addresses and unknown fields. Timestamp type observation is not a units guarantee. No standalone ad hoc alert-detail recipe ships until its additional projection/identity checks are reviewed; SOC-008 may consume already projected evidence with explicit provenance.
+A safe lineage projection contains the known incident/alert identity, message-state type, original source-evidence reference, policy/team slugs, captured recipient identity and booleans confirming the expected key/source match. Omit keys, inbound URLs, raw payloads, arbitrary messages, personal contact addresses and unknown fields. Timestamp type observation is not a units guarantee. The optional selected original-alert flow in [history-quality.md](history-quality.md) follows the incident’s observed `firstAlertUuid` on the fixed management origin and projects field presence only. It does not follow the latest alert or emit its raw body. SOC-008 may also consume separately projected lineage evidence with explicit provenance.
 
 ## Large estates
 
@@ -135,7 +151,7 @@ After completion, re-read current coverage before publishing and state the compl
 
 ## Report validation
 
-Author findings and the inventory from observed evidence using the parent skill's exact seven-check scoring contract. Use [report-template.md](../../../report-standard/report-template.md) for the Markdown spine. Derive the scorecard, inventory and lanes sections from their canonical JSON; do not duplicate evidence by hand. The renderer's HTML mode takes an explicit output-file argument.
+Author findings and the inventory from observed evidence using the parent skill's exact 18-check scoring contract. Use [report-template.md](../../../report-standard/report-template.md) for the Markdown spine. Derive the scorecard, inventory and lanes sections from their canonical JSON; do not duplicate evidence by hand. The renderer's HTML mode takes an explicit output-file argument.
 
 This fresh-shell block selects the same target through the shared `report-standard/toolkit-targets.sh` used by the collection recipe. It requires an already authored report for the chosen date. It validates target identity, findings, deterministic report sections and HTML; failures block completion.
 

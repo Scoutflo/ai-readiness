@@ -13,8 +13,9 @@ state change) ; this lane never mutates.
 
 **Never fabricate.** A provider that cannot expose history (no permission / API not
 present) marks that provider's fire-history tier `verify-pending` in
-`provider_coverage[]` ; never a guessed number. **Off-hours has no native field anywhere**
-; it is always *derived* from a fire timestamp against the business-hours window; say so.
+`provider_coverage[]`; never a guessed number. Off-hours needs a verified native
+definition matching your policy, or timestamp derivation using your declared timezone
+and business-hours window. State which method produced it; otherwise leave it unknown.
 
 **Bounded and resumable.** Use [collection-workflow.md](collection-workflow.md)
 for the selected-target doctor/identity gate, immutable window/object plan and
@@ -55,7 +56,7 @@ Write it to `${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/fatigue-signals.json`:
       "off_hours_fires": 30,    // fires whose timestamp is outside business hours; null if TZ/window unknown
       "reaches_human": false,   // routing resolves to a live receiver/subscriber/workflow/channel
       "reach_reason": "SNS topic has 0 subscribers",
-      "source_finding_ids": ["AWS-SNS"] }   // link back to the config finding(s)
+      "source_finding_ids": ["AWS-010"] }   // only when this run contains that config finding
   ],
   "provider_coverage": [
     { "provider": "aws",     "tier": "fire-history", "status": "collected", "objects": 118, "verification": "spec-only" },
@@ -141,7 +142,7 @@ the plugin's own live-smoke gate (AGENTS Done-criteria #5) provider by provider.
 | **New Relic** | `NrAiIncident` NRQL via NerdGraph | field set CONFIRMED LIVE against a real fired incident (event/openTime/conditionName/priority/muted/entity.guid, 2026-09) ; first live run may set `live-verified` directly after re-confirming on the target tenant |
 | **PagerDuty** | `GET /incidents` + `log_entries` | `analytics/metrics` response fields (prefer `log_entries` until confirmed) |
 | **incident.io / Opsgenie** | incidents lists | `duration_metrics[]` / `report.ackTime` shapes |
-| **Splunk On-Call (VictorOps)** | Bounded incident observations in `audit-splunk-oncall` | A complete fatigue feed, historical pagination and notification-delivery counts remain **verify-pending**; do not derive MTTA/MTTR or alert-to-incident ratios from one observed lifecycle |
+| **Splunk On-Call (VictorOps)** | Bounded all-phase history, explicit window, safe projection and optional original-context/on-call-log reads in `audit-splunk-oncall` | Native incident evidence feeds AF-005 separately from source fires. Populated field assertions do not establish a representative workload or complete notification feed. Multipage collection must reconcile each run; no ratio/actionability/recall from one lifecycle. See [history-quality.md](../../audit-splunk-oncall/references/history-quality.md). |
 | **Zenduty** | incidents list | **entirely UNVERIFIED** (docs migrated to Xurrent) ; keep `verify-pending` until re-confirmed |
 
 **Per-provider checklist (run once, on an authorized estate):** (1) run the read
@@ -316,18 +317,15 @@ threshold was raised in a remediation session, with `aiIssues.state` moving
 
 ---
 
-## Incident-feed tier ; the TRUE ratio, MTTA/MTTR, %-actionable (for AF-003)
+## Incident-feed tier: grounded counts and response samples (for AF-003)
 
-Populate `incident_feed{}` in `fatigue-signals.json` from a read-only incident/ack stream so
-AF-003 is a **measured** ratio, not an operator guess. General derivation: **ratio** = (alerts
-fired in window, from the reads above) ÷ (correlated incidents); **MTTA** = mean(first-ack −
-created); **MTTR** = mean(resolved − created); **%-actionable** = incidents acked/actioned ÷
-total (auto-resolved-without-ack ≈ noise); **off-hours** from `created_at`.
+Populate `incident_feed{}` only when separately grounded source-alert and incident counts describe the same window and mapped cohort. **Ratio** = those source alerts divided by correlated incident episodes. Neither `alertCount` over an incident's lifetime nor incident assignments establish source-window fires or notification totals. **MTTA** and **MTTR** require known transition semantics, explicit sample denominators, and open/censored records reported beside the observed means. **Actionability** requires reviewed labels; acknowledgement is not actionability and automatic resolution is not proof of noise. **Off-hours** requires an observed timestamp, declared timezone and business-hours model. An incident feed alone cannot measure recall or missed incidents.
 
-- **PagerDuty** (VERIFIED): `GET /incidents?since=&until=&statuses[]=` + `GET /incidents/{id}/log_entries` for exact ack/resolve times. MTTA = `acknowledgements[0].at − created_at`; %-actionable = incidents with a non-empty `acknowledgements[]`. (`POST /analytics/metrics/incidents/all` is a read-only rollup with native business/off/sleep-hour interruption splits, but its **response field names are UNVERIFIED** ; prefer `GET /incidents`+`log_entries`.)
-- **incident.io** (VERIFIED): `GET /v2/incidents` ; read `duration_metrics[].value_seconds` and `incident_timestamp_values[]` directly for MTTA/MTTR; exclude `incident_status.category ∈ {declined,canceled,merged}` from actionable.
+- **PagerDuty** (VERIFIED): `GET /incidents?since=&until=&statuses[]=` + `GET /incidents/{id}/log_entries` for observed ack/resolve times. An acknowledgement fraction is an acknowledgement fraction, not `% actionable`. (`POST /analytics/metrics/incidents/all` is a read-only rollup with native business/off/sleep-hour interruption splits, but its **response field names are UNVERIFIED**; prefer bounded incidents/log entries until grounded.)
+- **incident.io** (VERIFIED): `GET /v2/incidents`; read `duration_metrics[].value_seconds` and `incident_timestamp_values[]` with their declared definitions and cohort. Declined, canceled and merged categories change incident lifecycle accounting; they do not independently label actionability.
 - **Opsgenie** (VERIFIED): `GET /v2/alerts` (noise; `count` = de-dup occurrence = flap signal; `report.ackTime`/`report.closeTime` are seconds-to-ack/close, read directly) + `GET /v1/incidents`.
 - **Zenduty** (**UNVERIFIED** ; docs migrated to Xurrent this session): a read-only incidents list with `creation_date` + a numeric status; **re-confirm against the live API before use** ; until then mark Zenduty incident-feed `verify-pending`.
+- **Splunk On-Call:** run the [bounded native history recipe](../../audit-splunk-oncall/references/history-quality.md). Keep its `oncall-history.json` next to the target/date audit. The library validates that artifact through the recipe's local summary mode and adds it under AF-005 `incident_history[]`. Do not populate AF-003 or source `signals[].fires` from its native incident/lifetime-alert counts.
 
 Absent any incident feed **and** an operator `fatigue.json`, AF-003 is `not-in-scope` ; the
 true ratio/MTTA/MTTR/%-actionable are never fabricated.

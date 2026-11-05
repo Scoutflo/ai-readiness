@@ -9,7 +9,7 @@ Run the single block below in a fresh shell for each mode. Run the main skill's 
 | Input | Meaning |
 | --- | --- |
 | `SOC_OPERATION` | `policy-create`, `policy-replace`, `policy-retire`, `route-create`, `route-replace`, or `route-retire` |
-| `SOC_MODE` | `plan`, `apply`, `restore`, or `inspect`; default `plan` |
+| `SOC_MODE` | `plan`, `apply`, `restore`, `inspect`, or read-only `reconcile`; default `plan` |
 | `SOC_RUN_ID` | Unique safe local action label; reuse only for the saved plan |
 | `SOC_POLICY_SLUG` | Existing policy for replace/retire; not used for creation |
 | `SOC_POLICY_FILE` | Private JSON file for policy create/replace. Create: `{name,ignoreCustomPagingPolicies,steps}`. Replace: `{ignoreCustomPagingPolicies,steps}`. Flags must be explicit; no default false. |
@@ -17,15 +17,16 @@ Run the single block below in a fresh shell for each mode. Run the main skill's 
 | `SOC_ROUTE_TARGETS` | Comma-separated exact existing policy slugs for route create/replace; all must belong to the configured team |
 | `SOC_CREATED_RUN` | Creation journal label proving run ownership before a retirement plan |
 | `SOC_UNUSED_CONFIRMED` | `yes` only after checking external senders/active use for a retirement or create-restoration; it is not inferred from an empty management list |
-| `SOC_APPROVED_PLAN` | `apply:<sha256>` or `restore:<sha256>`, supplied only after the conversation approves the printed exact plan and effect. Never preset during plan. |
+| `SOC_APPROVED_PLAN` | `apply:<sha256>` or `restore:<sha256>`, supplied only after the conversation approves the printed exact plan and effect. Read-only reconcile retains the original `apply:` checksum. Never preset during plan. |
+| `SOC_LEGACY_ATTEMPT_PLAN_SHA256` | Original approved checksum recovered from a contemporaneous operator receipt, only for an older attempted policy-create journal without `plan_sha256`; never a newly computed replacement. |
 
 A policy step is `{timeout:<whole minutes>,entries:[...]}`. Automatic policy entries support `user:{username}`, `rotationGroup:{slug}` with `rotation_group`, `rotation_group_next`, or `rotation_group_previous`, and `targetPolicy:{policySlug}` with `policy_routing`. The selected users must be enrolled team members; referenced rotations must belong to the selected team; referenced policies are cycle-checked. Email and webhook entries require the guided destination workflow below because their authority and private payloads differ.
 
 For route replacement, current GET must expose a boolean `isMultiResponder`. The block refuses when it is absent. An old receipt or a user-entered false is not API preservation proof; use the guided UI procedure below. Route create does not invent a mode absent from the documented POST payload.
 
-The plan directory is mode 0700, files 0600, under the resolved target. The checksum binds approval to exact saved bytes, but does not itself grant permission. Plan/apply compare both credential tiers against the configured team and bind the exact credential generation privately. Apply rechecks the complete relevant state and dependencies. Policy changes bind the exact hashed routing identities and mappings before and after the write; an unchanged consumer count is insufficient. All collection reads reject unknown pagination/count/total fields rather than treating a subset as complete. POST/PUT/DELETE is attempted once; an uncertain response is reconciled by GET. A persistent attempt marker prevents retries, including after process termination. `inspect` makes reads and reports equality only; it never clears that marker. There is no conditional provider update, so keep the attended object stable between preread and write.
+The plan directory is mode 0700, files 0600, under the resolved target. The checksum binds approval to exact saved bytes, but does not itself grant permission. Plan/apply compare both credential tiers against the configured team and bind the exact credential generation privately. Apply rechecks the complete relevant state and dependencies. Policy changes bind the exact hashed routing identities and mappings before and after the write; an unchanged consumer count is insufficient. All collection reads reject unknown pagination/count/total fields rather than treating a subset as complete. POST/PUT/DELETE is attempted once; an uncertain response is reconciled by GET. A persistent attempt marker prevents retries, including after process termination. `inspect` makes reads and reports equality only; it never clears that marker. After an interrupted policy-create readback, `reconcile` may complete the ownership receipt using fresh reads and the original approved checksum; it never retries POST or clears the attempt marker. Other unknown operations remain inspect-only until their own recovery is supported. There is no conditional provider update, so keep the attended object stable between preread and write.
 
-## Prepare, apply, inspect or restore
+## Prepare, apply, inspect, reconcile or restore
 
 The provider's Swagger documents the operations below, including PUT policy replacement despite older POST prose describing policies as immutable. Live acceptance and full field preservation must be recorded per operation against your account; a successful plan or fixture test is not write proof. Unknown fields or unsupported policy variants stop before a mutation.
 
@@ -35,9 +36,11 @@ set -eu
 set +x
 umask 077
 SOC_MODE="${SOC_MODE:-plan}"
+SOC_LEGACY_ATTEMPT_PLAN_SHA256="${SOC_LEGACY_ATTEMPT_PLAN_SHA256:-}"
+export SOC_LEGACY_ATTEMPT_PLAN_SHA256
 SOC_RUN_ID="${SOC_RUN_ID:-}"
 SOC_OPERATION="${SOC_OPERATION:-}"
-case "$SOC_MODE" in plan|apply|restore|inspect) ;; *) echo 'Invalid mode'; exit 1;; esac
+case "$SOC_MODE" in plan|apply|restore|inspect|reconcile) ;; *) echo 'Invalid mode'; exit 1;; esac
 case "$SOC_OPERATION" in policy-create|policy-replace|policy-retire|route-create|route-replace|route-retire) ;; *) echo 'Choose a documented policy or route operation'; exit 1;; esac
 case "$SOC_RUN_ID" in ''|*[!A-Za-z0-9_-]*) echo 'Set a safe unique SOC_RUN_ID'; exit 1;; esac
 CFG="${SCOUTFLO_CONFIG:-}"
@@ -186,7 +189,7 @@ def policy_list():
 
 def steps(value, read=False):
     require(isinstance(value,list) and value, 'Policy needs explicit nonempty steps')
-    result=[]
+    result=[]; target_owners=None
     for step in value:
         require(isinstance(step,dict) and set(step)=={'timeout','entries'}, 'Unknown or missing policy step field')
         require(type(step['timeout']) is int and step['timeout']>=0, 'Timeout must be nonnegative whole minutes')
@@ -197,12 +200,18 @@ def steps(value, read=False):
             kind=entry.get('executionType')
             if kind in ('rotation_group','rotation_group_next','rotation_group_previous'): field,key,extra='rotationGroup','slug',{'label'}
             elif kind=='user': field,key,extra='user','username',{'firstName','lastName'}
-            elif kind=='policy_routing': field,key,extra='targetPolicy','policySlug',{'name'}
+            elif kind=='policy_routing': field,key,extra='targetPolicy','policySlug',{'name','policyName','teamSlug'}
             else: raise Stop('Entry type requires the guided destination workflow; no speculative replacement')
             require(set(entry)=={'executionType',field} and isinstance(entry[field],dict), 'Policy entry must contain only its matching target')
             allowed={key}|(extra if read else set())
             require(set(entry[field])<=allowed and key in entry[field], 'Unknown target field')
             for k in set(entry[field])-{key}: text(entry[field][k])
+            if field=='targetPolicy' and 'teamSlug' in entry[field]:
+                if target_owners is None: target_owners={x['slug']:x['team'] for x in policy_list()}
+                target=ident(entry[field][key]); returned_team=ident(entry[field]['teamSlug'])
+                require(target in target_owners and target_owners[target]==returned_team,'Nested target team contradicts the policy ownership census')
+            # teamSlug is observed identity evidence, checked above. It is not a
+            # writable field; normalized replacement payloads retain policySlug.
             entries.append({'executionType':kind,field:{key:ident(entry[field][key])}})
         result.append({'timeout':step['timeout'],'entries':entries})
     return result
@@ -319,7 +328,7 @@ def policy_consumes(slug,target):
     value=request('GET','/api-public/v1/policies/'+ident(slug),read_key)
     require(set(value)=={'name','slug','ignoreCustomPagingPolicies','steps'} and value.get('slug')==slug and type(value.get('ignoreCustomPagingPolicies')) is bool and isinstance(value.get('name'),str),'Unknown dependency policy shape')
     require(isinstance(value['steps'],list),'Unknown dependency steps')
-    found=False
+    found=False; target_owners=None
     kinds={'rotation_group':'rotationGroup','rotation_group_next':'rotationGroup','rotation_group_previous':'rotationGroup',
            'user':'user','policy_routing':'targetPolicy','webhook':'webhook','email':'email'}
     for step in value['steps']:
@@ -329,10 +338,15 @@ def policy_consumes(slug,target):
             field=kinds.get(entry['executionType'])
             require(field is not None and set(entry)=={'executionType',field} and isinstance(entry[field],dict),'Unknown dependency target')
             key,optional={'rotationGroup':('slug',{'label'}),'user':('username',{'firstName','lastName'}),
-                          'targetPolicy':('policySlug',{'name'}),'webhook':('slug',{'label'}),'email':('address',set())}[field]
+                          'targetPolicy':('policySlug',{'name','policyName','teamSlug'}),'webhook':('slug',{'label'}),'email':('address',set())}[field]
             require(set(entry[field])<=({key}|optional) and isinstance(entry[field].get(key),str) and entry[field][key] and all(isinstance(x,str) for x in entry[field].values()),'Incomplete dependency target fields')
             if field!='email': ident(entry[field][key])
-            if field=='targetPolicy': found=entry[field]['policySlug']==target or found
+            if field=='targetPolicy':
+                if 'teamSlug' in entry[field]:
+                    if target_owners is None: target_owners={x['slug']:x['team'] for x in policy_list()}
+                    nested=entry[field]['policySlug']; returned_team=ident(entry[field]['teamSlug'])
+                    require(nested in target_owners and target_owners[nested]==returned_team,'Dependency target team contradicts the policy ownership census')
+                found=entry[field]['policySlug']==target or found
     return found
 
 def no_policy_consumers(slug,summaries,route_rows):
@@ -414,6 +428,41 @@ try:
     require(plan.get('schema')=='scoutflo-oncall-policy-route/v1' and plan.get('operation')==operation and plan.get('target')==target and plan.get('team')==anchor and plan.get('credential_fingerprint')==fingerprint,'Plan target, operation or credentials changed')
     require(plan.get('object_id')==(route_env if is_route else object_id),'Selected identity differs from plan')
     if is_route: require(plan.get('route_fingerprint')==hashlib.sha256(route_value.encode()).hexdigest(),'Routing secret changed; prepare a new plan')
+    if mode=='reconcile':
+        require(operation=='policy-create' and plan.get('before') is None and plan.get('object_id') is None,'Reconcile supports only an attempted policy creation')
+        require(approved=='apply:'+digest,'Supply the original approved create checksum for read-only reconciliation')
+        attempt=private_read(out/'apply.started')
+        require(attempt.get('operation')=='policy-create' and type(attempt.get('attempted_at')) is int and type(plan.get('created_at')) is int and plan['created_at']<=attempt['attempted_at']<=int(time.time()),'Original creation attempt is unavailable or invalid')
+        original_hash=attempt.get('plan_sha256')
+        if original_hash is None:
+            # Older journals did not retain approval bytes. Recover the checksum
+            # from the original operator receipt, never from an edited plan.
+            original_hash=os.environ.get('SOC_LEGACY_ATTEMPT_PLAN_SHA256','')
+        require(original_hash==digest,'Attempt does not bind the original approved plan; retain it and inspect only')
+        require(not (out/'applied.json').exists() and not (out/'applied.json').is_symlink(),'Creation ownership receipt already exists; inspect it, do not replace it')
+        require(not (out/'reconcile.result.json').exists() and not (out/'reconcile.result.json').is_symlink(),'Reconciliation result exists; inspect instead of replacing it')
+        require(plan.get('route_census')==route_census(route_rows),'Routing identities or mappings changed; ownership remains unverified')
+        desired=plan['after']
+        require(isinstance(desired,dict) and set(desired)=={'name','teamSlug','ignoreCustomPagingPolicies','steps'} and desired['teamSlug']==anchor and type(desired['ignoreCustomPagingPolicies']) is bool,'Saved create payload is invalid')
+        text(desired['name']);steps(desired['steps'])
+        prior=plan['policy_census'];prior_ids={x['slug'] for x in prior}
+        found=[x for x in summaries if x['team']==anchor and x['name']==desired['name'] and x['slug'] not in prior_ids]
+        require(len(found)==1,'Created identity is absent or ambiguous; no retry or ownership claim')
+        created_id=found[0]['slug']
+        require([x for x in summaries if x['slug']!=created_id]==prior,'Unrelated policy census changed; ownership remains unverified')
+        observed=policy(created_id)
+        require(observed['name']==desired['name'] and payload(observed)=={k:desired[k] for k in ('ignoreCustomPagingPolicies','steps')},'Created policy differs from the approved full payload')
+        validate_dependencies(observed,summaries,created_id)
+        # Revalidate the exact census and routes after dependency reads. No read
+        # is a conditional write guarantee; keep this object stable externally.
+        final_summaries=policy_list();final_routes=routes()
+        require(final_summaries==summaries and route_census(final_routes)==plan['route_census'],'Dependencies changed during reconciliation; preserve the attempt')
+        final_observed=policy(created_id)
+        require(final_observed==observed,'Created policy changed during reconciliation')
+        create(out/'applied.json',{'object_id':created_id,'observed':observed,'route_census':route_census(final_routes),'at':int(time.time()),'provenance':'reconciled-without-retry','original_plan_sha256':digest})
+        create(out/'reconcile.result.json',{'operation':operation,'effect':'verified-by-fresh-readback','write_retried':False,'at':int(time.time())})
+        print('Original policy creation verified by fresh reads; ownership receipt recorded without a write retry.')
+        sys.exit(0)
     if mode=='inspect':
         if operation=='policy-create':
             found=[x for x in summaries if x['team']==anchor and x['name']==plan['after']['name'] and x['slug'] not in {x['slug'] for x in plan['policy_census']}]
@@ -451,7 +500,7 @@ try:
     if operation=='route-retire': no_route_consumers()
     for filename in (mode+'.started',mode+'.result.json')+ (('applied.json',) if mode=='apply' else ()):
         require(not (out/filename).exists() and not (out/filename).is_symlink(),'Attempt or result exists; inspect unknown outcome, never replay')
-    create(out/(mode+'.started'),{'attempted_at':int(time.time()),'operation':operation})
+    create(out/(mode+'.started'),{'attempted_at':int(time.time()),'operation':operation,'plan_sha256':digest})
     if operation=='policy-create': method,path,body='POST','/api-public/v1/policies',desired
     elif operation=='policy-replace': method,path,body='PUT','/api-public/v1/policies/'+object_id,desired
     elif operation=='policy-retire': method,path,body='DELETE','/api-public/v1/policies/'+object_id,None
@@ -505,6 +554,12 @@ PYCODE
 unset SOC_ID SOC_READ SOC_WRITE SOC_CREDENTIAL_FINGERPRINT SOC_HASH_LINE
 ```
 <!-- oncall-policy-routing:end -->
+
+## Recover an interrupted creation readback
+
+If policy creation was attempted once but its first readback failed, keep `apply.started`, the unchanged plan and the original approved checksum. After grounding/fixing the read shape, run the same block with `SOC_MODE=reconcile`, `SOC_OPERATION=policy-create`, original `SOC_RUN_ID`, target/config, and `SOC_APPROVED_PLAN=apply:<original checksum>`. This mode issues GETs only. It requires a unique new policy absent from the original census, exact name/team/flag/ordered payload, valid dependencies, and unchanged prior policy/routing state before writing the local ownership receipt. A missing or ambiguous object does not authorize POST or deletion.
+
+Older attempt records lack `plan_sha256`. Only for those records, supply `SOC_LEGACY_ATTEMPT_PLAN_SHA256` from the **contemporaneous original approved checksum** in the operator's receipt. Do not compute a new checksum from an edited plan and call it original. A mismatch stops; the original attempt marker is never removed. `reconcile.result.json` states `write_retried:false`. Normal owned retirement may use the verified creation receipt afterward; it still requires its separate unused-consumer checks and approved deletion plan. Reconciliation of other action types is not advertised by this recipe.
 
 ## Guided destination and mode workflow
 

@@ -12,7 +12,7 @@ plan, including the chronic duration and any flapping interval; use documented
 examples only until you choose values appropriate to your service.
 
 Wrong: “88.8% of your alerts are false” from a clinical study. Right: “This study
-illustrates desensitization; your actionable fraction needs your incident feed.”
+illustrates desensitization; your actionable fraction needs reviewed labels and a measured denominator.”
 Wrong: two identical policy names prove duplicate pages. Right: verify service
 identity, linked paths and actual delivery before claiming duplication.
 Wrong: two incidents always violate an on-call ceiling. Right: compare observed
@@ -25,8 +25,8 @@ incident work with the team’s declared shift and paging budget.
 - **Pages should be novel.** [MDS]
 - **Alert on SLO burn-rate, not raw static thresholds.** Static thresholds on a ratio flap and fire while the SLO is still met. [SRE Workbook, *Alerting on SLOs*]
 - **Tier by urgency: page / ticket / log.** Only urgent, actionable, symptom-level conditions page. [MDS]
-- **On-call load ceiling: ≤2 incidents per 12-hour shift** (an incident ≈ 6h of work); on-call ≤25% of time, total ops ≤50%. [Google SRE, *Being On-Call*]
-- **Target a 1:1 alert-to-incident ratio**; group related alerts. [Being On-Call]
+- **Google's worked on-call example:** two incidents per 12-hour shift, with its assumed incident-work duration, and its 25% on-call/50% operations time allocation. Use the example to discuss your staffing and work budget; these are not universal failure thresholds. [Google SRE, *Being On-Call*]
+- **Group related alerts while preserving distinct problems.** An aspiration to avoid redundant pages does not equate source-event, incident and notification counts or require a universal 1:1 ratio. [Being On-Call]
 - **Over-monitoring degrades reliability**; the Bigtable case: too many alerts made the team miss the real user-facing problems. Bias toward *removing* alerts. [MDS]
 - **The fatigue mechanism:** "I can only react with a sense of urgency a few times a day before I become fatigued"; noisy alerts get skimmed/ignored, and a real page gets masked by the noise. [MDS/Being On-Call]
 
@@ -46,27 +46,27 @@ The organizing principle: every signal falls into one tier by the data it needs.
 5. For SLO alerts: multi-window multi-burn-rate present vs single-window.
 6. Dedup / grouping / inhibition / maintenance-window / recovery-threshold configured.
 
-**B. Fire-history tier; the alert event stream, NO incident feed (honest measured numbers):**
+**B. Fire-history tier; the alert event stream (only supported measurements):**
 7. Alert volume & rate per rule / service / shift.
-8. Pages-per-shift vs the ≤2/12h ceiling.
-9. Flapping / self-resolve / transient rate (fires-and-clears within N min, no action).
+8. Source events per declared shift. Pages or human interruptions require separate delivery evidence; compare incident work with your chosen budget.
+9. Observed fire/clear transitions within a declared interval. A short episode is a review candidate, not proof that no action was needed.
 10. Top-N noisiest rules and their share of total volume.
-11. Off-hours / low-priority interrupt rate.
+11. Off-hours source-event rate using a declared timezone and business-hours model; do not relabel it an interruption rate.
 12. Co-firing clusters in a short window (an alert-to-incident **proxy**).
-13. Auto-resolve vs human-acknowledged ratio (where the provider exposes ack).
+13. Resolution and acknowledgement observations with known actor semantics; neither establishes actionability.
 
-**C. Incident-feed tier; needs the paging tool's incident/ack stream (else proxy / verify-pending):**
-14. Precision = significant alerts ÷ all alerts.
-15. Recall = detected significant events ÷ all significant events.
-16. True alert-to-incident ratio = alerts ÷ correlated incidents (BigPanda's published form: `1 − unique(incidents)/unique(alerts)`).
-17. % actionable = pages acted on ÷ pages.
-18. Detection time (incident start → alert) and reset time (resolve → clear).
+**C. Incident-history tier; each metric requires its own supporting evidence:**
+14. Precision needs independently reviewed true/false alert labels, not an acknowledgement flag.
+15. Recall needs independent ground truth including missed incidents; a paging feed cannot observe its own misses.
+16. Alert-to-incident ratio = source alerts divided by mapped incident episodes in the same window. Compression, `1 − incidents/alerts`, is a different measure. Incident-lifetime alerts cannot substitute for source-window events.
+17. Actionable percentage needs reviewed actionable labels and a clearly stated denominator. Report acknowledgement fractions under their own name.
+18. Detection/reset latency needs source-event timestamps, clock semantics and correlated provider transitions. Response means need known transition semantics and sample counts alongside open/censored records.
 
-**D. Systemic (config + roster/schedule):** operational-load fraction vs the 50%/25% caps; escalation-path/incident-process/blameless-postmortem scaffolding present.
+**D. Systemic (config + roster/schedule):** operational-load fraction against your declared staffing/work budget; escalation-path, incident-process and learning procedures.
 
-**Feed-dependency is the never-fabricate rule:** tiers A & B are real numbers from read-only access; tier C is a labeled proxy or `verify-pending (needs incident feed)`; never a fabricated precision/ratio.
+**Feed dependency is the never-fabricate rule:** access to an API does not establish every metric above. Keep the observed units, selected scope, window, completeness and missing prerequisites visible. Do not promote structural configuration or a proxy to a measured outcome.
 
-**The measured tiers (B & C) are collected by the skill's own read-only fire-history lane**; the exact per-provider read blocks (CloudWatch `DescribeAlarmHistory` + SNS subscriber check, Datadog Events + monitor state, Grafana annotations/state-history, Prometheus `ALERTS`/`ALERTS_FOR_STATE` PromQL, Alertmanager notification counters + silences, SigNoz rule-history routes, and the PagerDuty/incident.io/Opsgenie incident-feed reads for tier C), their VERIFIED/UNVERIFIED flags, and the `fatigue-signals.json` output contract are in **[fire-history-reads.md](fire-history-reads.md)**. Off-hours has no native field anywhere; it is always derived from a fire timestamp against the business-hours window.
+**The measured tiers use read-only collection.** Provider recipes and verification limits are in [fire-history-reads.md](fire-history-reads.md). Splunk On-Call uses its bounded native history lane and preserves incident units under AF-005 separately from source fires. Off-hours needs a verified native definition matching your policy, or timestamp derivation using your timezone and business-hours window.
 
 ## 4. Vendor noise-reduction technique catalog (config-hygiene vs runtime)
 
@@ -76,7 +76,7 @@ The organizing principle: every signal falls into one tier by the data it needs.
 - **Maintenance windows / muting**: Datadog downtimes (one-time + recurring, auto-mute on VM shutdown); Alertmanager `mute_time_intervals`; Opsgenie maintenance policies. → config-hygiene.
 - **Thresholding / hysteresis / burn-rate**: Datadog recovery thresholds, `min` (all-points-violate), composite; burn-rate SLO monitors (short = 1/12 long, long ≤48h). → config-hygiene.
 - **Auto-pause transient / auto-resolve**: PagerDuty APIN (2/3/5/10/15 min, ML-recommended) + service auto-resolve timeout; Opsgenie auto-close. → config-hygiene + runtime.
-- **Correlation / AIOps (ML)**: PagerDuty Intelligent Alert Grouping, BigPanda/Moogsoft situations. → runtime + ML. AIOps compression sweet spot **≈ 70-85%**; higher risks mis-grouping (BigPanda target; Splunk; INOC caveat).
+- **Correlation / AIOps (ML)**: PagerDuty Intelligent Alert Grouping and BigPanda/Moogsoft situations. Vendor compression targets are product claims, not acceptance bands. Verify both repeated events and unrelated critical controls to detect over-grouping.
 
 **The cross-tool gap no single vendor fills** (the cross-tool analysis): double-coverage (two tools paging the same SLO), cross-source storms, on-call load aggregated across *all* paging sources, and SLO-coherence across tools.
 

@@ -20,7 +20,7 @@ import json,os,sys,pathlib,urllib.parse
 args=sys.argv[1:]
 if args==['--version']:print('curl 8.12.0 fixture');sys.exit(0)
 assert args[args.index('--request')+1]=='GET'
-assert args[-1].startswith('https://api.victorops.com/api-public/v1/')
+assert args[-1].startswith(('https://api.victorops.com/api-public/v1/','https://api.victorops.com/api-public/v2/'))
 assert '--max-filesize' in args and args[args.index('--max-redirs')+1]=='0'
 headers=sys.stdin.read();assert 'fixture-read-key' in headers and 'fixture-id' in headers and 'MUST_NOT_LOAD' not in headers
 p=urllib.parse.urlparse(args[-1]).path
@@ -46,10 +46,11 @@ sys.stdout.write(json.dumps(r)+'\n200')
       '/api-public/v1/alertRules':[{'id':1,'alertField':'entity_id','alertValueMatch':'private-value','matchType':'WILDCARD','rank':1,'stopFlag':False,'routeKey':'synthetic-route-value','annotations':[{'id':2,'annotationType':'s','fieldName':'note','fieldValue':'private-value','flags':0}]}],
       '/api-public/v1/profile/alice/policies':{'steps':[{'index':0,'timeout':1,'rules':[{'index':0,'type':'email','contact':{'id':3,'type':'email'}}]}]},
       '/api-public/v1/user/alice/contact-methods':{'devices':[],'emails':[{'label':'private-person@example.invalid','extId':'private-contact','deviceType':'email'}],'phones':[]}}
+    responses['/api-public/v2/profile/alice/policies']={'policies':[{'name':'private-person@example.invalid','slug':'primary-safe','rank':0,'timeMask':{**{k:True for k in ('sunday','monday','tuesday','wednesday','thursday','friday','saturday')},'timeZone':'UTC','startTime':'00:00:00.000','endTime':'00:00:00.000'},'steps':copy.deepcopy(responses['/api-public/v1/profile/alice/policies']['steps']),'terminalAction':'repeat_last_step'}]}
     responsefile=work/'responses';calls=work/'calls';calls.write_text('');responsefile.write_text(json.dumps(responses))
-    ui_values={'route-mode':{'isMultiResponder':False},'policy':{},'membership':{},'shift':{'interval_start':'2026-11-04T01:00:00Z','interval_end':'2026-11-04T02:00:00Z','coverage_matches':True},'overrides':{'interval_start':'2026-11-04T01:00:00Z','interval_end':'2026-11-04T02:00:00Z','coverage_matches':True},'maintenance':{'end_mechanism_present':True},'alert-rules':{'positive_match':True,'negative_match':True},'paging':{},'contacts':{'selected_contact_hash':digest('private-contact'),'selected_contact_present':True,'selected_contact_verified':True},'incoming':{'integration_enabled':True},'value-digest':{}}
+    ui_values={'route-mode':{'isMultiResponder':False},'policy':{},'membership':{},'shift':{'interval_start':'2026-11-04T01:00:00Z','interval_end':'2026-11-04T02:00:00Z','coverage_matches':True},'overrides':{'interval_start':'2026-11-04T01:00:00Z','interval_end':'2026-11-04T02:00:00Z','coverage_matches':True},'maintenance':{'end_mechanism_present':True},'alert-rules':{'positive_match':True,'negative_match':True},'paging':{},'paging-v2':{},'global-paging':{'enforced':False,'propagation_complete':True,'scope_complete':True,'usernames':[],'policies':[],'effective_users':[]},'contacts':{'selected_contact_hash':digest('private-contact'),'selected_contact_present':True,'selected_contact_verified':True},'incoming':{'integration_enabled':True},'value-digest':{}}
     def binding(kind):
-        b={'target':'splunk_oncall','team':'team-safe','kind':kind,'object':'policy-safe' if kind=='policy' else 'alice' if kind in ('paging','contacts') else '', 'group':10 if kind=='shift' else 0,'shift':20 if kind=='shift' else 0,'route_ref':'PRIVATE_ROUTE' if kind in ('route-mode','incoming') else ''}
+        b={'target':'splunk_oncall','team':'team-safe','kind':kind,'object':'policy-safe' if kind=='policy' else 'alice' if kind in ('paging','paging-v2','contacts') else '', 'group':10 if kind=='shift' else 0,'shift':20 if kind=='shift' else 0,'route_ref':'PRIVATE_ROUTE' if kind in ('route-mode','incoming') else ''}
         if kind in ('route-mode','incoming'):b['route_value_hash']=digest(active_route_value)
         return b
     def ui(kind,name,age=20,values=None):
@@ -126,6 +127,75 @@ sys.stdout.write(json.dumps(r)+'\n200')
     r,p=run('route-mode',name='bad-unobservable-ui',observation='');check(r.returncode!=0 and not p.exists(),'Missing UI observation was accepted')
     bad=ui('route-mode','wrong-evidence');ob=json.loads(pathlib.Path(bad).read_text());ob['evidence_sha256']='0'*64;pathlib.Path(bad).write_text(json.dumps(ob))
     r,p=run('route-mode',name='bad-evidence-hash',observation=bad);check(r.returncode!=0,'Mismatched UI evidence file was accepted')
+    # Real contact envelopes and string verification preserve keyed values, not labels.
+    original_contacts=copy.deepcopy(responses['/api-public/v1/user/alice/contact-methods'])
+    responses['/api-public/v1/user/alice/contact-methods']={'devices':{'contactMethods':[],'_selfUrl':'private-device-url'},'emails':{'contactMethods':[{'id':3,'label':'private-person@example.invalid','value':'private-person@example.invalid','contactType':'Email','rank':0,'verified':'verified','extId':'private-contact','_selfUrl':'private-email-url'}]},'phones':{'contactMethods':[]}}
+    responsefile.write_text(json.dumps(responses))
+    r,contact_base=run('contacts',name='contact-wrapper-baseline');check(r.returncode==0,'Observed contact wrapper rejected: '+r.stdout)
+    contact=json.loads(contact_base.read_text())['api']['emails'][0]
+    check(contact['verified'] is True and contact['native_id']==3 and contact['value_hash']==digest('private-person@example.invalid'),'Contact value/ID/verified projection incorrect')
+    responses['/api-public/v1/user/alice/contact-methods']['emails']['contactMethods'][0]['value']='other-private@example.invalid';responsefile.write_text(json.dumps(responses))
+    r,p=run('contacts','check-before',name='contact-same-label-new-value',expected=contact_base);check(r.returncode!=0,'Changed contact value reused an equal-label baseline')
+    responses['/api-public/v1/user/alice/contact-methods']['emails']['contactMethods'][0]['value']='private-person@example.invalid'
+    responses['/api-public/v1/user/alice/contact-methods']['emails']['contactMethods'][0]['verified']='unverified';responsefile.write_text(json.dumps(responses))
+    r,p=run('contacts',name='contact-unverified');check(r.returncode!=0,'UI verified flag overrode observed unverified contact')
+    # Presence with an unknown string cannot be reclassified as absent API evidence.
+    contact_path='/api-public/v1/user/alice/contact-methods'
+    for index,(state_value,truth) in enumerate(((True,True),(False,False),('verified',True),('unverified',False),('true',True),('false',False))):
+        responses[contact_path]['emails']['contactMethods'][0]['verified']=state_value;responsefile.write_text(json.dumps(responses))
+        values={**ui_values['contacts'],'selected_contact_verified':truth}
+        r,known=run('contacts',name='contact-known-'+str(index),observation=ui('contacts','contact-known-'+str(index),values=values));check(r.returncode==0,'Grounded verification state refused: '+r.stdout)
+        check(json.loads(known.read_text())['api']['emails'][0]['verified'] is truth,'Grounded verification state normalized incorrectly')
+        r,p=run('contacts','check-after',name='contact-known-after-'+str(index),expected=known,observation=ui('contacts','contact-known-after-'+str(index),age=1,values=values));check(r.returncode==0,'Exact known verification after-state refused: '+r.stdout)
+    for index,state_value in enumerate(('unsupported-provider-state','','VERIFIED','True',' verified ')):
+        responses[contact_path]['emails']['contactMethods'][0]['verified']=state_value;responsefile.write_text(json.dumps(responses))
+        r,p=run('contacts',name='contact-unknown-capture-'+str(index));check(r.returncode!=0 and not p.exists(),'Unknown present string passed capture')
+        # Reproduce the former bypass exactly: expected null + matching private
+        # state digest + fresh UI true must still fail the API enum guard.
+        wanted=json.loads(contact_base.read_text());wanted['api']['emails'][0]['verified']=None;wanted['api']['emails'][0]['verification_state_hash']=digest(state_value)
+        expected_unknown=out/('contact-unknown-expected-'+str(index)+'.json');expected_unknown.write_text(json.dumps(wanted))
+        r,p=run('contacts','check-after',name='contact-unknown-after-'+str(index),expected=expected_unknown,observation=ui('contacts','contact-unknown-after-'+str(index),age=1));check(r.returncode!=0 and not p.exists(),'UI true overrode an unknown present API verification state')
+    for index,absent in enumerate((False,True)):
+        if absent:responses[contact_path]['emails']['contactMethods'][0].pop('verified',None)
+        else:responses[contact_path]['emails']['contactMethods'][0]['verified']=None
+        responsefile.write_text(json.dumps(responses))
+        r,p=run('contacts',name='contact-unknown-absent-'+str(index));check(r.returncode==0 and json.loads(p.read_text())['api']['emails'][0]['verified'] is None,'Absent/null API verification must remain explicit unknown with UI provenance')
+    responses['/api-public/v1/user/alice/contact-methods']=original_contacts;responsefile.write_text(json.dumps(responses))
+    # v2 compares custom policy priority/masks/terminal behavior in addition to primary.
+    v2=responses['/api-public/v2/profile/alice/policies'];v2['policies'][0]['timeMask']['monday']=False;responsefile.write_text(json.dumps(responses))
+    r,p=run('paging-v2','check-before',name='personal-mask-drift',expected=records['paging-v2']);check(r.returncode!=0,'Custom time-mask drift was ignored')
+    v2['policies'][0]['timeMask']['monday']=True;v2['policies'][0]['rank']=1;responsefile.write_text(json.dumps(responses))
+    r,p=run('paging-v2','check-before',name='personal-rank-drift',expected=records['paging-v2']);check(r.returncode!=0,'Custom policy order drift was ignored')
+    v2['policies'][0]['rank']=0;v2['policies'][0]['terminalAction']='unproven-terminal';responsefile.write_text(json.dumps(responses))
+    r,p=run('paging-v2',name='unknown-terminal');check(r.returncode!=0,'Unknown terminal action authorized a save')
+    v2['policies'][0]['terminalAction']='repeat_last_step';responsefile.write_text(json.dumps(responses))
+    r,p=run('paging-v2','check-before',name='personal-unchanged',expected=records['paging-v2']);check(r.returncode==0,'Unchanged personal policy refused: '+r.stdout)
+    # Global mode observes UI state only and reads no invented global endpoint.
+    before_calls=len(calls.read_text().splitlines())
+    r,p=run('global-paging','check-before',name='global-before',expected=records['global-paging']);check(r.returncode==0,'Disabled observed global state failed: '+r.stdout)
+    check(calls.read_text().splitlines()[before_calls:]==['GET /api-public/v1/team/team-safe'],'Global comparator guessed an API endpoint')
+    for flag in ('scope_complete','propagation_complete'):
+        values={**ui_values['global-paging'],flag:False}
+        r,p=run('global-paging',name='global-'+flag,observation=ui('global-paging','global-'+flag,values=values));check(r.returncode!=0,'Incomplete global '+flag+' accepted')
+    policy_steps=[{'index':0,'timeout':5,'rules':[{'index':0,'type':'email','selection':'first_verified','contact_hash':None}]}]
+    effective_steps=[{'index':0,'timeout':5,'rules':[{'index':0,'type':'email','contact_hash':digest('private-contact'),'available':True}]}]
+    global_after={'enforced':True,'propagation_complete':True,'scope_complete':True,'usernames':['alice'],'policies':[{'id':'global-safe','rank':0,'steps':policy_steps,'terminal_action':'repeat_last_step'}],'effective_users':[{'username':'alice','policy_id':'global-safe','steps':effective_steps,'terminal_action':'repeat_last_step'}]}
+    global_expected=out/'global-expected.json';wanted=json.loads(records['global-paging'].read_text());wanted['ui']['values']=global_after;global_expected.write_text(json.dumps(wanted))
+    r,p=run('global-paging','check-after',name='global-exact-after',expected=global_expected,observation=ui('global-paging','global-exact-after',age=1,values=global_after));check(r.returncode==0,'Exact global effective-state comparator failed: '+r.stdout)
+    missing=copy.deepcopy(global_after);missing['effective_users']=[]
+    r,p=run('global-paging',name='global-user-missing',observation=ui('global-paging','global-user-missing',values=missing));check(r.returncode!=0,'Global missing effective user accepted')
+    changed=copy.deepcopy(global_after);changed['effective_users'][0]['steps'][0]['rules'][0]['available']=False
+    r,p=run('global-paging','check-after',name='global-contact-drift',expected=global_expected,observation=ui('global-paging','global-contact-drift',age=1,values=changed));check(r.returncode!=0,'Changed effective global contact passed exact equality')
+    # A returned nested team is identity evidence, not disposable display data.
+    original_policy=copy.deepcopy(responses['/api-public/v1/policies/policy-safe'])
+    responses['/api-public/v1/policies']={'policies':[{'policy':{'slug':'target-policy'},'team':{'slug':'team-safe'}}]}
+    responses['/api-public/v1/policies/policy-safe']['steps']=[{'timeout':3,'entries':[{'executionType':'policy_routing','targetPolicy':{'policySlug':'target-policy','teamSlug':'team-safe','name':'Unrelated alias','policyName':'Other alias'}}]}];responsefile.write_text(json.dumps(responses))
+    r,p=run('policy',name='nested-known-team');check(r.returncode==0,'Observed nested owner shape rejected: '+r.stdout);check(json.loads(p.read_text())['api']['steps'][0]['entries'][0]['target_team']=='team-safe','Returned nested team was discarded')
+    responses['/api-public/v1/policies/policy-safe']['steps'][0]['entries'][0]['targetPolicy']['teamSlug']='wrong-team';responsefile.write_text(json.dumps(responses))
+    r,p=run('policy',name='nested-wrong-team');check(r.returncode!=0 and not p.exists(),'Contradictory nested owner was accepted')
+    del responses['/api-public/v1/policies/policy-safe']['steps'][0]['entries'][0]['targetPolicy']['teamSlug'];responsefile.write_text(json.dumps(responses))
+    r,p=run('policy',name='nested-legacy-team-absent');check(r.returncode==0,'Legacy absent nested-team metadata was rejected')
+    responses['/api-public/v1/policies/policy-safe']=original_policy;responsefile.write_text(json.dumps(responses))
     prior=calls.read_text();wrapper=bin/'python3'
     wrapper.write_text('#!/bin/sh\nif [ "$1" = -c ]; then exit 1; fi\nexec '+shlex.quote(sys.executable)+' "$@"\n');wrapper.chmod(0o700)
     r,p=run('policy',name='unsupported-python');check(r.returncode!=0 and calls.read_text()==prior,'Unsupported Python reached API access');wrapper.unlink()
