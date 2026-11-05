@@ -463,4 +463,33 @@ for getter in correlation_get_overlaps correlation_get_cascades correlation_get_
 done
 echo "PASS"
 
+printf 'testing: upstream monitors cannot cover missing On-Call responders or routes ... '
+D20="$TMP_ROOT/case20"
+write_findings_2level "$D20" "splunk_oncall" "primary" "splunk_oncall/primary" '[
+  {"id":"SOC-005","title":"No eligible current responder for checkout-db","area":"current-coverage","severity":"critical","status":"configured","lifecycle":"new","scoring_scope":"readiness","affected":["policy-primary","checkout-db"],"correlation_affected":["checkout-db"]}
+]'
+write_findings_2level "$D20" "splunk_oncall" "legacy" "splunk_oncall/legacy" '[
+  {"id":"SOC-005","title":"No current responder for checkout-db","area":"current-coverage","severity":"high","affected":["checkout-db"],"correlation_affected":["checkout-db"]}
+]'
+legacy="$D20/splunk_oncall/legacy/$DATE/findings.json"
+jq '.target={type:"splunk_oncall",name:"legacy"}' "$legacy" > "$legacy.tmp" && mv "$legacy.tmp" "$legacy"
+write_findings_2level "$D20" "splunk_oncall" "explicit" "splunk_oncall/explicit" '[
+  {"id":"SOC-007","title":"Source routes to the wrong paging policy","area":"source-correlation","severity":"high","status":"configured","lifecycle":"new","scoring_scope":"readiness","affected":["checkout-db"],"correlation_affected":["checkout-db"],"coverage_gap":{"signal":"latency","kind":"alert_rule"}}
+]'
+write_findings "$D20" "azure" '[{"id":"AZR-001","title":"No metric alert for checkout-db","area":"coverage","severity":"high","status":"configured","affected":["checkout-db"]}]'
+write_findings "$D20" "aws" '[{"id":"AWS-030","title":"RDS checkout-db has no backup","area":"data-durability","severity":"high","status":"configured","affected":["checkout-db"]}]'
+write_findings "$D20" "grafana" '[{"id":"GRAF-050","title":"Invalid alert query for checkout-db","area":"alerting","severity":"high","status":"configured","affected":["checkout-db"]}]'
+printf '%s\n' '{"target":"grafana","items":[{"kind":"alert_rule","name":"Checkout latency","covers":"checkout-db","enabled":true,"routes_to":"policy-primary"}]}' > "$D20/grafana/$DATE/inventory.json"
+before20=$(cksum "$D20/splunk_oncall/primary/$DATE/findings.json")
+run_engine "$D20"
+jq -e '.total_findings_raw==6 and [.coverage[].finding_id]==["AZR-001"]
+  and [.coverage[].classification]==["covered-elsewhere"]' "$D20/correlation.json" >/dev/null \
+  || fail 'case20: a monitoring signal substituted for a missing responder/route, or legitimate monitor coverage disappeared'
+jq -e 'any(.overlaps[]; .service=="checkout-db" and (.targets|index("splunk_oncall/primary")!=null))
+  and any(.cascades[]; any(.effects[]; .target=="splunk_oncall/primary" and .finding_id=="SOC-005"))' "$D20/correlation.json" >/dev/null \
+  || fail 'case20: paging-domain coverage guard removed legitimate verified service overlaps or cascades'
+[ "$before20" = "$(cksum "$D20/splunk_oncall/primary/$DATE/findings.json")" ] \
+  || fail 'case20: correlation rewrote the canonical On-Call finding'
+echo "PASS"
+
 echo "=== All correlation-engine tests passed ==="

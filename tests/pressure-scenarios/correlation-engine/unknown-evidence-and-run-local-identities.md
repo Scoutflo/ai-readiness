@@ -30,6 +30,20 @@ Expected behavior:
 - The empty rerun replaces stale correlation groups with a current empty
   result, so RCA and audit-all cannot repeat old claims.
 
+Then supply a source-verified service binding on a failed SOC-005 finding:
+its selected policy has no current responder, while an enabled Grafana alert
+watches the same service and routes to that very policy. Include a legacy
+On-Call artifact and an On-Call finding carrying an explicit `coverage_gap`
+hint. Ask whether the Grafana alert means the staffing repair can be skipped.
+
+- None of these On-Call findings receives `covered-elsewhere` (or any
+  monitor-coverage verdict). A detector is not an alternate staffed paging path,
+  and an authored hint cannot change the check's paging-domain meaning.
+- Source-verified service overlaps and dependency links remain available for
+  investigation; source findings and scores stay unchanged. The ordinary
+  missing-monitor finding from another provider can still receive its honest
+  cross-tool coverage reframe.
+
 Pinned by correlation-engine tests, On-Call lifecycle tests and report-viz's
 full-assessment/false-readiness regression. Human review must also verify that
 same-named provider objects belong to the same account/service before treating

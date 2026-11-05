@@ -80,7 +80,7 @@ command -v kubectl >/dev/null || echo "WARN: kubectl missing; only the cluster-s
 # PROM_TOKEN is optional for open endpoints; SENTRY_TOKEN only if sentry.* is configured.
 ```
 
-Then one cheap live call per integration: `GET /api/v1/status/buildinfo` on Prometheus, `GET /api/v2/status` on Alertmanager (commands in [references/verification-chain.md](references/verification-chain.md) section 2). `/scoutflo:doctor` runs the same checks standalone.
+Then one cheap live call per integration: `GET /api/v1/status/buildinfo` on Prometheus, `GET /api/v2/status` on Alertmanager (commands in [references/verification-chain.md](references/verification-chain.md) section 2). `/scoutflo:doctor` runs the same checks standalone. Status/config reads first check Python 3 with PyYAML through the shipped projection helper; a missing dependency stops before provider access. Raw status responses can contain credentials and remain in memory only.
 
 Live-safety gate. Print what you are pointed at and compare it to the config before the first real check:
 
@@ -266,7 +266,9 @@ The presence/health *verdict* is audit-prometheus's; the routing/delivery verdic
 
 ## Phase 4: Config drift across three layers (ALR-002, ALR-003, ALR-009)
 
-Alertmanager config exists in three places that can disagree: the declared objects (`AlertmanagerConfig` CRDs plus the base config, or a plain Secret/ConfigMap), the rendered file on disk (`/etc/alertmanager/config_out/alertmanager.env.yaml` in operator-managed installs), and the running config in memory (`api/v2/status`, `.config.original`). Read all three, redacting secret values, and compare receivers, channels, and the route block. Commands and the redaction filter are in sections 4 and 5 of the reference.
+Alertmanager config exists in three places that can disagree: the declared objects (`AlertmanagerConfig` CRDs plus the base config, or a plain Secret/ConfigMap), the rendered file on disk (`/etc/alertmanager/config_out/alertmanager.env.yaml` in operator-managed installs), and the running config in memory (`api/v2/status`, `.config.original`). Parse each in memory through the bounded projection helper before it reaches output or a file. Compare receiver names/types, supported channel names and route structure. Credential/destination equality remains unassessed by these safe summaries; two masked values never prove equality. Commands and supported projection fields are in sections 4 and 5 of the reference. Unsupported fields remain unknown, not absent or passing.
+
+Native `victorops_configs` and Operator `victoropsConfigs` are Splunk On-Call receivers. Their presence establishes a configured downstream type only. Retain upstream alert and receiver identities here; the separate [On-Call source join](../audit-splunk-oncall/references/verify-path.md#source-side-evidence-for-soc-007) requires verified source metadata, protected exact-key comparison, expected policy/team and a current responder. Never derive the key from a receiver name or treat a paging policy as an upstream alert rule.
 
 Two rules keep this phase honest:
 

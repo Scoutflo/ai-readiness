@@ -98,6 +98,8 @@ Green = read-only (safe, changes nothing) · amber = write, gated behind your co
 
 ## What's new (latest release)
 
+- **Monitoring is not responder coverage.** An alert in Grafana or another source cannot cover a missing On-Call responder. Scoped reports keep their scope through inventory, roll-ups and the executive summary.
+- **Alertmanager configuration is projected before capture.** Loaded configuration can contain native VictorOps routing keys. Audit recipes discard credential values in memory; doctor never saves its raw status body. Configuration inspection needs Python 3 with PyYAML and curl 8.4 or newer.
 - **Alert-history resume stays bound to the selected credentials.** Completed work is reused only with the same credential generation; changed credentials or a failed fingerprint require a safe stop. Existing single-target token defaults remain supported.
 - **On-Call secrets are covered by shared redaction.** Management headers and incoming-alert URL credentials are masked in reports and briefs, including quoted JSON evidence. Inventory activation remains unknown unless the provider actually reports it.
 

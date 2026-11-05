@@ -46,6 +46,8 @@ these two classes existed; these steps are what caught them.
   model/check-set. Missing historical scope and explicit `account` mean `full`;
   triage is incomparable with full. On-Call history retains scope, and both
   shared visual trends and audit-all's fresh-shell trend recipe enforce it.
+  Human report and inventory views must preserve explicit subset scope as well;
+  a complete collection within one selected path is not an account-wide catalog.
 - **Producer:** every `audit-*` (except `audit-all`, `audit-cost` for inventory).
 - **Consumers:** `audit-all`, `correlation-engine`, `cost-analysis`,
   `render-report-viz` (incl. the `exec-summary` mode — the top-of-report executive
@@ -438,7 +440,21 @@ forward routing from upstream policy references.
   environment against the store; `setup-sentry` keeps its elevated-token bind),
   `migration-plan` (its multi-target plan reads every label), the Slack webhook, and
   identity selectors such as key-file paths.
-- **Guards:** `skills/redaction/tests/test-oncall-redaction.sh` (known On-Call
+- **Alertmanager capture boundary:** status embeds rendered YAML and may expose
+  native VictorOps routing keys. Doctor validates this response in memory;
+  the audit uses `skills/audit-alertmanager/scripts/project-config.sh` to project
+  route structure and receiver metadata before output. The projection omits
+  credential/URL values and rejects URI-bearing identity or matcher text.
+  It cannot establish credential equality or complete omitted-field parity.
+  Status reads disable curl configuration files and redirects, enforce response
+  limits and require curl 8.4 or newer. Configuration projection additionally
+  requires Python 3 with PyYAML before any provider read.
+- **Guards:** `skills/doctor/tests/test-alertmanager-status-memory.sh` (no raw
+  status temporary file, malformed/refused responses and unsupported curl);
+  `skills/audit-alertmanager/tests/test-config-projection.sh` (native and
+  Operator shapes, credential-bearing text, nine literal fresh-shell status
+  blocks, dependency failures and safe refusal);
+  `skills/redaction/tests/test-oncall-redaction.sh` (known On-Call
   credential headers, incoming URL credentials and the canonical findings adapter),
   `ci/scope-checkpoint-check.sh`, `ci/redaction-parity-check.sh`,
   `ci/env-load-parity-check.sh` (asserts the layered resolver in every `audit-*`
@@ -493,6 +509,11 @@ forward routing from upstream policy references.
   job-to-service mapping. Unknown mappings stay unknown. Its `routes_to` may
   name only a successfully observed Alertmanager next hop; this does not prove
   eventual notification delivery.
+  On-Call routing, escalation and responder findings are not missing-monitor
+  findings. Exclude them from this monitor-coverage reframe even when they name
+  a verified service or supply `coverage_gap`; a monitor routed to an unstaffed
+  policy does not repair that policy. They still participate in evidence-bound
+  overlaps and cascades under C4/C5.
 - **SSOT:** `skills/correlation-engine/SKILL.md` (`coverage[]` schema, must match
   the lib) and `report-standard/inventory-schema.md` (`covers` = canonical service
   name when known).
@@ -839,6 +860,9 @@ PR; the live smoke against a real estate is a hard merge gate (`AGENTS.md`).
   never promotes a lesser finding above a critical one; a triage subset is
   **stamped TRIAGE and never presented as a full assessment or an all-clear**;
   dollar figures are provider-native only.
+  Count assessed targets from their audit envelopes, including zero-finding
+  runs, rather than counting targets only in finding rows. Empty findings do
+  not override blocked assessment, subset scope or `end_to_end: false`.
 - **SSOT:** `report-standard/triage-mode.md`.
 - **Guards:** `tests/test-report-viz.sh` Tests 16–17 (severity-first ordering,
   the $-never-promotes case, the TRIAGE stamp, the reachability denominator);

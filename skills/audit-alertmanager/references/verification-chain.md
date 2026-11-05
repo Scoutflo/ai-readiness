@@ -36,6 +36,9 @@ Some clusters expose the Alertmanager UI/API through an ingress; others keep it 
 
 ```bash
 set -eu
+set +x
+AM_PROJECT="${CLAUDE_PLUGIN_ROOT}/skills/audit-alertmanager/scripts/project-config.sh"
+sh "$AM_PROJECT" check   # dependencies before any provider read
 SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.scoutflo/env" ]; then SCOUTFLO_ENV="./.scoutflo/env"; else SCOUTFLO_ENV="$HOME/.scoutflo/env"; fi; }
 _SF_CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$_SF_CFG" ] || for _sf_c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_sf_c" ] && { _SF_CFG="$_sf_c"; break; }; done
 _SF_TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
@@ -55,11 +58,15 @@ if [ -n "${PROM_BASIC_USER:-}" ] && [ -n "${PROM_BASIC_PASS:-}" ]; then AUTH="Au
 
 kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" port-forward svc/alertmanager-operated "${AM_LOCAL_PORT}:9093" >/tmp/alertmanager-port-forward.log 2>&1 &
 AM_PF_PID=$!
+trap 'kill "$AM_PF_PID" 2>/dev/null || true' 0
 sleep 2
-curl -fsS --max-time 10 -H "$AUTH" "http://127.0.0.1:${AM_LOCAL_PORT}/api/v2/status" \
-  | jq -e -r '.cluster.status == "ready"' \
-  && echo "alertmanager reachable via port-forward"
+AM_URL="http://127.0.0.1:${AM_LOCAL_PORT}"
+AM_RESPONSE="$(curl -q -sS --proto '=http,https' --max-redirs 0 --connect-timeout 5 --max-time 15 --max-filesize 2097152 -H "$AUTH" -w '\n%{http_code} %{content_type}' "${AM_URL}/api/v2/status" 2>/dev/null)" || { AM_RC=$?; printf 'Alertmanager transport failed (curl exit %s); no raw response retained\n' "$AM_RC"; exit 1; }
+AM_SAFE="$(printf '%s' "$AM_RESPONSE" | sh "$AM_PROJECT" http-metadata)" || { unset AM_RESPONSE; echo 'Alertmanager projection blocked; do not assess downstream checks'; exit 1; }
+unset AM_RESPONSE
+printf '%s' "$AM_SAFE" | jq -e '.cluster.status == "ready"' && echo 'alertmanager reachable via port-forward'
 kill "$AM_PF_PID"
+trap - 0
 ```
 
 Expect: `true` printed by the `jq -e` assertion and the confirmation line. `jq -e` exits nonzero (and the `&&` short-circuits) when `.cluster.status` is anything other than `ready`, which is itself the failure signal, not a status a human has to eyeball. Note in evidence whether the run used the ingress URL or the port-forward path; both are read-only, but the choice explains why a later command targets `127.0.0.1` instead of the configured host. A `401`/`403` here means the token attached in `$AUTH` is wrong or missing scope, even though the network path itself is fine; do not read it as "port-forward failed".
@@ -68,6 +75,9 @@ Expect: `true` printed by the `jq -e` assertion and the confirmation line. `jq -
 
 ```bash
 set -eu
+set +x
+AM_PROJECT="${CLAUDE_PLUGIN_ROOT}/skills/audit-alertmanager/scripts/project-config.sh"
+sh "$AM_PROJECT" check   # dependencies before any provider read
 SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.scoutflo/env" ]; then SCOUTFLO_ENV="./.scoutflo/env"; else SCOUTFLO_ENV="$HOME/.scoutflo/env"; fi; }
 _SF_CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$_SF_CFG" ] || for _sf_c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_sf_c" ] && { _SF_CFG="$_sf_c"; break; }; done
 _SF_TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
@@ -93,9 +103,11 @@ dig +short "$(printf '%s' "$PROM_URL" | sed -E 's#^https?://([^/]+).*#\1#')" || 
 # so a JSON-shaped 200 proves the API answered (reachability), not that the caller is authorized.
 # Keep the body, capture the content-type, and require 200 + JSON + a field the real API always
 # returns before printing pass; a 200 that is not that JSON is an ALR-010 fail (a fronting page).
-PROM_BODY="$(mktemp)"; AM_BODY="$(mktemp)"
+PROM_BODY="$(mktemp)"
 PROM_META="$(curl -s -o "$PROM_BODY" -w '%{http_code} %{content_type}' --connect-timeout 5 --max-time 10 -H "$AUTH" "${PROM_URL}/api/v1/status/buildinfo")" || PROM_META="000 -"
-AM_META="$(curl -s -o "$AM_BODY" -w '%{http_code} %{content_type}' --connect-timeout 5 --max-time 10 -H "$AUTH" "${AM_URL}/api/v2/status")" || AM_META="000 -"
+AM_RESPONSE="$(curl -q -sS --proto '=http,https' --max-redirs 0 --connect-timeout 5 --max-time 10 --max-filesize 2097152 -w '\n%{http_code} %{content_type}' -H "$AUTH" "${AM_URL}/api/v2/status" 2>/dev/null)" || AM_RESPONSE='
+000 -'
+AM_META="$(printf '%s' "$AM_RESPONSE" | tail -n 1)"
 PROM_CODE="${PROM_META%% *}"; PROM_CT="${PROM_META#* }"
 AM_CODE="${AM_META%% *}"; AM_CT="${AM_META#* }"
 echo "prometheus: ${PROM_CODE}"
@@ -106,12 +118,13 @@ if [ "$PROM_CODE" = "200" ] && printf '%s' "$PROM_CT" | grep -qi json && jq -e '
 elif [ "$PROM_CODE" = "200" ]; then
   echo "ALR-010 fail: prometheus 200 but Content-Type='${PROM_CT}' and no .data.version — a fronting SSO/login/SPA/proxy page answered, not /api/v1/status/buildinfo"
 fi
-if [ "$AM_CODE" = "200" ] && printf '%s' "$AM_CT" | grep -qi json && jq -e '.cluster or .versionInfo' "$AM_BODY" >/dev/null 2>&1; then
+if [ "$AM_CODE" = "200" ] && printf '%s' "$AM_CT" | grep -qi json && printf '%s' "$AM_RESPONSE" | sh "$AM_PROJECT" http-metadata >/dev/null 2>&1; then
   AM_OK=1
 elif [ "$AM_CODE" = "200" ]; then
-  echo "ALR-010 fail: alertmanager 200 but Content-Type='${AM_CT}' and no .cluster/.versionInfo — a fronting SSO/login/SPA/proxy page answered, not /api/v2/status"
+  echo "ALR-010 fail: alertmanager HTTP 200 did not return the expected JSON identity; verify the API endpoint or proxy. Raw headers and body are not retained."
 fi
-rm -f "$PROM_BODY" "$AM_BODY"
+unset AM_RESPONSE
+rm -f "$PROM_BODY"
 [ "$PROM_OK" = "1" ] && [ "$AM_OK" = "1" ] && echo "ALR-010: pass"
 ```
 
@@ -135,7 +148,7 @@ if [ -z "$(dig +short A "$HOST"; dig +short CNAME "$HOST")" ]; then
 fi
 ```
 
-Expect: a resolvable A/CNAME record, and both probes returning `200` **with a real API body** — Prometheus `buildinfo` carrying `.data.version` and Alertmanager `/api/v2/status` carrying `.cluster` or `.versionInfo`. The final assertion prints `ALR-010: pass` only then. A `200` whose body is not that JSON is an ALR-010 **fail**, flagged as a fronting SSO/login/SPA/proxy page rather than the API. Because these endpoints are typically UNAUTHENTICATED, a JSON-shaped `200` is proof of *reachability*, not of authorized access. Anything else means the check failed and the reader must classify why, per this table:
+Expect: a resolvable A/CNAME record, and both probes returning `200` **with a real API body** — Prometheus `buildinfo` carrying `.data.version` and Alertmanager `/api/v2/status` carrying supported `.cluster.status` and `.versionInfo.version` metadata. The final assertion prints `ALR-010: pass` only then. A `200` whose body is not that JSON is an ALR-010 **fail**, flagged as a fronting SSO/login/SPA/proxy page rather than the API. Because these endpoints are typically UNAUTHENTICATED, a JSON-shaped `200` is proof of *reachability*, not of authorized access. Anything else means the check failed and the reader must classify why, per this table:
 
 | Observed code | Diagnosis | Not this |
 | --- | --- | --- |
@@ -211,6 +224,9 @@ Read the declared object, the rendered file, and the running config, in that ord
 
 ```bash
 set -eu
+set +x
+AM_PROJECT="${CLAUDE_PLUGIN_ROOT}/skills/audit-alertmanager/scripts/project-config.sh"
+sh "$AM_PROJECT" check   # dependencies before any provider read
 SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.scoutflo/env" ]; then SCOUTFLO_ENV="./.scoutflo/env"; else SCOUTFLO_ENV="$HOME/.scoutflo/env"; fi; }
 _SF_CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$_SF_CFG" ] || for _sf_c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_sf_c" ] && { _SF_CFG="$_sf_c"; break; }; done
 _SF_TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
@@ -230,33 +246,19 @@ AUTH="Authorization: Bearer ${PROM_TOKEN}"
 [ -n "$PROM_TOKEN" ] || AUTH="Accept: application/json"
 if [ -n "${PROM_BASIC_USER:-}" ] && [ -n "${PROM_BASIC_PASS:-}" ]; then AUTH="Authorization: Basic $(printf '%s:%s' "$PROM_BASIC_USER" "$PROM_BASIC_PASS" | base64 | tr -d '\n')"; fi   # prom basic_user_env/basic_pass_env override (basic auth beats bearer)
 
-# Layer 1: the declared object.
-# NEVER pull .webhookConfigs[].url (or any *_url) into output — a webhook URL is
-# credential-bearing (Slack/PagerDuty/generic tokens are embedded in the path), and
-# once it lands in a field not named *url/key/token the section-5 redaction filter
-# can no longer catch it. Emit only non-secret routing identifiers: slack channel
-# names, email targets, and the PRESENCE/COUNT of webhook and PagerDuty targets.
-kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" get alertmanagerconfig "$AM_CONFIG_NAME" -o json \
-  | jq '.spec.receivers[] | {name,
-      channels: [.slackConfigs[]?.channel, .emailConfigs[]?.to] | flatten | map(select(. != null)),
-      webhook_targets: ([.webhookConfigs[]?] | length),
-      pagerduty_targets: ([.pagerdutyConfigs[]?] | length),
-      opsgenie_targets: ([.opsgenieConfigs[]?] | length)}'
+# Each original stays in shell memory only; print only the validated projection.
+AM_DECLARED="$(kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" get alertmanagerconfig "$AM_CONFIG_NAME" -o json 2>/dev/null)" || { echo 'Declared config read blocked'; exit 1; }
+printf '%s' "$AM_DECLARED" | sh "$AM_PROJECT" crd
+unset AM_DECLARED
 
-# Layer 2: the rendered file the running process actually loaded.
-kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" exec "$AM_POD" -c alertmanager -- \
-  cat /etc/alertmanager/config_out/alertmanager.env.yaml
+AM_RENDERED="$(kubectl --context "$KUBE_CONTEXT" -n "$MON_NS" exec "$AM_POD" -c alertmanager -- cat /etc/alertmanager/config_out/alertmanager.env.yaml 2>/dev/null)" || { echo 'Rendered config read blocked'; exit 1; }
+printf '%s' "$AM_RENDERED" | sh "$AM_PROJECT" yaml
+unset AM_RENDERED
 
-# Layer 3: the running config as Alertmanager itself reports it.
-AM_CODE=$(curl -s -o /tmp/alr-am-status.json -w '%{http_code}' --max-time 10 -H "$AUTH" "${AM_URL}/api/v2/status")
-echo "alertmanager status: ${AM_CODE}"
-if [ "$AM_CODE" = "401" ] || [ "$AM_CODE" = "403" ]; then
-  echo "auth problem reading layer 3; layers 1 and 2 still stand, but the three-layer comparison is blocked, not a drift finding"
-elif [ "$AM_CODE" = "200" ]; then
-  jq -r '.config.original' /tmp/alr-am-status.json
-else
-  echo "unexpected status ${AM_CODE}: reachability or API-shape problem, not drift"
-fi
+AM_RESPONSE="$(curl -q -sS --proto '=http,https' --max-redirs 0 --connect-timeout 5 --max-time 15 --max-filesize 2097152 -H "$AUTH" -w '\n%{http_code} %{content_type}' "${AM_URL}/api/v2/status" 2>/dev/null)" || { AM_RC=$?; printf 'Alertmanager transport failed (curl exit %s); no raw response retained\n' "$AM_RC"; exit 1; }
+AM_SAFE="$(printf '%s' "$AM_RESPONSE" | sh "$AM_PROJECT" http-status)" || { unset AM_RESPONSE; echo 'Alertmanager projection blocked; do not assess downstream checks'; exit 1; }
+unset AM_RESPONSE
+printf '%s\n' "$AM_SAFE"
 ```
 
 If `kubectl exec` is denied in your cluster, use the port-forward path in section 1 for layer 3 and rely on layers 1 and 2; note the exec restriction in evidence and mark any check that strictly needs in-pod access `blocked` with that reason, never silently skipped.
@@ -268,6 +270,9 @@ Two rules keep the comparison honest:
 
 ```bash
 set -eu
+set +x
+AM_PROJECT="${CLAUDE_PLUGIN_ROOT}/skills/audit-alertmanager/scripts/project-config.sh"
+sh "$AM_PROJECT" check   # dependencies before any provider read
 SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.scoutflo/env" ]; then SCOUTFLO_ENV="./.scoutflo/env"; else SCOUTFLO_ENV="$HOME/.scoutflo/env"; fi; }
 _SF_CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$_SF_CFG" ] || for _sf_c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_sf_c" ] && { _SF_CFG="$_sf_c"; break; }; done
 _SF_TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
@@ -284,7 +289,10 @@ AUTH="Authorization: Bearer ${PROM_TOKEN}"
 [ -n "$PROM_TOKEN" ] || AUTH="Accept: application/json"
 if [ -n "${PROM_BASIC_USER:-}" ] && [ -n "${PROM_BASIC_PASS:-}" ]; then AUTH="Authorization: Basic $(printf '%s:%s' "$PROM_BASIC_USER" "$PROM_BASIC_PASS" | base64 | tr -d '\n')"; fi   # prom basic_user_env/basic_pass_env override (basic auth beats bearer)
 
-curl -fsS --max-time 10 -H "$AUTH" "${AM_URL}/api/v2/status" | jq -r '.cluster.status, .versionInfo.version'
+AM_RESPONSE="$(curl -q -sS --proto '=http,https' --max-redirs 0 --connect-timeout 5 --max-time 15 --max-filesize 2097152 -H "$AUTH" -w '\n%{http_code} %{content_type}' "${AM_URL}/api/v2/status" 2>/dev/null)" || { AM_RC=$?; printf 'Alertmanager transport failed (curl exit %s); no raw response retained\n' "$AM_RC"; exit 1; }
+AM_SAFE="$(printf '%s' "$AM_RESPONSE" | sh "$AM_PROJECT" http-metadata)" || { unset AM_RESPONSE; echo 'Alertmanager projection blocked; do not assess downstream checks'; exit 1; }
+unset AM_RESPONSE
+printf '%s' "$AM_SAFE" | jq -r '.cluster.status, .version'
 curl -fsS --max-time 10 -H "$AUTH" "${PROM_URL}/api/v1/query?query=alertmanager_config_last_reload_successful" \
   | jq -r '.data.result[] | "\(.metric.instance // .metric.pod // "unknown"): \(.value[1])"'
 curl -fsS --max-time 10 -H "$AUTH" "${PROM_URL}/api/v1/query?query=alertmanager_config_last_reload_success_timestamp_seconds" \
@@ -293,22 +301,13 @@ curl -fsS --max-time 10 -H "$AUTH" "${PROM_URL}/api/v1/query?query=alertmanager_
 
 A `1` on the first query and a recent timestamp on the second mean the reload succeeded and when. A `kubectl apply` that returns success with a `0` reload value or a stale timestamp means the running process still serves the old config (ALR-003, critical): the apply changed the object, not the behavior. If either `curl` call above returns `401`/`403` instead of a JSON body, that is a token problem on the query API, not evidence the reload failed; fix the token and re-run before drawing any ALR-003 conclusion.
 
-## 5. Redaction filter
+## 5. Config projection at capture
 
-Apply this to every config blob before it enters terminal output, `findings.json`, or `report.md`:
+The stateless [projection helper](../scripts/project-config.sh) parses a rendered YAML config, an `AlertmanagerConfig` JSON object, or an HTTP status response **in memory**. Python 3 with PyYAML and curl 8.4 or newer are required; `check` mode fails before provider reads when unavailable. Status requests disable curl configuration files and redirects. URI-bearing identity, matcher or metadata fields block projection rather than being masked into a false equality. It bounds input to 2 MiB, nesting to 30 and visited values to 50,000; malformed YAML/JSON, duplicate keys and recursive aliases stop without echoing the response.
 
-```bash
-set -eu
-# Redacts values of keys ending in url, key, token, secret, password (case-insensitive);
-# keeps receiver names, channel names, and structure intact.
-jq 'walk(
-  if type == "object" then
-    with_entries(if (.key | ascii_downcase | test("(url|key|token|secret|password)$")) then .value = "[redacted]" else . end)
-  else . end
-)'
-```
+Only route matchers/timing/grouping, interval definitions, receiver names/types, field names, credential-field presence, `send_resolved`, and destination classification are emitted. Native `victorops_configs` and CRD `victoropsConfigs` remain visible as receiver types; their API/routing keys, URLs, HTTP headers, custom details and templates never enter output. Cluster metadata is separately allowlisted. A parser or read failure is blocked, never an empty healthy configuration. Do not save `/api/v2/status`, `config.original`, or the loaded YAML before this projection, even temporarily; later report redaction cannot undo a capture leak.
 
-Receiver names and channel names are safe to keep; they are what you compare across layers. Webhook URLs, API keys, and any credential-bearing field are never safe, even truncated.
+Compare observed route structure and receiver type/count/presence across projections after accounting for the Operator namespace transformation. **`credential_equality: unassessed` is deliberate:** two redacted projections do not prove credential or destination equality, and an omitted field is not absent configuration. Keep the exact destination/credential part of ALR-002 unverified without separate protected in-memory comparison or authoritative source evidence. A type such as `victorops` does not reveal a routing key. For the source-to-policy/team/current-responder join, hand verified source metadata and the protected routing-key variable to [SOC-007](../../audit-splunk-oncall/references/verify-path.md#source-side-evidence-for-soc-007); keep upstream route findings here and downstream policy/staffing findings in that audit.
 
 ## 6. Active alerts and their resolved receiver (ALR-004)
 
@@ -549,7 +548,7 @@ Lessons folded into the check catalog:
 
 - Config-layer agreement is necessary but not sufficient. A receiver can be internally consistent across every layer this audit reads and still point at a destination that no longer exists on the receiving end. Only dispatch counters and logs catch that class of drift; that is why ALR-005/ALR-006 are separate checks from ALR-002/ALR-003, not folded into them.
 - Log lines age out. The same `channel_not_found` error kept appearing in `kubectl logs` output well after the destination was fixed, because the tail window included pre-fix history. Always compare the error timestamp to the last successful reload (section 4) before citing a log line as current (ALR-009).
-- Extract receiver targets by field name, not by array index. A one-liner like `.spec.receivers[1].slackConfigs[0].channel` breaks the moment a receiver list is reordered or a new receiver is inserted. Use `.spec.receivers[] | {name, channels: [.slackConfigs[]?.channel] }` (as in section 4) so the check survives reordering and still names which receiver each channel belongs to.
+- Extract receiver targets by field name, not by array index. A one-liner like `.spec.receivers[1].slackConfigs[0].channel` breaks the moment a receiver list is reordered or a new receiver is inserted. Use section 4’s receiver-name/type projection so reordered receiver lists remain attributable; verify any protected destination separately without publishing its value.
 
 ## 12. Large-path worklist: alert rule batches
 
@@ -784,6 +783,9 @@ All from the running config. Redact per section 5 before storing any of it.
 
 ```bash
 set -eu
+set +x
+AM_PROJECT="${CLAUDE_PLUGIN_ROOT}/skills/audit-alertmanager/scripts/project-config.sh"
+sh "$AM_PROJECT" check   # dependencies before any provider read
 SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.scoutflo/env" ]; then SCOUTFLO_ENV="./.scoutflo/env"; else SCOUTFLO_ENV="$HOME/.scoutflo/env"; fi; }
 _SF_CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$_SF_CFG" ] || for _sf_c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_sf_c" ] && { _SF_CFG="$_sf_c"; break; }; done
 _SF_TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
@@ -799,16 +801,13 @@ AUTH="Authorization: Bearer ${PROM_TOKEN}"
 [ -n "$PROM_TOKEN" ] || AUTH="Accept: application/json"
 if [ -n "${PROM_BASIC_USER:-}" ] && [ -n "${PROM_BASIC_PASS:-}" ]; then AUTH="Authorization: Basic $(printf '%s:%s' "$PROM_BASIC_USER" "$PROM_BASIC_PASS" | base64 | tr -d '\n')"; fi   # prom basic_user_env/basic_pass_env override (basic auth beats bearer)
 
-CODE=$(curl -s -o /tmp/alr-am-status.json -w '%{http_code}' --max-time 15 -H "$AUTH" "${AM_URL}/api/v2/status")
-[ "$CODE" = "200" ] || { echo "status ${CODE}: ALR-016/ALR-018 blocked, not clean"; exit 0; }
-jq -r '.config.original' /tmp/alr-am-status.json > /tmp/alr-am-config.yaml
-
-grep -nE 'group_by|repeat_interval|inhibit_rules|(mute|active)_time_intervals|time_intervals|send_resolved|resolve_timeout' \
-  /tmp/alr-am-config.yaml \
-  || echo "none of the grouping/inhibition/mute/resolve keys present in the rendered config"
+AM_RESPONSE="$(curl -q -sS --proto '=http,https' --max-redirs 0 --connect-timeout 5 --max-time 15 --max-filesize 2097152 -H "$AUTH" -w '\n%{http_code} %{content_type}' "${AM_URL}/api/v2/status" 2>/dev/null)" || { AM_RC=$?; printf 'Alertmanager transport failed (curl exit %s); no raw response retained\n' "$AM_RC"; exit 1; }
+AM_SAFE="$(printf '%s' "$AM_RESPONSE" | sh "$AM_PROJECT" http-status)" || { unset AM_RESPONSE; echo 'Alertmanager projection blocked; do not assess downstream checks'; exit 1; }
+unset AM_RESPONSE
+printf '%s\n' "$AM_SAFE" | jq '{route,inhibit_rules,time_intervals,mute_time_intervals,global,receivers}'
 ```
 
-Read the matched lines against these rules:
+Read the projected fields against these rules; omitted credential/destination values remain unverified:
 
 - **`group_by` (ALR-016):** absent on a paging route means one page per alert during a broad outage. The special value `['...']` also defeats aggregation — it means "group by every label", so each distinct alert becomes its own group. Both are findings; a real `group_by` names the few labels that define an incident (for example `['alertname','cluster','namespace']`).
 - **`inhibit_rules` (ALR-016):** empty or absent means no correlation suppression, so a single root cause pages for every downstream symptom.
@@ -821,6 +820,9 @@ Read the matched lines against these rules:
 
 ```bash
 set -eu
+set +x
+AM_PROJECT="${CLAUDE_PLUGIN_ROOT}/skills/audit-alertmanager/scripts/project-config.sh"
+sh "$AM_PROJECT" check   # dependencies before any provider read
 SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.scoutflo/env" ]; then SCOUTFLO_ENV="./.scoutflo/env"; else SCOUTFLO_ENV="$HOME/.scoutflo/env"; fi; }
 _SF_CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$_SF_CFG" ] || for _sf_c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_sf_c" ] && { _SF_CFG="$_sf_c"; break; }; done
 _SF_TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
@@ -837,8 +839,10 @@ AUTH="Authorization: Bearer ${PROM_TOKEN}"
 if [ -n "${PROM_BASIC_USER:-}" ] && [ -n "${PROM_BASIC_PASS:-}" ]; then AUTH="Authorization: Basic $(printf '%s:%s' "$PROM_BASIC_USER" "$PROM_BASIC_PASS" | base64 | tr -d '\n')"; fi   # prom basic_user_env/basic_pass_env override (basic auth beats bearer)
 
 # Alertmanager dedup only holds while the HA cluster is healthy.
-curl -s -H "$AUTH" "${AM_URL}/api/v2/status" \
-  | jq -r '.cluster | "cluster.status=\(.status) peers=\((.peers // []) | length)"'
+AM_RESPONSE="$(curl -q -sS --proto '=http,https' --max-redirs 0 --connect-timeout 5 --max-time 15 --max-filesize 2097152 -H "$AUTH" -w '\n%{http_code} %{content_type}' "${AM_URL}/api/v2/status" 2>/dev/null)" || { AM_RC=$?; printf 'Alertmanager transport failed (curl exit %s); no raw response retained\n' "$AM_RC"; exit 1; }
+AM_SAFE="$(printf '%s' "$AM_RESPONSE" | sh "$AM_PROJECT" http-metadata)" || { unset AM_RESPONSE; echo 'Alertmanager projection blocked; do not assess downstream checks'; exit 1; }
+unset AM_RESPONSE
+printf '%s' "$AM_SAFE" | jq -r '.cluster | "cluster.status=\(.status) peers=\(.peer_count)"'
 
 # Alerts currently resolved to more than one receiver: candidate duplicate delivery.
 curl -s -H "$AUTH" "${AM_URL}/api/v2/alerts" \
@@ -881,6 +885,9 @@ Prometheus 3.0 normalizes `le` (classic histograms) and `quantile` (summaries) l
 
 ```bash
 set -eu
+set +x
+AM_PROJECT="${CLAUDE_PLUGIN_ROOT}/skills/audit-alertmanager/scripts/project-config.sh"
+sh "$AM_PROJECT" check   # dependencies before any provider read
 SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.scoutflo/env" ]; then SCOUTFLO_ENV="./.scoutflo/env"; else SCOUTFLO_ENV="$HOME/.scoutflo/env"; fi; }
 _SF_CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$_SF_CFG" ] || for _sf_c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_sf_c" ] && { _SF_CFG="$_sf_c"; break; }; done
 _SF_TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
@@ -915,22 +922,20 @@ else
   if [ "$PMAJOR" -lt 3 ]; then
     echo "ALR-019 not-in-scope: Prometheus ${PVER} keeps the integer le/quantile form; no normalization trap"
   else
-  # Scan the rendered route tree and inhibit rules for le/quantile pinned to a bare integer.
-  # Read config.original from api/v2/status; catch BOTH matcher forms:
-  #   inline matchers list:  le="1"  /  le=~"1"      (operator = or =~)
-  #   classic map form:      match:/match_re:/source_match:/target_match: with  le: "1"
-  # A grep for only the `=` form silently misses the map form, which is common in
-  # hand-authored and Helm base configs — a false ALR-019 pass.
-  curl -s -H "$AUTH" "${AM_URL}/api/v2/status" \
-    | jq -r '.config.original // ""' \
-    | grep -nE '\b(le|quantile)\b[[:space:]]*(=~?|:)[[:space:]]*"?[0-9]+"?([^.0-9]|$)' \
-    || echo "no integer-pinned le/quantile matcher found"
+  # Parse safely, then inspect observed route/inhibition matcher values in memory.
+AM_RESPONSE="$(curl -q -sS --proto '=http,https' --max-redirs 0 --connect-timeout 5 --max-time 15 --max-filesize 2097152 -H "$AUTH" -w '\n%{http_code} %{content_type}' "${AM_URL}/api/v2/status" 2>/dev/null)" || { AM_RC=$?; printf 'Alertmanager transport failed (curl exit %s); no raw response retained\n' "$AM_RC"; exit 1; }
+AM_SAFE="$(printf '%s' "$AM_RESPONSE" | sh "$AM_PROJECT" http-status)" || { unset AM_RESPONSE; echo 'Alertmanager projection blocked; do not assess downstream checks'; exit 1; }
+unset AM_RESPONSE
+  printf '%s' "$AM_SAFE" | jq '[.. | objects | to_entries[]
+    | select(.key | IN("matchers","source_matchers","target_matchers","match","match_re","source_match","source_match_re","target_match","target_match_re"))
+    | {kind:.key,matchers:.value}]'
+
     echo "flag (Prometheus 3.x): each hit is an ALR-019 finding — the series now carries the float form (le=\"1.0\"); rewrite the matcher to the normalized value or a decimal-tolerant regex. A regex matcher with a literal '.' (le=~\"1.0\") is under-anchored; escape it (le=~\"1\\.0\")."
   fi
 fi
 ```
 
-Note: the grep is a candidate finder over the rendered config text, not the verdict. Read each hit in context — a matcher like `le="1.0"` (already normalized) or `le=~"1\\.0"` (correctly escaped) is fine; only a bare integer (`le="1"`, `quantile="0"`) is the finding. UTF-8 strict matcher mode is still opt-in in Alertmanager (fallback mode is the default through 0.33.x), so the escaping note applies regardless of parser mode.
+Note: the projected matcher list is candidate evidence, not the verdict. Read each matcher in context — a matcher like `le="1.0"` (already normalized) or `le=~"1\\.0"` (correctly escaped) is fine; only a bare integer (`le="1"`, `quantile="0"`) is the finding. UTF-8 strict matcher mode is still opt-in in Alertmanager (fallback mode is the default through 0.33.x), so the escaping note applies regardless of parser mode.
 
 ### 13.8 Deprecated msteams delivery path (ALR-020)
 
@@ -938,6 +943,9 @@ Note: the grep is a candidate finder over the rendered config text, not the verd
 
 ```bash
 set -eu
+set +x
+AM_PROJECT="${CLAUDE_PLUGIN_ROOT}/skills/audit-alertmanager/scripts/project-config.sh"
+sh "$AM_PROJECT" check   # dependencies before any provider read
 SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.scoutflo/env" ]; then SCOUTFLO_ENV="./.scoutflo/env"; else SCOUTFLO_ENV="$HOME/.scoutflo/env"; fi; }
 _SF_CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$_SF_CFG" ] || for _sf_c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_sf_c" ] && { _SF_CFG="$_sf_c"; break; }; done
 _SF_TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
@@ -954,10 +962,10 @@ AUTH="Authorization: Bearer ${PROM_TOKEN}"
 if [ -n "${PROM_BASIC_USER:-}" ] && [ -n "${PROM_BASIC_PASS:-}" ]; then AUTH="Authorization: Basic $(printf '%s:%s' "$PROM_BASIC_USER" "$PROM_BASIC_PASS" | base64 | tr -d '\n')"; fi   # prom basic_user_env/basic_pass_env override (basic auth beats bearer)
 
 # Receivers still carrying an msteams_configs block (the deprecated path).
-curl -s -H "$AUTH" "${AM_URL}/api/v2/status" \
-  | jq -r '.config.original // ""' \
-  | grep -nE 'msteams_configs[[:space:]]*:' \
-  || echo "no msteams_configs receiver found"
+AM_RESPONSE="$(curl -q -sS --proto '=http,https' --max-redirs 0 --connect-timeout 5 --max-time 15 --max-filesize 2097152 -H "$AUTH" -w '\n%{http_code} %{content_type}' "${AM_URL}/api/v2/status" 2>/dev/null)" || { AM_RC=$?; printf 'Alertmanager transport failed (curl exit %s); no raw response retained\n' "$AM_RC"; exit 1; }
+AM_SAFE="$(printf '%s' "$AM_RESPONSE" | sh "$AM_PROJECT" http-status)" || { unset AM_RESPONSE; echo 'Alertmanager projection blocked; do not assess downstream checks'; exit 1; }
+unset AM_RESPONSE
+printf '%s' "$AM_SAFE" | jq '[.receivers[] | select(any(.targets[]; .type=="msteams")) | .name]'
 echo "flag: each hit is an ALR-020 finding (medium) — migrate that receiver to msteamsv2_configs; the Office 365 connector msteams_configs relies on is being retired"
 ```
 
@@ -1010,8 +1018,29 @@ Fail (ALR-022, high): an alert is active AND paging-severity AND `.status.state=
 This adds only the **live-clock and latency** axis; the dangling/misconfigured mute-interval *definition* error is already owned by section 13.4 — cross-reference it, do not re-report it here.
 
 ```bash
-curl -s --max-time 15 -H "$AUTH" "${AM_URL}/api/v2/status" | jq -r '.config.original' > /tmp/alr-am-config.yaml
-grep -nE 'group_wait|group_interval|mute_time_intervals|active_time_intervals' /tmp/alr-am-config.yaml || echo 'no timing/mute keys in rendered config'
+set -eu
+set +x
+AM_PROJECT="${CLAUDE_PLUGIN_ROOT}/skills/audit-alertmanager/scripts/project-config.sh"
+sh "$AM_PROJECT" check   # dependencies before any provider read
+SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.scoutflo/env" ]; then SCOUTFLO_ENV="./.scoutflo/env"; else SCOUTFLO_ENV="$HOME/.scoutflo/env"; fi; }
+_SF_CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$_SF_CFG" ] || for _sf_c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_sf_c" ] && { _SF_CFG="$_sf_c"; break; }; done
+_SF_TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+if [ "$(sh "$_SF_TT" "$_SF_CFG" prometheus kind 2>/dev/null || true)" = seq ]; then _sf_i=0; while [ "$_sf_i" -lt "$(sh "$_SF_TT" "$_SF_CFG" prometheus count 2>/dev/null || echo 0)" ]; do [ -z "$(sh "$_SF_TT" "$_SF_CFG" prometheus get "$_sf_i" token_env 2>/dev/null || true)" ] || { echo "prometheus in ${_SF_CFG} is a list of targets that each name their own token_env, and this step reads PROM_TOKEN by its default name, so it cannot tell which target's value to use. It stops instead of guessing: give that target a config of its own where prometheus is a single block, and run with SCOUTFLO_CONFIG set to that file (and SCOUTFLO_AUDIT_DIR to its own folder)."; exit 1; }; _sf_i=$((_sf_i+1)); done; fi
+_sf_tv="$(sh "$_SF_TT" "$_SF_CFG" prometheus get 0 token_env 2>/dev/null || true)"; if [ -n "$_sf_tv" ] && [ "$(sh "$_SF_TT" "$_SF_CFG" prometheus kind 2>/dev/null || true)" != seq ]; then _sf_v="$(sh -c '( [ -f "$1" ] && . "$1" >/dev/null 2>&1; printenv -- "$2" ) 2>/dev/null || printenv -- "$2"' _ "$SCOUTFLO_ENV" "$_sf_tv" 2>/dev/null || true)"; if [ -n "$_sf_v" ]; then PROM_TOKEN="$_sf_v"; export PROM_TOKEN; else unset PROM_TOKEN; echo "note: ${_sf_tv} (named by prometheus.token_env) is not set in the secret store or the shell" >&2; fi; fi
+if [ "$(sh "$_SF_TT" "$_SF_CFG" prometheus kind 2>/dev/null || true)" = seq ]; then _sf_i=0; while [ "$_sf_i" -lt "$(sh "$_SF_TT" "$_SF_CFG" prometheus count 2>/dev/null || echo 0)" ]; do [ -z "$(sh "$_SF_TT" "$_SF_CFG" prometheus get "$_sf_i" basic_user_env 2>/dev/null || true)" ] || { echo "prometheus in ${_SF_CFG} is a list of targets that each name their own basic_user_env, and this step reads PROM_BASIC_USER by its default name, so it cannot tell which target's value to use. It stops instead of guessing: give that target a config of its own where prometheus is a single block, and run with SCOUTFLO_CONFIG set to that file (and SCOUTFLO_AUDIT_DIR to its own folder)."; exit 1; }; _sf_i=$((_sf_i+1)); done; fi
+_sf_tv="$(sh "$_SF_TT" "$_SF_CFG" prometheus get 0 basic_user_env 2>/dev/null || true)"; if [ -n "$_sf_tv" ] && [ "$(sh "$_SF_TT" "$_SF_CFG" prometheus kind 2>/dev/null || true)" != seq ]; then _sf_v="$(sh -c '( [ -f "$1" ] && . "$1" >/dev/null 2>&1; printenv -- "$2" ) 2>/dev/null || printenv -- "$2"' _ "$SCOUTFLO_ENV" "$_sf_tv" 2>/dev/null || true)"; if [ -n "$_sf_v" ]; then PROM_BASIC_USER="$_sf_v"; export PROM_BASIC_USER; else unset PROM_BASIC_USER; echo "note: ${_sf_tv} (named by prometheus.basic_user_env) is not set in the secret store or the shell" >&2; fi; fi
+if [ "$(sh "$_SF_TT" "$_SF_CFG" prometheus kind 2>/dev/null || true)" = seq ]; then _sf_i=0; while [ "$_sf_i" -lt "$(sh "$_SF_TT" "$_SF_CFG" prometheus count 2>/dev/null || echo 0)" ]; do [ -z "$(sh "$_SF_TT" "$_SF_CFG" prometheus get "$_sf_i" basic_pass_env 2>/dev/null || true)" ] || { echo "prometheus in ${_SF_CFG} is a list of targets that each name their own basic_pass_env, and this step reads PROM_BASIC_PASS by its default name, so it cannot tell which target's value to use. It stops instead of guessing: give that target a config of its own where prometheus is a single block, and run with SCOUTFLO_CONFIG set to that file (and SCOUTFLO_AUDIT_DIR to its own folder)."; exit 1; }; _sf_i=$((_sf_i+1)); done; fi
+_sf_tv="$(sh "$_SF_TT" "$_SF_CFG" prometheus get 0 basic_pass_env 2>/dev/null || true)"; if [ -n "$_sf_tv" ] && [ "$(sh "$_SF_TT" "$_SF_CFG" prometheus kind 2>/dev/null || true)" != seq ]; then _sf_v="$(sh -c '( [ -f "$1" ] && . "$1" >/dev/null 2>&1; printenv -- "$2" ) 2>/dev/null || printenv -- "$2"' _ "$SCOUTFLO_ENV" "$_sf_tv" 2>/dev/null || true)"; if [ -n "$_sf_v" ]; then PROM_BASIC_PASS="$_sf_v"; export PROM_BASIC_PASS; else unset PROM_BASIC_PASS; echo "note: ${_sf_tv} (named by prometheus.basic_pass_env) is not set in the secret store or the shell" >&2; fi; fi
+AM_URL="https://alertmanager.example.com"   # prometheus.alertmanager_url
+PROM_TOKEN="${PROM_TOKEN:-}"
+AUTH="Authorization: Bearer ${PROM_TOKEN}"
+[ -n "$PROM_TOKEN" ] || AUTH="Accept: application/json"
+if [ -n "${PROM_BASIC_USER:-}" ] && [ -n "${PROM_BASIC_PASS:-}" ]; then AUTH="Authorization: Basic $(printf '%s:%s' "$PROM_BASIC_USER" "$PROM_BASIC_PASS" | base64 | tr -d '\n')"; fi   # prom basic_user_env/basic_pass_env override (basic auth beats bearer)
+
+AM_RESPONSE="$(curl -q -sS --proto '=http,https' --max-redirs 0 --connect-timeout 5 --max-time 15 --max-filesize 2097152 -H "$AUTH" -w '\n%{http_code} %{content_type}' "${AM_URL}/api/v2/status" 2>/dev/null)" || { AM_RC=$?; printf 'Alertmanager transport failed (curl exit %s); no raw response retained\n' "$AM_RC"; exit 1; }
+AM_SAFE="$(printf '%s' "$AM_RESPONSE" | sh "$AM_PROJECT" http-status)" || { unset AM_RESPONSE; echo 'Alertmanager projection blocked; do not assess downstream checks'; exit 1; }
+unset AM_RESPONSE
+printf '%s' "$AM_SAFE" | jq '{route,time_intervals,mute_time_intervals}'
 date -u '+now UTC: %Y-%m-%d %H:%M %A'   # compare against any mute/active interval whose route pages 24/7
 ```
 

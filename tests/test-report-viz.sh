@@ -352,12 +352,14 @@ EXD="$WORK/exec"; EXDATE="2026-09-08"
 xk(){ d="$EXD/$1/$EXDATE"; mkdir -p "$d"; jq -n --arg t "$1" --argjson f "$2" '{schema:"scoutflo-findings/v2",target:$t,skill:("audit-"+$t),findings:$f}' > "$d/findings.json"; }
 xk aws '[{"id":"AWS-011","title":"Zero CloudWatch alarms on prod DB","severity":"critical","points_recoverable":20,"affected":["aurora"],"recommendation":"add alarms","remediation":"setup-aws#alarms"}]'
 xk cost '[{"id":"COST-AWS-008","title":"Savings Plan opportunity","severity":"low","points_recoverable":0,"affected":["account"],"estimated_monthly_savings_usd":472,"recommendation":"buy SP","remediation":"—"}]'
+jq '.schema="scoutflo-cost/v1"' "$EXD/cost/$EXDATE/findings.json" > "$WORK/cost-schema.json"
+mv "$WORK/cost-schema.json" "$EXD/cost/$EXDATE/findings.json"
 xk sentry '[{"id":"SNTRY-015","title":"Detectors wired to zero workflows","severity":"high","points_recoverable":8,"affected":["uptime"],"recommendation":"wire workflow","remediation":"setup-sentry#wf"}]'
 printf '{"schema":"scoutflo-alert-fatigue/v1","af_findings":[{"af_id":"AF-004","type":"alerting-reachability","status":"measured","measured_objects":30,"unreachable_objects":21}]}' > "$EXD/alert-fatigue.json"
 EX="$(sh "$VIZ" exec-summary "$EXD" "$EXDATE" 5)"
 printf '%s' "$EX" | grep -q '## Executive summary' || fail "exec-summary heading missing"
 printf '%s' "$EX" | grep -q 'Posture: AT RISK' || fail "posture grade wrong (want AT RISK — a critical is present)"
-printf '%s' "$EX" | grep -q '1 critical · 1 high · 0 medium across 3 stack' || fail "posture counts wrong"
+printf '%s' "$EX" | grep -q '1 critical · 1 high · 0 medium across 2 stack' || fail "posture counts wrong (cost is not a readiness stack)"
 # severity-first: the CRITICAL row must appear before the LOW $472 cost row
 printf '%s' "$EX" | awk '/AWS-011/{a=NR} /COST-AWS-008/{b=NR} END{exit !(a<b)}' || fail "\$472 cost finding was promoted above the critical (severity-first violated)"
 printf '%s' "$EX" | grep -q '21 of 30 alerting objects cannot reach a human' || fail "reachability headline missing"

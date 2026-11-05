@@ -108,6 +108,40 @@ trend_scores() {  # $1 = history.jsonl (optional), $2 = current findings.json
     | tail -n 5 | tr '\n' ' '
 }
 
+# A scope is a boundary of the result, not just a history-comparison key.
+# Historical missing scope and explicit full/account keep their existing display.
+# Escaping supports both Markdown and HTML without rendering scope text as markup.
+scope_notice() {  # $1 = findings.json (or a scope-bearing inventory)
+  [ -f "$1" ] || return 0
+  jq -r '
+    (if has("scope") and .scope != null then .scope else "full" end) as $s
+    | if $s == "full" or $s == "account" then empty
+      elif $s == "triage" then "TRIAGE — a subset, not a full assessment."
+      elif ($s|type) == "string" and ($s|length) > 0
+        then "Scoped assessment: " + $s + ". Results cover only that scope; other resources remain unassessed."
+      else "Scoped assessment: scope is not a supported label; full coverage is not established."
+      end
+    | gsub("[\\r\\n\\t]"; " ") | @html | gsub("`"; "&#96;") | gsub("\\|"; "&#124;")
+  ' "$1"
+}
+
+inventory_scope_notice() {  # use the matching audit envelope when inventory has no scope
+  is_inv="$1"; is_findings="${2:-$(dirname "$1")/findings.json}"
+  if jq -e 'has("scope") and .scope != null' "$is_inv" >/dev/null 2>&1; then
+    scope_notice "$is_inv"
+    return
+  fi
+  if [ -f "$is_findings" ] && jq -e --slurpfile inv "$is_inv" '
+    .target == $inv[0].target and (.run_date | type) == "string"
+    and ($inv[0].generated_at | type) == "string"
+    and .run_date == ($inv[0].generated_at[0:10])
+  ' "$is_findings" >/dev/null 2>&1; then
+    scope_notice "$is_findings"
+  else
+    scope_notice "$is_inv"
+  fi
+}
+
 # --- alert-fatigue: enrich the cited noise findings with their fix text -------
 # The roll-up (alert-fatigue.json) cites WHICH findings are noise by (target, id)
 # — the authoritative selection. The fix text (title / where / why / how-to-fix)
@@ -181,6 +215,8 @@ EOF
 
     echo "## At a glance"
     echo
+    SCOPE_NOTICE="$(scope_notice "$F")"
+    if [ -n "$SCOPE_NOTICE" ]; then printf '> **%s**\n\n' "$SCOPE_NOTICE"; fi
     if [ "$SCORE_STATE" = "unassessed" ] || [ "$OVERALL" = "unassessed" ]; then
       suppressed_count="$(jq -r '.score.assessment.suppressed_checks // 0' "$F")"
       blocked_count="$(jq -r '.score.assessment.blocked_checks // 0' "$F")"
@@ -352,6 +388,12 @@ th{cursor:pointer;user-select:none;color:#4a5568}
 <span class="chip"><span class="dot" style="background:#a0aec0"></span>${SI} info</span>
 </div>
 HTMLHEAD
+    SCOPE_NOTICE="$(scope_notice "$F")"
+    if [ -n "$SCOPE_NOTICE" ]; then printf '<p><strong>%s</strong></p>\n' "$SCOPE_NOTICE"; fi
+    if [ "$OVERALL_LABEL" != "unassessed" ] && jq -e '.schema == "scoutflo-findings/v2" or (.score | has("end_to_end"))' "$F" >/dev/null; then
+      E2E="$(jq -r '.score.end_to_end // false' "$F")"
+      printf '<p class="sub">%s</p>\n' "$(score_label "$OVERALL" "$E2E")"
+    fi
     if jq -e '.score.assessment | type == "object"' "$F" >/dev/null 2>&1; then
       jq -r '.score.assessment | "<div class=\"sub\" style=\"margin-top:10px\">Assessment coverage: <strong>\(.assessed_checks)/\(.applicable_checks) (\(.coverage_percent)%)</strong>; \(.scored_checks // .assessed_checks) scored; \(.blocked_checks) blocked; \(.suppressed_checks // 0) suppressed; \(.not_in_scope_checks) not in scope.</div>"' "$F"
     fi
@@ -566,6 +608,16 @@ HTMLFOOT
         echo "| \`${tgt}\` | ${sc}/100 | \`$(viz_bar "$sc" 100 12)\` | ${flag} |"
       fi
     done
+    for f in "$D"/*/"$RD"/findings.json "$D"/*/*/"$RD"/findings.json; do
+      [ -f "$f" ] || continue
+      tgt="$(jq -r '.target // "?"' "$f")"
+      case "$tgt" in all|cost|cost-analysis|doctor|"?") continue;; esac
+      SCOPE_NOTICE="$(scope_notice "$f")"
+      if [ -n "$SCOPE_NOTICE" ]; then
+        safe_target="$(jq -r '.target | @html | gsub("`"; "&#96;") | gsub("\\|"; "&#124;")' "$f")"
+        printf '\n- %s: %s\n' "$safe_target" "$SCOPE_NOTICE"
+      fi
+    done
     echo
     echo "_Worst-first — send the team to the top row. Partial assessment or an explicit false readiness flag prevents end-to-end credit even at a high score. Missing v1 flags retain legacy behavior. Never a combined average: one score line per stack._"
     ;;
@@ -585,11 +637,13 @@ HTMLFOOT
     TGT="$(jq -r '.target // "target"' "$INV" 2>/dev/null)"
     TOT="$(jq -r '.counts.total // (.items | length) // 0' "$INV" 2>/dev/null)"
     case "$TOT" in *[!0-9]*) TOT=0;; esac
+    SCOPE_NOTICE="$(inventory_scope_notice "$INV" "${2:-}")"
+    if [ -n "$SCOPE_NOTICE" ]; then printf '> **%s**\n\n' "$SCOPE_NOTICE"; fi
     if [ "$TOT" -eq 0 ]; then
-      echo "No objects found in \`${TGT}\` this run — the estate is empty here, or (see the empty/hidden-scope guardrail) this identity cannot see them. This is the full catalog, not the gaps (those are in Findings)."
+      echo "No objects recorded in \`${TGT}\` for this run. Check the report's scope and visibility limits before concluding the estate is empty."
       exit 0
     fi
-    echo "Complete current-state catalog of what \`${TGT}\` has configured (${TOT} objects). This is what exists; the gaps are in Findings above."
+    echo "Observed inventory for \`${TGT}\` (${TOT} objects). Counts describe the supplied inventory; see the report for scope and collection limits. Findings describe the gaps."
     echo
     jq -r '[.items[].kind] | unique[]' "$INV" 2>/dev/null | while IFS= read -r kind; do
       [ -n "$kind" ] || continue
@@ -740,7 +794,7 @@ HTMLFOOT
     found=0
     for f in "$D"/*/"$RD"/inventory.json "$D"/*/*/"$RD"/inventory.json; do [ -f "$f" ] && found=1; done
     if [ "$found" -eq 0 ]; then echo "_No \`inventory.json\` for ${RD}._"; exit 0; fi
-    echo "Everything the configured stacks have, by type — the current-state catalog across the estate."
+    echo "Observed objects by type in the supplied inventories. Counts do not establish complete estate coverage; each report retains its scope and collection limits."
     echo
     echo "| Stack | Total | By kind |"
     echo "| --- | ---: | --- |"
@@ -752,6 +806,16 @@ HTMLFOOT
       tot="$(jq -r '.counts.total // (.items|length) // 0' "$f" 2>/dev/null)"
       bk="$(jq -r '(.counts.by_kind // {}) | to_entries | map("\(.key): \(.value)") | join(", ")' "$f" 2>/dev/null)"
       echo "| \`${tgt}\` | ${tot} | ${bk:--} |"
+    done
+    for f in "$D"/*/"$RD"/inventory.json "$D"/*/*/"$RD"/inventory.json; do
+      [ -f "$f" ] || continue
+      tgt="$(jq -r '.target // "?"' "$f")"
+      case "$tgt" in all|cost|cost-analysis|doctor|"?") continue;; esac
+      SCOPE_NOTICE="$(inventory_scope_notice "$f")"
+      if [ -n "$SCOPE_NOTICE" ]; then
+        safe_target="$(jq -r '.target | @html | gsub("`"; "&#96;") | gsub("\\|"; "&#124;")' "$f")"
+        printf '\n- %s: %s\n' "$safe_target" "$SCOPE_NOTICE"
+      fi
     done
     ;;
 
@@ -1123,7 +1187,9 @@ HTMLFOOT
     set --
     for f in "$D"/*/"$RD"/findings.json "$D"/*/*/"$RD"/findings.json; do
       [ -e "$f" ] || continue
-      case "$f" in */all/*|*/doctor/*|*/alert-fatigue/*) continue ;; esac
+      relative="${f#"$D"/}"
+      case "${relative%%/*}" in all|doctor|alert-fatigue|cost-analysis) continue ;; esac
+      case "$(jq -r '.target // "?"' "$f")" in all|cost-analysis|doctor|"?") continue ;; esac
       set -- "$@" "$f"
     done
     # P3: detect a triage run — any findings.json with a "triage" scope envelope. A triage
@@ -1142,14 +1208,59 @@ HTMLFOOT
       echo "> ⚡ **TRIAGE — fast worst-first subset, NOT a full assessment.** This pass ran a curated high-signal subset per provider (smallest scope, no per-resource sweep). A clean or quiet result here is *not* an all-clear — run the full \`/scoutflo:audit-all\` for complete coverage."
       echo
     fi
-    ALL="$(jq -s '[ .[] | (.target // "unknown") as $t | (.findings // [])[] | select((.lifecycle // "new") != "suppressed") | . + {target: $t} ]' "$@")"
-    read -r NC NH NM NST <<EOF
-$(printf '%s' "$ALL" | jq -r '"\([.[]|select(.severity=="critical")]|length) \([.[]|select(.severity=="high")]|length) \([.[]|select(.severity=="medium")]|length) \([.[].target]|unique|length)"')
+    SCOPED=0
+    for f in "$@"; do
+      SCOPE_NOTICE="$(scope_notice "$f")"
+      if [ -n "$SCOPE_NOTICE" ]; then
+        if jq -e '.schema != "scoutflo-cost/v1" and .target != "cost"' "$f" >/dev/null; then SCOPED=1; fi
+        safe_target="$(jq -r '.target | @html | gsub("`"; "&#96;") | gsub("\\|"; "&#124;")' "$f")"
+        printf -- '- %s: %s\n' "$safe_target" "$SCOPE_NOTICE"
+      fi
+    done
+    if [ "$SCOPED" -eq 1 ]; then echo; fi
+    # Stack and assessment counts come from envelopes, including zero-finding
+    # audits. Unknown evidence is not a confirmed gap or a healthy estate.
+    read -r NST UNASSESSED INCOMPLETE BLOCKED <<EOF
+$(jq -sr --argjson gate "$GATE" '
+  # Cost opportunities have no readiness score by design. Keep them in the
+  # ranked findings below, but out of all readiness denominators.
+  [.[] | select(.schema != "scoutflo-cost/v1" and .target != "cost")] as $r
+  | $r
+  | length as $n
+  | ([.[] | select(.score.overall == null or .score.state == "unassessed"
+       or (.schema == "scoutflo-findings/v2" and (.score.assessment.scored_checks // 0) == 0))] | length) as $u
+  | ([.[] | select(.score.overall == null or .score.overall < $gate
+       or .score.end_to_end == false
+       or (.schema == "scoutflo-findings/v2" and
+           (.score.end_to_end != true or (.score.assessment.coverage_percent // 0) < 100)))] | length) as $i
+  | ([.[] | (.checks // [] | map(select(.result == "blocked")) | length) as $c
+       | (.findings // [] | map(select(.status == "blocked")) | length) as $f
+       | [$c, $f, (.score.assessment.blocked_checks // 0)] | max] | add // 0) as $b
+  | "\($n) \($u) \($i) \($b)"' "$@")
+EOF
+    ALL="$(jq -s '[ .[] | .target as $t | (.findings // [])[]
+      | select((.lifecycle // "new") | IN("new","unchanged","regressed"))
+      | select((.status // "configured") | IN("configured","validated-live"))
+      | . + {target: $t} ]' "$@")"
+    read -r NC NH NM <<EOF
+$(printf '%s' "$ALL" | jq -r '"\([.[]|select(.severity=="critical")]|length) \([.[]|select(.severity=="high")]|length) \([.[]|select(.severity=="medium")]|length)"')
 EOF
     # posture grade from the worst severity present
-    if [ "${NC:-0}" -gt 0 ]; then GRADE="AT RISK — critical gaps"; elif [ "${NH:-0}" -gt 0 ]; then GRADE="NEEDS WORK — high-severity gaps"; elif [ "${NM:-0}" -gt 0 ]; then GRADE="FAIR — medium gaps";
-    elif [ "$TRIAGE" -eq 1 ]; then GRADE="no critical/high/medium in the TRIAGE SUBSET — not a full-assessment all-clear"; else GRADE="HEALTHY on what ran"; fi
-    echo "**Posture: ${GRADE}.** ${NC} critical · ${NH} high · ${NM} medium across ${NST} stack(s), ${RD}. Start with the ${TOPN} below (worst first)."
+    if [ "$NST" -eq 0 ]; then GRADE="NO READINESS ASSESSMENT — only non-scored evidence supplied"
+    elif [ "${NC:-0}" -gt 0 ]; then GRADE="AT RISK — critical gaps"; elif [ "${NH:-0}" -gt 0 ]; then GRADE="NEEDS WORK — high-severity gaps"; elif [ "${NM:-0}" -gt 0 ]; then GRADE="FAIR — medium gaps";
+    elif [ "$TRIAGE" -eq 1 ]; then GRADE="no critical/high/medium in the TRIAGE SUBSET — not a full-assessment all-clear"
+    elif [ "$UNASSESSED" -gt 0 ] || [ "$BLOCKED" -gt 0 ]; then GRADE="UNASSESSED OR PARTIAL — missing evidence prevents an all-clear"
+    elif [ "$SCOPED" -eq 1 ] || [ "$INCOMPLETE" -gt 0 ]; then GRADE="no critical/high/medium findings in the assessed scope — end-to-end readiness not established"
+    else GRADE="HEALTHY on what ran"; fi
+    echo "**Posture: ${GRADE}.** ${NC} critical · ${NH} high · ${NM} medium across ${NST} stack(s), ${RD}."
+    if [ "$BLOCKED" -gt 0 ] || [ "$UNASSESSED" -gt 0 ]; then
+      echo "Evidence limits: ${UNASSESSED} stack(s) have no readiness score; ${BLOCKED} check(s) are blocked. See their reports to unlock evidence; these are not confirmed failures."
+    fi
+    if [ "$(printf '%s' "$ALL" | jq '[.[] | select(.severity != "info")] | length')" -gt 0 ]; then
+      echo "Start with up to ${TOPN} observed findings below (worst first)."
+    else
+      echo "No observed non-info findings were supplied. This does not establish coverage beyond the assessed scope."
+    fi
     echo
     echo "| # | Severity | What's wrong | Where (blast radius) | \$/mo | Fix |"
     echo "| --- | --- | --- | --- | ---: | --- |"
@@ -1418,6 +1529,16 @@ EOF
       echo "**Coverage gaps (audited in some environments but not all):**${gaps}. An integration missing from an environment is an untested surface, not a pass — confirm it is intentionally absent before treating that environment as clean."
       echo
     fi
+    while IFS="$TB" read -r lbl f; do
+      [ -f "$f" ] || continue
+      SCOPE_NOTICE="$(scope_notice "$f")"
+      if [ -n "$SCOPE_NOTICE" ]; then
+        safe_label="$(printf '%s' "$lbl" | jq -Rr '@html | gsub("`"; "&#96;") | gsub("\\|"; "&#124;")')"
+        safe_target="$(jq -r '.target | @html | gsub("`"; "&#96;") | gsub("\\|"; "&#124;")' "$f")"
+        printf -- '- %s / %s: %s\n' "$safe_label" "$safe_target" "$SCOPE_NOTICE"
+      fi
+    done < "$FND"
+    echo
     for e in $ENVS; do
       set --
       while IFS="$TB" read -r lbl f; do [ "$lbl" = "$e" ] && [ -f "$f" ] && set -- "$@" "$f"; done < "$FND"
