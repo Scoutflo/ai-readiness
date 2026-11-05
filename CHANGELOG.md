@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.1.247
+
+Checkpoint saves the scope you actually chose. `checkpoint_save_scope` passes
+service names to jq as data, so a name with a quote or backslash no longer
+breaks the save, and it trims whitespace and drops empty entries. `all` or an
+empty answer now clears the saved scope instead of storing `all` as if it were
+a service name. Removed the unused `checkpoint_prompt_services` helper, which
+offered four placeholder service names and saved them as your scope when you
+chose `all`; the skill now lists only discovered services. Batch-size ranges in
+the skill match the code. Added scope save/load/reset tests and a checkpoint
+pressure scenario.
+
 ## 0.1.246
 
 Expand Splunk On-Call from routing and current staffing into 18 scored checks for

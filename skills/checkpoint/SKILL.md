@@ -16,17 +16,19 @@ Save service and region scope before running audits. For large estates, batch au
 
 ## Phase 1: Interactive Scope Selection
 
-Present available services and prompt the user to select which to audit:
+List the services your estate actually has: the calling audit's inventory, or the topology export from `/scoutflo:map-topology`. Never offer a placeholder list. If neither exists, say so and offer to run `/scoutflo:map-topology` first. Ask which to audit:
 
 ```
 === Select Services to Audit ===
-Available services: payment-svc, checkout-svc, analytics-svc, api-gateway
+Available services: <discovered service names>
 Enter services (comma-separated, or 'all' for all): 
 ```
 
-Expected input: comma-separated list (e.g., `payment-svc,checkout-svc`) or `all` to audit everything.
+Expected input: a comma-separated list of discovered names, or `all` to audit everything.
 
-Save the selection to `~/.scoutflo/topology.json`:
+Save with `checkpoint_save_scope "<comma-separated names>"`. Whitespace around each name is trimmed and names are stored verbatim, so quotes and backslashes are safe. `all` or an empty answer clears the saved scope rather than freezing today's list, so the next audit also covers services added since.
+
+The selection is saved to `~/.scoutflo/topology.json`:
 
 ```json
 {
@@ -43,9 +45,9 @@ Save the selection to `~/.scoutflo/topology.json`:
 For large estates, calculate batch size and count:
 
 - `< 100 resources` → one pass (batch_size = 1)
-- `100–500 resources` → batch by 100
-- `500–2000 resources` → batch by 200
-- `> 2000 resources` → batch by 500
+- `100–499 resources` → batch by 100
+- `500–1999 resources` → batch by 200
+- `2000+ resources` → batch by 500
 
 Example: 1500 resources → `1500 / 200 = 8 batches of 200`
 
