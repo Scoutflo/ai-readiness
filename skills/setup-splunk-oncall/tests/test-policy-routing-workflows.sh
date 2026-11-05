@@ -76,6 +76,13 @@ elif path=='overrides':result={'overrides':data['overrides']}
 elif path=='alertRules':result=data['rules']
 elif path=='maintenancemode':result={'activeInstances':data['maintenance']}
 else:raise AssertionError('Unexpected request path '+safe_path)
+if fault=='create-readback-shape' and path=='policies/pol-created' and method=='GET':
+ result=dict(result);result['futureShape']=True
+if fault=='nested-read-metadata' and path.startswith('policies/') and method=='GET':
+ for step in result.get('steps',[]):
+  for entry in step.get('entries',[]):
+   if entry.get('executionType')=='policy_routing':
+    target=entry['targetPolicy']['policySlug'];entry['targetPolicy'].update(teamSlug=data['teams'][target],name='Untrusted display alias',policyName='Another display alias')
 if fault=='partial-policy-list' and path=='policies' and method=='GET':
  result['policies']=[x for x in result['policies'] if x['policy']['slug']!='pol-other'];result['next']='unconsumed-page'
 if fault=='policy-count-mismatch' and path=='policies' and method=='GET':result['total']=len(result['policies'])+1
@@ -242,6 +249,36 @@ with tempfile.TemporaryDirectory(prefix='oncall-policy-route-test-') as temp:
  check(len(writes())==1,'Ambiguous POST retried')
  reset();save_input();store.write_text(store.read_text()+"FIXTURE_ROUTE='default-value'\n")
  bad(run(operation='route-replace',runid='default'),'Default route protected');check(not writes(),'Default route mutated')
+ # A created object whose readback failed is reconciled by reads, never POST.
+ import hashlib
+ def failed_create():
+  reset();save_input(True);good(run(operation='policy-create',runid='recovery'),'Interrupted create plan')
+  bad(run(operation='policy-create',mode='apply',runid='recovery',approve=True,fault='create-readback-shape'),'Readback shape must fail after POST')
+  check(len(writes())==1 and (folder('recovery')/'apply.started').exists() and not (folder('recovery')/'applied.json').exists(),'Attempt was not preserved')
+  return hashlib.sha256((folder('recovery')/'plan.json').read_bytes()).hexdigest()
+ def recover(original,extra=None):
+  return run(operation='policy-create',mode='reconcile',runid='recovery',extra={'SOC_APPROVED_PLAN':'apply:'+original,**(extra or {})})
+ original=failed_create();good(recover(original),'Read-only ownership reconciliation')
+ check(len(writes())==1,'Reconcile sent a write')
+ recovered=json.loads((folder('recovery')/'applied.json').read_text());check(recovered['object_id']=='pol-created' and recovered['provenance']=='reconciled-without-retry','Reconciled receipt missing provenance')
+ check((folder('recovery')/'apply.started').exists(),'Reconcile cleared attempt marker')
+ bad(recover(original),'Repeated reconciliation must not replace receipt');check(len(writes())==1,'Repeated reconcile wrote')
+ good(run(operation='policy-retire',runid='recovered-retire',extra={'SOC_POLICY_SLUG':'pol-created','SOC_CREATED_RUN':'recovery','SOC_UNUSED_CONFIRMED':'yes'}),'Reconciled ownership can prepare normal guarded retirement')
+ for mutation in ('no-attempt','ambiguous','payload','census','routes','plan-binding'):
+  original=failed_create()
+  if mutation=='no-attempt':(folder('recovery')/'apply.started').unlink()
+  elif mutation=='ambiguous':state_edit(lambda x:(x['policies'].update({'pol-second':{**x['policies']['pol-created'],'slug':'pol-second'}}),x['teams'].update({'pol-second':'team-safe'})))
+  elif mutation=='payload':state_edit(lambda x:x['policies']['pol-created']['steps'][0].update(timeout=99))
+  elif mutation=='census':state_edit(lambda x:x['policies']['pol-other'].update(name='Renamed by another operator'))
+  elif mutation=='routes':state_edit(lambda x:x['routes'].update({'another-private-key':{'targets':['pol-current'],'isDefault':False}}))
+  else:
+   f=folder('recovery')/'apply.started';v=json.loads(f.read_text());v['plan_sha256']='0'*64;f.write_text(json.dumps(v))
+  bad(recover(original),'Reconcile must refuse '+mutation);check(not (folder('recovery')/'applied.json').exists() and len(writes())==1,'Unsafe recovery granted ownership or wrote: '+mutation)
+ original=failed_create();f=folder('recovery')/'apply.started';v=json.loads(f.read_text());v.pop('plan_sha256');f.write_text(json.dumps(v))
+ bad(recover(original),'Legacy attempt requires original receipt checksum')
+ bad(recover(original,{'SOC_LEGACY_ATTEMPT_PLAN_SHA256':'0'*64}),'Wrong legacy checksum')
+ good(recover(original,{'SOC_LEGACY_ATTEMPT_PLAN_SHA256':original}),'Explicit original legacy checksum and exact state permit recovery')
+ check(len(writes())==1,'Legacy recovery retried creation')
  # A same-name policy on another team is never selected by accident.
  reset();save_input();state_edit(lambda x:x['teams'].update({'pol-current':'team-other'}))
  bad(run(),'Wrong-team policy');check(not writes(),'Wrong-team policy changed')
@@ -258,5 +295,19 @@ with tempfile.TemporaryDirectory(prefix='oncall-policy-route-test-') as temp:
  reset();save_input();config.write_text('splunk_oncall:\n  - label: primary\n    api_id_env: FIXTURE_ID\n    api_key_env: FIXTURE_READ\n    setup_api_key_env: FIXTURE_WRITE\n    team_slug: team-safe\n')
  bad(run(),'Missing target label');check(not writes(),'Missing label wrote')
  good(run(extra={'SCOUTFLO_TARGET':'primary'}),'Explicit list label')
+ # Populated GET metadata is asserted before it is stripped from write payloads.
+ config.write_text('splunk_oncall:\n  api_id_env: FIXTURE_ID\n  api_key_env: FIXTURE_READ\n  setup_api_key_env: FIXTURE_WRITE\n  team_slug: team-safe\n')
+ reset();save_input();nested=json.loads(inputfile.read_text());nested['steps']=[{'timeout':5,'entries':[{'executionType':'policy_routing','targetPolicy':{'policySlug':'pol-other'}}]}];inputfile.write_text(json.dumps(nested))
+ good(run(runid='nested-live-shape'),'Nested policy plan')
+ good(run(mode='apply',runid='nested-live-shape',approve=True,fault='nested-read-metadata'),'Nested populated teamSlug readback')
+ check((folder('nested-live-shape')/'applied.json').exists(),'Nested observed shape did not verify')
+ reset();save_input();state_edit(lambda x:x['policies']['pol-current'].update(steps=[{'timeout':0,'entries':[{'executionType':'policy_routing','targetPolicy':{'policySlug':'pol-other','teamSlug':'wrong-team','name':'Other policy','policyName':'Current policy'}}]}]))
+ bad(run(runid='wrong-nested-team'),'Contradictory nested target team');check(not writes(),'Contradictory nested owner permitted a write')
+ reset();save_input(True);good(run(operation='policy-create',runid='nested-owner'),'Owned policy for dependency read');good(run(operation='policy-create',mode='apply',runid='nested-owner',approve=True),'Create owned fixture')
+ state_edit(lambda x:x['policies']['pol-other'].update(steps=[{'timeout':0,'entries':[{'executionType':'policy_routing','targetPolicy':{'policySlug':'pol-current','teamSlug':'team-safe','policyName':'Harmless alias','name':'Different alias'}}]}]))
+ owned={'SOC_POLICY_SLUG':'pol-created','SOC_CREATED_RUN':'nested-owner','SOC_UNUSED_CONFIRMED':'yes'}
+ good(run(operation='policy-retire',runid='nested-unrelated-valid',extra=owned),'Known unrelated nested consumer census')
+ count=len(writes());state_edit(lambda x:x['policies']['pol-other']['steps'][0]['entries'][0]['targetPolicy'].update(teamSlug='wrong-team'))
+ bad(run(operation='policy-retire',runid='nested-unrelated-wrong',extra=owned),'Unrelated nested ownership mismatch must still block retirement');check(len(writes())==count,'Unrelated ownership mismatch permitted deletion')
  print('policy-routing workflows: '+str(passed)+' assertions passed; no provider calls')
 PYTEST

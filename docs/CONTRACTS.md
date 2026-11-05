@@ -34,6 +34,25 @@ the cross-block gate cannot catch a semantically wrong command that parses
 cleanly. One release shipped with every gate green while defects of exactly
 these two classes existed; these steps are what caught them.
 
+### On-Call depth: producer and consumer change map
+
+This map names the contract owners for the expanded On-Call assessment. It is an
+impact map, not a claim that a customer passed the checks or every live shape was
+verified. Existing skill names, config keys, findings envelopes and source-audit
+ownership remain compatible. The only fatigue addition is the separate native
+history lane described in C17; historical fire-only artifacts remain readable.
+
+| Contracts | Owner and consumer obligation |
+| --- | --- |
+| C1, C8, C16, C20 | The [On-Call catalog](../skills/audit-splunk-oncall/references/oncall-checks.md) owns eighteen scored checks and a separate non-scored SOC-008 observation. Reports, score history, audit-all and executive views retain scope, evidence gaps and end-to-end limits; the expanded check set is not score-comparable with the older seven-check set. |
+| C2, C3, C9, C12, C13, C15 | The selected target, read-only credential, bounded collection and fresh environment rules apply to both [effective quality](../skills/audit-splunk-oncall/references/effective-quality.md) and [history quality](../skills/audit-splunk-oncall/references/history-quality.md). Optional denied reads block their lane; they do not require new config keys or permit setup-key fallback. |
+| C4, C5, C7, C14, C21, C22 | Existing source-verified `correlation_affected` identity remains the only service join. Policy, team and opaque history references support local investigation; they are not application monitors, repository matches, duplicate-page proof or current root cause. Source audits continue to own source rule evaluation and destination selection. |
+| C6 | The check catalog owns application of declared response, noise, staffing, future-horizon and timezone requirements. Missing objectives remain blocked; illustrative provider/SRE guidance never supplies an undeclared customer threshold. |
+| C10, C11 | `audit-all`, scheduled runs and standalone invocation preserve the selected collection scope and partial history. Start, README, connection guidance and customer FAQ describe the same shipped capabilities and limitations. |
+| C17 | Native history adds its own status, window, incident units, completeness and response denominators. The fatigue renderer preserves old fire fields and never synthesizes an AF-003 ratio or outcome label from incident history. |
+| C18, C19 | Incident duration, assignments and policy counts establish neither billing savings nor a supported migration pair. These consumers retain their existing provider boundaries. |
+| C23 | Failed, denied, unsupported and incomplete reads are evidence gaps. Only an evidenced scope or design decision can exclude a check; neither a fixture count nor an empty list completes the customer outcome. |
+
 ---
 
 ## C1 — Per-audit output: findings.json / report.md / report.html / inventory.json
@@ -596,7 +615,7 @@ forward routing from upstream policy references.
   `tests/test-report-viz.sh` and `tests/test-check-report.sh`; prompt-level
   roll-up and Slack consumers are covered by `tests/test-v2-consumer-safety.sh`.
 
-## C17 — Alert-fatigue analysis (non-scored: config tier + measured fire-history tier)
+## C17 — Alert-fatigue analysis (non-scored: configuration, fire history and native incident history)
 
 - **Producer:** `skills/alert-fatigue/lib/alert-fatigue.sh` (`alert_fatigue_run`)
   writes `${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/alert-fatigue.json`
@@ -613,9 +632,44 @@ forward routing from upstream policy references.
   **Measured fire-history tier** (from an optional
   `fatigue-signals.json`, else `not-in-scope`): `AF-004` (reachability — objects that
   reach nobody), `AF-005` (measured volume/flapping/top-offenders by fatigue impact),
-  `AF-006` (chronic/stuck). **Incident-feed tier:** `AF-003` (alert-to-incident ratio +
-  MTTA/MTTR/%-actionable), computed from `fatigue-signals.json` `.incident_feed` (live)
-  OR an operator `fatigue.json`, else `not-in-scope`.
+  `AF-006` (chronic/stuck). **Incident-feed tier:** `AF-003` (alert-to-incident ratio),
+  computed from compatible populations in `fatigue-signals.json` `.incident_feed`
+  or an operator `fatigue.json`, else `not-in-scope`. A supplied ratio does not
+  establish response latency, actionability or recall. Those require verified
+  transitions and sample denominators, reviewed outcome labels or independent
+  missed-event evidence respectively.
+- **Native On-Call history producer:** the bounded read-only recipe and semantic
+  contract live in
+  [history-quality.md](../skills/audit-splunk-oncall/references/history-quality.md).
+  It writes `oncall-history.json` beside the exact target/date `findings.json`.
+  The roll-up validates target/date, schema, window, provenance and completeness
+  locally before summarizing; it never fetches provider data. An invalid present
+  artifact becomes an explicit blocked native summary. Optional absence remains
+  not in scope and does not erase valid fire history.
+  **Additive AF-005 fields:** `incident_history_status`
+  (`measured|blocked|not-in-scope`) and `incident_history[]`. Existing AF-005
+  `status`, `total_fires`, `objects_with_history` and fire rankings retain their
+  original meaning. Each valid native summary carries `target`, `generated_at`,
+  `window` (start/end and query phases), `status`, `complete_window`,
+  `collected_incidents`, `observed_incidents`, `population_incidents`,
+  `expected_incidents` and `count_unit: incidents-started-in-window`. Observed
+  incident measurements include only verified starts strictly inside the window.
+  Collected counts and missing/outside-start diagnostics expose excluded rows;
+  selected duty and context observations retain their independent scope. Accepted
+  timestamp precision is preserved through query, resume binding and measurement.
+  An incomplete or rejected cohort has no population total. `provider_alert_count` uses the separate unit
+  `alerts-received-over-incident-lifetime`; it is not a source-window event count,
+  notification attempt or human receipt. `response` carries observed counts,
+  `ack_samples`, `resolution_samples`, missing/unverified transitions and means
+  named `mean_*_seconds_observed_subset`. Zero samples cannot produce a measured
+  mean. Recurrence and assignment projections are review candidates, not proof
+  of false positives, off-hours interruptions or unfairness.
+  The renderers show this lane even when fire-history `status` is `not-in-scope`;
+  both formats preserve window, units, completeness, sample counts and explicit
+  limitations. Markdown and HTML also surface supplied recurrence, incident
+  assignments, duty windows and selected original-context observations with
+  their units, scope and unknowns. Neither adds native incident counts to fire totals or generates
+  AF-003 populations from the provider's lifetime alert count.
 - **Second producer — the fire-history collection lane (in the SKILL, not the lib):**
   the `alert-fatigue` skill makes **read-only** per-provider fire-history + incident-feed
   reads and writes `${SCOUTFLO_AUDIT_DIR}/fatigue-signals.json`
@@ -668,16 +722,23 @@ forward routing from upstream policy references.
   **Never mutates a finding or its severity and never re-scores** — every
   `source_findings[].finding_id` exists in this run and its noise is scored once in its
   home audit. **Never fabricates a measured number:** a tier with no data is
-  `not-in-scope`/`verify-pending`, never guessed (AF-003 without a feed/block; AF-004/005/006
-  without `fatigue-signals.json`; a provider marked `verify-pending` in `provider_coverage[]`).
-  Off-hours is always derived from a timestamp, never a native field. **AF-004 reports its
+  `not-in-scope`/`verify-pending`, never guessed (AF-003 without comparable populations;
+  AF-004/005/006 fire metrics without `fatigue-signals.json`; a provider marked
+  `verify-pending` in `provider_coverage[]`). Native AF-005 history status is
+  independent. Off-hours requires event time, declared timezone/business hours
+  and the relevant event unit, or a verified native measure whose definition
+  matches that policy. Assignment counts alone do not establish interruptions.
+  **AF-004 reports its
   coverage denominator** (`objects_seen` vs `measured_objects`): when routing was resolved for
   only a subset, the report says so, so "N cannot reach a human" never implies the whole estate
   from a partial read. A `spec-only` provider is surfaced in the report's fire-history coverage
   line so the measured tier is never presented as live-battle-tested when it is not. `AF` is a
   registered **non-scored** prefix (findings-schema), like `COST`.
 - **SSOT:** `skills/alert-fatigue/SKILL.md`; the fire-history read spec +
-  `fatigue-signals.json` contract in `skills/alert-fatigue/references/fire-history-reads.md`.
+  `fatigue-signals.json` contract in `skills/alert-fatigue/references/fire-history-reads.md`;
+  native history fields and interpretations in
+  `skills/audit-splunk-oncall/references/history-quality.md` and its literal
+  `scripts/history.sh` summary recipe.
 - **Guards:** `skills/alert-fatigue/tests/test-collection-auth.sh` (credential swaps,
   exclusive binding, missing legacy bindings, token defaults and DigitalOcean lane);
   `skills/alert-fatigue/tests/test-collection-hash.sh` (failed or malformed hashes
@@ -700,6 +761,11 @@ forward routing from upstream policy references.
   fix, orders worst-first, renders the measured tier + coverage line + spec-only caveat, stamps a
   triage run so a subset is never read as a full assessment, and the exec-summary ranks
   severity-first with `$` as an in-band tiebreaker — never promoting a lesser finding);
+  `skills/audit-splunk-oncall/tests/test-history-quality.sh` (bounded native
+  collection and safe summaries), `skills/alert-fatigue/tests/test-oncall-history.sh`
+  (current target/date consumption and separation from fire history),
+  `tests/test-oncall-history-rendering.sh` (complete, partial, zero, malformed,
+  escaped, legacy fire-only and mixed native/fire reports);
   `ci/prefix-registry-check.sh` (`AF` registered);
   `ci/catalog-consistency-check.sh` (alert-fatigue is a documented internal
   helper). Selftest: `layer_depth` alert-fatigue lock.

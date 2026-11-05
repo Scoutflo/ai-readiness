@@ -4,9 +4,10 @@ set -eu
 ROOT=$(CDPATH= cd -- "$(dirname "$0")/../../.." && pwd)
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT HUP INT TERM
-mkdir -p "$WORK/plugin/skills/audit-splunk-oncall/scripts" "$WORK/bin" "$WORK/home"
+mkdir -p "$WORK/plugin/skills/audit-splunk-oncall/references" "$WORK/plugin/skills/audit-splunk-oncall/scripts" "$WORK/bin" "$WORK/home"
 awk '/oncall-verify-path:start/ {active=1;next} /oncall-verify-path:end/ {active=0} active && /^```bash/ {fence=1;next} active && /^```/ {fence=0;next} active && fence {print}' "$ROOT/skills/audit-splunk-oncall/references/verify-path.md" > "$WORK/verify.sh"
 [ -s "$WORK/verify.sh" ]; sh -n "$WORK/verify.sh"
+cp "$ROOT/skills/audit-splunk-oncall/references/effective-quality.md" "$WORK/plugin/skills/audit-splunk-oncall/references/effective-quality.md"
 cat > "$WORK/plugin/skills/audit-splunk-oncall/scripts/collect.sh" <<'STUB'
 #!/bin/sh
 set -eu
@@ -76,7 +77,7 @@ reset_case; mutate '.scope="team-one"'; run 2
 reset_case; check=SOC-002; team=team-other; run 1
 reset_case; check=SOC-002; mutate '.teams=[]'; run 1
 reset_case; check=SOC-003; mutate '.policy_details[0].steps[0].entries=[]'; run 1
-reset_case; check=SOC-003; mutate '.policy_details[0].steps[0].timeout=5'; run 2
+reset_case; check=SOC-003; mutate '.policy_details[0].steps[0].timeout=5'; run 0
 reset_case; check=SOC-003; mutate '.policy_details[0].steps[0].entries[0].type="unknown"'; run 2
 reset_case; check=SOC-003; mutate '.team_details[0].members[0].verified=false'; run 1
 reset_case; check=SOC-003; mutate '.team_details[0].members += [.team_details[0].members[0]]'; run 2

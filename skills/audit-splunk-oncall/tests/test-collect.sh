@@ -53,6 +53,7 @@ fi
 if [ "$CASE_MODE" = identity-drift ] && [ "$route" = /api-public/v1/team/team-a ] && [ "$(grep -c '/api-public/v1/team/team-a$' "$CASE_DIR/calls")" -gt 1 ]; then
   printf '%s\n200' '{"slug":"wrong-team"}'; exit 0
 fi
+if [ "$CASE_MODE" = quality-denied ] && [ "$route" = /api-public/v1/alertRules ]; then printf '%s\n403' '{"error":"private-error-canary"}'; exit 0; fi
 if [ "$CASE_MODE" = html ]; then printf '%s\n200' '<html>login</html>'; exit 0; fi
 case "$CASE_MODE" in
   http-*) printf '%s\n%s' '{"error":"fixture refusal"}' "${CASE_MODE#http-}"; exit 0 ;;
@@ -75,6 +76,16 @@ case "$route" in
   /api-public/v1/teams/team-b/rotations) file=groups-b ;;
   /api-public/v2/team/team-a/rotations) file=rotations-a ;;
   /api-public/v2/team/team-b/rotations) file=rotations-b ;;
+  /api-public/v1/maintenancemode) file=maintenance ;;
+  /api-public/v1/alertRules) file=rules ;;
+  /api-public/v1/overrides) file=overrides ;;
+  /api-public/v1/profile/person-a/policies|/api-public/v1/profile/person-b/policies) file=primary ;;
+  /api-public/v2/profile/person-a/policies|/api-public/v2/profile/person-b/policies) file=personal ;;
+  /api-public/v1/user/person-a/contact-methods|/api-public/v1/user/person-b/contact-methods) file=contacts ;;
+  /api-public/v1/team/team-a/admins) file=admins-a ;;
+  /api-public/v1/team/team-b/admins) file=admins-b ;;
+  /api-public/v2/team/team-a/oncall/schedule\?daysForward=14\&daysSkip=0\&step=0) file=schedule-a ;;
+  /api-public/v2/team/team-b/oncall/schedule\?daysForward=14\&daysSkip=0\&step=0) file=schedule-b ;;
   *) exit 91 ;;
 esac
 cat "$CASE_DIR/responses/$file.json"
@@ -147,14 +158,34 @@ JSON
   cat > "$WORK/responses/rotations-b.json" <<'JSON'
 {"rotations":[]}
 JSON
-  CFG="$WORK/single.yaml"; TARGET=; CASE_MODE=healthy; TRIAGE=0
+  cat > "$WORK/responses/maintenance.json" <<'JSON'
+{"activeInstances":[{"instanceId":"maintenance-one","startedAt":1,"isGlobal":false,"targets":[{"type":"RoutingKeys","names":["private-route-a-canary"]}]}]}
+JSON
+  cat > "$WORK/responses/rules.json" <<'JSON'
+[{"id":1,"rank":0,"stopFlag":true,"alertField":"state_message","alertValueMatch":"private-match-canary","matchType":"REGEX","routeKey":"private-route-a-canary","annotations":[{"fieldName":"entity_id","fieldValue":"private-annotation-canary"}]}]
+JSON
+  cat > "$WORK/responses/primary.json" <<'JSON'
+{"steps":[{"index":0,"timeout":5,"rules":[{"index":0,"type":"email","contact":{"id":1,"type":"Email"}}]}]}
+JSON
+  cat > "$WORK/responses/personal.json" <<'JSON'
+{"policies":[{"slug":"primary-one","rank":0,"timeMask":{"sunday":true,"monday":true,"tuesday":true,"wednesday":true,"thursday":true,"friday":true,"saturday":true,"timeZone":"UTC","startTime":"00:00:00.000","endTime":"00:00:00.000"},"terminalAction":"repeat_last_step","steps":[{"index":0,"timeout":5,"rules":[{"index":0,"type":"email","contact":{"id":1,"type":"Email"}}]}]}]}
+JSON
+  cat > "$WORK/responses/contacts.json" <<'JSON'
+{"emails":{"contactMethods":[{"id":1,"email":"private-contact-canary","verified":"verified","extId":"private-email-canary"}],"_selfUrl":"private-contact-url-canary"},"phones":{"contactMethods":[]},"devices":{"contactMethods":[]}}
+JSON
+  printf '%s\n' '{"teamAdmins":[{"username":"person-a"}]}' > "$WORK/responses/admins-a.json"
+  printf '%s\n' '{"teamAdmins":[{"username":"person-b"}]}' > "$WORK/responses/admins-b.json"
+  printf '%s\n' '{"team":{"slug":"team-a"},"schedules":[{"policy":{"slug":"policy-a"},"schedule":[{"onCallType":"rotation","onCallUser":{"username":"person-a"},"rolls":[{"start":"2030-01-01T00:00:00Z","end":"2030-01-02T00:00:00Z","onCallUser":{"username":"person-a"},"isRoll":true}]}],"overrides":[]}]}' > "$WORK/responses/schedule-a.json"
+  printf '%s\n' '{"team":{"slug":"team-b"},"schedules":[{"policy":{"slug":"policy-b"},"schedule":[{"onCallType":"user","onCallUser":{"username":"person-b"},"rolls":[]}],"overrides":[]}]}' > "$WORK/responses/schedule-b.json"
+  printf '%s\n' '{"overrides":[]}' > "$WORK/responses/overrides.json"
+  CFG="$WORK/single.yaml"; TARGET=; CASE_MODE=healthy; TRIAGE=0; QUALITY_BUDGET=500; USER_CAP=100
   EXPECT_ID=fixture-first-id; EXPECT_KEY=fixture-first-key
 }
 run() {
   : > "$WORK/calls"
   (cd "$WORK" && env -i HOME="$WORK/home" PATH="$WORK/bin:/usr/bin:/bin" \
     SCOUTFLO_CONFIG="$CFG" SCOUTFLO_ENV_FILE="$WORK/home/.scoutflo/env" \
-    SCOUTFLO_TARGET="$TARGET" SCOUTFLO_TRIAGE="$TRIAGE" CASE_DIR="$WORK" CASE_MODE="$CASE_MODE" \
+    SCOUTFLO_TARGET="$TARGET" SCOUTFLO_TRIAGE="$TRIAGE" SCOUTFLO_ONCALL_QUALITY_MAX_CALLS="$QUALITY_BUDGET" SCOUTFLO_ONCALL_QUALITY_MAX_USERS="$USER_CAP" CASE_DIR="$WORK" CASE_MODE="$CASE_MODE" \
     EXPECT_ID="$EXPECT_ID" EXPECT_KEY="$EXPECT_KEY" \
     /bin/sh "$COLLECT" "$@") > "$WORK/out" 2> "$WORK/err"
 }
@@ -177,10 +208,27 @@ fixtures
 if run && assert_json '.target=="splunk_oncall" and .complete_reads==true and .atomic_snapshot==false and (.teams|length)==2 and .current[0].users==["person-a"] and .team_details[0].rotations[0].shifts[0].members==["person-a"]'; then
   ok 'populated graph and endpoint-specific current casing'
 else bad 'populated graph'; fi
-if ! grep -E 'private-.*-canary|fixture-(first|second)-(id|key)|unused-setup-canary|"(routingKey|apiKey|raw|phone|email|_selfUrl)"' "$WORK/out" "$WORK/err" >/dev/null; then
+if ! grep -E 'private-.*-canary|fixture-(first|second)-(id|key)|unused-setup-canary|"(routingKey|apiKey|raw|phone|email|_selfUrl)"[[:space:]]*:' "$WORK/out" "$WORK/err" >/dev/null; then
   ok 'project before output; no raw route, API or contact fields'
 else bad 'sensitive projection'; fi
+if assert_json '.quality.user_collection_complete==true and (.quality.selected_users|length)==2 and .quality.selected_users[0].primary.data[0].rules[0].contact_type=="email" and .quality.selected_users[0].contacts.data[0].verified==true and .quality.maintenance.data[0].route_aliases==["route-1"] and .quality.transformations.data[0].route_aliases==["route-1"] and .quality.transformations.data[0].identity_mutation==true and .quality.schedules[0].status=="collected"'; then
+  ok 'quality projection preserves effective joins, exact contact types and bounded schedule scope'
+else bad 'quality projection'; fi
+if [ "$(grep -c '/v1/profile/person-a/policies$' "$WORK/calls")" -eq 1 ]; then ok 'referenced profile calls deduplicate people'; else bad 'profile dedup'; fi
 if assert_json '.routes[0].multi_responder==null and .routes[1].multi_responder==true'; then ok 'missing multi-responder remains unknown'; else bad 'missing multi-responder'; fi
+
+fixtures; CASE_MODE=quality-denied
+if run && assert_json '.complete_reads==true and .quality.transformations.status=="read-blocked" and .quality.transformations.data==null'; then ok 'optional API denial preserves core and remains unknown'; else bad 'optional denial'; fi
+fixtures; QUALITY_BUDGET=1
+if run && assert_json '.quality.calls==1 and .quality.transformations.status=="budget-exhausted" and .quality.overrides.status=="budget-exhausted"'; then ok 'quality request cap remains explicit'; else bad 'quality request cap'; fi
+fixtures; USER_CAP=1
+if run && assert_json '.quality.selected_user_count==2 and .quality.user_collection_complete==false and (.quality.selected_users|length)==1'; then ok 'bounded user tail is incomplete'; else bad 'bounded user tail'; fi
+fixtures
+jq '.policies[0].timeMask.timeZone="private-timezone-canary:secret" | .policies[0].timeMask.monday={key:"private-mask-canary"} | .policies[0].timeMask.startTime="private-time-canary"' "$WORK/responses/personal.json" > "$WORK/change"; mv "$WORK/change" "$WORK/responses/personal.json"
+if run && assert_json '.quality.selected_users[0].personal.data[0].time_mask | .timeZone==null and .monday==null and .startTime==null' && ! grep -q 'private-.*-canary' "$WORK/out"; then ok 'arbitrary time-mask values never survive projection'; else bad 'time mask projection'; fi
+fixtures
+printf '%s\n' '{"activeInstances":[],"activeInstances":[{"unknown":"private-duplicate-canary"}]}' > "$WORK/responses/maintenance.json"
+if run && assert_json '.quality.maintenance.status=="read-blocked"' && ! grep -q 'private-.*-canary' "$WORK/out"; then ok 'duplicate optional JSON keys cannot hide conflicting state'; else bad 'duplicate quality JSON'; fi
 
 fixtures
 printf '%s\n' '{"policies":[]}' > "$WORK/responses/policies.json"
@@ -226,6 +274,12 @@ mv "$WORK/change" "$WORK/responses/policy-a.json"
 if run && assert_json '.policy_details[0].steps[0].entries[0] | .type=="policy_routing" and .user==null and .rotation==null'; then
   ok 'unproven entry variant remains distinguishable'
 else bad 'unproven entry variant'; fi
+
+fixtures
+jq '.steps[0].entries=[{executionType:"policy_routing",targetPolicy:{policySlug:"policy-b",teamSlug:"team-b",name:"Wrong display alias",policyName:"Another display alias"}}]' "$WORK/responses/policy-a.json" > "$WORK/change"; mv "$WORK/change" "$WORK/responses/policy-a.json"
+if run && assert_json '.policy_details[0].steps[0].entries[0] | .policy=="policy-b" and .policy_team=="team-b"'; then ok 'nested returned team is retained and agrees with census'; else bad 'nested team identity'; fi
+jq '.steps[0].entries[0].targetPolicy.teamSlug="team-a"' "$WORK/responses/policy-a.json" > "$WORK/change"; mv "$WORK/change" "$WORK/responses/policy-a.json"
+must_reject 'nested returned team contradicts the complete policy census'
 
 fixtures; CFG="$WORK/list.yaml"
 must_reject_before_call 'list requires explicit target' --plan
@@ -322,7 +376,7 @@ must_reject_before_call 'single-item list requires explicit label'
 
 # Fast-pass regression: count transport calls, not just a metadata label.
 fixtures; TRIAGE=1
-if run && assert_json '.scope=="triage" and .assessed_check_ids==["SOC-001","SOC-002"] and (.deferred_check_ids|length)==5 and .current==[] and .policy_details==[] and .team_details==[]' && [ "$(wc -l < "$WORK/calls" | tr -d ' ')" -eq 5 ] && ! grep -Eq '/(members|rotations|current)$|/policies/' "$WORK/calls"; then ok 'triage bulk subset makes five reads and no detail fanout'; else bad 'triage ran deep or misstated scope'; fi
+if run && assert_json '.scope=="triage" and .assessed_check_ids==["SOC-001","SOC-002"] and (.deferred_check_ids|length)==16 and .current==[] and .policy_details==[] and .team_details==[]' && [ "$(wc -l < "$WORK/calls" | tr -d ' ')" -eq 5 ] && ! grep -Eq '/(members|rotations|current)$|/policies/' "$WORK/calls"; then ok 'triage bulk subset makes five reads and no detail fanout'; else bad 'triage ran deep or misstated scope'; fi
 fixtures; TRIAGE=1
 if run --plan && assert_json '.scope=="triage"' && [ "$(wc -l < "$WORK/calls" | tr -d ' ')" -eq 4 ]; then ok 'triage plan exposes subset scope'; else bad 'triage plan'; fi
 fixtures; TRIAGE=1; CASE_MODE=identity-drift; must_reject 'triage final identity changed'

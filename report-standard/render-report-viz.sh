@@ -189,6 +189,120 @@ af_enriched_noise() {  # $1=alert-fatigue.json  $2=audits-dir  $3=run-date -> JS
             remediation: (($d.remediation // "") | s) } ]'
 }
 
+# AF-005 native incident history is additive to its existing fire-history fields.
+# Keep units, incomplete windows and response sample denominators identical in
+# Markdown and HTML. This projection does not convert incidents into fires/pages.
+af_incident_history_rows() {  # $1=alert-fatigue.json -> safe display-row JSON array
+  jq '
+    def text: if type=="string" and length>0 then . else "not recorded" end;
+    def count: if type=="number" and .>=0 and .==floor then . else null end;
+    def shown: if .==null then "not measured" else tostring end;
+    def average($samples):
+      if ($samples|count)!=null and $samples>0 and type=="number" and .>=0
+      then (.*100|round)/100|tostring else "not measured" end;
+    def obj: if type=="object" then . else {} end;
+    def arr: if type=="array" then . else [] end;
+    def ref($prefix): if type=="string" and test("^"+$prefix+"-[a-f0-9]{24}$") then . else "not recorded" end;
+    def incident: if type=="string" and test("^[0-9]{1,20}$") then . else "not recorded" end;
+    def slug: if type=="string" and test("^[A-Za-z0-9][A-Za-z0-9_.-]*$") then . else "not recorded" end;
+    def stamp: if type=="string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.+-]+Z?$") then . else "not recorded" end;
+    def cohort_count($observed):
+      if (.|count)!=null and ($observed|count)!=null and .<=$observed then tostring else "not measured" end;
+    def duration:
+      obj | if (.hours|type)=="number" and (.minutes|type)=="number" and .hours>=0 and .minutes>=0
+      then "\(.hours) h \(.minutes) min" else "not measured" end;
+    def presence($keys):
+      obj as $values | [true,false,null] | map(. as $want |
+        [$keys[] | . as $key | select(if $want==null then ($values[$key]!=true and $values[$key]!=false) else $values[$key]==$want end)]
+        | if length>0 then join(", ") else "none observed" end);
+    def details($h;$unit):
+      ($h.recurrence|obj) as $r | ($h.workload|obj) as $w | ($w.assignment_time|obj) as $d
+      | ($h.observed_incidents|count) as $observed
+      | ($unit and $r.interpretation=="review-candidates-not-proven-noise" and ($r.ranked_entities|type)=="array") as $rec
+      | ($r.ranked_entities|arr|map(select(type=="object"))) as $rank
+      | ($rec and $observed!=null and all($rank[]; (.incidents|count)!=null and .incidents<=$observed)
+          and (($rank|map(.incidents|count)|map(select(.!=null))|add//0)<=$observed)) as $rec_counts
+      | ($unit and $w.interpretation=="assignments-not-pages-or-human-interruptions") as $work
+      | ($unit and $d.interpretation=="assignment-time-not-interruptions"
+          and ($d.users|type)=="array" and $d.started_at==$h.window.started_after and $d.ended_at==$h.window.started_before) as $duty
+      | { recurrence_available:$rec, recurrence_counts_valid:$rec_counts,
+          missing_entity:(if $rec then $r.incidents_missing_entity|cohort_count($observed) else "not measured" end),
+          recurrence:(if $rec then [$rank[] | [(.entity_ref|ref("entity")),(.service_ref|ref("service")),(.host_ref|ref("host")),
+            (if $rec_counts then .incidents|cohort_count($observed) else "not measured" end),
+            (.incident_numbers|arr|map(incident)|if length>0 then join(", ") else "not recorded" end),
+            (if $h.provider_alert_count_unit=="alerts-received-over-incident-lifetime" then .provider_alert_count|count|shown else "not measured" end)]] else [] end),
+          assignments:(if $work then
+            [($w.incident_assignment_counts|arr)[] | select(type=="object") | ["Responder",(.responder_ref|ref("responder")),(.incidents|cohort_count($observed))]]
+            + [($w.team_assignment_counts|arr)[] | select(type=="object") | ["Team",(.team|slug),(.incidents|cohort_count($observed))]] else [] end),
+          duty_available:$duty,duty_team:($d.team|slug),duty_start:($d.started_at|stamp),duty_end:($d.ended_at|stamp),duty_lag:($d.lag_seconds|count|shown),
+          duty:(if $duty then [$d.users[] | select(type=="object") | [(.user_ref|ref("log-user")),(.reported_total|duration),(.reported_adjusted_total|duration),
+            (.intervals|arr|map(select(type=="object")|(.on|stamp)+" to "+(.off|stamp))|if length>0 then join("; ") else "not recorded" end)]] else [] end),
+          context:(if $unit then [($h.context|arr)[] | select(type=="object" and .interpretation=="presence-only" and .original_alert_read==true)
+            | . as $c | ["Basic",(.fields_present|presence(["entity","description","monitoring_tool","display_name"]))],
+                        ["Raw context",(.raw_fields_present|presence(["service","environment","owner","runbook","impact"]))]
+            | [($c.incident_number|incident),(if ["INFO","WARNING","ACKNOWLEDGEMENT","CRITICAL","RECOVERY"]|index($c.message_type) then $c.message_type else "not recorded" end),.[0]] + .[1]
+          ] else [] end) };
+    [ .af_findings[]? | select(.af_id=="AF-005")
+      | (.incident_history // []) | if type=="array" then .[] else empty end
+      | select(type=="object")
+      | .window = (if (.window|type)=="object" then .window else {} end)
+      | .response = (if (.response|type)=="object" then .response else {} end)
+      | .limitations = (if (.limitations|type)=="array" then .limitations else [] end)
+      | . as $h
+      | (.count_unit=="incidents-started-in-window") as $unit
+      | (.status=="measured" and .complete_window==true and $unit
+          and (.population_incidents|count)!=null
+          and (.observed_incidents|count)==.population_incidents) as $complete
+      | { target:(.target|text), state:(if $complete then "measured" else "blocked" end),
+          start:(.window.started_after|text), end:(.window.started_before|text),
+          phases:(.window.query_phases|if type=="array" then map(select(type=="string"))|join(", ") else "not recorded" end),
+          complete:(if $complete then "yes" else "no; full-window totals unavailable" end),
+          observed:(if $unit then .observed_incidents|count|shown else "not measured" end),
+          population:(if $complete then .population_incidents|count|shown else "not measured" end),
+          provider_alerts:(if .provider_alert_count_unit=="alerts-received-over-incident-lifetime"
+            then .provider_alert_count|count|shown else "not measured" end),
+          ack_samples:(.response.ack_samples|count|shown),
+          ack_seconds:(.response.mean_ack_seconds_observed_subset|average($h.response.ack_samples)),
+          resolution_samples:(.response.resolution_samples|count|shown),
+          resolution_seconds:(.response.mean_resolution_seconds_observed_subset|average($h.response.resolution_samples)),
+          missing_transitions:(.response.missing_or_unverified_transitions|count|shown),
+          unacknowledged:(.response.unacknowledged_or_censored|count|shown),
+          details:details($h;$unit),
+          note:([.reason, (.limitations // [])[]] | map(select(type=="string" and length>0)) | join("; "))
+        }
+    ]
+  ' "$1"
+}
+
+# Render the same allowlisted observations in both report formats. No arbitrary
+# payload field is serialized, and these tables never create a health verdict.
+af_incident_history_details() {  # $1=markdown|html; display rows on stdin
+  jq -r --arg format "$1" '
+    def esc: tostring|gsub("[\\r\\n\\t]";" ")|@html|gsub("`";"&#96;")|gsub("\\|";"&#124;");
+    def paragraph($s): if $format=="html" then "<p class=\"sub\">"+($s|@html)+"</p>" else "\n"+($s|esc)+"\n" end;
+    def table($title;$headers;$rows):
+      if $format=="html" then
+        "<h2 style=\"font-size:14px\">"+($title|@html)+"</h2>"
+        + (if ($rows|length)==0 then "<p class=\"sub\">No supported rows supplied; this is not a zero or a healthy result.</p>"
+           else "<table><thead><tr>"+($headers|map("<th>"+(.|@html)+"</th>")|join(""))+"</tr></thead><tbody>"
+             +($rows|map("<tr>"+(map("<td>"+(tostring|@html)+"</td>")|join(""))+"</tr>")|join(""))+"</tbody></table>" end)
+      else "\n**"+($title|esc)+"**\n\n"
+        +(if ($rows|length)==0 then "No supported rows supplied; this is not a zero or a healthy result.\n"
+          else "| "+($headers|map(esc)|join(" | "))+" |\n| "+($headers|map("---")|join(" | "))+" |\n"
+            +($rows|map("| "+(map(esc)|join(" | "))+" |")|join("\n"))+"\n" end) end;
+    .[] | .details as $d
+    | paragraph("Observed details for "+.target+"; incident start window "+.start+" to "+.end+"; "+.observed+" observed incidents. Complete window: "+.complete+".")
+      , table("Recurrence candidates";["Entity reference","Service reference","Host reference","Incidents in observed cohort","Incident references","Provider alerts (incident lifetime)"];$d.recurrence)
+      , paragraph("Ranked rows are the supplied exact entity/service/host groups, not proven noise or duplicate pages. Incidents without entity reference: "+$d.missing_entity+". "+(if $d.recurrence_available and ($d.recurrence_counts_valid|not) then "Inconsistent recurrence counts are unavailable. " else "" end)+"Review the named incidents against your paging budget and source evidence before tuning.")
+      , table("Observed incident assignments";["Assignment kind","Reference","Assigned incidents in observed cohort"];$d.assignments)
+      , paragraph("Assignments are not notification attempts, human receipts or interruptions. One incident can have multiple assignments; do not sum rows as unique incidents. Off-hours and fairness are not assessed without the declared duty model and matching evidence.")
+      , table("Reported duty observations";["Duty-log user reference","Reported total","Reported adjusted total","Observed on/off intervals"];$d.duty)
+      , paragraph(if $d.duty_available then "Duty-log team "+$d.duty_team+", window "+$d.duty_start+" to "+$d.duty_end+", reporting lag "+$d.duty_lag+" seconds. Durations are provider-reported first-step assignment time, not interruption time. Do not sum overlapping intervals or join log-user and responder references as the same person without verified identity." else "A supported duty log matching this window was not supplied; duty totals remain unavailable." end)
+      , table("Selected original-alert context";["Selected incident","Message type","Field family","Present","Absent","Unknown"];$d.context)
+      , paragraph("Presence is not correctness, usefulness or runbook accessibility. These rows cover only the selected original alert, which may be outside the incident cohort; they do not establish account-wide context coverage. Confirm the required service, environment, owner, impact and diagnostic links before proposing source enrichment.")
+  '
+}
+
 # =============================================================================
 case "$MODE" in
   at-a-glance)
@@ -839,14 +953,14 @@ $(jq -r '.totals | "\(.alerting_noise_findings // 0) \(.cross_source_storms // 0
 EOF
     RSTATUS="$(jq -r '.af_findings[]? | select(.af_id=="AF-003") | .status // "not-in-scope"' "$AFJ")"
     FHO="$(jq -r '.totals.fire_history_objects // 0' "$AFJ")"
+    IH_ROWS="$(af_incident_history_rows "$AFJ")"
+    IH_COUNT="$(printf '%s' "$IH_ROWS" | jq 'length')"
     if [ "$(jq -r ' .input_validation.status // ""' "$AFJ")" = "blocked" ]; then
       jq -r '"**Measured input blocked:** " + .input_validation.reason' "$AFJ"
       echo
     fi
-    # Only bail when BOTH tiers are empty. A run with zero config-noise findings but
-    # measured fire-history (the standalone fire-history case) must still render the
-    # measured tier — the whole point of AF-004/005/006 is noise the config can't see.
-    if [ "${TN:-0}" -eq 0 ] && [ "${FHO:-0}" -eq 0 ]; then
+    # A native incident lane must render even with no config or fire-history rows.
+    if [ "${TN:-0}" -eq 0 ] && [ "${FHO:-0}" -eq 0 ] && [ "$IH_COUNT" -eq 0 ]; then
       echo "No alerting-noise findings and no measured fire-history were supplied for ${RD}. This is not an all-clear: inspect each audit coverage ledger; notification volume, delivery and incident ratios remain unmeasured."
       exit 0
     fi
@@ -857,7 +971,7 @@ EOF
     fi
     echo "**At a glance — ${TN} alerting-noise finding(s) across ${TT} tool(s) · ${TS} potential cross-source overlap(s) · ${RATIO_LINE}.**"
     echo
-    echo "Read across three honest tiers: **config** (rule hygiene — a real yes/no from the rules), **fire-history** (measured volume/flapping/reachability/chronic from the alert stream), and **incident-feed** (true precision & alert-to-incident ratio — from your incident data, never fabricated). AF-001/002/007 are the config picture; **AF-004/005/006 are the measured fire-history tier** (shown when the collection lane ran, else not-in-scope); the ratio is the incident-feed tier."
+    echo "Read each evidence lane in its own units: **config** findings, **fire-history** observations, and **native incident history** with its stated start window and response sample counts. AF-005 can carry incident history even when fire-history is not collected. An alert-to-incident ratio needs a separate comparable alert/incident feed; incident history alone does not establish actionability or human receipt."
     echo
     NOISE="$(af_enriched_noise "$AFJ" "$D" "$RD")"
     read -r SC SH SM SL SI <<EOF
@@ -886,7 +1000,7 @@ EOF
            elif (.remediation != "") then "  - Fix: `" + .remediation + "`\n" else "" end)'
     echo
     else
-      echo "_Config tier: 0 alerting-noise findings from the audits this run — the measured fire-history tier below is the story (or the config alerting is clean on the checks that ran)._"
+      echo "_Config tier: 0 alerting-noise findings were supplied. Check assessment coverage and the available measured lanes below; this is not proof of a quiet or healthy estate._"
       echo
     fi
     echo "### Where the noise concentrates (by tool)"
@@ -967,7 +1081,35 @@ EOF
       PENDING="$(jq -r '[.fire_history_coverage[]? | select(.status!="collected") | .provider] | join(", ")' "$AFJ")"
       [ -n "$PENDING" ] && { echo "_Fire-history not collected for: ${PENDING} (marked verify-pending — no measured number is guessed for them)._"; echo; }
     else
-      echo "_Measured fire-history tier not collected this run (no \`fatigue-signals.json\`). AF-004/005/006 are not-in-scope — run the fire-history collection lane (references/fire-history-reads.md) for measured reachability, volume, and chronic-stuck. The config tier above still reports fully._"
+      echo "_Measured fire-history tier not collected this run. Inspect its coverage record for missing or blocked inputs. Native incident history, if supplied, is shown separately and never converted into fire counts._"
+      echo
+    fi
+    if [ "$IH_COUNT" -gt 0 ]; then
+      echo "### Native incident history"
+      echo
+      echo "Incidents are counted by start time in the stated window. Provider alert counts span incident lifetimes and are not windowed fires, notification attempts or human receipts. Incomplete windows show observed rows only; no full-window total is inferred."
+      echo
+      echo "| Target | State | Started after | Started before | Query phases | Complete window | Observed incidents | Full-window incidents | Provider alerts (incident lifetime) |"
+      echo "| --- | --- | --- | --- | --- | --- | ---: | ---: | ---: |"
+      printf '%s' "$IH_ROWS" | jq -r '
+        def esc: tostring|gsub("[\\r\\n\\t]";" ")|@html|gsub("`";"&#96;")|gsub("\\|";"&#124;");
+        .[] | [.target,.state,.start,.end,.phases,.complete,.observed,.population,.provider_alerts]
+        | "| " + (map(esc)|join(" | ")) + " |"'
+      echo
+      echo "Response means cover only observed, verified transition samples. Missing transitions and open/unacknowledged episodes remain visible; resolution does not prove source recovery."
+      echo
+      echo "| Target | Ack samples | Mean ack seconds (observed subset) | Resolution samples | Mean resolution seconds (observed subset) | Missing/unverified transitions | Unacknowledged or censored |"
+      echo "| --- | ---: | ---: | ---: | ---: | ---: | ---: |"
+      printf '%s' "$IH_ROWS" | jq -r '
+        def esc: tostring|gsub("[\\r\\n\\t]";" ")|@html|gsub("`";"&#96;")|gsub("\\|";"&#124;");
+        .[] | [.target,.ack_samples,.ack_seconds,.resolution_samples,.resolution_seconds,.missing_transitions,.unacknowledged]
+        | "| " + (map(esc)|join(" | ")) + " |"'
+      printf '%s' "$IH_ROWS" | jq -r '
+        def esc: gsub("[\\r\\n\\t]";" ")|@html|gsub("`";"&#96;")|gsub("\\|";"&#124;");
+        .[] | select(.note!="") | "\n- " + (.target|esc) + ": " + (.note|esc)'
+      echo
+      printf '%s' "$IH_ROWS" | af_incident_history_details markdown
+      echo "Recurring entities and short/no-ack episodes are review candidates, not proven false positives. Assignments are not interruptions. No noise-reduction percentage, duplicate-page count or savings is inferred."
       echo
     fi
     # --- Fatigue anti-pattern histogram (AF-007) ---
@@ -1005,19 +1147,18 @@ EOF
         | "**\(.alerts_per_incident):1** — \(.alerts_fired) alerts fired to \(.incidents) real incident(s) over \(.window). Compare this with the declared paging budget and service objectives for this window. " + (.note // "")' "$AFJ"
     else
       jq -r '.af_findings[]? | select(.af_id=="AF-003")
-        | "**Needs your incident feed.** " + (.reason // "No incident/ack stream supplied, so the true alert-to-incident ratio and %-actionable are not computed — and never fabricated. Provide a fatigue.json signal block ({window, alerts_fired, incidents}) to compute it.")' "$AFJ"
+        | "**Needs comparable source and incident populations.** " + (.reason // "No compatible source-event and incident populations were supplied. A validated fatigue.json signal block can supply the ratio inputs; it cannot establish actionability or human delivery.")' "$AFJ"
       echo
-      echo "**Not measured this run (incident-feed tier — deliberately not fabricated):** true alert-to-incident ratio, %-actionable (precision), MTTA/MTTR, escalation & ack rates, and the off-hours interruption split (business / off / sleep hours) all need the paging tool's incident/ack stream. Connect it — or supply a \`fatigue.json\` signal block — to unlock them. This honesty is the point: we report what the config + fire-history reads prove, and say so where a number would be a guess (unlike a headline \"N% noise reduction\" no one can reconcile)."
+      echo "**Not measured this run:** an alert-to-incident ratio without comparable populations, actionability without labeled outcomes, and interruptions or delivery without notification/receipt evidence. Native incident response samples, when present above, do not supply those missing measurements."
     fi
     echo
-    echo "### What \"good\" looks like (cited — score against these, never invent one)"
+    echo "### Operating guidance (apply your declared objectives)"
     echo
     echo "- **Every page actionable; page on symptoms, not causes.** (Google SRE, *Monitoring Distributed Systems*)"
     echo "- **<= 2 incidents per 12-hour shift**, on-call <= 25% of time, is a published operating example. (Google SRE, *Being On-Call*)"
     echo "Research and vendor benchmarks provide context, not universal pass/fail thresholds. Compare the declared service objectives, shift length, paging budget and observation window before setting an action threshold."
     echo "- **Alert on SLO burn-rate, not static thresholds** — multi-window 14.4 (1h/5m) + 6 (6h/30m); short window ~ 1/12 the long, long <= 48h. (SRE Workbook, *Alerting on SLOs*)"
-    echo "- **Target 1:1 alert-to-incident**; group (~30-min default) and dedup (~24h default) so one incident is one page. (incident.io / FireHydrant / Opsgenie)"
-    echo "- **AIOps compression sweet spot ~ 70-85%** — higher over-groups and hides real signal. (BigPanda / Splunk)"
+    echo "- Group repeated updates without merging distinct problems. Preserve an urgent-event positive control when changing delay, grouping or suppression; no universal grouping window or compression percentage is assumed."
     echo "- Full principles, per-tier checklist, and sources: \`skills/alert-fatigue/references/methodology.md\`."
     echo
     echo "_Non-scored roll-up — cites each source finding-ID, re-scores nothing; noise is scored once in its home audit. Config + fire-history numbers are measured from read-only reads; the alert-to-incident ratio is reported only from your incident data._"
@@ -1057,6 +1198,8 @@ EOF
     elif [ "$CHRON_STATUS" = "blocked" ]; then CHRON="blocked"; fi
     INPUT_NOTICE="$(jq -r 'if .input_validation.status=="blocked" then "<p><strong>Measured input blocked:</strong> " + (.input_validation.reason|@html) + "</p>" else "" end' "$AFJ")"
     FHOBJ="$(jq -r '.totals.fire_history_objects // 0' "$AFJ")"
+    IH_ROWS="$(af_incident_history_rows "$AFJ")"
+    IH_COUNT="$(printf '%s' "$IH_ROWS" | jq 'length')"
     {
     cat <<HTMLHEAD
 <!doctype html><html lang="en"><head><meta charset="utf-8">
@@ -1097,7 +1240,7 @@ ${INPUT_NOTICE}
 <span class="chip"><span class="dot" style="background:#3182ce"></span>${SL} low</span>
 <span class="chip"><span class="dot" style="background:#a0aec0"></span>${SI} info</span>
 </div>
-<div class="tiers"><strong>Three honest tiers:</strong> <em>config</em> (rule hygiene, a real yes/no) · <em>fire-history</em> (measured volume/flapping/reachability/chronic from the alert stream — the Measured fire-history card below, shown when the collection lane ran) · <em>incident-feed</em> (true precision &amp; alert-to-incident ratio — only from your incident data, never fabricated). A tier with no data is not-in-scope, never guessed.</div>
+<div class="tiers"><strong>Evidence lanes keep their own units:</strong> config findings, fire-history observations, and native incident history with its start window and response sample counts. AF-005 can carry incident history without measured fires. A ratio requires comparable alert and incident populations; incident history alone does not prove actionability or human receipt.</div>
 </div>
 <div class="card"><h1 style="font-size:16px">Top offenders — worst first (problem &rarr; fix)</h1>
 <table id="find"><thead><tr><th onclick="sortT(this,0)">Severity</th><th onclick="sortT(this,1)">Problem</th><th onclick="sortT(this,2)">Where</th><th onclick="sortT(this,3)">How to fix</th><th>Ref</th></tr></thead><tbody>
@@ -1149,16 +1292,31 @@ HTMLSTORM
       fi
       echo '</div>'
     fi
+    if [ "$IH_COUNT" -gt 0 ]; then
+      echo '<div class="card"><h1 style="font-size:16px">Native incident history</h1>'
+      echo '<p class="sub">Incidents are counted by start time in the stated window. Provider alert counts cover incident lifetimes, not windowed fires, notification attempts or human receipts. Incomplete windows show observed rows only; full-window totals stay unavailable.</p>'
+      echo '<table><thead><tr><th>Target</th><th>State</th><th>Started after</th><th>Started before</th><th>Query phases</th><th>Complete window</th><th>Observed incidents</th><th>Full-window incidents</th><th>Provider alerts (incident lifetime)</th></tr></thead><tbody>'
+      printf '%s' "$IH_ROWS" | jq -r '.[] | [.target,.state,.start,.end,.phases,.complete,.observed,.population,.provider_alerts]
+        | "<tr>" + (map("<td>" + (tostring|@html) + "</td>")|join("")) + "</tr>"'
+      echo '</tbody></table><p class="sub">Response means cover only observed, verified transition samples. Missing transitions and open/unacknowledged episodes remain visible. Resolution is not proof of source recovery.</p>'
+      echo '<table><thead><tr><th>Target</th><th>Ack samples</th><th>Mean ack seconds (observed subset)</th><th>Resolution samples</th><th>Mean resolution seconds (observed subset)</th><th>Missing/unverified transitions</th><th>Unacknowledged or censored</th></tr></thead><tbody>'
+      printf '%s' "$IH_ROWS" | jq -r '.[] | [.target,.ack_samples,.ack_seconds,.resolution_samples,.resolution_seconds,.missing_transitions,.unacknowledged]
+        | "<tr>" + (map("<td>" + (tostring|@html) + "</td>")|join("")) + "</tr>"'
+      echo '</tbody></table>'
+      printf '%s' "$IH_ROWS" | jq -r '.[] | select(.note!="") | "<p class=\"sub\">" + (.target|@html) + ": " + (.note|@html) + "</p>"'
+      printf '%s' "$IH_ROWS" | af_incident_history_details html
+      echo '<p class="sub">Recurring entities and short/no-ack episodes are review candidates, not proven false positives. Assignments are not interruptions. No noise-reduction percentage, duplicate-page count or savings is inferred.</p></div>'
+    fi
     # Anti-pattern histogram card (AF-007)
     if jq -e '.af_findings[]? | select(.af_id=="AF-007") | (.histogram | length) > 0' "$AFJ" >/dev/null 2>&1; then
       echo '<div class="card"><h1 style="font-size:16px">What KIND of noise</h1><table><thead><tr><th>Failure mode</th><th>Findings</th></tr></thead><tbody>'
       jq -r '.af_findings[]? | select(.af_id=="AF-007") | .histogram[]? | "<tr><td>\(.class|@html)</td><td>\(.count)</td></tr>"' "$AFJ"
       echo '</tbody></table></div>'
     fi
-    RATIO_NOTE="$(jq -r '.af_findings[]? | select(.af_id=="AF-003") | (if .status=="computed" then ((.note // "")) else (.reason // "No incident/ack stream supplied — the true ratio and %-actionable are not computed and never fabricated. Provide a fatigue.json signal block to compute it.") end)' "$AFJ" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g')"
+    RATIO_NOTE="$(jq -r '.af_findings[]? | select(.af_id=="AF-003") | (if .status=="computed" then ((.note // "")) else (.reason // "No compatible source-event and incident populations were supplied. A validated fatigue.json signal block can supply ratio inputs, not actionability or human-delivery evidence.") end)' "$AFJ" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g')"
     GATED_HTML=""
     if [ "$RSTATUS" != "computed" ]; then
-      GATED_HTML='<p class="sub"><strong>Not measured this run (incident-feed tier — deliberately not fabricated):</strong> true alert-to-incident ratio, %-actionable (precision), MTTA/MTTR, escalation &amp; ack rates, and the off-hours interruption split all need the paging tool&rsquo;s incident/ack stream. Connect it &mdash; or supply a <code>fatigue.json</code> signal block &mdash; to unlock them. We report what the config + fire-history reads prove and say so where a number would be a guess.</p>'
+      GATED_HTML='<p class="sub"><strong>Additional evidence needed:</strong> comparable alert/incident populations for the ratio, labeled outcomes for actionability, and actual notification/receipt data for interruption or delivery claims. Native incident response samples do not supply those missing measurements.</p>'
     fi
     cat <<HTMLFOOT
 <div class="card"><h1 style="font-size:16px">Alert-to-incident ratio</h1>

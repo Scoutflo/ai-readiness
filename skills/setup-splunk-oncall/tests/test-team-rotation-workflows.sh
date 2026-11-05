@@ -268,6 +268,13 @@ sys.stdout.write('\n204' if method!='GET' and p.endswith('/members') and '/rotat
     reset();r,calls=fail('team-retire',payload={},owner='unavailable',case='paginated');check('Policy dependency census unavailable' in r.stdout,'Unconsumed policy page was treated as a complete census')
     check(all(p.stat().st_mode & 0o077==0 for p in (work/'out').rglob('*.json')),'Private journal permissions widened')
     check(all('private-person@example.invalid' not in p.read_text() and 'Private name' not in p.read_text() for p in (work/'out').rglob('*.json')),'Provider contact fields entered a journal')
+    # Nested team metadata must agree even for an unrelated dependency policy.
+    reset();pair('rotation-create',payload={'label':'Example rotation','shifts':[]},run_id='nested-owner')
+    changed=json.loads(state.read_text());changed['policies']=[{'team':{'slug':'team-anchor'},'policy':{'slug':'nested-parent'}},{'team':{'slug':'team-anchor'},'policy':{'slug':'nested-child'}}]
+    changed['policy_details']={'nested-parent':{'slug':'nested-parent','steps':[{'timeout':0,'entries':[{'executionType':'policy_routing','targetPolicy':{'policySlug':'nested-child','teamSlug':'team-anchor','name':'Wrong friendly alias','policyName':'Another alias'}}]}]},'nested-child':{'slug':'nested-child','steps':[]}}
+    state.write_text(json.dumps(changed));expect('rotation-retire',gid=100,payload={},owner='nested-owner',run_id='nested-metadata-valid')
+    changed['policy_details']['nested-parent']['steps'][0]['entries'][0]['targetPolicy']['teamSlug']='different-team';state.write_text(json.dumps(changed))
+    r,calls=fail('rotation-retire',gid=100,payload={},owner='nested-owner',run_id='nested-metadata-wrong');check(all(x.startswith('GET ') for x in calls),'Nested team mismatch authorized rotation retirement')
     print('team-rotation workflows:',checks,'checks passed')
 finally:
     shutil.rmtree(work)
