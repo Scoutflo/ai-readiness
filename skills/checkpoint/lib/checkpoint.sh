@@ -14,35 +14,27 @@ checkpoint_init_topology() {
   fi
 }
 
-# --- Interactive service selection ---
-checkpoint_prompt_services() {
-  printf "\n=== Select Services to Audit ===\n"
-  printf "Available services: payment-svc, checkout-svc, analytics-svc, api-gateway\n"
-  printf "Enter services (comma-separated, or 'all' for all): "
-  read -r selection
-
-  if [ "$selection" = "all" ] || [ -z "$selection" ]; then
-    services="payment-svc,checkout-svc,analytics-svc,api-gateway"
-  else
-    services="$selection"
-  fi
-
-  echo "$services"
-}
-
 # --- Save scope to topology.json ---
+# $1: comma-separated service names. "all" or empty clears the saved scope
+# rather than storing "all" as a service name.
 checkpoint_save_scope() {
   services="$1"
 
   checkpoint_init_topology
 
+  case "$services" in
+    ''|all) checkpoint_reset_scope; return 0 ;;
+  esac
+
   now=$(date -u +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || date +"%Y-%m-%dT%H:%M:%SZ")
 
-  jq ".audit_scope = {
-    services: (\"$services\" | split(\",\")),
-    selected_at: \"$now\",
+  # Names enter jq via --arg, never the program text: a quote or backslash in a
+  # name must not break (or rewrite) the saved scope.
+  jq --arg s "$services" --arg now "$now" '.audit_scope = {
+    services: ($s | split(",") | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0))),
+    selected_at: $now,
     revision: 1
-  }" "$TOPOLOGY_FILE" > "$TOPOLOGY_FILE.tmp"
+  }' "$TOPOLOGY_FILE" > "$TOPOLOGY_FILE.tmp"
 
   mv "$TOPOLOGY_FILE.tmp" "$TOPOLOGY_FILE"
 }
