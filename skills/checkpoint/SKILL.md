@@ -16,7 +16,13 @@ Save service and region scope before running audits. For large estates, batch au
 
 ## Phase 1: Interactive Scope Selection
 
-List the services your estate actually has: the calling audit's inventory, or the topology export from `/scoutflo:map-topology`. Never offer a placeholder list. If neither exists, say so and offer to run `/scoutflo:map-topology` first. Ask which to audit:
+List the services your estate actually has. Every audit writes an `inventory.json`, so start from the newest one for each integration (the date is in the path):
+
+```bash
+find "${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}" -name inventory.json 2>/dev/null | sort
+```
+
+Use each inventory's `covers` values, skipping `-`. If every `covers` is `-`, as in a Prometheus inventory, use the `name` of each item whose `kind` is `target`. The topology export from `/scoutflo:map-topology` also works. Never offer a placeholder list. If none of these exist, say so and offer to run `/scoutflo:map-topology` first. Ask which to audit:
 
 ```
 === Select Services to Audit ===
@@ -26,7 +32,16 @@ Enter services (comma-separated, or 'all' for all):
 
 Expected input: a comma-separated list of discovered names, or `all` to audit everything.
 
-Save with `checkpoint_save_scope "<comma-separated names>"`. Whitespace around each name is trimmed and names are stored verbatim, so quotes and backslashes are safe. `all` or an empty answer clears the saved scope rather than freezing today's list, so the next audit also covers services added since.
+Save the answer, quoted so the shell passes it unchanged:
+
+```bash
+set -eu
+. "${CLAUDE_PLUGIN_ROOT}/skills/checkpoint/lib/checkpoint.sh"
+checkpoint_save_scope '<comma-separated names>'
+checkpoint_load_scope
+```
+
+Write a single quote inside a name as `'\''`. Whitespace around each name is trimmed and names are stored verbatim, so quotes and backslashes are safe. `all` or an empty answer clears the saved scope rather than freezing today's list, so the next audit also covers services added since.
 
 The selection is saved to `~/.scoutflo/topology.json`:
 
@@ -55,9 +70,9 @@ Output to the user: `[BATCH] Auditing 1500 resources in 8 batches of 200`
 
 ## Phase 3: Reload on Next Audit
 
-Load the saved scope automatically on the next `/scoutflo:audit-all` run. If no scope set, default to `all` (audit everything).
+Each audit's estate-sizing step loads the saved scope automatically. If no scope is set, it defaults to `all` (audit everything).
 
-Display when loading: `[CHECKPOINT] Auditing scope: payment-svc,checkout-svc`
+Display when loading: `[checkpoint] reusing saved audit scope: payment-svc,checkout-svc`
 
 ## Standalone Usage
 
@@ -73,7 +88,7 @@ Prompts for service selection, saves to topology.json.
 /scoutflo:checkpoint --reset-scope
 ```
 
-Clears the saved scope; next audit will default to `all`.
+Load the library as in Phase 1 and run `checkpoint_reset_scope`. This clears the saved scope, so the next audit defaults to `all`.
 
 ## Integration
 
