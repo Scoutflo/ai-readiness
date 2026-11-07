@@ -57,12 +57,13 @@ set -eu
 . "${CLAUDE_PLUGIN_ROOT}/skills/audit-datadog/scripts/datadog-context.sh"
 # Names are projected first; full messages, URLs and raw errors never reach stdout.
 dd_read org /api/v1/org || echo 'Org metadata unavailable; use the selected site and safe monitor identities.'
-dd_read monitors '/api/v1/monitor?page_size=3' | jq '[.[] | {id,name}]'
+MON_SAMPLE=$(dd_read monitors '/api/v1/monitor?page_size=3') || exit 2
+printf '%s\n' "$MON_SAMPLE" | jq -e 'if type == "array" then [.[] | {id,name}] else error("Expected a monitor array") end'
 printf 'Compare this identity to the intended account: %s on %s
 ' "$DD_SEG" "$DD_SITE"
 ```
 
-The key pair and the site together select the account; the selected variable names may resolve from the store or exported environment (store wins), with no fallback to another target or variable name. The `/api/v1/org` read is best-effort (some scoped keys cannot read org metadata — an `unreadable` there is fine); the safe monitor identities support your comparison. Record the accepted target, site and identity evidence in the report before judging checks. If they differ from the intended account, stop and correct the configuration. Captures additionally bind the selected variable names and credential generation with a private keyed digest; changed credentials require recapture, even on the same site and date.
+The key pair and the site together select the account; the selected variable names may resolve from the store or exported environment (store wins), with no fallback to another target or variable name. The `/api/v1/org` read is best-effort (some scoped keys cannot read org metadata — an `unreadable` there is fine); the safe monitor identities support your comparison. The monitor sample must complete successfully and return an array. A successful empty array is an observed empty sample, supplies no monitor identity, and must be recorded as that limit; a failed or incomplete read blocks this gate. Record the accepted target, site and identity evidence in the report before judging checks. If they differ from the intended account, stop and correct the configuration. Captures additionally bind the selected variable names and credential generation with a private keyed digest; changed credentials require recapture, even on the same site and date.
 
 ## Ground rules
 

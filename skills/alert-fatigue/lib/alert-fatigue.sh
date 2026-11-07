@@ -168,13 +168,20 @@ alert_fatigue_prepare_signals() {
     AF_SIGNALS_DOCUMENT="$(cat "$af_tmp/signals.json")" || { rm -rf "$af_tmp"; return 1; }
     if [ "$SF_RUN_MODE" = selected ]; then
       AF_SIGNALS_DOCUMENT=$(printf '%s' "$AF_SIGNALS_DOCUMENT" | jq --argjson run "$SF_RUN_DOCUMENT" '
+        def utc_instant:
+          capture("^(?<seconds>[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2})(?:\\.(?<fraction>[0-9]+))?Z$")
+          | [(.seconds+"Z"|fromdateiso8601), ((.fraction // "")|sub("0+$";""))];
+        def current_instant:
+          now|tostring|capture("^(?<seconds>[0-9]+)(?:\\.(?<fraction>[0-9]+))?$")
+          | [(.seconds|tonumber), ((.fraction // "")|sub("0+$";""))];
         . as $doc
-        | (try (.generated_at|sub("\\.[0-9]+Z$";"Z")|fromdateiso8601|.<=now) catch false) as $not_future
-        | .signals = [(.signals // [])[] | select($not_future and $doc.generated_at >= $run.started_at and ((.target // .provider) as $t | ($run.completed_targets|index($t))!=null))]
+        | (try ((.generated_at|utc_instant) as $generated
+            | $generated >= ($run.started_at|utc_instant) and $generated <= current_instant) catch false) as $fresh
+        | .signals = [(.signals // [])[] | select($fresh and ((.target // .provider) as $t | ($run.completed_targets|index($t))!=null))]
         | .provider_coverage = [(.provider_coverage // [])[] | select((.target // .provider) as $t | ($run.targets|index($t))!=null)
-           | if .status=="collected" and (($not_future|not) or ($doc.generated_at < $run.started_at) or ((.target // .provider) as $t | ($run.completed_targets|index($t))==null))
+           | if .status=="collected" and (($fresh|not) or ((.target // .provider) as $t | ($run.completed_targets|index($t))==null))
              then .status="verify-pending" | .reason="No fresh completed target evidence in this selected run" else . end]
-        | if .incident_feed.status=="collected" and (($not_future|not) or ($doc.generated_at < $run.started_at) or (.incident_feed.target as $t | ($run.completed_targets|index($t))==null))
+        | if .incident_feed.status=="collected" and (($fresh|not) or (.incident_feed.target as $t | ($run.completed_targets|index($t))==null))
           then .incident_feed={status:"verify-pending",reason:"Incident population lacks a fresh completed target binding for this selected run"} else . end') || { rm -rf "$af_tmp"; return 1; }
     fi
     AF_SIGNAL_STATE="validated"

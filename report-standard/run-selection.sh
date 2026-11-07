@@ -25,7 +25,7 @@ sf_run_file() {
 sf_run_aggregate_file() {
   [ "$SF_RUN_MODE" = selected ] || return 0
   SF_RUN_EXPECTED=$SF_RUN_DOCUMENT python3 - "$1" "$SF_RUN_DATE" <<'PY'
-import datetime,json,os,pathlib,sys
+import datetime,json,os,pathlib,re,sys
 try:
     p=pathlib.Path(sys.argv[1]);assert p.is_file() and not p.is_symlink() and p.stat().st_size<=16*1024*1024
     def unique(pairs):
@@ -38,8 +38,11 @@ try:
     doc=json.loads(p.read_text(),object_pairs_hook=unique,parse_constant=reject)
     run=json.loads(os.environ['SF_RUN_EXPECTED'])
     assert doc['run_selection']==run and doc['audit_date']==sys.argv[2]
-    stamp=datetime.datetime.strptime(doc['generated_at'],'%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=datetime.timezone.utc)
-    assert run['started_at']<=doc['generated_at'] and stamp<=datetime.datetime.now(datetime.timezone.utc)
+    def utc(value):
+        assert isinstance(value,str) and re.fullmatch(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z',value)
+        return datetime.datetime.fromisoformat(value.replace('Z','+00:00'))
+    stamp=utc(doc['generated_at'])
+    assert utc(run['started_at'])<=stamp<=datetime.datetime.now(datetime.timezone.utc)
 except Exception:
     raise SystemExit('RUN-AGGREGATE-FAIL: regenerate the roll-up from the current completed targets')
 PY

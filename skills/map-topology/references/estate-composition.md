@@ -39,6 +39,8 @@ Expected: `ESTATE-TOPOLOGY-OK maps=2 entities=... links=... completeness=partial
 
 Every entity is keyed by **target + entity type + source name**. Equal service names, `cluster.local` addresses, private addresses or backend labels do not merge entities across clusters. Relationships inside each source map keep their original payload and source hash. Existing `assertion_type: observed` means an object was observed; its composed evidence is **configuration**, including VirtualService-derived `CALLS`. It does not prove that traffic flowed. Existing `inferred` stays inferred, `asserted` stays asserted, and a missing assertion type stays unknown. No tier is upgraded during composition.
 
+Both structured `relationships` and legacy `edges` with string `from`/`to` names and `type` remain supported, including exports containing both arrays. Each legacy name must identify exactly one service or resource inside its selected target. An absent or ambiguous name, conflicting relation fields or an endpoint naming another target stops composition; it never triggers a guessed cross-map join.
+
 For a reviewed cross-map link, add `from`, `to`, `relation` and `evidence_file` to `links[]`. The evidence file must be a retained, sanitized observation with this shape:
 
 ```json

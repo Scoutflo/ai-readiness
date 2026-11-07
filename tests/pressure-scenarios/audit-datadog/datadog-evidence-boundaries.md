@@ -47,6 +47,7 @@ separately verify current provider semantics and report any remaining blocked sh
 - Compare >0, >=0 and >-1. Metric-name hints are insufficient; strict >0 can recover at zero. Require exact safe-query lower-bound proof before a tautology finding.
 - Put two distinct paging handles on one monitor. Export two stable candidate route records; both must pass the real On-Call packet reader without being upgraded to verified mapping.
 - Canonical inventory carries partial/subset collection while lanes remain unassessed. A service tag alone must not create qualified identity, active coverage, duplicate-page proof or a cross-account join.
+- Execute the literal live-safety block under both sh and bash with exported credentials, assignment-only store credentials, and a selected target on another supported site. A denied optional org read may proceed only when the mandatory monitor sample succeeds as an array. HTTP denial, HTML, transport failure, incomplete transfer, malformed JSON and non-array monitor responses must stop before the identity-comparison prompt and must not print a partial monitor sample. A successfully read empty array remains an observed empty sample with no monitor identity; it is never inferred from a failed read. `test-datadog-live-safety.sh` exercises these paths with isolated provider stand-ins.
 
 
 A v2 downtime response supplies group scope as the string `"*"` or `"env:prod"`. The selected monitor also carries the definition tag `env:prod`.

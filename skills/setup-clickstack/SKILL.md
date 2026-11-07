@@ -29,7 +29,7 @@ HyperDX changes use the exact selected instance's UI. The current external API v
 
 ## Doctor gate and live-safety gate
 
-Resolve the selected target and run `/scoutflo:doctor` before planning. Print the selected label and hostnames only; never full credential-bearing URLs. Use the audit's [target and probe blocks](../audit-clickstack/SKILL.md#doctor-gate), which resolve config/secret names afresh and assert actual responses. A configured unreadable lane is blocked, not excluded.
+Resolve the selected target and run `/scoutflo:doctor` before planning. Print the selected label and hostnames only; never full credential-bearing URLs. Use the audit's [target and probe blocks](../audit-clickstack/SKILL.md#doctor-gate-and-live-safety-gate), which resolve config/secret names afresh and assert actual responses. A configured unreadable lane is blocked, not excluded.
 
 For ClickHouse, read this independent server identity with the safe read-only helper:
 

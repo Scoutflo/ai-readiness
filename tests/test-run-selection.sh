@@ -2,7 +2,7 @@
 set -eu
 ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 python3 - "$ROOT" <<'PY'
-import concurrent.futures,datetime,hashlib,json,os,pathlib,re,subprocess,sys,tempfile,unittest
+import concurrent.futures,datetime,hashlib,json,os,pathlib,re,shutil,subprocess,sys,tempfile,unittest
 root=pathlib.Path(sys.argv.pop());now=datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0);day=now.strftime('%Y-%m-%d');stamp=now.strftime('%Y-%m-%dT%H:%M:%SZ');start=(now-datetime.timedelta(seconds=10)).strftime('%Y-%m-%dT%H:%M:%SZ')
 class Checks(unittest.TestCase):
  def setUp(self):
@@ -81,6 +81,18 @@ class Checks(unittest.TestCase):
   (self.a/'fatigue-signals.json').write_text(json.dumps(signals))
   r=self.shell('. "$CLAUDE_PLUGIN_ROOT/skills/alert-fatigue/lib/alert-fatigue.sh"\naudit_date='+day+'\nalert_fatigue_prepare_signals\nprintf \'%s\' "$AF_SIGNALS_DOCUMENT"')
   self.assertEqual(r.returncode,0,r.stderr);d=json.loads(r.stdout);self.assertEqual([x['target'] for x in d['signals']],['aws/east']);self.assertEqual(d['incident_feed']['status'],'verify-pending');self.assertEqual(d['provider_coverage'][1]['status'],'verify-pending')
+ def test_measured_fatigue_orders_mixed_precision_by_instant(self):
+  second=(now-datetime.timedelta(seconds=5)).strftime('%Y-%m-%dT%H:%M:%S')
+  self.plan['started_at']=second+'.600000Z';self.saveplan();self.complete('aws/east')
+  for suffix,fresh in [('Z',False),('.5Z',False),('.599999Z',False),('.5999999Z',False),('.599999999Z',False),('.6Z',True),('.600000Z',True),('.6000000Z',True),('.6000001Z',True),('.600001Z',True),('.7Z',True)]:
+   with self.subTest(suffix=suffix):
+    signals={'schema':'scoutflo-fatigue-signals/v1','generated_at':second+suffix,'window':'last hour','signals':[{'provider':'aws','target':'aws/east','object_id':'alarm-east','object_kind':'alarm','fires':7}], 'provider_coverage':[{'provider':'aws','target':'aws/east','status':'collected','tier':'fire-history'}], 'incident_feed':{'status':'collected','target':'aws/east','alerts_fired':7,'incidents':2}}
+    (self.a/'fatigue-signals.json').write_text(json.dumps(signals))
+    r=self.shell('. "$CLAUDE_PLUGIN_ROOT/skills/alert-fatigue/lib/alert-fatigue.sh"\naudit_date='+day+'\nalert_fatigue_prepare_signals\nprintf \'%s\' "$AF_SIGNALS_DOCUMENT"')
+    self.assertEqual(r.returncode,0,r.stderr);doc=json.loads(r.stdout)
+    self.assertEqual(len(doc['signals']),1 if fresh else 0)
+    self.assertEqual(doc['provider_coverage'][0]['status'],'collected' if fresh else 'verify-pending')
+    self.assertEqual(doc['incident_feed']['status'],'collected' if fresh else 'verify-pending')
  def test_actual_renderers_exclude_unfinished_without_inherited_plugin_root(self):
   self.complete('aws/east');env={**self.env};env.pop('CLAUDE_PLUGIN_ROOT',None)
   for mode in ['rollup','inventory-rollup','exec-summary','env-compare']:
@@ -90,6 +102,15 @@ class Checks(unittest.TestCase):
   self.edits('aws/east','findings.json',lambda d:d.update(target='aws/west'))
   r=subprocess.run(['sh',str(root/'report-standard/render-report-viz.sh'),'rollup',str(self.a),day],env=env,capture_output=True,text=True)
   self.assertNotEqual(r.returncode,0);self.assertNotIn('Stacks end-to-end',r.stdout)
+ def test_measured_fatigue_refuses_same_second_future(self):
+  instant=now-datetime.timedelta(seconds=5);second=instant.strftime('%Y-%m-%dT%H:%M:%S')
+  self.plan['started_at']=second+'.1Z';self.saveplan();self.complete('aws/east')
+  signals={'schema':'scoutflo-fatigue-signals/v1','generated_at':second+'.75Z','window':'last hour','signals':[{'provider':'aws','target':'aws/east','object_id':'alarm-east','object_kind':'alarm','fires':7}],'provider_coverage':[{'provider':'aws','target':'aws/east','status':'collected','tier':'fire-history'}]}
+  (self.a/'fatigue-signals.json').write_text(json.dumps(signals))
+  jq=shutil.which('jq');shim=self.p/'bin/jq'
+  shim.write_text('#!'+sys.executable+'\nimport os,sys\na=sys.argv[1:]\nif a[:2]==["--argjson","run"]:a[-1]="def now: '+str(instant.timestamp()+.5)+'; "+a[-1]\nos.execv('+repr(jq)+',['+repr(jq)+']+a)\n');shim.chmod(0o755)
+  r=self.shell('. "$CLAUDE_PLUGIN_ROOT/skills/alert-fatigue/lib/alert-fatigue.sh"\naudit_date='+day+'\nalert_fatigue_prepare_signals\nprintf \'%s\' "$AF_SIGNALS_DOCUMENT"')
+  self.assertEqual(r.returncode,0,r.stderr);doc=json.loads(r.stdout);self.assertEqual(doc['signals'],[]);self.assertEqual(doc['provider_coverage'][0]['status'],'verify-pending')
  def test_current_coverage_requires_completion_and_fresh_collections(self):
   self.fixture('aws/east',True);self.fixture('aws/west',True);self.complete('aws/east')
   (self.a/'coverage-assessment.json').write_text(json.dumps({'schema':'scoutflo-coverage-assessment/v1','audit_date':day,'expected_targets':['aws/east','aws/west']}))
@@ -117,6 +138,14 @@ class Checks(unittest.TestCase):
   mutations=[lambda d:d.pop('run_selection'),lambda d:d['run_selection'].update(completed_targets=[]),lambda d:d.update(audit_date='2000-01-01'),lambda d:d.update(generated_at=day+'T00:00:00Z'),lambda d:d.update(generated_at='2099-01-01T00:00:00Z')]
   for change in mutations:
    d=json.loads(json.dumps(original));change(d);path.write_text(json.dumps(d));self.assertNotEqual(self.check_aggregate(path).returncode,0)
+ def test_aggregate_orders_mixed_precision_by_instant(self):
+  second=(now-datetime.timedelta(seconds=5)).strftime('%Y-%m-%dT%H:%M:%S')
+  self.plan['started_at']=second+'.600000Z';self.saveplan();self.complete('aws/east')
+  path=self.a/'aggregate.json';snapshot=json.loads(self.command('snapshot').stdout)
+  for suffix,fresh in [('Z',False),('.5Z',False),('.599999Z',False),('.6Z',True),('.600000Z',True),('.600001Z',True),('.7Z',True)]:
+   with self.subTest(suffix=suffix):
+    path.write_text(json.dumps({'generated_at':second+suffix,'audit_date':day,'run_selection':snapshot}))
+    r=self.check_aggregate(path);self.assertEqual(r.returncode==0,fresh,r.stderr)
  def test_plan_completion_during_each_aggregate_cannot_publish(self):
   for lib,collector,entry in [('correlation-engine','correlation_collect_findings','correlation_run'),('alert-fatigue','alert_fatigue_collect_findings','alert_fatigue_run'),('cost-analysis','cost_analysis_aggregate_findings','cost_analysis_run')]:
    self.saveplan();self.complete('aws/east')

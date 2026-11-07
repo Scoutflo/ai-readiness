@@ -73,6 +73,7 @@ def request(url,user,key,sql,readonly=False,anonymous=False):
             remaining(); chunk=response.read1(min(65536,LIMIT+1-total))
             if not chunk: break
             total+=len(chunk); need(total<=LIMIT); chunks.append(chunk)
+        need(length is None or total==int(length))
         body=b''.join(chunks)
         return response.status,body
     finally: conn.close()

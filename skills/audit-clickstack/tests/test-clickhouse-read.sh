@@ -3,7 +3,7 @@ set -eu
 export PYTHONDONTWRITEBYTECODE=1
 ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)"
 python3 - "$ROOT" <<'PY'
-import fcntl,concurrent.futures,hashlib,hmac,json,os,pathlib,re,subprocess,sys,tempfile,threading,time,unittest
+import fcntl,concurrent.futures,hashlib,hmac,json,os,pathlib,re,shutil,subprocess,sys,tempfile,threading,time,unittest
 from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
 root=pathlib.Path(sys.argv.pop())
 CANARY='PRIVATE_TOKEN_NOT_FOR_REPORT'
@@ -39,11 +39,19 @@ class Checks(unittest.TestCase):
     owner.seen.append({'path':self.path,'sql':sql,'key':key,'user':user,'status':status})
     self.send_response(status)
     if status==302:self.send_header('Location','http://127.0.0.1:1/'+CANARY)
+    framing=owner.state.get('framing','length')
     if owner.state.get('oversize'):self.send_header('Content-Length','1048577')
-    else:self.send_header('Content-Length',str(len(body)))
+    elif framing in ('chunked','incomplete-chunked'):self.send_header('Transfer-Encoding','chunked')
+    elif framing!='eof':self.send_header('Content-Length',str(len(body)+(25 if framing=='short' else 0)))
+    self.send_header('Connection','close')
     self.end_headers()
-    try:self.wfile.write(body)
+    try:
+     if framing in ('chunked','incomplete-chunked'):
+      self.wfile.write(format(len(body),'x').encode()+b'\r\n'+body+b'\r\n')
+      if framing=='chunked':self.wfile.write(b'0\r\n\r\n')
+     else:self.wfile.write(body)
     except (BrokenPipeError,ConnectionResetError):pass
+    self.close_connection=True
   self.server=ThreadingHTTPServer(('127.0.0.1',0),Handler);self.thread=threading.Thread(target=self.server.serve_forever,daemon=True);self.thread.start()
   self.url='http://127.0.0.1:'+str(self.server.server_port);self.cfg=self.p/'toolkit.yaml';self.store=self.p/'env';self.out=self.p/'audits'
   self.configure();self.store.write_text('KEY_A=wrong-account\nKEY_B='+KEY+'\n')
@@ -79,6 +87,39 @@ class Checks(unittest.TestCase):
  def test_missing_target_key_and_wrong_label_never_fallback(self):
   for env in ({k:v for k,v in self.env.items() if k!='SCOUTFLO_TARGET'},{**self.env,'SCOUTFLO_TARGET':'missing'}):self.blocked(self.runq(env=env))
   self.store.write_text('KEY_A=wrong-account\n');self.blocked(self.runq());self.assertEqual(self.seen,[])
+ def target_selector_cases(self,use_yq):
+  yq=shutil.which('yq')
+  if use_yq and yq is None:self.skipTest('yq unavailable; awk cases run separately')
+  path=self.p/('with-yq' if use_yq else 'without-yq');path.mkdir()
+  for name in ('sh','bash','awk','cat','date','python3','printenv'):
+   (path/name).symlink_to(shutil.which(name))
+  if use_yq:(path/'yq').symlink_to(yq)
+  env={**self.env,'PATH':str(path)}
+  block='. "$CLAUDE_PLUGIN_ROOT/skills/audit-clickstack/scripts/target-context.sh"\nprintf "%s|%s|%s|%s\\n" "$CS_KIND" "$CS_IDX" "$CS_SEG" "$(sh "$TT" "$CFG" clickstack get "$CS_IDX" clickhouse_password_env)"'
+  single='clickstack:\n  clickhouse_url: '+self.url+'\n  clickhouse_user: scoutflo_ro\n  clickhouse_password_env: KEY_B\n'
+  self.cfg.write_text(single)
+  for selector in (None,'clickstack','other-integration-label'):
+   with self.subTest(parser='yq' if use_yq else 'awk',selector=selector):
+    current={k:v for k,v in env.items() if k!='SCOUTFLO_TARGET'}
+    if selector is not None:current['SCOUTFLO_TARGET']=selector
+    r=self.shell(block,env=current);self.assertEqual(r.returncode,0,r.stderr);self.assertEqual(r.stdout,'map|0|clickstack|KEY_B\n')
+  self.configure();r=self.shell(block,env=env);self.assertEqual(r.returncode,0,r.stderr);self.assertEqual(r.stdout,'seq|1|clickstack/region-b|KEY_B\n')
+  for current in ({k:v for k,v in env.items() if k!='SCOUTFLO_TARGET'},{**env,'SCOUTFLO_TARGET':'unknown'}):self.blocked(self.shell(block,env=current))
+  self.cfg.write_text(self.cfg.read_text().replace('region-a','region-b'));self.blocked(self.shell(block,env=env));self.assertEqual(self.seen,[])
+ def test_target_selector_with_yq(self):self.target_selector_cases(True)
+ def test_target_selector_without_yq(self):self.target_selector_cases(False)
+ def test_transport_completion_for_probe_and_query(self):
+  self.state.update(probe='ro',rows=[{'rows':3,'private_text':CANARY}])
+  for framing in ('length','chunked','eof'):
+   with self.subTest(framing=framing):
+    self.state['framing']=framing;self.assertEqual(self.ok(self.runq())['data'],[{'rows':3}])
+    self.assertEqual(self.runq('SELECT 1').stdout,'1\n')
+  for framing in ('short','incomplete-chunked'):
+   with self.subTest(framing=framing):
+    self.state['framing']=framing;self.blocked(self.runq());self.blocked(self.runq('SELECT 1'))
+    self.cache().unlink();before=len(self.seen);self.blocked(self.runq());self.assertEqual(len(self.seen),before+1)
+    self.assertEqual(list(self.out.rglob('clickhouse-probe.json')),[])
+    self.state['framing']='length';self.ok(self.runq())
  def test_direct_env_fallback_and_store_precedence(self):
   self.store.write_text('KEY_B='+KEY+'\n');self.ok(self.runq(env={**self.env,'KEY_B':'wrong-inherited-key'}));self.assertTrue(all(x['key']==KEY for x in self.seen))
   self.store.write_text('');self.ok(self.runq(env={**self.env,'KEY_B':KEY}))

@@ -109,18 +109,31 @@ def compose(manifest_path):
                     fail('Entity cluster identity contradicts source map')
                 row=dict(id=identifier(key),target=target,entity_type=kind,name=key[2],source=entity)
                 by_key[key]=row;entities.append(row)
-        edges=doc.get('relationships',doc.get('edges',[]))
-        if not isinstance(edges,list):fail('Source relationships must be an array')
-        for edge in edges:
-            a=endpoint(dict(edge['from'],target=target));b=endpoint(dict(edge['to'],target=target))
+        edges=[]
+        for field in ['relationships','edges']:
+            group=doc.get(field,[])
+            if not isinstance(group,list):fail('Source relationships must be an array')
+            edges.extend((field,edge) for edge in group)
+        def local_endpoint(value):
+            if text(value):
+                matches=[(target,kind,value) for kind in ['service','resource'] if (target,kind,value) in by_key]
+                if len(matches)!=1:fail('Legacy relationship endpoint is absent or ambiguous')
+                return matches[0]
+            if not isinstance(value,dict):fail('Invalid source relationship endpoint')
+            if 'target' in value and value['target']!=target:fail('Source relationship crosses its declared target')
+            return endpoint(dict(value,target=target))
+        for field,edge in edges:
+            a=local_endpoint(edge['from']);b=local_endpoint(edge['to'])
             if a not in by_key or b not in by_key:fail('Source relationship references an absent entity')
-            relation=edge.get('relation')
+            relation=edge.get('relation',edge.get('type'))
+            if 'relation' in edge and 'type' in edge and edge['relation']!=edge['type']:
+                fail('Source relationship type contradicts relation')
             if not text(relation):fail('Relationship needs a relation')
             # The old observed assertion means live objects, not runtime traffic.
             assertion = edge.get('assertion_type')
             if assertion not in {None,'observed','asserted','inferred'}: fail('Unsupported source assertion type')
             kind = {'observed':'configuration','asserted':'asserted','inferred':'inferred',None:'unknown'}[assertion]
-            relationships.append(dict(from_id=identifier(a),to_id=identifier(b),relation=relation,evidence=dict(kind=kind,target=target,observed_at=generated,ref='source-map/relationships',source_sha256=digest),source=edge))
+            relationships.append(dict(from_id=identifier(a),to_id=identifier(b),relation=relation,evidence=dict(kind=kind,target=target,observed_at=generated,ref='source-map/'+field,source_sha256=digest),source=edge))
     if len(entities)>50000:fail('Composition exceeds 50000 entities; narrow the selected maps')
     for link in manifest.get('links',[]):
         a,b=endpoint(link['from']),endpoint(link['to'])

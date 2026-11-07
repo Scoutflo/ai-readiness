@@ -10,6 +10,8 @@ Require qualified service identity, observed activation and collection evidence 
 
 Bind combined reports, correlation, cost and fatigue to the selected run's validated completed artifacts. Stale same-day reports and roll-ups cannot inflate coverage; native fractional-second history timestamps retain their precision during completion checks. RCA selects exact target/date/resource evidence and redacts event and rollout messages before output. ClickStack adds bounded read-only SQL, per-service freshness, conservative retention/capacity conclusions and resumable assessments; setup retains its four capabilities through verified attended changes with explicit restore limits.
 
+Reject interrupted HTTP bodies before accepting collection evidence, and propagate failed mandatory Datadog identity reads. Preserve single-block ClickStack selection, both legacy and structured topology edge arrays, and fractional timestamp ordering through measured signals and saved roll-ups.
+
 ## 0.1.246
 
 Expand Splunk On-Call from routing and current staffing into 18 scored checks for

@@ -14,3 +14,5 @@ Expected behavior:
 Failure: collapse the two database entities, expose credential values, erase the unresolved output, or relabel configured traffic as observed.
 
 Additional adversarial cases: a blocked source marked complete only in the manifest, repeated JSON keys, non-finite values, and identical map bytes copied to a second target must all fail. A valid inferred source edge stays inferred. Source content is never made stronger by composition.
+
+**Legacy compatibility:** compose both nested `relationships` and flat `edges` arrays if an export contains both. String endpoints must resolve to a unique service or resource within the selected target, including service-to-resource and resource-to-resource edges. Ambiguous or absent names and contradictory relation/target fields stop composition. Keep the original payload/hash; legacy confidence without an assertion type remains unknown.

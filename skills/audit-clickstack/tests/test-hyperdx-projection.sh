@@ -108,6 +108,57 @@ class Checks(unittest.TestCase):
  def test_skipped_connections_stay_partial(self):
   c,_=fake([{'data':[{'id':'c1','host':'https://db.internal/'+canary}], 'meta':{'skipped':1}}]);r=c.collect('connections')
   self.assertEqual(r['reason'],'provider-omitted-objects');self.assertNotIn(canary,json.dumps(r))
+ def test_transport_completion_replaces_stale_verified_artifacts(self):
+  state={'framing':'length'}
+  class Handler(BaseHTTPRequestHandler):
+   def log_message(self,*args):pass
+   def respond(self,body):
+    framing=state['framing']
+    if framing=='bad-status':
+     self.wfile.write(b'INVALID '+canary.encode()+b'\r\n\r\n');self.close_connection=True;return
+    self.send_response(200);self.send_header('Content-Type','application/json');self.send_header('Connection','close')
+    if framing in ('chunked','incomplete-chunked'):self.send_header('Transfer-Encoding','chunked')
+    elif framing!='eof':self.send_header('Content-Length','invalid' if framing=='invalid-length' else str(m.MAX_BYTES+1 if framing=='oversize' else len(body)+(25 if framing=='short' else 0)))
+    self.end_headers()
+    try:
+     if framing in ('chunked','incomplete-chunked'):
+      self.wfile.write(format(len(body),'x').encode()+b'\r\n'+body+b'\r\n')
+      if framing=='chunked':self.wfile.write(b'0\r\n\r\n')
+     else:self.wfile.write(body)
+    except (BrokenPipeError,ConnectionResetError):pass
+    self.close_connection=True
+   def do_GET(self):self.respond(json.dumps({**page([]),'private_text':canary}).encode())
+   def do_POST(self):
+    self.rfile.read(int(self.headers.get('Content-Length','0')));self.respond(b'{"ok":true}')
+  server=ThreadingHTTPServer(('127.0.0.1',0),Handler);thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
+  try:
+   with tempfile.TemporaryDirectory() as tmp:
+    out=pathlib.Path(tmp);url='http://127.0.0.1:'+str(server.server_port)
+    env={'PATH':os.environ['PATH'],'PYTHONDONTWRITEBYTECODE':'1','HDX_CAPTURE_URL':url,'HDX_CAPTURE_KEY':canary,'HDX_CAPTURE_MODE':'key'}
+    cmd=[sys.executable,str(root/'skills/audit-clickstack/scripts/hyperdx-projection.py'),str(out),'clickstack']
+    def invoke():
+     r=subprocess.run(cmd,env=env,capture_output=True,text=True,timeout=30)
+     self.assertNotIn(canary,r.stdout+r.stderr)
+     files={f.name:f.read_bytes() for f in out.glob('*.json')};self.assertEqual(len(files),3)
+     for raw in files.values():self.assertNotIn(canary.encode(),raw)
+     return r,files
+    for framing in ('length','chunked','eof'):
+     with self.subTest(framing=framing):
+      state['framing']=framing;r,files=invoke();self.assertEqual(r.returncode,0,r.stderr)
+      self.assertEqual(json.loads(files['alert-source-capture.json'])['verification']['status'],'verified')
+      self.assertEqual(json.loads(files['hyperdx-configuration.json'])['resources']['alerts']['status'],'complete')
+      self.assertIsNone(m.Client(url,email='user',password=canary).request('/api/login/password',login=True))
+    for framing in ('short','incomplete-chunked','bad-status','invalid-length','oversize'):
+     with self.subTest(framing=framing):
+      state['framing']='length';r,before=invoke();self.assertEqual(r.returncode,0,r.stderr)
+      state['framing']=framing;r,after=invoke();self.assertNotEqual(r.returncode,0)
+      self.assertTrue(all(before[name]!=raw for name,raw in after.items()))
+      self.assertEqual(json.loads(after['alert-source-capture.json'])['verification']['status'],'blocked')
+      self.assertEqual(json.loads(after['alert-source-evidence.json'])['verification']['status'],'blocked')
+      self.assertEqual(json.loads(after['alert-source-evidence.json'])['records'],[])
+      resources=json.loads(after['hyperdx-configuration.json'])['resources'];self.assertTrue(all(v['status']=='blocked' and v['scope']=='subset' for v in resources.values()))
+      with self.assertRaises(m.Blocked):m.Client(url,email='user',password=canary).request('/api/login/password',login=True)
+  finally:server.shutdown();server.server_close();thread.join()
  def test_shell_multi_target_zero_requests_and_live_loopback(self):
   seen=[]
   class Handler(BaseHTTPRequestHandler):

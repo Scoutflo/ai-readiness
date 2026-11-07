@@ -11,6 +11,7 @@ if [ -z "$CFG" ]; then
 fi
 [ -n "$CFG" ] && [ -f "$CFG" ] || { echo 'ClickStack blocked: select an existing config' >&2; return 1; }
 TT="$CS_ROOT/report-standard/toolkit-targets.sh"
+CS_KIND=$(sh "$TT" "$CFG" clickstack kind)
 CS_N=$(sh "$TT" "$CFG" clickstack count)
 [ "$CS_N" -gt 0 ] || { echo 'ClickStack blocked: no configured target' >&2; return 1; }
 [ "$CS_N" -le 1 ] || [ -n "${SCOUTFLO_TARGET:-}" ] || { echo 'ClickStack blocked: select SCOUTFLO_TARGET for the labeled list' >&2; return 1; }
@@ -18,13 +19,13 @@ CS_IDX=0; cs_matches=0; cs_i=0
 while [ "$cs_i" -lt "$CS_N" ]; do
   cs_label=$(sh "$TT" "$CFG" clickstack label "$cs_i")
   case "$cs_label" in ''|*[!A-Za-z0-9_-]*) echo 'ClickStack blocked: invalid target label' >&2; return 1 ;; esac
-  if [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$cs_label" = "$SCOUTFLO_TARGET" ]; then CS_IDX=$cs_i; cs_matches=$((cs_matches+1)); fi
+  if [ "$CS_KIND" = map ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$cs_label" = "$SCOUTFLO_TARGET" ]; then CS_IDX=$cs_i; cs_matches=$((cs_matches+1)); fi
   cs_i=$((cs_i+1))
 done
 [ "$cs_matches" -eq 1 ] || { echo 'ClickStack blocked: target must match exactly one configured label' >&2; return 1; }
 CS_LABEL=$(sh "$TT" "$CFG" clickstack label "$CS_IDX")
 CS_SEG=clickstack
-if [ "$(sh "$TT" "$CFG" clickstack kind)" = seq ]; then CS_SEG="clickstack/$CS_LABEL"; fi
+if [ "$CS_KIND" = seq ]; then CS_SEG="clickstack/$CS_LABEL"; fi
 CH_URL=$(sh "$TT" "$CFG" clickstack get "$CS_IDX" clickhouse_url)
 HDX_URL=$(sh "$TT" "$CFG" clickstack get "$CS_IDX" hyperdx_url)
 CH_USER=$(sh "$TT" "$CFG" clickstack get "$CS_IDX" clickhouse_user)

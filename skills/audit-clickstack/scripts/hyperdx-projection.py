@@ -2,6 +2,7 @@
 """Bounded HyperDX configuration read recipe. Never writes provider response bodies."""
 import datetime as dt
 import hashlib
+import http.client
 import http.cookiejar
 import ipaddress
 import json
@@ -157,19 +158,24 @@ class Client:
         signal.setitimer(signal.ITIMER_REAL,min(20,max(0.001,240-(time.monotonic()-self.started))))
         try:
             with self.opener.open(req, timeout=20) as resp:
-                if login:
-                    return None
-                if resp.headers.get_content_type() != 'application/json':
+                if not login and resp.headers.get_content_type() != 'application/json':
                     raise Blocked('non-json-response')
+                length = resp.headers.get('Content-Length')
+                if length is not None and (not re.fullmatch(r'[0-9]+', length) or int(length) > MAX_BYTES):
+                    raise Blocked('invalid-response-length')
                 raw = resp.read(MAX_BYTES+1)
                 if len(raw) > MAX_BYTES:
                     raise Blocked('response-size-limit')
+                if length is not None and len(raw) != int(length):
+                    raise Blocked('incomplete-response')
+                if login:
+                    return None
                 return json.loads(raw, object_pairs_hook=unique_object, parse_constant=lambda _: (_ for _ in ()).throw(Blocked('nonfinite-json')))
         except urllib.error.HTTPError as exc:
             if login and exc.code == 303:
                 return None
             raise Blocked('http-'+str(exc.code)) from None
-        except (urllib.error.URLError, TimeoutError, OSError):
+        except (urllib.error.URLError, http.client.HTTPException, TimeoutError, OSError):
             raise Blocked('transport-error') from None
         except (UnicodeError, ValueError):
             raise Blocked('invalid-json') from None
