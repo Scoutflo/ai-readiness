@@ -134,6 +134,7 @@ audit-pagerduty PD-001
 audit-prometheus PROM-001
 audit-sentry SNTRY-001
 audit-signoz SIG-001
+audit-splunk-oncall SOC-001
 audit-zenduty ZD-001
 CATALOGS
 for pair in 'aws AWS-001 AWSOPT-002' 'kubernetes K8S-001 K8SRT-001'; do

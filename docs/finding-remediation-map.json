@@ -1,5 +1,5 @@
 {
-  "_comment": "Generated from the setup skills' own fix sections: each finding ID maps to the first fix section in its setup skill that names it. Validated by ci/remediation-map-check.sh (ID prefix must match a real audit catalog; skill dir must exist; anchor must resolve to a real heading). Regenerate when setup skills change; never hand-invent entries.",
+  "_comment": "Generated from the setup skills' own fix sections: each finding ID maps to the first fix section in its setup skill that names it. For audit-splunk-oncall, whose setup skill also names IDs in its re-run steps, each entry is instead the first setup link in that check's own catalog section. Validated by ci/remediation-map-check.sh (ID prefix must match a real audit catalog; skill dir must exist; anchor must resolve to a real heading). Regenerate when setup skills change; never hand-invent entries.",
   "version": 1,
   "mappings": {
     "ALR-002": {
@@ -201,6 +201,70 @@
     "AWS-065": {
       "setup_skill": "setup-aws",
       "anchor": "fix-alert-routing"
+    },
+    "AZR-001": {
+      "setup_skill": "setup-azure",
+      "anchor": "create-and-wire-an-action-group"
+    },
+    "AZR-002": {
+      "setup_skill": "setup-azure",
+      "anchor": "add-metric-alerts"
+    },
+    "AZR-003": {
+      "setup_skill": "setup-azure",
+      "anchor": "add-log-alerts"
+    },
+    "AZR-004": {
+      "setup_skill": "setup-azure",
+      "anchor": "add-activity-log-alerts"
+    },
+    "AZR-005": {
+      "setup_skill": "setup-azure",
+      "anchor": "review-alert-processing-rules"
+    },
+    "AZR-007": {
+      "setup_skill": "setup-azure",
+      "anchor": "handle-the-empty-scope-guardrail"
+    },
+    "AZR-010": {
+      "setup_skill": "setup-azure",
+      "anchor": "enable-vm-diagnostics"
+    },
+    "AZR-030": {
+      "setup_skill": "setup-azure",
+      "anchor": "enable-aks-monitoring"
+    },
+    "AZR-031": {
+      "setup_skill": "setup-azure",
+      "anchor": "enable-aks-monitoring"
+    },
+    "AZR-032": {
+      "setup_skill": "setup-azure",
+      "anchor": "enable-diagnostic-settings"
+    },
+    "AZR-033": {
+      "setup_skill": "setup-azure",
+      "anchor": "add-prometheus-rule-groups"
+    },
+    "AZR-040": {
+      "setup_skill": "setup-azure",
+      "anchor": "enable-diagnostic-settings"
+    },
+    "AZR-041": {
+      "setup_skill": "setup-azure",
+      "anchor": "investigate-log-ingestion"
+    },
+    "AZR-042": {
+      "setup_skill": "setup-azure",
+      "anchor": "enable-diagnostic-settings"
+    },
+    "AZR-050": {
+      "setup_skill": "setup-azure",
+      "anchor": "enable-diagnostic-settings"
+    },
+    "AZR-060": {
+      "setup_skill": "setup-azure",
+      "anchor": "create-and-wire-an-action-group"
     },
     "CS-060": {
       "setup_skill": "setup-clickstack",
@@ -961,6 +1025,78 @@
     "SNTRY-110": {
       "setup_skill": "setup-sentry",
       "anchor": "alert-rule-remediation-playbook"
+    },
+    "SOC-001": {
+      "setup_skill": "setup-splunk-oncall",
+      "anchor": "routing-keys"
+    },
+    "SOC-002": {
+      "setup_skill": "setup-splunk-oncall",
+      "anchor": "escalation-policies"
+    },
+    "SOC-003": {
+      "setup_skill": "setup-splunk-oncall",
+      "anchor": "escalation-policies"
+    },
+    "SOC-004": {
+      "setup_skill": "setup-splunk-oncall",
+      "anchor": "rotations-and-shifts"
+    },
+    "SOC-005": {
+      "setup_skill": "setup-splunk-oncall",
+      "anchor": "escalation-policies"
+    },
+    "SOC-006": {
+      "setup_skill": "setup-splunk-oncall",
+      "anchor": "teams-and-membership"
+    },
+    "SOC-007": {
+      "setup_skill": "setup-splunk-oncall",
+      "anchor": "incoming-alert-sources"
+    },
+    "SOC-009": {
+      "setup_skill": "setup-splunk-oncall",
+      "anchor": "personal-paging-and-contact-methods"
+    },
+    "SOC-010": {
+      "setup_skill": "setup-splunk-oncall",
+      "anchor": "overrides-maintenance-and-alert-rules"
+    },
+    "SOC-011": {
+      "setup_skill": "setup-splunk-oncall",
+      "anchor": "overrides-maintenance-and-alert-rules"
+    },
+    "SOC-012": {
+      "setup_skill": "setup-splunk-oncall",
+      "anchor": "response-and-noise-optimisation"
+    },
+    "SOC-013": {
+      "setup_skill": "setup-splunk-oncall",
+      "anchor": "response-and-noise-optimisation"
+    },
+    "SOC-014": {
+      "setup_skill": "setup-splunk-oncall",
+      "anchor": "incoming-alert-sources"
+    },
+    "SOC-015": {
+      "setup_skill": "setup-splunk-oncall",
+      "anchor": "rotations-and-shifts"
+    },
+    "SOC-016": {
+      "setup_skill": "setup-splunk-oncall",
+      "anchor": "rotations-and-shifts"
+    },
+    "SOC-017": {
+      "setup_skill": "setup-splunk-oncall",
+      "anchor": "incident-context-and-ownership"
+    },
+    "SOC-018": {
+      "setup_skill": "setup-splunk-oncall",
+      "anchor": "lifecycle-and-access-review"
+    },
+    "SOC-019": {
+      "setup_skill": "setup-splunk-oncall",
+      "anchor": "incoming-alert-sources"
     }
   }
 }
