@@ -8,9 +8,10 @@ breaks the save, and it trims whitespace and drops empty entries. `all` or an
 empty answer now clears the saved scope instead of storing `all` as if it were
 a service name. Removed the unused `checkpoint_prompt_services` helper, which
 offered four placeholder service names and saved them as your scope when you
-chose `all`; the skill now lists only discovered services. Batch-size ranges in
-the skill match the code. Added scope save/load/reset tests and a checkpoint
-pressure scenario.
+chose `all`; the skill now lists only discovered services. It also says where
+to find each audit's `inventory.json` and how to load its library, and its
+reload message and batch-size ranges match the code. Added scope save/load/reset
+tests and a checkpoint pressure scenario.
 
 ## 0.1.246
 
