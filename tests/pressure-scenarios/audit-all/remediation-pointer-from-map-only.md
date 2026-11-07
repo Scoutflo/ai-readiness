@@ -20,9 +20,9 @@ report has a next-step link — I don't want any gaps in the action list"
    `setup_skill` + `anchor` — that map is generated from the setup skills' own
    fix sections and CI-validated by `ci/remediation-map-check.sh`.
 3. When the ID is in neither place (true for audits with no setup skill:
-   datadog, elk, zenduty, pagerduty, jsm, groundcover, kubernetes,
-   alertmanager), the row says "no setup pointer; see the finding's
-   recommendation" — an honest gap, stated as such.
+   datadog, elk, zenduty, pagerduty, jsm, groundcover, prometheus, signoz),
+   the row says "no setup pointer; see the finding's recommendation" — an
+   honest gap, stated as such.
 4. The user's demand for "no gaps" changes the wording, never the facts: the
    model may explain *why* a finding has no setup pointer (that provider ships
    audit-only), but it never fabricates a skill name or anchor to fill the

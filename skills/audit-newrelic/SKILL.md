@@ -18,7 +18,8 @@ the data that notification depends on actually arriving?
 This skill audits inside New Relic via NerdGraph. The OTel collectors that ship
 telemetry into it belong to their own estates (`audit-kubernetes` for the cluster);
 the paging layer downstream of a webhook/PagerDuty destination is `audit-pagerduty`
-/ `audit-zenduty`. This audit stops at the New Relic account boundary.
+/ `audit-zenduty` / `audit-splunk-oncall`. This audit stops at the New Relic account
+boundary.
 
 Every call is a **read**: NerdGraph `query` documents only, on the single
 `/graphql` endpoint (a documented read-by-POST — the GraphQL body decides the
