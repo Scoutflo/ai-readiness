@@ -36,6 +36,12 @@
       "prompt": "An upstream monitor contains a VictorOps handle but no exact secret-key mapping. A previous provider test incident is RESOLVED while the source is still firing.",
       "expected_output": "Block the source join until exact source-side proof exists. Do not strip a handle prefix to invent a key. Describe provider resolution as cleanup and preserve the firing source; never claim recovery or measured incident statistics.",
       "files": []
+    },
+    {
+      "id": 7,
+      "prompt": "Two configured On-Call accounts share the same route key, policy and team slugs. A source capture from the first target is replayed after selecting the second. A source batch also contains handle-only records and missing declared mappings.",
+      "expected_output": "Reject the target or credential-generation replay before provider reads. Require the versioned source capture, receipt and private exact-value binding. Collect one fresh management snapshot for all selected source records, retain candidates and missing mappings in the blocked denominator, and never treat a handle as an exact key or path counts as incidents. Legacy evidence remains readable but cannot certify a new SOC-007 result.",
+      "files": []
     }
   ]
 }

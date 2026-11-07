@@ -1,6 +1,6 @@
 ---
 name: doctor
-description: Preflight connection check; a bundled read-only script reads ~/.scoutflo/toolkit.yaml, makes one cheap call per configured integration, and emits a JSON-per-check matrix with fix hints and distinct exit codes. Use when the user mentions doctor, preflight, connection check, cannot reach Grafana, Sentry, or Prometheus, 401 or timeout errors before an audit, or blocked audit checks. Do not use to create or rotate credentials (use connect) or for scored assessment (use the audit-* skills).
+description: Preflight connection check; a bundled read-only script reads ~/.scoutflo/toolkit.yaml, makes bounded read-only probes for each configured integration, and emits a JSON-per-check matrix with fix hints and distinct exit codes. Use when the user mentions doctor, preflight, connection check, cannot reach Grafana, Sentry, or Prometheus, 401 or timeout errors before an audit, or blocked audit checks. Do not use to create or rotate credentials (use connect) or for scored assessment (use the audit-* skills).
 ---
 
 # Doctor: Connection Preflight
@@ -9,13 +9,13 @@ Doctor answers one question before any audit or setup skill spends your time: ca
 
 Run it after `/scoutflo:connect`, before your first `/scoutflo:audit-all`, and whenever an audit reports a blocked check. Every `audit-*` and `setup-*` skill re-runs the subset of these checks it needs as its own doctor gate; this skill is the full matrix in one place.
 
-All checking lives in one bundled script, `scripts/doctor.sh`. It is read-only, non-interactive, and never prints a secret: tokens are checked for presence and sent only inside request headers. The single exception to read-only is the optional Slack test post, which sends a visible message and runs only when you pass `--slack-test` after the user explicitly confirms. Doctor produces no `findings.json` and no score; it is a preflight, not an audit, and a failed check here is a stop-and-fix, never a finding.
+All checking lives in one bundled script, `scripts/doctor.sh`. It is read-only, non-interactive, and never prints a secret: credentials are checked for presence and used only by the selected request. The single exception to read-only is the optional Slack test post, which sends a visible message and runs only when you pass `--slack-test` after the user explicitly confirms. Doctor produces no `findings.json` and no score; it is a preflight, not an audit, and a failed check here is a stop-and-fix, never a finding.
 
 ## Prerequisites
 
-- `curl` required; `jq` checked because every other skill needs it.
-- `yq` optional. Without it, the script falls back to a POSIX parser that handles the flat two-level layout of `templates/toolkit.yaml.example`. Anything more nested needs `yq`.
-- A vendor CLI **only when its provider is configured**, and doctor emits a `binary-<cli>` row (pass/fail) for each so a missing one is a clear, named failure rather than a downstream crash: `kubectl` (a `kubernetes:` block), `aws` (`aws:`), `gcloud` (`gcp:`), `doctl` (`digitalocean:`). Every other provider is HTTPS+token and needs no CLI.
+- `curl` and `jq` required. Bounded JSON account/query probes and the Alertmanager, HyperDX and ClickHouse reads require curl 8.4 or newer; an older or unrecognized client version is refused before those reads.
+- `yq` optional. Without it, the script falls back to a POSIX parser that handles the flat two-level layout of `templates/toolkit.yaml.example`. The shared enumerator also handles supported labeled lists; unsupported YAML must be simplified or parsed with a supported `yq`.
+- A vendor CLI **only when its provider is configured**, with a named failure when missing: `kubectl` (a `kubernetes:` block), `aws` (`aws:`), `gcloud` (`gcp:`), `doctl` (`digitalocean:`), and `az` (`azure:`). Successful availability may be represented by the subsequent provider check rather than a separate binary pass row. Other configured providers use HTTP probes.
 
 ## Step 0: Report the storage location (no choice required)
 
@@ -113,22 +113,23 @@ Judgment step: read the JSON lines and decide what to fix first. Each line has s
 
 | Field | Meaning |
 | --- | --- |
-| `integration` | Template-order row: toolkit, grafana, sentry, pagerduty, datadog, elk, jsm, zenduty, splunk_oncall, groundcover, lgtm, prometheus, alertmanager, loki, tempo, mimir, victoriametrics, vmalert, digitalocean, gcp, aws, kubernetes, slack | **When a block configures SEVERAL targets the value is `<block> (<label>)`, not the bare block name** — so a consumer matching the bare form alone silently matches zero rows on a multi-target config. Match `$1 == b || substr($1, 1, length(b) + 2) == b " ("`, and treat zero matches as a stop, never as a pass |
+| `integration` | Template-order row: toolkit, grafana, sentry, pagerduty, datadog, elk, jsm, zenduty, splunk_oncall, groundcover, lgtm, prometheus, alertmanager, loki, tempo, mimir, victoriametrics, vmalert, signoz, newrelic, clickstack, digitalocean, gcp, aws, azure, github, kubernetes, slack. **When a block configures SEVERAL targets the value is `<block> (<label>)`, not the bare block name** — so a consumer matching the bare form alone silently matches zero rows on a multi-target config. Match `$1 == b || substr($1, 1, length(b) + 2) == b " ("`, and treat zero matches as a stop, never as a pass |
 | `check` | What was checked: `env` (variable presence), a live endpoint (e.g. `health`, `identity`, `org`, `abilities`, `analytics`, `validate`, `monitors-read`, `cloudwatch-read`, `cost-permissions`, `kibana-status`, `alerting-health`, `alerts-read`, `teams-read`, `team-read`, `spaces`, `query`, `status`, `config`, `ready`, `rbac`, `account`, `vmalert-health`, `monitoring-api`, `webhook-post`), `binary-*`, or `configured` for unconfigured rows |
 | `configured` | `yes` when the block exists with a non-empty `url`, `host`, `token_env`, `project`, `account_id`, or `context`. Unconfigured rows are informational, never failures |
 | `env_var` | The `*_env` variable name, `none` when the block names no token, `-` when not applicable. Names only; values never |
-| `result` | `pass`, `fail`, `env-missing`, or `skipped` |
+| `result` | `pass`, `fail`, `env-missing`, `skipped`, or `warn` |
 | `http_code` | Captured status code; `"000"` means the transport failed before any HTTP response; `null` for non-HTTP checks |
 | `hint` | The concrete fix, quoting the observed failure shape (curl exit code or HTTP status), never a guess |
 
 Result vocabulary:
 
-- `pass`: the check succeeded.
+- `pass`: the specific probe succeeded; it does not certify full audit scope or write permission.
+- `warn`: an advisory condition, not proof of a failed provider read.
 - `fail`: the check ran and failed. The hint says why and what to fix.
 - `env-missing`: the block names a `*_env` variable that is not set in this shell. The integration's live checks are recorded as `skipped`, never attempted, so no empty Authorization header is ever sent.
 - `skipped`: not attempted for a stated reason (unconfigured, blocked by `env-missing`, or the Slack post awaiting confirmation). Skipped rows never fail the run.
 
-Exit code precedence: `2` (env var missing) wins over `3` (live check failed), because exporting the variable may fix the live checks too. Fix in that order.
+Exit code precedence: `2` (env var missing) wins over `3` (live check failed), because loading the selected variable from the secret store may fix the live checks too. Fix in that order.
 
 ## Step 3: Render the connection matrix
 
@@ -146,7 +147,7 @@ toolkit          binary-jq     yes         -              pass     -          -
 grafana          env           yes         GRAFANA_TOKEN  pass     -          -
 grafana          health        yes         GRAFANA_TOKEN  pass     200        -
 grafana          identity      yes         GRAFANA_TOKEN  pass     200        -
-sentry           env           yes         SENTRY_TOKEN   env-missing  -      export SENTRY_TOKEN in this shell, then rerun doctor
+sentry           env           yes         SENTRY_TOKEN   env-missing  -      use /scoutflo:connect to save SENTRY_TOKEN, then rerun doctor
 sentry           org           yes         SENTRY_TOKEN   skipped  -          blocked: SENTRY_TOKEN is not set
 prometheus       query         yes         none           fail     000        curl exit 7: connection refused; wrong port, service not exposed, or the port-forward is not running
 loki             configured    no          -              skipped  -          add a loki block via /scoutflo:connect if you run Loki
@@ -156,7 +157,7 @@ slack            webhook-post  yes         SCOUTFLO_SLACK_WEBHOOK  skipped  -  t
 
 Close with a verdict:
 
-- Exit 0: "Ready." Then, only if a `kubernetes` block is configured: "Run /scoutflo:map-topology (it needs kubectl + a kubernetes.context), then /scoutflo:audit-all." Otherwise send them straight to audit: "Run /scoutflo:audit-all, or a single audit like /scoutflo:audit-grafana." Never point a non-Kubernetes user at map-topology — it is Kubernetes-only and will exit on a missing kubectl/context.
+- Exit 0: "The configured preflight probes passed." Run `/scoutflo:map-topology` using its Kubernetes mode when a context is selected, or its Cloud Mode for a configured supported cloud estate; then run `/scoutflo:audit-all` or the selected provider audit. A passed preflight does not establish estate completeness or customer readiness.
 - Exit 1: no `~/.scoutflo/toolkit.yaml` yet — run `/scoutflo:connect` first, then rerun doctor.
 - Exit 2 or 3: name the affected skills, fix, then rerun doctor. Exit 2 wording names the env var ("audit-sentry will not run until SENTRY_TOKEN is set"); exit 3 wording quotes the live evidence ("grafana failed its live check: http_code 000, curl exit 7 - host unreachable"), never the env var. Never advise starting an audit over a failed row, and never downgrade a doctor failure into a finding.
 
@@ -170,7 +171,7 @@ awk -F '\t' 'NR>1 && $3=="yes" && ($5=="fail" || $5=="env-missing")' "${OUT_DIR}
 
 ## What the script checks
 
-One cheap read-only call per configured integration. Unconfigured integrations are skipped cleanly; they are never failures.
+Small read-only probes for each configured integration; identity, capability and fallback checks may require several calls. Unconfigured integrations are skipped cleanly; they are never failures.
 
 | Integration | Live check | Healthy | Common failure meaning |
 | --- | --- | --- | --- |
@@ -178,7 +179,7 @@ One cheap read-only call per configured integration. Unconfigured integrations a
 | sentry | GET `/api/0/organizations/<org>/` | 200 | 404: wrong region host or org slug; run the region probe in `connect` `references/providers.md` |
 | pagerduty | GET `/abilities`, then POST `/analytics/metrics/incidents/all` (read-only filter body) | 200, 200 | 401 on abilities: key invalid/revoked or wrong region host (`pagerduty.region` us vs eu). The analytics probe never fails the run: 402/403 there records `skipped` with a reason, because read-only keys are documented GET-only and Analytics may be plan-gated; audit-pagerduty reads that row to include or honestly exclude its actionability section |
 | elk | Identity: GET `/api/status`; scope: GET `/api/alerting/_health` (Kibana, `Authorization: ApiKey`) | Identity requires 200 JSON with `version.number`; alerting health may be blocked | `/api/status` 401 means unauthenticated, 403 means target identity cannot be verified with this scope, and 404 means the configured base URL/path is wrong. After identity passes, `/api/alerting/_health` 401/403/404 is a non-fatal evidence gap that `audit-elk` records as blocked; its health fields are audit signals, not the identity gate |
-| datadog | GET `/api/v1/validate` (API key), then GET `/api/v1/monitor?page_size=1` (app key + `monitors_read`) | 200, 200 | Datadog needs a key PAIR; both headers are sent together. 403 on validate: API key wrong or wrong `datadog.site` (a valid key on the wrong site 403s). 403 on monitor: app key invalid, unscoped for `monitors_read`, or its creating user was disabled (app keys are user-bound). A `cost-permissions` row records whether `usage_read`/`billing_read` are present; a miss there is `skipped`, never a failure — audit-datadog reads it to run or exclude the non-scored cost section |
+| datadog | GET `/api/v1/validate` (API key), then GET `/api/v1/monitor?page_size=1` (app key + `monitors_read`) | 200, 200 | Datadog needs a key PAIR; both headers are sent together. 403 on validate: API key wrong or wrong `datadog.site` (a valid key on the wrong site 403s). 403 on monitor: app key invalid, unscoped for `monitors_read`, or its creating user was disabled (app keys are user-bound). A `cost-permissions` row records only whether the usage-summary probe returned HTTP 200; its response content, `billing_read` and estimated-cost access remain unverified; a miss there is `skipped`, never a failure — audit-datadog reads it to run or exclude the non-scored cost section |
 | jsm | resolve `cloud_id` (from `jsm.cloud_id`, else the unauthenticated `tenant_info` route), then GET `/jsm/ops/api/<cloud_id>/v1/alerts?size=1` (Atlassian API token over Basic auth) | non-empty cloud_id, then 200 | No cloud_id: `jsm.site` wrong or its `tenant_info` route blocked; set `jsm.cloud_id` explicitly. 401: bad token or email (the token is the Basic password, not a classic Opsgenie GenieKey). 403: the token's user has no JSM Operations access. 404: wrong `cloud_id` or the site has no Operations |
 | splunk_oncall | GET `/api-public/v1/team/{team_slug}` at `api.victorops.com`; `X-VO-Api-Id` + `X-VO-Api-Key` | 200 and exact team slug | Requires both named variables and a configured team identity. Rejects redirects, HTML, missing/wrong/duplicate slug and malformed bodies. 401/403 means access not established; 429 means retry later. A successful read does not establish write permission or message delivery |
 | zenduty | GET `/api/account/teams/` (`Authorization: Token <key>`) | 200 | 401/403: key invalid or not prefixed correctly — the header must be `Authorization: Token <key>` (the literal word `Token`, not `Bearer`). 429: rate-limited — Zenduty's per-endpoint-class limits are tight; wait ~1 minute. Zenduty has no read-only key scope, so a Bot Token (Beta) is the least-privilege path |
@@ -191,8 +192,13 @@ One cheap read-only call per configured integration. Unconfigured integrations a
 | vmalert | GET `/health` | 200 | If `/health` is not exposed in your setup, `GET /api/v1/rules` returning JSON is an equivalent read-only proof |
 | digitalocean | `doctl` installed (binary check), then GET `/v2/account` | doctl present, then 200 | `binary-doctl fail`: `doctl` not installed but a `digitalocean:` block is configured (audit-digitalocean is doctl-based) — install doctl. 401: token missing, invalid, or expired. 403: token valid but scoped too low for account read |
 | gcp | `gcloud auth print-access-token` (or `application-default` when `credentials_env` is set), then GET the Monitoring API `notificationChannels` | non-empty token, then 200 | No token at all: not logged in, or the key file `credentials_env` names is missing or invalid; run `gcloud auth login` or fix the key file. 403 on the API call: identity lacks `monitoring.viewer`. 404: `gcp.project` is wrong |
-| aws | `aws sts get-caller-identity`, then `aws cloudwatch describe-alarms --max-records 1` (via the AWS CLI, honoring `aws.profile`/`aws.region`); a `cost-permissions` row records Compute Optimizer / Cost Explorer / Support read access | identity resolves, then reachable | Identity fails: no credentials in the chain (env, profile, or assumed role) — run `aws configure` or export credentials. A resolved identity whose account differs from `aws.account_id` is an account-mismatch **stop**, not a warning. `cloudwatch-read fail`: the principal lacks `cloudwatch:DescribeAlarms` (grant the read-only policy in `connect` `references/providers.md`). The `cost-permissions` row is `skipped`, never a failure, when CO/CE/Support are not readable — audit-aws reads it to run or honestly exclude its non-scored Cost & Resource Optimization section |
+| aws | `aws sts get-caller-identity`, then `aws cloudwatch describe-alarms --max-records 1` (via the AWS CLI, honoring `aws.profile`/`aws.region`); an optional `cost-permissions` row records only whether `compute-optimizer get-enrollment-status` completed successfully | identity resolves, then reachable | Identity fails: no credentials in the chain (env, profile, or assumed role) — run `aws configure` or export credentials. A resolved identity whose account differs from `aws.account_id` is an account-mismatch **stop**, not a warning. `cloudwatch-read fail`: the principal lacks `cloudwatch:DescribeAlarms` (grant the read-only policy in `connect` `references/providers.md`). The optional row is `skipped`, never a failure, when this metadata call fails or `aws.cost_checks` is false. A `pass` does not validate enrollment state, recommendation reads, Cost Explorer or Support access; audit-aws validates those per check in its non-scored cost section |
 | kubernetes | `kubectl --context <ctx> auth can-i get pods` | `yes` | `no`: the context reaches the cluster but lacks read RBAC; bind the `view` ClusterRole. A context error: the config value does not exist in your kubeconfig; run `kubectl config get-contexts` |
+| clickstack | Independent ClickHouse `SELECT 1` and HyperDX health/API checks | ClickHouse requires HTTP200 and exact result1; HyperDX requires one compatible JSON array/envelope | Refused configured access is blocked, not a scope exclusion. Session-variable presence is not verified login. Probe bodies remain in memory |
+| signoz | Version, authenticated rules read, optional ClickHouse probe | Expected JSON plus successful optional SQL read | A successful version endpoint does not establish authenticated rules access; each lane has its own result |
+| newrelic | Region-selected NerdGraph account read | Expected actor/account JSON | Verify region, account and User key; HTTP status alone cannot identify the cause |
+| azure | `az account show --subscription <configured id>` | Command succeeds for the selected subscription | Missing CLI, login or inaccessible subscription prevents that lane |
+| github | Organization lookup, then user lookup on404 | Selected login resolves | This establishes lookup reachability, not access to every repository |
 | slack | POST test message (only with `--slack-test`) | 200 and the message appears | 404 or `no_service`: the webhook was revoked; create a new one via `/scoutflo:connect` |
 
 Authentication headers are sent only when every required credential variable for that provider is named and nonempty. The metrics-family blocks (`prometheus`, `loki`, `tempo`, `mimir`, `victoriametrics`) may instead name a `basic_user_env` + `basic_pass_env` pair for basic-auth-fronted endpoints; when both are set, basic auth overrides the bearer token, and the same never-send-empty rule applies. PagerDuty uses its own `Authorization: Token token=<key>` scheme rather than a Bearer header, Datadog uses a `DD-API-KEY` + `DD-APPLICATION-KEY` header pair, Kibana uses `Authorization: ApiKey <encoded>`, JSM Operations uses HTTP Basic auth (`email:token`) with an Atlassian API token, Zenduty uses `Authorization: Token <key>` (the literal word `Token`, not `Bearer`), Splunk On-Call uses `X-VO-Api-Id` + `X-VO-Api-Key`, and Groundcover uses `Authorization: Bearer <key>` plus an `X-Backend-Id` header on multi-backend accounts; the same never-send-empty rule applies to all of them. A named-but-unset variable yields `env-missing`, not a call with an empty header. GCP has no static `token_env`; its identity comes from `gcloud`, and the same empty-credential rule applies: no access token, no call.
@@ -216,14 +222,14 @@ The script's hints quote the observed failure shape. This table is the deeper re
 | Failure class | Likely cause | Fix |
 | --- | --- | --- |
 | exit 1, config not found | No `~/.scoutflo/toolkit.yaml` | Run `/scoutflo:connect` (or export `SCOUTFLO_CONFIG` if yours lives elsewhere); it seeds the file from `templates/toolkit.yaml.example` |
-| `env-missing` | The `*_env` variable is not exported in this shell | Export it here (env vars are per-shell), or load it from your profile; created per `connect` `references/providers.md` |
+| `env-missing` | The selected credential variable did not resolve | Save it through `/scoutflo:connect` or the shipped secret-store writer, then rerun. An exported-only variable works only if the plugin process inherits it |
 | `http_code` 000, curl exit 6 | DNS lookup failed | Typo in the URL, or the host resolves only on VPN or internal DNS |
 | `http_code` 000, curl exit 7 | Connection refused | Wrong port, service not exposed, or the port-forward is not running |
 | `http_code` 000, curl exit 28 | Timeout | Firewall or network path; confirm you can reach the host at all before raising `CURL_MAX_TIME` |
 | `http_code` 000, curl exit 35 or 60 | TLS failure | Internal CA not trusted by your system; install the CA properly, never disable verification |
 | `http_code` 000, curl exit 52, 55, or 56 | Connection dropped mid-transfer (no HTTP response) | A proxy or corporate firewall between you and the host, not the token; retry once with proxy vars cleared (`env -u HTTPS_PROXY -u https_proxy ...`) and confirm the host is reachable from this network. It is never an auth (401/403) error |
-| HTTP 401 | Token missing, invalid, or expired | Recreate per the provider section in `connect`; confirm the variable is exported in this shell |
-| HTTP 403 | Token valid, scope or role too low | Raise to the tier scopes in `connect` `references/providers.md` |
+| HTTP 401 | Authentication refused; exact cause not established | Verify the selected target, credential type and provider-specific response before replacing credentials |
+| HTTP 403 | Access refused; validity and required scope remain unproven | Check target, region, key type and documented read requirements with the administrator; do not widen access based on the status alone |
 | HTTP 404 | Wrong path, wrong region host, or a path prefix | Sentry: run the region probe. Gateways: verify the health path against your deployment |
 | kubernetes `rbac` fail with "no" | Context reaches the cluster, read RBAC missing | Bind the `view` ClusterRole per `connect` `references/providers.md` |
 | kubernetes `rbac` fail with a context error | `kubernetes.context` not in your kubeconfig | `kubectl config get-contexts`, then fix the config value |
@@ -233,7 +239,7 @@ The script's hints quote the observed failure shape. This table is the deeper re
 
 | Failure | Prevention |
 | --- | --- |
-| Doctor passes in one terminal, the audit fails in another | Env vars are per-shell; export them in your profile or run doctor and the audit in the same shell |
+| Doctor passes in one terminal, the audit fails in another | Use the shared secret-store resolver in both steps; each command runs in a fresh shell and loads its selected variable names |
 | Empty `Authorization` header sent to an unauthenticated endpoint, causing a proxy 401 | Run the bundled script; it attaches the header only when `token_env` is named and set. Never hand-roll a check that adds the header unconditionally |
 | Checks re-implemented inline instead of running the script | The script is the check contract: exit codes, JSON shape, and header guards live there. Inline curl loops drift and leak |
 | `/ready` 404 behind a path-prefixed gateway read as "service down" | Health paths vary by deployment; verify the path, and treat a successful real query as authoritative |

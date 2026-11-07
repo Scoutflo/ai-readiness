@@ -46,7 +46,7 @@ history lane described in C17; historical fire-only artifacts remain readable.
 | --- | --- |
 | C1, C8, C16, C20 | The [On-Call catalog](../skills/audit-splunk-oncall/references/oncall-checks.md) owns eighteen scored checks and a separate non-scored SOC-008 observation. Reports, score history, audit-all and executive views retain scope, evidence gaps and end-to-end limits; the expanded check set is not score-comparable with the older seven-check set. |
 | C2, C3, C9, C12, C13, C15 | The selected target, read-only credential, bounded collection and fresh environment rules apply to both [effective quality](../skills/audit-splunk-oncall/references/effective-quality.md) and [history quality](../skills/audit-splunk-oncall/references/history-quality.md). Optional denied reads block their lane; they do not require new config keys or permit setup-key fallback. |
-| C4, C5, C7, C14, C21, C22 | Existing source-verified `correlation_affected` identity remains the only service join. Policy, team and opaque history references support local investigation; they are not application monitors, repository matches, duplicate-page proof or current root cause. Source audits continue to own source rule evaluation and destination selection. |
+| C4, C5, C7, C14, C21, C22 | Existing source-verified `correlation_affected` identity remains an additional On-Call service-join filter; C24 also requires qualified identity/generation bindings. Policy, team and opaque history references support local investigation; they are not application monitors, repository matches, duplicate-page proof or current root cause. Source audits continue to own source rule evaluation and destination selection. |
 | C6 | The check catalog owns application of declared response, noise, staffing, future-horizon and timezone requirements. Missing objectives remain blocked; illustrative provider/SRE guidance never supplies an undeclared customer threshold. |
 | C10, C11 | `audit-all`, scheduled runs and standalone invocation preserve the selected collection scope and partial history. Start, README, connection guidance and customer FAQ describe the same shipped capabilities and limitations. |
 | C17 | Native history adds its own status, window, incident units, completeness and response denominators. The fatigue renderer preserves old fire fields and never synthesizes an AF-003 ratio or outcome label from incident history. |
@@ -235,10 +235,13 @@ forward routing from upstream policy references.
 
 - **Producer:** `findings[].affected` names concrete resources (required for
   non-`info`).
-- **Consumers:** `correlation-engine` joins overlaps (same `affected` service
+- **Consumers:** `correlation-engine` joins overlaps (compatible current qualified service identity
   across targets) and cascades (shared-resource datastore→alerting chains);
-  `rca` reads `correlation.json` (Phase 5) for cross-stack agreement + cascades;
-  `cost-analysis` dedups via `correlation.json`.
+  `rca` recomputes candidates from the exact selected target/resource/run date
+  through the shared library (Phase 5), never a stale cached correlation.
+  `cost-analysis` also recomputes overlap annotations for a current selected run;
+  historical standalone reads retain the dated `correlation.json` path. Neither
+  overlap annotation changes provider-native savings.
 - **Invariant:** a non-`info` finding with no `affected` is unjoinable — rejected
   at the gate.
   On-Call `route-N` aliases are run-local display values, never persistent
@@ -248,10 +251,10 @@ forward routing from upstream policy references.
   explicit `correlation_affected` subset containing only source-verified canonical
   service identities. Absent/invalid declarations yield no join tokens, including
   for historical On-Call artifacts; bare policy/team slugs cannot corroborate
-  another account. Other integrations retain their existing affected contract.
+  another account. All integrations retain affected remediation identities; C24 adds qualified proof for cross-target joins.
 - **Guards:** `check-findings.sh` (affected required). Tests:
   `skills/correlation-engine/tests/`. Selftest: `layer_capstone` (a shared
-  `affected` resource is detected as an overlap across a one- and two-level target).
+  qualified resource identity is detected as an overlap across a one- and two-level target).
 
 ## C5 — correlation.json shape (producer ↔ consumer field agreement)
 
@@ -262,11 +265,18 @@ forward routing from upstream policy references.
   all input rows. A zero-finding rerun writes an empty current result instead of
   leaving an earlier root-level `correlation.json` for consumers.
 - **Producer:** `correlation-engine.sh` writes `overlaps[]`
-  `{overlap_id:"OVL-<service>", type, service, targets[], findings[{target,finding_id,title,severity}], recommendation}`
-  and `cascades[]`
+  `{overlap_id:"OVL-<encoded-qualified-identity>", type, service, targets[], findings[{target,finding_id,title,severity}], recommendation}`
+  and `cascades[]` (cascade IDs encode the source target and root finding ID)
   `{cascade_id, root_cause{finding_id,title,target,shared_resources}, effects[{finding_id,title,target,condition}]}`.
-- **Consumers:** `rca` Phase 5, `cost-analysis` dedup, `render-report-viz overlaps`,
-  `topology-guided-setup`.
+- **Consumers:** `render-report-viz overlaps` reads the saved artifact with the
+  current selected-run snapshot check. `rca` Phase 5 and selected-run
+  `cost-analysis` use the same shared candidate shapes after recomputing from
+  validated current inputs; standalone historical cost analysis may read a
+  date-matched saved artifact. The older `topology-guided-setup` helper also
+  reads this shape but is not wired into setup execution and does not enforce
+  current run/target bindings. It is not an approved automatic skip/dedup path:
+  send candidates to the owning setup skill for explicit scope/evidence review
+  and confirmed changes; never prune monitoring from these candidates alone.
 - **Invariants:** consumers read **only** fields the lib writes — there is no
   `chain_length`/`services[]`/`skill`/`redundancy_level`/`root_cause.impact`/
   `effects[].step` (a phantom `chain_length` read once rendered "prevents
@@ -326,8 +336,12 @@ forward routing from upstream policy references.
   (Tier-C questions and unconfirmed low-tier candidates never do). `map-topology`
   emits the canonical `relationships[]`; consumers read `relationships[]` **and**
   tolerate a legacy `edges[]` shape as a fallback (older or hand-authored
-  exports). Keep the `edges[]` fallback in `rca`/`render-report-viz` — it is
-  backward-compat, not dead code — and do not add a *third* divergent reader.
+  exports). The estate composer accepts both source shapes, so RCA preserves
+  this compatibility through composition into its explicitly selected local
+  `estate-topology.json`; it does not join unqualified names from a global export.
+  `render-report-viz` retains its direct legacy fallback. The composed artifact
+  preserves qualified endpoints and configuration/traffic tiers; it is separate
+  from the unchanged server-import export, not a new server schema.
   `map-topology` is **per-target** (re-run per labeled kubernetes context or
   cloud target; one shared `topology.md` describes the wrong estate for the
   others).
@@ -418,8 +432,15 @@ forward routing from upstream policy references.
   fails closed. A deliberately status-only probe carries a `status-probe-ok`
   comment. (HyperDX: Personal API Access Key → Bearer → `/api/v2` (probe the
   app-proxy-doubled `/api/api/v2` too), never the ingestion key; SigNoz:
-  `signoz-viewer` role, 403 = no role.)
-- **Guards:** `ci/content-type-probe-check.sh`. Selftest: HyperDX + SigNoz auth
+  `signoz-viewer` role. A 401/403 alone cannot identify credential type or prove
+  that wider permissions are required.) Doctor's generic JSON account/query probes retain their
+  bounded responses only in memory, require one expected JSON document and
+  reject HTML, malformed responses, redirects and incomplete transfers.
+- **Guards:** `ci/content-type-probe-check.sh`,
+  `skills/doctor/tests/test-json-status-memory.sh` (bounded transport, version
+  refusal, one-document shape and transient-write canary),
+  `skills/doctor/tests/test-doctor-safety-boundaries.sh` (GCP/DigitalOcean/GitHub
+  JSON checks and GitHub user fallback). Selftest: HyperDX + SigNoz auth
   locks in `layer_depth`.
 
 ## C13 — Behavioral parity (scope / redaction / env-load)
@@ -430,9 +451,10 @@ forward routing from upstream policy references.
   every audit must resolve that store identically** via the layered resolver
   (`SCOUTFLO_ENV_FILE` → `./.scoutflo/env` → `$HOME/.scoutflo/env`) — a hardcoded
   `$HOME`-only path in one and the layered path in the other is a real
-  doctor↔audit asymmetry on sandboxed/project-local surfaces. Secrets live in the
-  store, not the operator's interactive shell (the plugin runs in its own process
-  and cannot see a shell `export`); `connect` writes the store for the operator
+  doctor↔audit asymmetry on sandboxed/project-local surfaces. The store is the
+  recommended source: a plugin process need not inherit exports from another
+  terminal. A selected variable already exported to the plugin process is also
+  supported; the store wins when both are present. `connect` writes the store for the operator
   with the shipped writer `skills/connect/scripts/addsecret.sh`, which resolves
   the store by the **same** layered ladder as the readers and stores each value
   single-quote-escaped as `export VAR='…'` — a re-run **replaces** that line
@@ -468,7 +490,25 @@ forward routing from upstream policy references.
   Status reads disable curl configuration files and redirects, enforce response
   limits and require curl 8.4 or newer. Configuration projection additionally
   requires Python 3 with PyYAML before any provider read.
-- **Guards:** `skills/doctor/tests/test-alertmanager-status-memory.sh` (no raw
+- **HyperDX preflight capture:** doctor retains its bounded alert probe only in memory,
+  requires one JSON array/envelope with array data, and refuses old curl versions that
+  cannot bound unknown-length responses. Authentication status alone does not identify
+  a key type or justify wider access. An unreadable configured target remains blocked.
+- **Preflight identity/auth boundaries:** a failed pinned AWS account check prevents
+  downstream service reads; the configured GCP credential file is bound to its token
+  subprocess. Missing authenticated credential names cannot send empty headers.
+  A malformed secret store stops before provider reads without exposing shell
+  diagnostics. Explicit metrics Basic pairs override bearer only on their own calls;
+  incomplete pairs cannot fall back to another credential. ClickHouse probes require
+  both a successful HTTP status and the exact read result.
+- **Guards:** `skills/doctor/tests/test-doctor-safety-boundaries.sh` (full-script
+  identity, credential-file, missing-name, malformed-store, Basic isolation and
+  ClickHouse status regressions);
+  `skills/doctor/tests/test-cost-probe-claims.sh` (metadata-only AWS cost proof,
+  optional GCP failure semantics and evidence-bound access advice);
+  `skills/doctor/tests/test-hyperdx-status-memory.sh` (no transient raw
+  alert file, strict JSON shape, old-curl refusal and accurate auth limits);
+  `skills/doctor/tests/test-alertmanager-status-memory.sh` (no raw
   status temporary file, malformed/refused responses and unsupported curl);
   `skills/audit-alertmanager/tests/test-config-projection.sh` (native and
   Operator shapes, credential-bearing text, nine literal fresh-shell status
@@ -525,14 +565,16 @@ forward routing from upstream policy references.
   an alerting/monitor type that watches its `covers` resource — one of `monitor`,
   `alarm`, `alert`, `alert_rule`, `alert_policy`, `log_alert`, `activity_log_alert`,
   `uptime_check` (routing/muting/delivery kinds like `receiver`/`silence`/`route`/
-  `escalation_policy`/`notification_channel` never count) — `enabled != false`, and
+  `escalation_policy`/`notification_channel` never count) — literal `enabled == true`, and
   `routes_to` names a real receiver. This kind list is the SSOT the `active()` filter
   in `correlation-engine.sh` must match; adding a provider that emits a new alerting
   kind means updating both.
-  A `covered-elsewhere` verdict requires an **exact** normalized `covers==affected`
-  match and is always worded **single-tool-dependency** (never "covered"); a fuzzy
-  match is `unmappable` (verify-pending); nothing is `true-gap`. Confidence is
-  highest when `map-topology` has run so both sides use the canonical service name.
+  A `covered-elsewhere` verdict requires exact qualified identity and current
+  generation evidence under C24, and is worded **single-tool-dependency**, with
+  actual signal/query equivalence still requiring verification. Bare names and
+  fuzzy matches remain `unmappable`. `true-gap` is permitted only within the
+  nonempty declared expected set when all target inventories are complete;
+  missing, blocked, partial or subset reads cannot establish absence.
   Every `covered_by` entry names an inventory item present in this run.
   Prometheus `covers` values come from observed service labels or a verified
   job-to-service mapping. Unknown mappings stay unknown. Its `routes_to` may
@@ -948,12 +990,16 @@ PR; the live smoke against a real estate is a hard merge gate (`AGENTS.md`).
 ## C21 — RCA answer (live-first, never-invented)
 
 - **Producer:** `rca` answers "why is X failing" by correlating the per-audit
-  findings + `correlation.json` + `topology-export.json` + business context,
-  then making **read-only** live checks (via the `live-evidence` lib) for
-  current-state evidence.
+  findings for an explicit target/resource/run date, shared recomputed correlation
+  candidates, selected local estate topology and business context, then making
+  **read-only** live checks (via the `live-evidence` lib) for current-state evidence.
+  Saved topology remains dated reference; configuration is not observed traffic.
 - **Probe boundary:** `le_kubectl` limits `config` to `view` / `get-contexts` and `auth` to
   `can-i`, rejects target/credential overrides and raw-output flags, and always
-  pins the selected context.
+  pins the selected context. Each live shell resolves the selected config anew
+  and compares the cluster endpoint with an independently reviewed expectation.
+  Event/rollout messages and logs pass through shared redaction before output;
+  missing redaction or failed reads withhold evidence.
 - **Invariants:** every named cause is **evidence-cited** (finding IDs, live
   reads); the answer carries a **confidence level and an honest list of what it
   could not determine**; it never invents a cause, never mutates anything, and
@@ -1018,3 +1064,10 @@ PR; the live smoke against a real estate is a hard merge gate (`AGENTS.md`).
   (`audit-prometheus/decommissioned-is-not-an-outage.md`,
   `audit-cost/intent-is-declared-never-inferred.md`,
   `audit-grafana/alerting-lives-on-the-ruler-this-audit-cannot-read.md`).
+
+## C24 — Qualified identity, complete scope and safe source handoff
+
+- **Producers:** audits retain optional `collection`, inventory `service_identity`/`identity_evidence`, and finding `correlation_bindings` under [service-evidence.md](../report-standard/service-evidence.md). `audit-all` records the selected queue through `report-standard/write-coverage-assessment.sh` and its completed artifact hashes through `report-standard/run-selection.py`. Datadog and HyperDX fixed read recipes project before persistence and emit the source evidence/capture envelopes owned by [source-evidence.md](../skills/audit-splunk-oncall/references/source-evidence.md).
+- **Consumers:** correlation, alert fatigue and RCA require qualified identity and generation evidence for cross-target conclusions; On-Call binds source definitions, source generation, expected management target and protected-route generation before one bounded management collection. `map-topology` composes a separate local estate artifact with qualified source identities and evidence tiers. This does not extend the server import enum or authorize backend work.
+- **Invariants:** bare names, handles and matching strings cannot prove cross-account identity. Only literal active state supports coverage. `true-gap` is restricted to the declared complete expected target set; missing/partial/subset data is unmappable. Source capture verification is distinct from exact route verification and neither proves human receipt. Optional legacy fields remain readable without being silently upgraded. Configuration overlap is not measured fatigue, money, query equivalence or a root cause. Invalid current inputs cannot reuse stale success. Current planned runs aggregate only validated, completed artifact generations; unselected or unfinished same-day files cannot enter correlation, cost, fatigue or report rendering. Legacy standalone reads remain supported without implying a selected run is complete.
+- **Guards:** `report-standard/check-correlation-evidence.sh` (called by findings/report validation), `tests/test-service-evidence.sh`, `tests/test-run-selection.sh`, `tests/test-rca-evidence-scope.sh`, `skills/correlation-engine/tests/test-evidence-boundaries.sh`, `skills/audit-clickstack/tests/test-hyperdx-projection.sh`, and the owning Datadog/On-Call source-binding suites. Existing C1/C2/C4/C5/C7/C14/C17/C21 consumers retain their independent scoring, domain and artifact boundaries.

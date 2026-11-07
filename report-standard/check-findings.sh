@@ -25,6 +25,9 @@ F="${1:?usage: check-findings.sh path/to/findings.json}"
 command -v jq >/dev/null || { echo "FINDINGS-FAIL: jq not installed"; exit 1; }
 jq empty "$F" 2>/dev/null || { echo "FINDINGS-FAIL: $F is not valid JSON"; exit 1; }
 
+EVIDENCE_ROOT="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+sh "$EVIDENCE_ROOT/check-correlation-evidence.sh" "$F" >/dev/null || exit 1
+
 FAIL=0
 fail() { echo "FINDINGS-FAIL: $1"; FAIL=1; }
 

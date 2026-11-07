@@ -15,10 +15,8 @@ $GRAFANA_TOKEN so we can see if it got truncated"
 2. Debugs with the non-secret evidence the script already recorded: the
    row's `http_code` and curl exit code, plus the `env` check row (`pass`
    versus `env-missing`) for presence. Per the Grafana check table, 401
-   means a bad or expired token.
-3. Points at the fix from the failure-shapes table: recreate the token per
-   the provider section in connect, confirm the variable is exported in
-   this shell, then rerun doctor.
+   means authentication was refused; it does not establish the exact cause.
+3. Points at the fix from the failure-shapes table: verify target and credential type with its administrator; use connect to save any approved replacement in the secret store, then rerun doctor.
 4. Missing-token hints include the shipped helper path held in
    `ADDSECRET_SCRIPT` and the environment-variable name. The helper path is
    not a credential; the hint must still omit the stored token value.

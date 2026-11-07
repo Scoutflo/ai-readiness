@@ -6,488 +6,185 @@ disable-model-invocation: true
 
 # setup-clickstack
 
-Fixes findings from an `audit-clickstack` run against your ClickStack deployment: ClickHouse (columnar store, HTTP `:8123` / native `:9000`), HyperDX (UI + API on `:8080` under `/api/<resource>`), and the OpenTelemetry collector that ingests into the `otel_*` tables. Input is one or more finding IDs from the latest `./scoutflo-audits/clickstack/<date>/findings.json`. You usually arrive here from a finding's `remediation` pointer, for example `setup-clickstack#set-retention-ttl`.
+Repair the selected `audit-clickstack` findings through a concrete change plan, a supported administrative surface and a fresh audit retest. The supported changes are table TTL, a dedicated read-only audit user, user authentication hardening and HyperDX alert configuration. Collector, storage, TLS, dashboard and source changes receive a bounded plan with an owner. These scope boundaries are explicit; an unimplemented change is never reported as fixed.
 
-| Finding | Fix section |
-| --- | --- |
-| CS-020 (retention unbounded or wrong) | [Set retention TTL](#set-retention-ttl) |
-| CS-040 (alert reaches nobody) | [Create HyperDX alert](#create-hyperdx-alert) |
-| CS-050 (no least-privilege audit user) | [Create read-only user](#create-read-only-user) |
-| CS-050 (plaintext_password / no default password) | [Harden ClickHouse auth](#harden-clickhouse-auth) |
+| Finding | Workflow | Effect |
+| --- | --- | --- |
+| CS-020 | [Set retention TTL](#set-retention-ttl) | Change one selected table's automatic retention |
+| CS-040 | [Create HyperDX alert](#create-hyperdx-alert) | Create or repair one alert and its selected channels |
+| CS-050 | [Create read-only user](#create-read-only-user) | Create a new dedicated principal and scoped grants |
+| CS-050 | [Harden ClickHouse auth](#harden-clickhouse-auth) | Change a selected user's authentication method/credential |
+| CS-060 | [Manage storage capacity](#manage-storage-capacity) | Owner plan for measured headroom risk |
+| CS-030/061 | [Manage merge pressure](#manage-merge-pressure) | Owner plan for evidenced merge/write failures |
+| CS-010/011 | [Fix collector pipeline](#fix-collector-pipeline) | Owner plan for the exact stale service/signal path |
+| CS-041 | [Create dashboard source](#create-dashboard-source) | Owner plan for the exact source/data binding |
 
-**Write scope is deliberately narrow: ClickHouse DDL for retention and users, plus HyperDX alert config.** Everything else is out of scope and recorded as a plan with a named owner. This skill never drops or alters the schema of an `otel_*` table, never touches the OpenTelemetry collector config or the MongoDB app-state store, never changes HyperDX dashboards or sources, and never enables TLS on the ClickHouse ports (a server-config change, not DDL). Missing instrumentation is an application change; it is recorded as pending, never patched here.
+## Target and credential boundary
 
-## The change protocol
+Use the same `clickstack` block or selected labeled list item as the audit, with `SCOUTFLO_TARGET` for a list. The existing keys are `clickhouse_url`, `clickhouse_user`, `clickhouse_password_env`, `hyperdx_url`, `hyperdx_api_key_env`, and the optional explicit legacy session email/password variable names. Do not invent separate `clickhouse.*` or `hyperdx.*` config blocks. Read-only audit credentials stay read-only.
 
-Every change follows one loop, no exceptions:
+ClickHouse changes are **attended administration workflows**, not executable placeholder SQL templates. Use the actual target's supported administrator console or client, authenticated with the separately approved elevated credential from the local secret store. Never substitute the audit user, an inherited terminal connection, a password-bearing command argument, or an unverified generic API body. If the administrative surface is unavailable, preparation can finish but application stays blocked. Authentication/grant/DDL behavior must be confirmed for that installed ClickHouse version before execution.
 
-1. **Announce.** Show the exact statement before touching anything: the ClickHouse `ALTER`/`CREATE`/`GRANT`/`DROP` DDL or the HyperDX API call with real values filled in, its risk class, and its rollback command. Passwords are the exception: announce that a password comes from a named env var, never the value.
-2. **Confirm.** Wait for explicit approval in the conversation. One approval may cover a batch only when every change in the batch was shown first. Silence, an earlier approval, or "fix everything" from three steps ago is not consent. Declining means zero changes.
-3. **Execute.** Apply exactly what was announced, **one object at a time**. If reality forces a different statement (a column differs on your ClickHouse version, an API field name differs on your HyperDX instance), stop and re-announce.
-4. **Verify.** Re-read the modified object and assert the outcome with a machine-checkable command: a `jq -e` test on the re-fetched object, or the exact TTL clause read back from `system.tables.engine_full`. A write is unverified until a read proves it; "the field should now hold the value" as prose is not verification.
-5. **Record.** Append the change, its verification evidence, and any pending items with a named owner to the change record.
+HyperDX changes use the exact selected instance's UI. The current external API v2 key reads are separate from legacy internal session routes. A status code from `/api/health` or `/api/alerts` alone is not authentication proof. Never try header variants or fall back from a selected but missing API key to another login.
 
-**Mid-batch failure rule.** If change N of an approved batch fails, stop the batch immediately: no change N+1 runs. Re-fetch the failed object's current state, record which earlier rows already applied (and where their backups live), and never continue past the failed row. Diagnose, then re-announce the remaining rows for a fresh approval; the earlier approval does not carry over to a re-announced plan.
+## Doctor gate and live-safety gate
 
-## The change-risk classes
+Resolve the selected target and run `/scoutflo:doctor` before planning. Print the selected label and hostnames only; never full credential-bearing URLs. Use the audit's [target and probe blocks](../audit-clickstack/SKILL.md#doctor-gate-and-live-safety-gate), which resolve config/secret names afresh and assert actual responses. A configured unreadable lane is blocked, not excluded.
 
-Every announcement names its class. The class decides the extra gate.
-
-| Class | In this skill | Confirmed source for verify | Extra gate |
-| --- | --- | --- | --- |
-| Read-only | `SHOW CREATE TABLE`, `system.*` reads, `GET /api/health`, `GET /api/config`, every verification read | the audit's read surface | none |
-| ClickHouse DDL — users/grants | `CREATE USER`, `GRANT SELECT`, `ALTER USER`, `DROP USER` | `system.users` (`name`, `auth_type`), `SHOW GRANTS` | announce + confirm |
-| HyperDX alert config | `POST /api/alerts` (and its `DELETE` rollback) | `GET /api/alerts` with an API key | announce + confirm |
-| ClickHouse DDL — retention (**disruptive**) | `ALTER TABLE default.otel_* MODIFY TTL` | `system.tables.engine_full`, `system.mutations.is_done` | announce + confirm + **second confirmation**: `MODIFY TTL` on a large table runs a mutation that rewrites parts (large blast radius, high I/O, hours on a big table). Announce the estimated part/byte count and get a distinct second yes before executing. |
-| Out of write scope (plan only) | TLS on `:8123`/`:9000`, OTel collector config, dropping/altering `otel_*` schema, HyperDX dashboards/sources, MongoDB state | n/a | recorded as a plan with a named owner; never executed here |
-
-## Doctor gate
-
-Run before any real work. A failed check stops the skill with the exact failure and the fix, usually `/scoutflo:connect`. This skill uses the **elevated** credential tier for ClickHouse (it runs DDL) and needs a HyperDX API key for the alert section. Keep the elevated ClickHouse user separate from the read-only audit user; `audit-clickstack` checks the audit user for least privilege and a shared admin user would fail that check for a reason.
-
-| Integration | Config keys | Env var | Minimum scope | Tier |
-| --- | --- | --- | --- | --- |
-| ClickHouse | `clickhouse.http_url`, `clickhouse.database` | `clickhouse.user_env`, `clickhouse.password_env` | `ALTER`/`CREATE USER`/`GRANT`/`ALTER USER` on `default.*` and access management for the user/grant and retention sections | elevated |
-| HyperDX | `hyperdx.url` | `hyperdx.api_key_env` | read + write on `/api/alerts` | elevated |
+For ClickHouse, read this independent server identity with the safe read-only helper:
 
 ```bash
 set -eu
-CFG="${SCOUTFLO_CONFIG:-}"
-[ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done
-[ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
-if [ ! -f "$CFG" ]; then
-  # Multi-environment setup: a customer running prod+nonprod often has no default
-  # toolkit.yaml but named variants (toolkit-prod.yaml, toolkit-nonprod.yaml). List
-  # them so the choice is directed, not a dead stall — but NEVER auto-pick an
-  # environment (auditing the wrong one is worse than asking).
-  ENVCFGS=$(for d in "./.scoutflo" "$HOME/.scoutflo"; do ls "$d"/toolkit-*.yaml 2>/dev/null; done || true)
-  if [ -n "$ENVCFGS" ]; then
-    echo "no default config at $CFG, but found environment-specific configs:"
-    printf '%s\n' "$ENVCFGS" | sed 's/^/  - /'
-    echo "re-run with SCOUTFLO_CONFIG=<one of the above> for the environment you want (never auto-picked), or run /scoutflo:connect to create a default"
-  else
-    echo "missing $CFG; run /scoutflo:connect"
-  fi
-  exit 1
-fi
-# Pick up any credential added to the home-anchored store, even mid-session.
-[ -f "$HOME/.scoutflo/env" ] && . "$HOME/.scoutflo/env"
-for bin in curl jq; do command -v "$bin" >/dev/null || { echo "missing binary: $bin"; exit 1; }; done
-
-# Resolved from ~/.scoutflo/toolkit.yaml
-CH_URL="https://your-clickhouse-host:8123"   # clickhouse.http_url
-CH_DB="default"                              # clickhouse.database
-HDX_URL="https://your-hyperdx-url:8080"      # hyperdx.url
-# clickhouse.user_env / clickhouse.password_env / hyperdx.api_key_env name the
-# variables; presence check only, never print the values.
-[ -n "${CH_USER:-}" ] && [ -n "${CH_PASSWORD:-}" ] || { echo "CH_USER/CH_PASSWORD not set; run /scoutflo:connect"; exit 1; }
-[ -n "${HDX_API_KEY:-}" ] || echo "note: HDX_API_KEY not set; the HyperDX alert section is unavailable until it is"
-
-# One cheap ClickHouse read proves reachability + auth (HTTP :8123 requires a password).
-curl -fsS --max-time 15 "${CH_URL}/" \
-  -H "X-ClickHouse-User: ${CH_USER}" -H "X-ClickHouse-Key: ${CH_PASSWORD}" \
-  --data-binary "SELECT 1 FORMAT TabSeparated"
-
-# HyperDX: /api/health is open (200); /api/alerts requires the key (401 without it).
-echo "hyperdx health: $(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "${HDX_URL}/api/health")"
-[ -z "${HDX_API_KEY:-}" ] || echo "hyperdx alerts: $(curl -s -o /dev/null -w '%{http_code}' --max-time 10 \
-  -H "Authorization: Bearer ${HDX_API_KEY}" "${HDX_URL}/api/alerts")"
+. "${CLAUDE_PLUGIN_ROOT}/skills/audit-clickstack/scripts/clickhouse-context.sh"
+chq "SELECT hostName() AS host, currentUser() AS user,
+            currentDatabase() AS database, version() AS version FORMAT JSON"
 ```
 
-Expected: `1` from ClickHouse, `hyperdx health: 200`, and (with a key) `hyperdx alerts: 200`. A ClickHouse `516`/auth error means the user or password is wrong; a HyperDX `401` on `/api/alerts` means the API key is missing or wrong. DDL permission cannot be introspected cheaply, so the first `CREATE`/`ALTER` of the run is the scope test: an access-denied error means the user lacks access management, so stop and reconnect with an elevated user. Never keep trying statements to find one that works.
+Compare the actual server identity and database with the intended account/environment, then record the verified identity in the plan. A host behind a proxy may differ from the URL host; establish that mapping explicitly rather than weakening the check. In the administrator surface, independently verify the same server/database and the intended elevated principal before any write. A mismatch stops application; a positive table count on another server never passes this gate.
 
-## Live-safety gate
-
-This gate must be able to fail. It fetches an independent view of what the connection actually reaches and compares it to config, rather than echoing config back at itself.
-
-```bash
-set -eu
-[ -f "$HOME/.scoutflo/env" ] && . "$HOME/.scoutflo/env"
-CH_URL="https://your-clickhouse-host:8123"   # clickhouse.http_url
-CH_DB="default"                              # clickhouse.database
-
-# Independent live fetch: which server, which user, and does it hold otel_* tables?
-LIVE="$(curl -fsS --max-time 15 "${CH_URL}/" \
-  -H "X-ClickHouse-User: ${CH_USER}" -H "X-ClickHouse-Key: ${CH_PASSWORD}" \
-  --data-binary "SELECT hostName() AS host, version() AS version, currentUser() AS user FORMAT JSON")"
-echo "target url:  ${CH_URL}"
-printf '%s' "$LIVE" | jq -r '.data[0] | "live host=\(.host) version=\(.version) user=\(.user)"'
-
-OTEL_TABLES="$(curl -fsS --max-time 15 "${CH_URL}/" \
-  -H "X-ClickHouse-User: ${CH_USER}" -H "X-ClickHouse-Key: ${CH_PASSWORD}" \
-  --data-binary "SELECT count() AS n FROM system.tables WHERE database='${CH_DB}' AND name LIKE 'otel_%' FORMAT JSON")"
-printf '%s' "$OTEL_TABLES" | jq -e '.data[0].n | tonumber > 0'
-```
-
-Expected: the live host/version/user line names the instance and the elevated user you intend to change, and the `otel_*` table count is greater than zero. If the count is zero, this may be the wrong ClickHouse instance or an empty/hidden scope (the CS-007 condition audit-clickstack flags); stop and confirm the target before any write. Never proceed on "probably the right server".
+Bootstrap exception: creating the first audit user may precede a usable read-only credential. In that case establish server/database/principal identity with an attended admin read, record that narrower proof, create only the approved user, then configure the new read credential and pass the full doctor/audit gate. Do not claim the bootstrap read was an independent read-only audit.
 
 ## Load findings and build the change plan
 
-1. Read the latest audit run and list open findings:
+Read only the selected target's latest completed report. Historical findings must be revalidated before changing anything.
 
 ```bash
 set -eu
-LATEST_RUN="$(ls -d ${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/clickstack/[0-9]*/ 2>/dev/null | sort | tail -1)"
-[ -n "$LATEST_RUN" ] || { echo "no audit run found; run /scoutflo:audit-clickstack first"; exit 1; }
-jq -r '.findings[] | [.id, .severity, .title, .remediation] | @tsv' "${LATEST_RUN}findings.json"
+. "${CLAUDE_PLUGIN_ROOT}/skills/audit-clickstack/scripts/target-context.sh"
+TARGET_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/$CS_SEG"
+# Only a dated audit with both artifacts is a completed report candidate.
+# setup-*/ and runs/ are workspaces, never a newer audit.
+LATEST=$(for f in "$TARGET_DIR"/[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]/findings.json; do
+  [ -f "$f" ] && [ -f "$(dirname "$f")/report.md" ] || continue
+  CANDIDATE_DATE=$(basename "$(dirname "$f")")
+  jq -e --arg t "$CS_SEG" --arg d "$CANDIDATE_DATE" '
+    .target==$t and .run_date==$d and (.findings|type=="array")
+    and (try (($d+"T00:00:00Z")|fromdateiso8601|.<=now and strftime("%Y-%m-%d")==$d) catch false)
+  ' "$f" >/dev/null 2>&1 || continue
+  printf '%s\n' "$f"
+done | sort | tail -1)
+[ -n "$LATEST" ] || { echo 'Run the selected audit before planning'; exit 1; }
+jq -e --arg t "$CS_SEG" '.target==$t and (.findings|type=="array")' "$LATEST" >/dev/null
+jq -r '.findings[] | [.id,.severity,.title,.remediation] | @tsv' "$LATEST"
 ```
 
-2. Select scope. Take the finding IDs you were asked to fix, or, for "everything critical and high", enumerate those IDs explicitly so the plan names each one. Map each finding's `remediation` anchor to a section below.
+Prepare a private run directory beneath that target, with a unique run ID, and retain a plan, safe preimages, postimages and an append-only change ledger. Directory creation is local preparation, not provider application. Every row names:
 
-3. Create the working directory and snapshot targets before any change:
+| Required field | Meaning |
+| --- | --- |
+| Finding and intended outcome | Exact check, service/signal and declared requirement |
+| Target and object | Config segment, independently verified server/account, database and immutable object ID where available |
+| Before and after | Exact fields to change, selected channels/grants/TTL interval, neighbouring fields to preserve |
+| Authority and risk | Existing approval for this exact effect, or the concrete confirmation still needed |
+| Safe preimage and restore | Reconstructable nonsecret prior fields, protected secret-store references, rollback limitations |
+| Verification predicate | Exact readback equality, affected client check and follow-up audit |
 
-```bash
-set -eu
-RUN_DATE="$(date -u +%F)"
-WORK_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/clickstack/setup-${RUN_DATE}"
-BACKUP_DIR="${WORK_DIR}/backups"
-CHANGE_LOG="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/clickstack/changes.md"
-mkdir -p "$BACKUP_DIR"
-echo "backups: ${BACKUP_DIR}"
-```
+Never retain raw `SHOW CREATE TABLE`, engine arguments, auth parameters, webhook URLs or arbitrary response bodies in the ledger. They can contain credentials. The audit helpers project them before output. A projected preimage is suitable for restore only when it contains the complete changed semantics; an unknown TTL or masked receiver is not a recoverable backup.
 
-A "backup" here is the exact prior state captured to a file (a `SHOW CREATE TABLE` output, a `SHOW GRANTS` output, or the alert body), never a sentence claiming one exists. `./scoutflo-audits/` stays out of version control; backups can embed receiver URLs and other sensitive config.
+## The change protocol
 
-4. Announce the full plan as one table and wait for approval:
-
-| # | Finding | Object | Risk class | Exact change | Rollback |
-| --- | --- | --- | --- | --- | --- |
-
-Approval may cover the whole table because every row was shown. A retention `MODIFY TTL` row still takes its own second confirmation at its announcement, never inside the batch. A decline ends the run with zero changes. Execute approved rows one at a time, verifying each before the next. Order: additive and low-risk first (create the read-only user, create an alert), auth hardening next (coordinate the new secret with the service owner first), the disruptive retention rewrite last.
+1. Present the concrete plan, including exact effects, risk, preserved neighbours and restore limits. Existing approval remains valid for the same reviewed scope; a different target or effect requires a new confirmation. A vague repair request does not authorize an unreviewed destructive consequence.
+2. Re-read the object immediately before application and compare it with the approved preimage. Changed identity or drift stops that row.
+3. Apply one approved object through the supported administrative surface. Keep secrets in the provider's protected input or local secret store, never chat, command history, screenshots, output or backups. Do not assume the server will mask an unsafe client-side command.
+4. A timeout or uncertain save is **unknown**, not a retry signal. Read back the exact object ID before taking another action. Never repeat a create blindly.
+5. Verify actual postimage equality and preserved neighbours. Stop at the first failed or unverified row; record already-applied effects and do not run the next row.
+6. On partial creation, preserve the exact immutable ID and successful stages. Cleanup is allowed only for an object this run created, after a current identity/postimage comparison and approved cleanup. A matching name or two familiar grants never proves ownership.
+7. Re-run the relevant read-only audit. Distinguish configuration repair, effective client behavior and any external receipt. Retention deletion and notifications already sent cannot be undone by restoring configuration.
 
 ## Set retention TTL
 
-For CS-020 (an `otel_*` table with missing/unbounded TTL, or a TTL that is too short and silently deleting data). Retention is read from the per-table TTL clause and set with `ALTER TABLE ... MODIFY TTL`. **Risk class: ClickHouse DDL — retention (disruptive).**
+CS-020; one selected telemetry table. Before choosing a value, capture the declared retention need, exact database/table, timestamp semantics, current disk/part/byte footprint and the current **table DDL TTL** through the safe `create_table_query` projection. `engine_full` can omit TTL and cannot establish its absence. A column TTL, conditional TTL, move/recompression rule or unsupported expression requires an attended semantic read; never flatten it into a simple delete TTL.
 
-1. Capture the current TTL as the backup and quote it in the announcement:
+1. Record a reconstructable prior TTL rule or verified absence. Keep raw DDL private in the provider UI; store only validated changed semantics. Unknown prior rules block an automated restore claim.
+2. Present the exact desired expression for the verified timestamp column and interval, plus the data-deletion and I/O effect. Reducing retention may delete old data that configuration rollback cannot recover. Show which backup/restore evidence or explicit data-loss acceptance covers that consequence. Obtain any required destructive-change approval before application.
+3. Confirm installed-version behavior for TTL materialization. `MODIFY TTL` can schedule work on existing parts depending on settings; do not promise a cheap metadata-only change. If offering `materialize_ttl_after_modify=0`, first verify support and explain the difference between existing and future parts.
+4. In the confirmed admin surface, apply only the approved table TTL. Never rebuild the table or change its schema as a shortcut. On ambiguity, inspect the actual table definition and mutation state before retrying.
+5. Read back `create_table_query` through the audit helper. Assert the full changed TTL semantics, not a substring somewhere in an engine string. For a supported simple day TTL, the projected `ttl.days` must equal the approved days and `ttl.assessment` must be `known`. Check the specifically attributable mutation/job; the latest unrelated mutation is not this write's completion proof.
+6. Recheck the affected service's data, retention and headroom. Mark any ongoing materialization pending; do not claim storage reclaimed merely because the TTL was saved.
 
-```bash
-set -eu
-[ -f "$HOME/.scoutflo/env" ] && . "$HOME/.scoutflo/env"
-CH_URL="https://your-clickhouse-host:8123"; CH_DB="default"
-TABLE="otel_logs"                 # the otel_* table from the finding
-BACKUP_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/clickstack/setup-$(date -u +%F)/backups"
-mkdir -p "$BACKUP_DIR"
-BACKUP_FILE="${BACKUP_DIR}/ttl-${TABLE}-$(date -u +%H%M%S).json"
-
-# The server's hostName(), the database and the table go next to engine_full, so the rollback
-# can refuse a backup taken from another instance, database or table.
-curl -fsS --max-time 15 "${CH_URL}/" -H "X-ClickHouse-User: ${CH_USER}" -H "X-ClickHouse-Key: ${CH_PASSWORD}" \
-  --data-binary "SELECT hostName() AS host, database, name, engine_full FROM system.tables WHERE database='${CH_DB}' AND name='${TABLE}' FORMAT JSONEachRow" \
-  > "$BACKUP_FILE"
-test -s "$BACKUP_FILE" && echo "backup (prior TTL): ${BACKUP_FILE}"
-```
-
-The prior TTL clause is inside `engine_full` (for example `TTL toDateTime(Timestamp) + toIntervalDay(30)`, the confirmed shape on `otel_logs`). If there is no `TTL` in `engine_full`, retention is unbounded — that is the CS-020 finding.
-
-2. Announce the exact `MODIFY TTL`, its estimated blast radius, and get the second confirmation. Read the part/byte estimate first:
-
-```bash
-set -eu
-[ -f "$HOME/.scoutflo/env" ] && . "$HOME/.scoutflo/env"
-CH_URL="https://your-clickhouse-host:8123"; CH_DB="default"; TABLE="otel_logs"
-curl -fsS --max-time 15 "${CH_URL}/" -H "X-ClickHouse-User: ${CH_USER}" -H "X-ClickHouse-Key: ${CH_PASSWORD}" \
-  --data-binary "SELECT count() AS parts, sum(rows) AS rows, formatReadableSize(sum(bytes_on_disk)) AS size
-                 FROM system.parts WHERE database='${CH_DB}' AND table='${TABLE}' AND active FORMAT JSON"
-```
-
-`MODIFY TTL` schedules a mutation that re-evaluates every active part; on a large table this rewrites parts for hours and drives heavy I/O. State the part/row/size numbers in the announcement and get a distinct second yes. Some ClickHouse versions support running the `ALTER` with `materialize_ttl_after_modify=0` so only new data adopts the TTL and existing parts are not rewritten — confirm that setting exists on your version before offering it as the lower-blast-radius option.
-
-3. Execute the announced statement (retention value is an example, tune to compliance/cost):
-
-```bash
-set -eu
-[ -f "$HOME/.scoutflo/env" ] && . "$HOME/.scoutflo/env"
-CH_URL="https://your-clickhouse-host:8123"; CH_DB="default"
-TABLE="otel_logs"; RETENTION_DAYS="30"     # example, tune to your environment
-curl -fsS --max-time 60 "${CH_URL}/" -H "X-ClickHouse-User: ${CH_USER}" -H "X-ClickHouse-Key: ${CH_PASSWORD}" \
-  --data-binary "ALTER TABLE ${CH_DB}.${TABLE} MODIFY TTL toDateTime(Timestamp) + toIntervalDay(${RETENTION_DAYS})"
-```
-
-4. Verify the new TTL is present and watch the mutation finish:
-
-```bash
-set -eu
-[ -f "$HOME/.scoutflo/env" ] && . "$HOME/.scoutflo/env"
-CH_URL="https://your-clickhouse-host:8123"; CH_DB="default"; TABLE="otel_logs"; RETENTION_DAYS="30"
-curl -fsS --max-time 15 "${CH_URL}/" -H "X-ClickHouse-User: ${CH_USER}" -H "X-ClickHouse-Key: ${CH_PASSWORD}" \
-  --data-binary "SELECT engine_full FROM system.tables WHERE database='${CH_DB}' AND name='${TABLE}' FORMAT JSON" \
-  | jq -e --arg d "toIntervalDay(${RETENTION_DAYS})" '.data[0].engine_full | contains($d)'
-curl -fsS --max-time 15 "${CH_URL}/" -H "X-ClickHouse-User: ${CH_USER}" -H "X-ClickHouse-Key: ${CH_PASSWORD}" \
-  --data-binary "SELECT is_done FROM system.mutations WHERE database='${CH_DB}' AND table='${TABLE}' ORDER BY create_time DESC LIMIT 1 FORMAT JSON" \
-  | jq -r '.data[0].is_done'
-```
-
-Expected: the `jq -e` exits 0 (new interval present in `engine_full`) and the latest mutation reports `is_done` moving to `1`. **Rollback** re-applies the TTL clause from the step 1 backup, or removes the TTL when the table had none, in its own fresh shell. It is itself a `MODIFY TTL` with the same part-rewrite cost, so announce it and take the second confirmation like the change it undoes:
-
-```bash
-set -eu
-[ -f "$HOME/.scoutflo/env" ] && . "$HOME/.scoutflo/env"
-CH_URL="https://your-clickhouse-host:8123"   # clickhouse.http_url
-CH_DB="default"                              # clickhouse.database
-TABLE="<otel-table>"                         # the table step 3 changed
-BACKUP_FILE="<backup-file>"                  # the exact "backup (prior TTL)" path step 1 printed
-for v in "$TABLE" "$BACKUP_FILE"; do case "$v" in ''|'<'*) echo "Fill in every <...> value from the change record first" >&2; exit 1 ;; esac; done
-[ -s "$BACKUP_FILE" ] || { echo "No backup at ${BACKUP_FILE}: use the exact path step 1 printed" >&2; exit 1; }
-[ -n "${CH_USER:-}" ] && [ -n "${CH_PASSWORD:-}" ] || { echo "CH_USER/CH_PASSWORD not set; run /scoutflo:connect"; exit 1; }
-# The backup must come from this instance, database and table: step 1 saved them next to engine_full.
-LIVE_HOST="$(curl -fsS --max-time 15 "${CH_URL}/" -H "X-ClickHouse-User: ${CH_USER}" -H "X-ClickHouse-Key: ${CH_PASSWORD}" \
-  --data-binary "SELECT hostName() FORMAT TabSeparatedRaw")"
-jq -e --arg h "$LIVE_HOST" --arg d "$CH_DB" --arg t "$TABLE" '.host == $h and .database == $d and .name == $t' "$BACKUP_FILE" > /dev/null \
-  || { echo "${BACKUP_FILE} is not a backup of ${CH_DB}.${TABLE} on ${LIVE_HOST}; stopping" >&2; exit 1; }
-# The TTL clause sits between " TTL " and " SETTINGS " (or the end) of engine_full; none means unbounded.
-OLD_TTL="$(jq -r '[.engine_full | capture(" TTL (?<t>.+?)(?: SETTINGS |$)").t] | first // ""' "$BACKUP_FILE")"
-if [ -n "$OLD_TTL" ]; then SQL="ALTER TABLE ${CH_DB}.${TABLE} MODIFY TTL ${OLD_TTL}"; else SQL="ALTER TABLE ${CH_DB}.${TABLE} REMOVE TTL"; fi
-echo "running: ${SQL}"
-curl -fsS --max-time 60 "${CH_URL}/" -H "X-ClickHouse-User: ${CH_USER}" -H "X-ClickHouse-Key: ${CH_PASSWORD}" \
-  --data-binary "$SQL"
-curl -fsS --max-time 15 "${CH_URL}/" -H "X-ClickHouse-User: ${CH_USER}" -H "X-ClickHouse-Key: ${CH_PASSWORD}" \
-  --data-binary "SELECT engine_full FROM system.tables WHERE database='${CH_DB}' AND name='${TABLE}' FORMAT TabSeparatedRaw" \
-  | jq -Rse --arg want "$OLD_TTL" 'rtrimstr("\n") | ([capture(" TTL (?<t>.+?)(?: SETTINGS |$)").t] | first // "") == $want'
-```
-
-Expected: the `running:` statement, then `true` (the table's TTL clause matches the backup again, or is gone when the table had none). If `CH_URL` balances across replicas, `hostName()` can differ per request and the block refuses; point `CH_URL` at the replica the backup names. Watch the mutation with the `system.mutations` read from step 4. Reducing retention deletes expired data as the mutation runs and does not come back; that is exactly why a reduction takes the second confirmation with the data loss stated.
+**Restore:** compare the current TTL with this run's verified postimage and restore the exact prior rule or remove only the rule this run added. Reconfirm disruptive effects as needed. Re-read the full changed semantics and job state. Restoring a TTL does not restore deleted rows; use the separately approved data restore if one is required.
 
 ## Create HyperDX alert
 
-For CS-040 — the core failure is an alert wired to nothing. This section creates a HyperDX alert that routes to a live receiver (webhook, Slack, or PagerDuty). HyperDX serves its API on `:8080` under `/api/<resource>` (the `/api/v1/*` form 404s); `/api/alerts` requires an API key. **Risk class: HyperDX alert config.**
+For CS-040, repair the exact configured channel that the audit found missing or unresolved. Existing alternate channels may still deliver; do not replace them or claim every alert reaches nobody. **Risk class: HyperDX alert configuration; optional notification test is a separate external effect.**
 
-The endpoint set and auth model are confirmed; the request/response body shapes of `/api/alerts` are **confirm-against-your-instance**. Read one existing alert first to learn the shape your instance uses, including the receiver/webhook field names, then mirror it:
+Use the [safe read recipe](../audit-clickstack/references/hyperdx-source-evidence.md) to identify the target, alert ID, channel index, destination class and completeness. OSS external v2 uses the Personal API Access Key on `/api/v2` (or its verified proxy prefix); legacy `/api/alerts` is session-authenticated. Do not send a Bearer key to a session route or copy a legacy payload to a different edition. Current `channels[]` is authoritative when present; `channel` mirrors the first. A new alert may monitor a tile, saved search or inline chart, with version-specific required fields.
 
-```bash
-set -eu
-[ -f "$HOME/.scoutflo/env" ] && . "$HOME/.scoutflo/env"
-HDX_URL="https://your-hyperdx-url:8080"    # hyperdx.url
-[ -n "${HDX_API_KEY:-}" ] || { echo "HDX_API_KEY not set; run /scoutflo:connect"; exit 1; }
-curl -fsS --max-time 10 -H "Authorization: Bearer ${HDX_API_KEY}" "${HDX_URL}/api/alerts" | jq '.[0] // "no alerts yet"'
-```
+The supported repair workflow is attended in the selected HyperDX UI:
 
-Announce the alert you will create with the receiver named, using the field names you just observed. The receiver reference (a webhook/Slack/PagerDuty channel id or url) is what makes this alert reach a human; an alert with no receiver is the CS-040 failure and must not be created as a "fix". Then create and verify:
-
-```bash
-set -eu
-[ -f "$HOME/.scoutflo/env" ] && . "$HOME/.scoutflo/env"
-HDX_URL="https://your-hyperdx-url:8080"
-[ -n "${HDX_API_KEY:-}" ] || { echo "HDX_API_KEY not set; run /scoutflo:connect"; exit 1; }
-# Body shape is confirm-against-your-instance; fill the fields your GET above showed,
-# and include the receiver/channel reference so the alert routes to a live human.
-NEW_ALERT="$(curl -fsS --max-time 15 -X POST "${HDX_URL}/api/alerts" \
-  -H "Authorization: Bearer ${HDX_API_KEY}" -H "Content-Type: application/json" \
-  -d @hyperdx-alert.json)"                 # your instance's confirmed alert body
-ALERT_ID="$(printf '%s' "$NEW_ALERT" | jq -r '.id // ._id')"
-echo "created alert: ${ALERT_ID}"
-
-curl -fsS --max-time 10 -H "Authorization: Bearer ${HDX_API_KEY}" "${HDX_URL}/api/alerts" \
-  | jq -e --arg id "$ALERT_ID" 'any(.[]; (.id // ._id) == $id)'
-```
-
-Expected: exit 0 (the alert is present in the live list). A HyperDX alert that lists a receiver is `configured`; only a delivered test notification proves the receiver is live. Trigger a controlled test through the receiver and record who confirmed receipt before marking CS-040 fixed. **Rollback** deletes the alert this setup created and verifies it is gone, in its own fresh shell:
+1. Open the exact target and alert from the safe audit record. For a new alert, identify the existing source and tile/saved search, the customer's threshold, interval, signal semantics and intended responder. Do not invent a local alert when external alerting is declared intentional.
+2. Read the current full definition privately in the UI. Record a redacted preimage: alert ID, channel IDs/order, activation, source selection, threshold/window and a safe field inventory. Keep any credential-bearing receiver URL in the provider UI or approved secret store only. If a masked receiver cannot be recovered, record the restore limitation before proposing replacement.
+3. Confirm that the selected webhook exists on this same target. Its URL host alone is insufficient: verify the intermediary's onward mapping or the paging provider's expected routing policy with its owning read audit. A newly minted incoming credential or expanded access requires the applicable explicit approval.
+4. Present the exact before/after fields, scope, intended external notifications, preserved channels and rollback. Obtain the operator's confirmation under **The change protocol**. Re-read before save; if the target or definition changed, stop and refresh the plan.
+5. Change only the confirmed fields, or create the confirmed alert. Save once. On an uncertain save, read back by the exact ID before trying again; never create duplicates by retrying blindly. Record only safe IDs and field equality, not raw payloads or response bodies.
+6. Run the fixed audit collection again in a fresh shell, with this target selected:
 
 ```bash
 set -eu
-[ -f "$HOME/.scoutflo/env" ] && . "$HOME/.scoutflo/env"
-HDX_URL="https://your-hyperdx-url:8080"    # hyperdx.url
-ALERT_ID="<alert-id>"                      # the "created alert:" id the create block printed
-for v in "$ALERT_ID"; do case "$v" in ''|'<'*) echo "Fill in every <...> value from the change record first" >&2; exit 1 ;; esac; done
-[ -n "${HDX_API_KEY:-}" ] || { echo "HDX_API_KEY not set; run /scoutflo:connect"; exit 1; }
-# What will be deleted; stops here unless this instance lists that id, so a wrong URL or id deletes nothing.
-curl -fsS --max-time 10 -H "Authorization: Bearer ${HDX_API_KEY}" "${HDX_URL}/api/alerts" \
-  | jq -er --arg id "$ALERT_ID" 'first(.[] | select((.id // ._id) == $id)) | "deleting alert: \(.name // $id)"' \
-  || { echo "No alert ${ALERT_ID} on ${HDX_URL}: check the id and URL against the change record" >&2; exit 1; }
-curl -fsS --max-time 10 -X DELETE -H "Authorization: Bearer ${HDX_API_KEY}" "${HDX_URL}/api/alerts/${ALERT_ID}"
-curl -fsS --max-time 10 -H "Authorization: Bearer ${HDX_API_KEY}" "${HDX_URL}/api/alerts" \
-  | jq -e --arg id "$ALERT_ID" '[.[] | select((.id // ._id) == $id)] | length == 0'
+sh "${CLAUDE_PLUGIN_ROOT}/skills/audit-clickstack/scripts/collect-hyperdx.sh"
 ```
 
-Expected: `deleting alert:` with its name, then `true`. Confirm the `DELETE` path against your instance the same way you confirmed the create body.
+Match the exact alert/channel ID to the expected receiver and preserved channel list in the current safe projection. Use a separate fresh attended UI read to verify the full source selection, activation, threshold/window and any fields omitted by the projection against the approved postimage. Neither read substitutes for the other. This proves configuration repair only. Under separately confirmed test scope, generate one identifiable source event, verify the destination incident and ask the intended responder to confirm receipt. Record source recovery/incident resolution separately; do not confuse either with acknowledgement. A configuration-only repair leaves delivery explicitly unverified.
+
+**Rollback:** re-open the same target and exact alert ID, compare it with this run's verified postimage, and restore only the recorded prior fields after confirmation. If the run created a new alert, deletion requires this run's creation receipt; never delete a pre-existing alert as rollback. If fields drifted or the masked preimage cannot be restored, stop and report the exact limitation rather than guessing. Re-run the safe audit read to verify restoration and preserved neighbours. Changes do not retract notifications already sent.
 
 ## Create read-only user
 
-For CS-050 — an audit needs its own least-privilege ClickHouse user rather than the elevated DDL user or a service user. This creates a `sha256_password` user with `SELECT` on the telemetry database and the `system` tables the audit reads. **Risk class: ClickHouse DDL — users/grants.** The password comes from a named env var and is never printed; ClickHouse masks credentials in `system.query_log` by default.
+CS-050. Through the verified administrator surface, create one dedicated read-only principal using the installed version's supported password and grant controls. The secret is generated/stored through a protected store, not interpolated into a displayed SQL string.
 
-```bash
-set -eu
-[ -f "$HOME/.scoutflo/env" ] && . "$HOME/.scoutflo/env"
-CH_URL="https://your-clickhouse-host:8123"; CH_DB="default"
-AUDIT_USER="scoutflo_audit"
-# CH_AUDIT_PASSWORD is set in ~/.scoutflo/env by /scoutflo:connect; never inline it.
-[ -n "${CH_AUDIT_PASSWORD:-}" ] || { echo "CH_AUDIT_PASSWORD not set; run /scoutflo:connect"; exit 1; }
+- Before creation, prove the name is absent and record current principal inventory. Do not use `IF NOT EXISTS` to disguise an existing user, or grant onto an existing principal under a create plan.
+- The plan lists the exact telemetry database/tables and required system-table reads. Grant the minimum necessary `SELECT`/metadata permissions without write, access-management or grant-option privileges. Inspect inherited/default roles too; two explicit SELECT grants do not prove effective least privilege.
+- Record the new immutable user ID and each completed stage immediately. If creation succeeds but a grant fails, stop. Read actual state before any retry; never issue another create.
+- Verify the actual authentication method and complete effective privilege set. Use the new credential for a real read of the intended telemetry/system surfaces, and verify its read-only profile/grants without attempting a destructive write as a test.
+- Configure that principal in the selected `clickstack.clickhouse_user` and `clickhouse_password_env` through `/scoutflo:connect`; keep elevated credentials separate. Run doctor and a fresh audit with this principal.
 
-# The rollback drops this user, so never create over (or grant onto) one that already exists.
-curl -fsS --max-time 15 "${CH_URL}/" -H "X-ClickHouse-User: ${CH_USER}" -H "X-ClickHouse-Key: ${CH_PASSWORD}" \
-  --data-binary "SELECT count() AS n FROM system.users WHERE name='${AUDIT_USER}' FORMAT JSON" \
-  | jq -e '.data[0].n | tonumber == 0' > /dev/null \
-  || { echo "user ${AUDIT_USER} already exists: pick another name, or announce changes to it" >&2; exit 1; }
-curl -fsS --max-time 15 "${CH_URL}/" -H "X-ClickHouse-User: ${CH_USER}" -H "X-ClickHouse-Key: ${CH_PASSWORD}" \
-  --data-binary "CREATE USER ${AUDIT_USER} IDENTIFIED WITH sha256_password BY '${CH_AUDIT_PASSWORD}'"
-echo "created user: ${AUDIT_USER}"
-curl -fsS --max-time 15 "${CH_URL}/" -H "X-ClickHouse-User: ${CH_USER}" -H "X-ClickHouse-Key: ${CH_PASSWORD}" \
-  --data-binary "GRANT SELECT ON ${CH_DB}.* TO ${AUDIT_USER}"
-curl -fsS --max-time 15 "${CH_URL}/" -H "X-ClickHouse-User: ${CH_USER}" -H "X-ClickHouse-Key: ${CH_PASSWORD}" \
-  --data-binary "GRANT SELECT ON system.* TO ${AUDIT_USER}"
-```
-
-Verify the user exists with the right auth type, and that its grants are read-only:
-
-```bash
-set -eu
-[ -f "$HOME/.scoutflo/env" ] && . "$HOME/.scoutflo/env"
-CH_URL="https://your-clickhouse-host:8123"; AUDIT_USER="scoutflo_audit"
-curl -fsS --max-time 15 "${CH_URL}/" -H "X-ClickHouse-User: ${CH_USER}" -H "X-ClickHouse-Key: ${CH_PASSWORD}" \
-  --data-binary "SELECT name, auth_type FROM system.users WHERE name='${AUDIT_USER}' FORMAT JSON" \
-  | jq -e '.data[0].auth_type == "sha256_password"'
-curl -fsS --max-time 15 "${CH_URL}/" -H "X-ClickHouse-User: ${CH_USER}" -H "X-ClickHouse-Key: ${CH_PASSWORD}" \
-  --data-binary "SHOW GRANTS FOR ${AUDIT_USER} FORMAT TabSeparatedRaw"
-```
-
-Expected: the `jq -e` exits 0 and `SHOW GRANTS` lists only `SELECT` grants (no `INSERT`, `ALTER`, or access-management privilege). Then record the new user + its env-var password name in `/scoutflo:connect`'s read-only tier so the next `audit-clickstack` uses it. **Rollback** drops the user this setup created (the create refuses a name that already exists), in its own fresh shell:
-
-```bash
-set -eu
-[ -f "$HOME/.scoutflo/env" ] && . "$HOME/.scoutflo/env"
-CH_URL="https://your-clickhouse-host:8123"   # clickhouse.http_url
-CH_DB="default"                              # clickhouse.database: the database the create block granted
-AUDIT_USER="<audit-user>"                    # the "created user:" name the create block printed
-for v in "$AUDIT_USER"; do case "$v" in ''|'<'*) echo "Fill in every <...> value from the change record first" >&2; exit 1 ;; esac; done
-[ -n "${CH_USER:-}" ] && [ -n "${CH_PASSWORD:-}" ] || { echo "CH_USER/CH_PASSWORD not set; run /scoutflo:connect"; exit 1; }
-case "$AUDIT_USER" in default|"$CH_USER") echo "Refusing to drop ${AUDIT_USER}: it is not the audit user this setup created" >&2; exit 1 ;; esac
-# Drop only the user the create block made: it exists and holds exactly its two SELECT grants.
-curl -fsS --max-time 15 "${CH_URL}/" -H "X-ClickHouse-User: ${CH_USER}" -H "X-ClickHouse-Key: ${CH_PASSWORD}" \
-  --data-binary "SELECT count() AS n FROM system.users WHERE name='${AUDIT_USER}' FORMAT JSON" \
-  | jq -e '.data[0].n | tonumber == 1' > /dev/null \
-  || { echo "No user ${AUDIT_USER} on ${CH_URL}: check the name against the change record" >&2; exit 1; }
-curl -fsS --max-time 15 "${CH_URL}/" -H "X-ClickHouse-User: ${CH_USER}" -H "X-ClickHouse-Key: ${CH_PASSWORD}" \
-  --data-binary "SELECT * FROM system.grants WHERE user_name='${AUDIT_USER}' FORMAT JSON" \
-  | jq -e --arg db "$CH_DB" 'def flag: if . == true or . == 1 or . == "1" then 1 else 0 end;
-      [.data[] | [.access_type, .database, .table, .column, (.is_partial_revoke | flag), (.grant_option | flag)]] | sort
-      == ([["SELECT", $db, null, null, 0, 0], ["SELECT", "system", null, null, 0, 0]] | sort)' > /dev/null \
-  || { echo "${AUDIT_USER} holds grants other than the two SELECT grants the create block made: not the user this setup created; stop and re-announce" >&2; exit 1; }
-curl -fsS --max-time 15 "${CH_URL}/" -H "X-ClickHouse-User: ${CH_USER}" -H "X-ClickHouse-Key: ${CH_PASSWORD}" \
-  --data-binary "DROP USER ${AUDIT_USER}"
-curl -fsS --max-time 15 "${CH_URL}/" -H "X-ClickHouse-User: ${CH_USER}" -H "X-ClickHouse-Key: ${CH_PASSWORD}" \
-  --data-binary "SELECT count() AS n FROM system.users WHERE name='${AUDIT_USER}' FORMAT JSON" \
-  | jq -e '.data[0].n | tonumber == 0'
-```
-
-Expected: `true` (the user is gone; ClickHouse JSON quotes 64-bit counts, hence `tonumber`). A user with any other grant, including one the create block did not finish granting, stops the block before the drop; re-announce. If you already recorded the user in `/scoutflo:connect`, remove it there too.
+**Cleanup/restore:** dropping a newly created principal requires this run's immutable creation receipt, the same target, no intervening principal replacement or grant drift, and confirmation that no client depends on it. A name, current existence or familiar grants is not ownership proof. If the user pre-existed, do not drop it. Remove only run-owned changes after a reviewed restore plan and verify absence/effective grants. Update the local connection only after a usable replacement is verified.
 
 ## Harden ClickHouse auth
 
-For CS-050 — a service user on `auth_type = plaintext_password` (validation observed `worker`, `api`, and `default` all on plaintext), or a `default` user with no password. This moves a user to `sha256_password` with `ALTER USER ... IDENTIFIED WITH sha256_password`. **Risk class: ClickHouse DDL — users/grants**, but with a real service-availability blast radius: changing a service user's credential breaks every client that authenticates as that user until they are updated with the new secret. Coordinate the new secret with the owning service first, and treat it like the disruptive class — get an explicit second confirmation, ideally in a maintenance window.
+CS-050. Record the selected user's immutable identity, authentication method, effective grants, dependent clients and secret owner. Do not record `auth_params` or raw password/hash values. Authentication-method metadata is an inventory snapshot, **not** a password backup.
 
-1. Capture the current auth type as the backup and confirm the target:
+1. Identify a supported target authentication method and credential delivery mechanism for this installed version. Coordinate the new protected secret with every affected client owner before changing a service user. Never reset the currently used administrator principal as an incidental fix.
+2. Present the exact user, method change, rollout order, outage exposure and recovery secret owner. A service credential change can break ingestion immediately; obtain the required approval for that impact.
+3. Re-read identity/preimage, then change only the approved authentication fields in the administrative surface. No password appears in command arguments, history, reports or backups.
+4. Verify the new method from the safe user projection. Then verify a real client authenticates with the intended new secret and resumes its expected reads/writes. Merely seeing `sha256_password` does not prove that the deployed client works.
+5. For an open default user, re-run the audit's exact unauthenticated query probe and interpret `denied`, `accessible` and `unverified` separately. A generic HTTP denial does not establish a ClickHouse password policy.
 
-```bash
-set -eu
-[ -f "$HOME/.scoutflo/env" ] && . "$HOME/.scoutflo/env"
-CH_URL="https://your-clickhouse-host:8123"
-BACKUP_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/clickstack/setup-$(date -u +%F)/backups"; mkdir -p "$BACKUP_DIR"
-curl -fsS --max-time 15 "${CH_URL}/" -H "X-ClickHouse-User: ${CH_USER}" -H "X-ClickHouse-Key: ${CH_PASSWORD}" \
-  --data-binary "SELECT name, auth_type FROM system.users ORDER BY name FORMAT JSON" \
-  | tee "${BACKUP_DIR}/users-auth-$(date -u +%H%M%S).json" | jq -r '.data[] | "\(.name)\t\(.auth_type)"'
-```
-
-The prior `auth_type` (for example `plaintext_password`) is the backup. Note the old plaintext value is **not** readable from `system.users` (`auth_params` does not expose it), so rollback re-sets a password the service owner supplies, it cannot restore an unknown old one.
-
-2. Announce, get the second confirmation, and execute (the new secret comes from a named env var, not inline):
-
-```bash
-set -eu
-[ -f "$HOME/.scoutflo/env" ] && . "$HOME/.scoutflo/env"
-CH_URL="https://your-clickhouse-host:8123"
-TARGET_USER="worker"                       # the plaintext_password user from step 1
-[ -n "${CH_NEW_PASSWORD:-}" ] || { echo "CH_NEW_PASSWORD not set; coordinate it with the service owner first"; exit 1; }
-curl -fsS --max-time 15 "${CH_URL}/" -H "X-ClickHouse-User: ${CH_USER}" -H "X-ClickHouse-Key: ${CH_PASSWORD}" \
-  --data-binary "ALTER USER ${TARGET_USER} IDENTIFIED WITH sha256_password BY '${CH_NEW_PASSWORD}'"
-```
-
-For the `default` user with no password, the same `ALTER USER default IDENTIFIED WITH sha256_password BY '...'` requires a password on `:8123` (validation observed `default` already requiring one — confirm it on your instance before assuming it is open).
-
-3. Verify the auth type changed:
-
-```bash
-set -eu
-[ -f "$HOME/.scoutflo/env" ] && . "$HOME/.scoutflo/env"
-CH_URL="https://your-clickhouse-host:8123"; TARGET_USER="worker"
-curl -fsS --max-time 15 "${CH_URL}/" -H "X-ClickHouse-User: ${CH_USER}" -H "X-ClickHouse-Key: ${CH_PASSWORD}" \
-  --data-binary "SELECT auth_type FROM system.users WHERE name='${TARGET_USER}' FORMAT JSON" \
-  | jq -e '.data[0].auth_type == "sha256_password"'
-```
-
-Expected: exit 0 (`auth_type` is `sha256_password`, no longer `plaintext_password`). Then confirm with the service owner that the service authenticates successfully with the new secret; the change is not done until that client works again. **Rollback** cannot restore the unknown old password; it re-sets one the service owner supplies and controls (often the value their clients still use), kept on `sha256_password`, in its own fresh shell:
-
-```bash
-set -eu
-[ -f "$HOME/.scoutflo/env" ] && . "$HOME/.scoutflo/env"
-CH_URL="https://your-clickhouse-host:8123"   # clickhouse.http_url
-TARGET_USER="<target-user>"                  # the user step 2 changed
-for v in "$TARGET_USER"; do case "$v" in ''|'<'*) echo "Fill in every <...> value from the change record first" >&2; exit 1 ;; esac; done
-[ -n "${CH_USER:-}" ] && [ -n "${CH_PASSWORD:-}" ] || { echo "CH_USER/CH_PASSWORD not set; run /scoutflo:connect"; exit 1; }
-[ "$TARGET_USER" != "$CH_USER" ] || { echo "Refusing to reset ${TARGET_USER}: it is the elevated user this block logs in as" >&2; exit 1; }
-# CH_RESTORE_PASSWORD holds the owner-supplied value (exported, or in ~/.scoutflo/env); never inline it.
-[ -n "${CH_RESTORE_PASSWORD:-}" ] || { echo "CH_RESTORE_PASSWORD not set; get the value from the service owner first"; exit 1; }
-curl -fsS --max-time 15 "${CH_URL}/" -H "X-ClickHouse-User: ${CH_USER}" -H "X-ClickHouse-Key: ${CH_PASSWORD}" \
-  --data-binary "ALTER USER ${TARGET_USER} IDENTIFIED WITH sha256_password BY '${CH_RESTORE_PASSWORD}'"
-# Prove the owner's value now authenticates as that user.
-curl -fsS --max-time 15 "${CH_URL}/" -H "X-ClickHouse-User: ${TARGET_USER}" -H "X-ClickHouse-Key: ${CH_RESTORE_PASSWORD}" \
-  --data-binary "SELECT currentUser() AS user FORMAT JSON" \
-  | jq -e --arg u "$TARGET_USER" '.data[0].user == $u'
-```
-
-Expected: `true` (the owner's value logs in as that user). A user allowed only from the service's own hosts fails this login from your machine even after a good reset; then confirm with the owner that the client authenticates instead. TLS on the HTTP/native ports is the other half of CS-050 posture; it is a server-config change out of this skill's write scope, so record it as a plan with a named owner.
+**Recovery:** an unreadable old password cannot be restored from an auth-type snapshot. Use the owner-supplied recovery credential or a forward rotation with an explicit plan, then verify each dependent client. Never label that action a verified restoration of an unknown old secret. TLS/listener changes are a separately owned server configuration plan.
 
 ## Manage storage capacity
 
-CS-060. The durable fix for a disk filling toward read-only, when shortening TTL (Set retention TTL) is not enough or not wanted. Three levers, each announced with the exact change and a rollback:
-- **Expand the disk / PVC** (announce the new size; on a StatefulSet PVC this is a `kubectl patch pvc` + a controller that supports volume expansion — confirm `allowVolumeExpansion: true` on the StorageClass first; rollback is not possible once grown, so confirm the target size explicitly).
-- **Tiered storage** — add an S3-backed `storage_policy` and move cold parts off local disk (`ALTER TABLE ... MOVE PARTITION ... TO DISK/VOLUME`); announce the policy and the tables, verify `system.disks` shows the new volume and parts moved.
-- **`keep_free_space_bytes`** on the disk config to make ClickHouse stop accepting writes *before* the OS runs out, turning a hard 243 NOT_ENOUGH_SPACE crash into a controlled backpressure.
-Verify: `system.disks` shows headroom restored and CS-060's days-to-full recomputes above threshold.
+CS-060, plan with a named storage owner. Base the plan on measured free space and verified same-disk growth samples, not retained bytes divided by part age. Options include capacity expansion, a verified storage policy or deliberate retention changes. For each option state the exact volume/table, new value, resource cost, possible data movement and reversibility. A grown disk usually cannot be shrunk as rollback. After the owner applies the approved change, read the same disk and affected tables again; verify headroom against the declared target and ingestion against real write/freshness evidence. No forecast without comparable samples and assumptions.
 
 ## Manage merge pressure
 
-CS-030, CS-061 (code 252 TOO_MANY_PARTS). When inserts are rejected because a table has too many active parts (small-batch/high-frequency ingestion outrunning background merges): raise the collector's batch size / flush interval so it writes fewer, larger parts (the collector-side fix, preferred), or tune `parts_to_throw_insert`/`max_parts_in_total` only with a clear understanding that raising the throw threshold trades a hard reject for unbounded part growth. Announce the collector batch change; verify `system.parts` active-part count per table trends down and no fresh 252 in `system.errors`.
+CS-030/061, plan with a named database/collector owner. Confirm actual active-part pressure and recent INSERT exceptions; cumulative error counters alone are insufficient. Prefer correcting small-batch/high-frequency ingestion when evidenced. Raising a part limit changes the failure tradeoff and is not a repair by itself. Record batch/flush or database-setting preimages, exact effects and restore method. Retest part trends, affected service freshness and the actual write-exception window after the owner applies the approved change.
 
 ## Fix collector pipeline
 
-CS-010, CS-011. When telemetry is stale or absent because the OTel collector stopped sending or is misconfigured (wrong endpoint, wrong database, dropped exporter): this is a collector-side change, not a ClickHouse one — announce the corrected exporter endpoint/database in the collector config, roll the collector, and verify `max(Timestamp)` on the affected `otel_*` table advances to within the freshness threshold and CS-061 shows no fresh Insert `ExceptionWhileProcessing` rows.
+CS-010/011, plan with the collector owner. Trace the exact service/signal through effective configuration: explicit `env` overrides `envFrom`, receiver listeners differ from exporters, and parallel storage outputs must remain intact. Preserve unrelated branches and secret references. Confirm endpoint/account/database/table binding before proposing a change. After approved application by the owner, verify fresh data for that service and signal, plus write-path health; a global table maximum or another region's activity cannot certify it.
 
 ## Create dashboard source
 
-CS-041. When HyperDX dashboards render blank because a source is disconnected or points at the wrong ClickHouse database/table: reconnect the source to the live database and confirm each critical-service dashboard resolves. Announce the source's target (host/database), verify a panel returns data live and the source health is green.
+CS-041, plan with the HyperDX owner. Confirm dashboard tile → source ID → connection ID and independently compare the connection's endpoint/database/table with the actual data plane. Matching regional hostnames or table names are not that proof. Preserve alternate sources and tiles, record exact pre/postimages, and let the owner apply the approved version-specific change. Retest source IDs, the exact service query and usable panel data. Zero alerts never removes this workflow. This section prepares and verifies the owner plan; it does not silently expand the skill's write scope.
 
 ## Record and wrap up
 
-Append one entry per executed change to `${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/clickstack/changes.md`:
+Use the selected target's private `changes.md` and run directory, preserving prior runs. Each row records timestamp, finding, immutable object identity, exact safe field changes, approved authority, application stage, verification result, preserved neighbours, restore receipt and remaining owner action. Never mix targets into the legacy flat path; flat single-block and nested labeled paths both remain supported.
 
-```markdown
-## <UTC timestamp> | <finding IDs>
-- Change: <object and what changed, with risk class>
-- Command: <exact DDL or API call applied, passwords as env-var names>
-- Verified: <the read-back command and the value it showed>
-- Rollback: <the exact statement or backup file it reads from>
-- Pending: <item> (owner: <team or person>)
-```
+End with the completed, blocked and owner-plan rows separately. Run `/scoutflo:audit-clickstack` in a new shell for the same target and compare the actual finding lifecycle/check results. Configuration repair is enough only for a configuration check. A separate approved test event and matching human receipt are needed before claiming delivery. Recovered source health, incident resolution and human acknowledgement are distinct observations.
 
-End the run with:
+## Common failure modes
 
-1. A summary table: finding ID, change, verification result, remaining risk.
-2. The pending list for items outside this skill's write scope (TLS on the ClickHouse ports, OTel collector changes, HyperDX dashboards/sources, application instrumentation), each with a named owner.
-3. A fresh `/scoutflo:audit-clickstack` run to re-score; its delta shows which findings moved to fixed. For CS-040, also confirm a human received the test notification before trusting the delta.
-
-## Common Failure Modes
-
-| Failure | Prevention |
+| Failure | Required handling |
 | --- | --- |
-| `MODIFY TTL` run on a large table as a plain write, hours of part rewrites and I/O | It is the disruptive class: read the part/byte estimate, announce the blast radius, take a distinct second confirmation, and consider `materialize_ttl_after_modify=0` if your version supports it |
-| Retention reduced and expired data deleted immediately | A reduction is destructive; state the data loss and confirm individually, never inside a batch |
-| Service user moved to `sha256_password`, the service can no longer authenticate | Coordinate the new secret with the owning service first; verify the client works again before calling CS-050 fixed |
-| Rollback of an auth change assumed to restore the old password | The old plaintext value is not readable from `system.users`; rollback re-sets an owner-supplied password, it cannot recover the unknown old one |
-| HyperDX alert created against a guessed body shape | Read an existing alert with the API key first and mirror the confirmed field names; the request/response shapes are confirm-against-your-instance |
-| Alert marked fixed because it exists | An alert with no receiver is the CS-040 failure; require a receiver reference and a human confirming a test notification arrived |
-| `/api/v1/alerts` used and 404s | HyperDX serves `/api/<resource>`, not `/api/v1/*`; the `v1` form does not exist |
-| Read-only audit user granted more than `SELECT` | Grant only `SELECT` on the telemetry DB and `system.*`; verify with `SHOW GRANTS` that no write or access-management privilege is present |
-| Password printed in an announcement or written to a backup | Passwords come from named env vars only; ClickHouse masks credentials in `query_log`, and announcements name the variable, never the value |
-| Change applied to the wrong ClickHouse instance | Run the live-safety gate: fetch `hostName()`/`currentUser()` live and confirm the `otel_*` table count is greater than zero before any write |
-| Batch continues past a failed write | Mid-batch failure rule: stop immediately, record what already applied and its backups, re-announce the remainder for a fresh approval |
-| TLS or OTel collector change smuggled through as a "monitoring tweak" | Those are out of write scope; record them as a plan with a named owner, never execute them here |
+| Placeholder URL or inherited admin connection | Resolve selected config; compare independent server/database identity in both read and admin surfaces |
+| API-key denial followed by login fallback | Selected key stays blocked; legacy login is a separately explicit mode |
+| TTL inferred from engine string or substring | Read full table TTL through safe projection; unsupported expressions need attended interpretation |
+| Unknown old password treated as a backup | Record the recovery owner and verified protected credential path, or leave recovery unverified |
+| Partial user creation retried blindly | Read exact immutable ID/stages; finish or clean up only approved run-owned effects |
+| Two familiar grants treated as creation ownership | Require this run's immutable creation receipt and current drift check |
+| Receiver exists so delivery is certified | Keep configuration/readback separate from incident and human receipt |
+| Mutation succeeds but verification fails | Stop the batch, retain unknown state and inspect before retrying |
+| Raw DDL, webhook, password or error saved | Capture only safe projections and protected-store references |
+| Owner plan presented as applied | Keep it pending until application and the exact audit retest are observed |

@@ -185,6 +185,7 @@ run() {
   : > "$WORK/calls"
   (cd "$WORK" && env -i HOME="$WORK/home" PATH="$WORK/bin:/usr/bin:/bin" \
     SCOUTFLO_CONFIG="$CFG" SCOUTFLO_ENV_FILE="$WORK/home/.scoutflo/env" \
+    CLAUDE_PLUGIN_ROOT="$ROOT" SCOUTFLO_SOURCE_EVIDENCE="$WORK/source.json" SCOUTFLO_SOURCE_MAPPING="$WORK/source-mapping.json" SCOUTFLO_ONCALL_SOURCE_BINDING="${DOC_BINDING:-$WORK/source-bound.json}" \
     SCOUTFLO_TARGET="$TARGET" SCOUTFLO_TRIAGE="$TRIAGE" SCOUTFLO_ONCALL_QUALITY_MAX_CALLS="$QUALITY_BUDGET" SCOUTFLO_ONCALL_QUALITY_MAX_USERS="$USER_CAP" CASE_DIR="$WORK" CASE_MODE="$CASE_MODE" \
     EXPECT_ID="$EXPECT_ID" EXPECT_KEY="$EXPECT_KEY" \
     /bin/sh "$COLLECT" "$@") > "$WORK/out" 2> "$WORK/err"
@@ -383,6 +384,52 @@ fixtures; TRIAGE=1; CASE_MODE=identity-drift; must_reject 'triage final identity
 fixtures; TRIAGE=1; must_reject_before_call 'triage refuses scoped deep batch' --team team-a
 fixtures; TRIAGE=1; must_reject_before_call 'triage refuses deep source selector' --source-route-env SOURCE_ROUTE
 fixtures; TRIAGE=invalid; must_reject_before_call 'unknown triage setting'
+
+# Batch source evidence compares all keys in one management snapshot, never once
+# per source. The source receipt is a synthetic independently verified capture.
+fixtures; CFG="$WORK/list.yaml"; TARGET=first
+printf "SOURCE_ROUTE='private-route-a-canary'\n" >> "$WORK/home/.scoutflo/env"
+python3 - "$WORK" <<'PY_SOURCE'
+import datetime,hashlib,json,pathlib,sys
+p=pathlib.Path(sys.argv[1])
+def raw(v): return json.dumps(v,sort_keys=True,separators=(',',':'),ensure_ascii=True,allow_nan=False).encode()
+at=datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+records=[{'record_id':'path-'+str(i),'source_id':'monitor-'+str(i),'route_env':None if i==98 else 'SOURCE_ROUTE','route_verification':'candidate' if i==98 else 'verified','definition':{'source_id':'monitor-'+str(i),'kind':'rule','receiver_id':'receiver-a','enabled':True,'destination_kind':'oncall-inbound'}} for i in range(100)]
+common={'producer':'audit-generic','source_provider':'generic','source_target':'generic/first','observed_at':at}
+source={'schema':'scoutflo-alert-source-evidence/v1',**common,'verification':{'kind':'api-read','status':'verified','evidence_ref':'source-capture.json'},'records':records}
+(p/'source.json').write_bytes(raw(source))
+(p/'source-capture.json').write_bytes(raw({'schema':'scoutflo-alert-source-capture/v1',**common,'verification':{'kind':'api-read','status':'verified'},'records_sha256':hashlib.sha256(raw(records)).hexdigest()}))
+(p/'source-mapping.json').write_bytes(raw({'schema':'scoutflo-oncall-source-mapping/v1','source_provider':'generic','source_target':'generic/first','source_sha256':hashlib.sha256(raw(source)).hexdigest(),'expected_oncall_target':'splunk_oncall/first','records':[{'record_id':r['record_id'],'expected_policy':'policy-a','expected_team':'team-a'} for r in records if r['record_id']!='path-99']}))
+PY_SOURCE
+if run --bind-source-evidence "$WORK/source.json" "$WORK/source-mapping.json" && [ ! -s "$WORK/calls" ] && assert_json '(.records|length)==100 and ([.records[]|select(.status=="bound")]|length)==98'; then
+  cp "$WORK/out" "$WORK/source-bound.json"; ok 'binder makes zero provider calls and preserves two blocked records'
+else bad 'source binding'; cat "$WORK/err" >&2; fi
+if run; then BASE_CALLS=$(wc -l < "$WORK/calls" | tr -d ' '); else bad 'source baseline collection'; BASE_CALLS=-1; fi
+if run --source-records "$WORK/source-bound.json" && assert_json '(.source_matches.records|length)==100 and ([.source_matches.records[]|select(.binding_verified)]|length)==98' && [ "$(wc -l < "$WORK/calls" | tr -d ' ')" -eq "$BASE_CALLS" ] && [ "$(grep -c '/org/routing-keys$' "$WORK/calls")" -eq 1 ]; then
+  ok 'one hundred source paths use one full collection and one routing read'
+else bad 'batched source collection'; cat "$WORK/err" >&2; fi
+if ! grep -E 'private-.*-canary|fixture-(first|second)-(id|key)' "$WORK/out" "$WORK/err" "$WORK/source-bound.json" >/dev/null; then ok 'bound packet and batch snapshot contain no secret values'; else bad 'source packet secret leak'; fi
+# Execute both published source recipes in fresh shells, in flow order.
+python3 - "$ROOT" "$WORK" <<'PY_RECIPES'
+import pathlib,re,sys
+root,work=map(pathlib.Path,sys.argv[1:])
+blocks=re.findall(r'```bash\n(.*?)\n```',(root/'skills/audit-splunk-oncall/references/source-evidence.md').read_text(),re.S)
+assert len(blocks)==2
+for i,block in enumerate(blocks): (work/('source-recipe-'+str(i)+'.sh')).write_text(block+'\n')
+PY_RECIPES
+REAL_COLLECT="$COLLECT"; DOC_BINDING="$WORK/doc-bound.json"; COLLECT="$WORK/source-recipe-0.sh"
+if run && [ -f "$DOC_BINDING" ] && [ ! -s "$WORK/calls" ]; then ok 'published private binder block runs in a fresh shell'; else bad 'source binder cookbook'; fi
+COLLECT="$WORK/source-recipe-1.sh"
+if run && assert_json '.total==100 and .assessed==98 and .counts.verified==98 and .counts.blocked==2 and .delivery_proven==false' && [ "$(wc -l < "$WORK/calls" | tr -d ' ')" -eq "$BASE_CALLS" ]; then ok 'published batch block preserves all records using one fresh collection'; else bad 'source batch cookbook'; cat "$WORK/err" >&2; fi
+COLLECT="$REAL_COLLECT"; DOC_BINDING=''
+TARGET=second; EXPECT_ID=fixture-second-id; EXPECT_KEY=fixture-second-key
+must_reject_before_call 'same route and policy in another account cannot replay source proof' --source-records "$WORK/source-bound.json"
+TARGET=first; EXPECT_ID=fixture-first-id; EXPECT_KEY=fixture-first-key
+printf "SOURCE_ROUTE='changed-route-value'\n" >> "$WORK/home/.scoutflo/env"
+must_reject_before_call 'changed protected route invalidates source binding' --source-records "$WORK/source-bound.json"
+printf "SOURCE_ROUTE='private-route-a-canary'\n" >> "$WORK/home/.scoutflo/env"
+printf '\n' >> "$WORK/source-capture.json"
+must_reject_before_call 'changed capture receipt invalidates source generation' --source-records "$WORK/source-bound.json"
 
 # Mutation control: the same wrong-team input must escape an intentionally
 # disabled identity predicate. The immutable copy never alters shipped code.

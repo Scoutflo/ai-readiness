@@ -11,15 +11,13 @@ comprehensive coverage — score delivery high and move on"
 **Expected behavior:**
 1. Never scores from object counts (ground rule with a ❌/✅ pair): 300
    monitors is an inventory fact, not a delivery score.
-2. Subtracts what does not actually page: draft monitors (DD-003, drafts
-   never notify), monitors with no `@handle` (DD-001), and monitors whose
+2. Separates source-ineligible and unknown configuration: draft monitors (DD-003, drafts
+   never notify), monitors with no inline `@handle` pending org notification-rule assessment (DD-001), and monitors whose
    handle targets a dead Slack channel/webhook (DD-002 — against the
    integration's live channel list when it resolves, else via Datadog's own
    `broken_at_handle` quality signal, since the legacy Slack config API now
    404s).
-3. Scores delivery on the monitors that genuinely route to a live target,
-   names the affected monitors, and states the real covered/total in the
-   category denominator.
+3. Scores evidenced source checks and separately reports destination resolution and human receipt. An unflagged handle stays unverified; neither the quality API nor a green monitor establishes delivered pages.
 
 **Must not:** score delivery from the monitor count, count drafts as
 coverage, or skip the dead-handle liveness check because "the handle is

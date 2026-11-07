@@ -13,7 +13,8 @@ Use the same `SCOUTFLO_CONFIG` and `SCOUTFLO_TARGET` as the audit. The collector
 | `SCOUTFLO_VERIFY_TEAM` | Exact intended owning-team slug, required for SOC-002 and SOC-007 |
 | `SCOUTFLO_VERIFY_POLICIES` | Optional JSON array for SOC-006, containing the required policy set including `SCOUTFLO_VERIFY_POLICY`; defaults to that one policy |
 | `SCOUTFLO_VERIFY_MIN_RESPONDERS` | SOC-006's explicit positive integer requirement; literal `none` only when the operator declares no redundancy requirement. Missing is blocked. |
-| `SCOUTFLO_VERIFY_SOURCE_EVIDENCE` | SOC-007's existing, verified, safely projected source-side evidence record, described below |
+| `SCOUTFLO_VERIFY_SOURCE_EVIDENCE` | SOC-007's private bound packet from [source evidence](source-evidence.md) |
+| `SCOUTFLO_VERIFY_SOURCE_RECORD` | SOC-007's exact unique `record_id` in that packet |
 | `SCOUTFLO_VERIFY_SOURCE_MAX_AGE_SECONDS` | Positive integer freshness window; example default `3600`. Choose a shorter window for frequently changed sources. |
 | `SCOUTFLO_VERIFY_CLOCK_SKEW_SECONDS` | Positive integer allowance for source clock skew; example default `60`. Set from the observed clock accuracy. |
 | `SCOUTFLO_VERIFY_SOURCE_SCOPE` | Literal `none` only for an explicit declaration that no sender is in scope; never set from missing evidence |
@@ -26,9 +27,9 @@ SOC-006 deduplicates actual current users across the explicitly selected policy 
 
 ## Source-side evidence for SOC-007
 
-Prepare this record from an already verified source-side read, never by guessing a receiver handle or copying an incoming URL. The file contains metadata only: `source_id`, UTC `observed_at` in `YYYY-MM-DDTHH:MM:SSZ` form, `route_env` naming the protected source routing-key variable, `expected_policy`, `expected_team`, and `verified: true`. The verification flag records a completed source-side verification; setting a flag cannot make an unverified source trustworthy. Check the underlying source evidence and its provenance before using the file. Do not put the key, incoming URL, raw source configuration or contact values in it.
+Use the versioned producer envelope, capture receipt, intended mapping and private bound packet in [source evidence](source-evidence.md). The exporter packages a completed source read; the binder never upgrades a handle, hostname, imported metadata or intermediate receiver to an exact route proof. The source target and evidence generation, selected On-Call target and credential generation, expected policy/team and protected route value must all still match.
 
-The recipe uses an example freshness window of one hour and clock-skew allowance of one minute. These are operator policy defaults, not provider guarantees. Set the named positive-integer inputs above for the source change rate and measured clock accuracy; a longer window must be an explicit choice. A changed source invalidates that evidence immediately. Re-read the source when it is stale or has changed. The collector receives only `--source-route-env <variable-name>` and returns `source_match.route_aliases` and `source_match.policies`; the value comparison happens in memory before projection. Missing evidence or an unpopulated source-match contract is blocked, not a passing or deliberately excluded source.
+Legacy source records remain readable as historical evidence, but cannot certify a new SOC-007 result. Re-read the actual source and bind its independently verified safe projection. The example freshness window is one hour with one minute of clock skew. These are operator defaults, not provider guarantees. Any changed source, target, credential or route value requires new evidence. For multiple sources, use the batch recipe: it collects one management snapshot and evaluates every path locally, preserving blocked records in the denominator.
 
 ## Fresh read and assertion
 
@@ -65,10 +66,9 @@ if [ "$CHECK" = SOC-007 ]; then
   for WINDOW in "$MAX_AGE" "$CLOCK_SKEW"; do
     printf '%s' "$WINDOW" | jq -Rse 'test("^[1-9][0-9]*$") and (tonumber|isinfinite|not)' >/dev/null 2>&1 || { echo 'Source evidence time windows must be positive integers'; exit 2; }
   done
-  SOURCE=$(jq -ce -s --argjson age "$MAX_AGE" --argjson skew "$CLOCK_SKEW" --arg p "$POLICY" --arg t "$TEAM" 'select(length==1) | .[0] | select(type=="object" and .verified==true and (.source_id|type=="string" and length>0) and (.route_env|type=="string" and test("^[A-Za-z_][A-Za-z0-9_]*$")) and .expected_policy==$p and .expected_team==$t) | (.observed_at|fromdateiso8601) as $at | select($at<=now+$skew and $at>=now-$age) | {route_env}' "$SOURCE_FILE" 2>/dev/null) || { echo 'Source evidence is invalid, stale or for another path'; exit 2; }
-  [ -n "$SOURCE" ] || { echo 'Source evidence did not select one verified path'; exit 2; }
-  ROUTE_ENV=$(printf '%s' "$SOURCE" | jq -er '.route_env')
-  SNAPSHOT=$(sh "$READER" --source-route-env "$ROUTE_ENV") || { echo 'Current source/path read is blocked'; exit 2; }
+  RECORD="${SCOUTFLO_VERIFY_SOURCE_RECORD:-}"
+  [ -n "$RECORD" ] || { echo 'Select the exact SCOUTFLO_VERIFY_SOURCE_RECORD'; exit 2; }
+  SNAPSHOT=$(sh "$READER" --source-records "$SOURCE_FILE") || { echo 'Current bound source/path read is blocked'; exit 2; }
 else
   SNAPSHOT=$(sh "$READER") || { echo 'Current path read is blocked'; exit 2; }
 fi

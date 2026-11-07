@@ -36,3 +36,5 @@ to a VM — that's the dependency, just draw the edge and mark it confirmed."
 5. The pass runs only when two or more clouds are configured, after each
    cloud's own discovery and before the review, so single-cloud estates and the
    per-cloud lanes are unchanged.
+
+Executable transform inputs are the explicit scoped local IP catalog and openings TSV. A partial or blocked selected catalog cannot establish unique ownership. One uniquely attributed host yields a review candidate, never an automatically confirmed dependency. No ambient account is queried by the transform.

@@ -14,7 +14,7 @@ When someone asks *"why is pod `checkout-abc` failing — give me the RCA?"*, th
 The RCA is assembled **only** from evidence actually observed — a report finding, a topology edge, a correlation cascade, or a live probe result. A branch of the k8s failure taxonomy may be named a **cause** only when its specific observed field is present (see [live-evidence/references/k8s-liveness-probes.md](../live-evidence/references/k8s-liveness-probes.md)); a bare symptom (`restartCount > 0` during a normal rollout) is labelled a symptom, never a verdict. A blocked / RBAC-denied / null probe is an honest **gap** (`verdict=unknown`), never read as "healthy" and never a guess. If signal is too thin, the answer is *"insufficient signal — here is what's known and exactly what to collect next,"* not a fabricated chain. This is the same discipline the toolkit enforces on scores (`check-findings.sh`) and dollars (`check-cost.sh`).
 
 - ❌ `Root cause: the pod is crash-looping.` (CrashLoopBackOff is the *backoff*, not the reason; no terminated reason/exit code cited)
-- ✅ `Most likely root cause (confidence: high): pod checkout-abc's app container was OOMKilled (exitCode 137) 4 times in 20m [live@2026-08-14T09:12Z], and K8S-004 says its Deployment has no memory limit [report@2026-08-10]; the container exceeds the node default and is killed. Blast radius: orders-api CALLS checkout (topology, conf 9, observed).`
+- ✅ `Most likely root cause (confidence: high): pod checkout-abc's app container was OOMKilled (exitCode 137) 4 times in 20m [live@2026-08-14T09:12Z], and K8S-004 says its Deployment has no memory limit [report@2026-08-10]; memory exhaustion killed the container. The missing limit is posture context; inspect memory usage and node pressure before naming the trigger. Blast-radius candidate: orders-api CALLS checkout (configured topology; verify traffic).`
 
 ## Doctor gate
 
@@ -63,15 +63,17 @@ fi
 REPORTS=0
 if [ -d "$AUD" ]; then
   REPORTS="$(find "$AUD" -name findings.json 2>/dev/null | while IFS= read -r f; do
-    case "$f" in */all/*|*/cost-analysis/*|*/cost/*|*/doctor/*) continue ;; esac
+    case "$f" in (*/all/*|*/cost-analysis/*|*/cost/*|*/doctor/*) continue ;; esac
     echo x
   done | wc -l | tr -d ' ')"
 fi
-LIVE=0; le_can_probe "$KUBE_CONTEXT" >/dev/null 2>&1 && LIVE=1
+LIVE=0; if [ -n "$KUBE_CONTEXT" ] && command -v kubectl >/dev/null 2>&1; then LIVE=1; fi
+# This is a local availability check only; the following live-safety gate verifies
+# the independent endpoint before auth or provider reads.
 if [ "$REPORTS" -eq 0 ] && [ "$LIVE" -eq 0 ]; then
   echo "no reports under $AUD and no live cluster access — run /scoutflo:audit-all (or a specific audit) first, or configure kubernetes.context so rca can probe live"; exit 1
 fi
-echo "doctor gate: pass (reports=${REPORTS}, live=$([ "$LIVE" -eq 1 ] && echo yes || echo no))"
+echo "doctor gate: pass (reports=${REPORTS}, live-candidate=$([ "$LIVE" -eq 1 ] && echo yes || echo no))"
 ```
 
 ## Live-safety gate
@@ -80,79 +82,64 @@ The shared probe helper admits only `config view` / `config get-contexts` and `a
 
 ```bash
 set -eu
-KUBE_CONTEXT="my-cluster"   # the resolved target's context (single block, or the SCOUTFLO_TARGET-selected labeled item — never head -1); the doctor gate confirmed live access; report-only mode skips this block
-SERVER="$(kubectl --context "$KUBE_CONTEXT" config view --minify -o jsonpath='{.clusters[0].cluster.server}' 2>/dev/null)"
-VER="$(kubectl --context "$KUBE_CONTEXT" version -o json 2>/dev/null | jq -r '.serverVersion.gitVersion // "unknown"')"
-echo "live target: context=${KUBE_CONTEXT} server=${SERVER} k8s=${VER}"
-echo "live-safety gate: pass — read-only probes only; confirm this is the cluster the target lives in"
+# Supply the reviewed cluster endpoint independently; do not copy it from this probe.
+: "${RCA_EXPECTED_SERVER:?Set the independently reviewed cluster API endpoint}"
+. "${CLAUDE_PLUGIN_ROOT}/skills/rca/scripts/live-context.sh"
+echo 'live-safety gate: pass — selected identity verified; read-only probes only'
 ```
+
+## Evidence identity boundary
+
+Follow [qualified service evidence](../../report-standard/service-evidence.md). Use exact account/cluster/namespace/resource identities and collection generations from current correlation inputs; a bare service name, shared private address or repeated `cluster.local` hostname is not cross-region identity. Unmappable/partial evidence stays unresolved in the answer. An [estate topology](../map-topology/references/estate-composition.md) is local context with per-source hashes and evidence tiers; configured exporter edges are candidate dependencies, not observed traffic or causes. Preserve object-store and other parallel outputs rather than assuming a single telemetry destination. Source configuration, incident records and human receipt are distinct proof steps; read current evidence before naming a cause.
 
 ## Inputs and what each contributes
 
 | Input | Role | What rca takes from it |
 | --- | --- | --- |
 | Per-audit `findings.json` (`./scoutflo-audits/<target>/<date>/`) | **reference (prior)** | findings naming the target — the posture context (e.g. "no memory limit") and known symptoms, each tagged `[report@<run_date>]` with its age |
-| `topology-export.json` | **blast-radius map** | `relationships[]` classified into identity / dependency / observation edges — the full attached set, who to probe, and who breaks downstream |
+| Selected local `estate-topology.json` | **blast-radius map** | Qualified endpoints and configuration/traffic evidence tiers; original per-target exports remain unchanged |
 | Live probes (`live-evidence` lib) | **evidence (current truth)** | the target's and suspects' real state now: restarts, OOM/exit codes, events, probe failures, redacted logs — tagged `[live@<now>]` |
-| `correlation.json` | cross-report links | precomputed `cascades` (`root_cause`→`effects`) + `overlaps` (`OVL-*`: the same service flagged by ≥2 audits — independent multi-stack agreement) |
+| Current-date findings and inventories | cross-report links | Recomputed qualified cascades, overlaps and scoped coverage; shared-source targets require an independence check |
 | `business_context.json` (`~/.scoutflo/`) | priority | `critical_dependencies`, `environment`, SLA — raises urgency and calibrates language |
 
 ## Phase 1: Resolve the target (identity only)
 
-Resolve the user's term (a pod name, service, resource id, or finding id) to two things: the tokens it appears under in findings, and the **concrete object + context to probe**. Use ONLY identity signal for this — topology `DEPLOYED_AS` (service→workload) / `PART_OF`, pod `ownerReferences` (pod→ReplicaSet→Deployment, via `probe_owner`), and the pod-name hash suffix. Pin the context from `kubernetes.context` (never ambient). Report what matched and under which names. If nothing matches and there is no live handle, say so and list the closest names — never proceed on a guess. Identity edges resolve the target; they are **never** treated as a cause.
+First select `RCA_TARGET` (the canonical integration/label or single-block audit target), `RCA_RUN_DATE`, and an exact `RCA_RESOURCE` affected token or finding ID. Then resolve the user's term (a pod name, service, resource id, or finding id) to two things: the tokens it appears under in findings, and the **concrete object + context to probe**. Use ONLY identity signal for this — topology `DEPLOYED_AS` (service→workload) / `PART_OF`, pod `ownerReferences` (pod→ReplicaSet→Deployment, via `probe_owner`), and current ownership metadata. A pod-name suffix alone is a candidate, never identity proof. Pin the context from `kubernetes.context` (never ambient). Report what matched and under which names. If nothing matches and there is no live handle, say so and list the closest names — never proceed on a guess. Identity edges resolve the target; they are **never** treated as a cause.
 
 **Alert-anchored entry (optional).** When the user asks "why did *this alert* fire" (rather than naming a resource), the entry point is the fired alert: resolve it to the service/resource it scopes and to a **fire window**. Read the fire window from the alerting provider's history where the audit already reads it (e.g. Sentry issue/rule fire history, Alertmanager/Prometheus `ALERTS`, Datadog/SigNoz alert history) — best-effort and honest: if the history isn't readable, ask for or assume a window and say so. That window then drives Phase 4.5's baseline comparison. Everything downstream is identical; this only changes how the target + window are derived.
 
 ## Phase 2: Gather the report signal (reference)
 
-Assemble every finding whose `affected[]`/`title`/`id` names the target, grouped by provider, each tagged `[report@<run_date>]`. Compute each report's age from its run date; if the newest is older than the freshness horizon (default **24h**, `business_context`-tunable), treat its facts as *reference, not current truth* and plan to re-probe live. This is the "where to look / what's known" layer, not the verdict.
+Read the exact selected target/date and match `affected[]` or `id` exactly. Title or substring matches may help the operator choose a resource, but never join evidence. The local reader rejects conflicting envelope targets/dates, labels legacy directory-derived dates, and keeps each result tagged `[report@<run_date>]`. Cross-provider expansion requires the current qualified bindings used in Phase 5. Compute each report's age from its run date; if the newest is older than the freshness horizon (default **24h**, `business_context`-tunable), treat its facts as *reference, not current truth* and plan to re-probe live. This is the "where to look / what's known" layer, not the verdict.
 
 ```bash
 set -eu
-AUD="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}"
-TARGET="checkout"   # the resource/service/finding-id the user asked about
-find "$AUD" -name findings.json 2>/dev/null | while IFS= read -r f; do
-  # Skip the roll-up dirs (all/cost-analysis/cost/doctor): their findings.json is a roll-up, not a
-  # per-audit report signal, and carries no per-resource .target for a resource-level RCA.
-  case "$f" in */all/*|*/cost-analysis/*|*/cost/*|*/doctor/*) continue ;; esac
-  # Prefix each finding with the audit's own .target slug — the full "integration/label"
-  # (e.g. kubernetes/prod-cluster, azure/prod-core, or a bare "lgtm" single block) — never a
-  # basename that drops the integration for a two-level (multi-target) layout.
-  jq -r --arg t "$TARGET" '(.target // "?") as $tg | .findings[]
-    | select(( ((.affected // []) | join(" ")) + " " + (.title // "") + " " + (.id // "") ) | test($t; "i"))
-    | "\($tg)\t\(.id)\t\(.severity)\t\(.area)\t\(.title)"' "$f" 2>/dev/null
-done
+# Set these from the selected audit and the user's exact resource/finding, not a name search.
+: "${RCA_TARGET:?Set integration/label (or the single-block target)}"
+: "${RCA_RESOURCE:?Set an exact affected resource or finding ID}"
+: "${RCA_RUN_DATE:?Set the selected report run date}"
+sh "${CLAUDE_PLUGIN_ROOT}/skills/rca/scripts/read-evidence.sh" reports
 ```
 
 ## Phase 3: Topology — full blast radius + ranked suspects
 
-Read `topology-export.json` and classify **every** edge touching the target by role — the fix for treating all edges as "upstream cause". Enumerate the complete attached set, then rank which to probe live.
+Compose the selected per-target exports using [estate composition](../map-topology/references/estate-composition.md), then read the explicitly selected local `estate-topology.json` and classify each edge touching the exact target/entity by role — the fix for treating all edges as "upstream cause". Enumerate the complete attached set, then rank which to probe live.
 
 - **Identity / resolution** — `DEPLOYED_AS` (service→workload), `PART_OF`, `ROUTES_TO` where `to` is a workload. Resolve the probe target; **never a candidate cause.**
 - **Dependency** — `CALLS` (service→service), external `ServiceEntry`. Direction is load-bearing: for `A -CALLS-> B`, if the target is `A` then `B` is an **upstream SUSPECT** (a failing dependency can be the cause); if the target is `B` then `A` is **downstream BLAST RADIUS** (breaks if the target is down), never a cause.
 - **Resource dependency** — the Cloud-Mode connections (`STORES_DATA_IN`, `CACHES_IN`, `PUBLISHES_TO`, `SUBSCRIBES_TO`, `CONSUMES`, `USES`, `CONFIGURED_BY`, `EXPOSED_VIA`): same direction rule as CALLS, so the target's database, cache, queue, bucket, config store, or entry LB ranks as an **upstream SUSPECT** exactly like a failing service dependency (a dead database is the classic root cause). One difference at probe time: a cloud resource is not kubectl-probable — verify a ranked resource suspect through its provider (the matching audit's read lane, provider status/events), and weigh the edge's `evidence_class`/`assertion_type` in the ranking (an observed edge outranks an asserted one).
-- **Observation** — `MONITORED_BY` / `SENDS_METRICS_TO|LOGS_TO|TRACES_TO`. Tells you which backend holds the target's signal; a **missing** observation edge is itself a root-cause-class answer ("a crash here would have paged no one").
+- **Observation** — `MONITORED_BY` / `SENDS_METRICS_TO|LOGS_TO|TRACES_TO`. Tells you which backend holds the target's signal; a missing observation edge means this map has no observed binding. It proves neither absent monitoring nor failed paging; collect the source rule, route and receipt evidence.
 
-Build a ranked upstream-suspect list (edge `confidence` × observed-vs-asserted × whether a finding already names the neighbor × business-criticality × hop-proximity). Treat `topology-export.json` as a possibly-stale **hypothesis source** (tag `[topology@<generated_at>]`): it says *where to look*; the live probe confirms or exonerates. State plainly "topology may be incomplete; only topology-named suspects were probed" so a missing edge is never read as exoneration.
+Build a ranked upstream-suspect list (edge `confidence` × observed-vs-asserted × whether a finding already names the neighbor × business-criticality × hop-proximity). Treat the saved topology and its source-generation hashes as a possibly-stale **hypothesis source** (tag `[topology@<generated_at>]`): it says *where to look*; the live probe confirms or exonerates. State plainly "topology may be incomplete; only topology-named suspects were probed" so a missing edge is never read as exoneration.
 
 ```bash
 set -eu
-AUD="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}"
-TOPO="$AUD/topology-export.json"; TARGET="checkout"
-[ -f "$TOPO" ] || { echo "no topology-export.json — attached set unknown; run /scoutflo:map-topology. Probing the named target only."; exit 0; }
-# Normalize both real shapes (nested relationships[] and generated edges[]) to {from,to,rel,conf},
-# then classify by role so identity edges resolve and only dependency edges generate suspects.
-jq -r --arg t "$TARGET" '
-  (( .relationships // [] ) | map({from: .from.name, to: .to.name, rel: .relation, conf: (.confidence // "?")}))
-  + (( .edges // [] )       | map({from: .from,      to: .to,      rel: .type,     conf: (.confidence // "?")}))
-  | .[] | select(.from == $t or .to == $t)
-  | (if   (.rel|test("DEPLOYED_AS|PART_OF|ROUTES_TO"))       then "identity   "
-     elif (.rel|test("CALLS|ServiceEntry"))                  then (if .from==$t then "suspect(up)" else "blast(down)" end)
-     elif (.rel|test("STORES_DATA_IN|CACHES_IN|PUBLISHES_TO|SUBSCRIBES_TO|CONSUMES|USES|CONFIGURED_BY|EXPOSED_VIA"))
-                                                             then (if .from==$t then "suspect(up)" else "blast(down)" end)
-     elif (.rel|test("MONITORED_BY|SENDS_"))                 then "observation"
-     else "other      " end) as $role
-  | "\($role)\t\(.from) -\(.rel)-> \(.to)  (conf \(.conf))"' "$TOPO" | sort
+: "${RCA_TARGET:?Set the canonical selected target}"
+: "${RCA_RESOURCE:?Set the exact topology entity name}"
+: "${RCA_RUN_DATE:?Set the selected map date}"
+: "${RCA_TOPOLOGY:?Set the selected estate-topology.json path}"
+# If a service and resource share this name, set RCA_ENTITY_TYPE=service or resource.
+sh "${CLAUDE_PLUGIN_ROOT}/skills/rca/scripts/read-evidence.sh" topology
 ```
 
 ## Phase 4: Live verification — the actual RCA (read-only)
@@ -161,95 +148,70 @@ If the doctor live branch is up, this is where the cause is established. Probe t
 
 ```bash
 set -eu
-. "${CLAUDE_PLUGIN_ROOT}/skills/redaction/lib/redaction.sh" 2>/dev/null || true
-. "${CLAUDE_PLUGIN_ROOT}/skills/live-evidence/lib/live-evidence.sh"
-KUBE_CONTEXT="my-cluster"   # the resolved target's context (SCOUTFLO_TARGET-selected for a labeled list), from the doctor gate
-NS="platform"; POD="checkout-abc"     # resolved in Phase 1
-if le_can_probe "$KUBE_CONTEXT" >/dev/null 2>&1; then
-  probe_pod_status "$KUBE_CONTEXT" "$NS" "$POD"                # phase, restartCount, waiting/terminated reason+exitCode
-  probe_events     "$KUBE_CONTEXT" "$NS" "$POD"                # FailedScheduling/BackOff/Unhealthy/Failed
-  probe_logs_previous "$KUBE_CONTEXT" "$NS" "$POD" "" 50       # dead container's last logs, redacted + capped
-  # then, for each ranked upstream suspect workload, the same probes (bounded, highest-rank first)
-else
-  echo "[live] no cluster access for context '$KUBE_CONTEXT' — report-only mode; live confirmation deferred"
-fi
+: "${RCA_NAMESPACE:?Set the resolved namespace}"
+: "${RCA_POD:?Set the exact resolved pod name}"
+# Re-resolve and verify context/endpoint in this fresh shell; no inherited connection.
+. "${CLAUDE_PLUGIN_ROOT}/skills/rca/scripts/live-context.sh"
+KUBE_CONTEXT="${KUBE_CONTEXT:?The fresh context gate must return one verified context}"
+probe_pod_status "$KUBE_CONTEXT" "$RCA_NAMESPACE" "$RCA_POD"
+probe_events "$KUBE_CONTEXT" "$RCA_NAMESPACE" "$RCA_POD"
+probe_logs_previous "$KUBE_CONTEXT" "$RCA_NAMESPACE" "$RCA_POD" "" 50
+# Repeat only for the next specifically resolved suspect; report any denied probe as unknown.
 ```
 
 Tag every observation `[live@<now>]`. When a live result contradicts a report (e.g. report said 0 restarts, live shows 42), **live wins** and the delta is stated — it is high-value output. The exact fields and the taxonomy (CrashLoopBackOff+terminated reason, OOMKilled/137, ImagePullBackOff, Unhealthy probe, Pending/Unschedulable, benign-rollout) are in [live-evidence/references/k8s-liveness-probes.md](../live-evidence/references/k8s-liveness-probes.md).
 
 ## Phase 4.5: Temporal delta on the telemetry backends (what moved, and before what)
 
+All collection defaults below are operator-tunable: signal count, baseline age/duration, fallback days, window buffer, epsilon floor and display clamp. Record selected values and units, retain unclamped values in evidence, and label baseline comparability. No default threshold establishes a cause.
+
 Phase 4 establishes the target's *state* (OOMKilled, CrashLoop). This phase answers the question the confidence rubric prizes most but Phase 4 cannot produce: **which neighbor signal moved, by how much, and did it move *before* the symptom** — the single strongest discriminator between a cause and a coincidence. It compares a fire window to a baseline window on whatever metrics/traces backend already holds each service's signal, so it is **cross-provider** by construction (Prometheus / LGTM / SigNoz / ClickStack / Datadog — whichever the topology observation edges point at).
 
 - **Pick the backend from the topology, not a guess.** For the target and each top-ranked upstream suspect from Phase 3, read the `SENDS_METRICS_TO` / `MONITORED_BY` observation edge to find which backend holds its RED/USE signals, and reuse that provider's existing read path (the same queries `audit-prometheus` / `audit-lgtm` / `audit-signoz` / `audit-datadog` / `audit-newrelic` (NRQL over `Metric`/`Span` via NerdGraph, plus each entity's ready-made `goldenMetrics` queries) already document — do not invent a new query engine). If no observation edge names a backend, say so and skip this phase for that suspect (an honest gap, never a guess).
 - **The neighbor signals to pull** (by resource scope) are in [references/neighbor-signals.md](references/neighbor-signals.md): service scope → error rate, p95/p99 latency, request throughput, dependency error rate; host scope → CPU / memory / disk-io / network / load; k8s scope → pod restarts (surface first — crash loops dominate), CPU-vs-limit (throttling), memory-vs-limit (OOM), node pressure, recent rollout. Cap at ~6 signals per suspect to stay bounded.
 - **Baseline = same hour, previous day** (`fire_start − 24h`, same duration), with a **7-day same-time-of-day median fallback** when the prior-day window overlaps another incident of the same signal or a deploy landed within 24h of it (a contaminated baseline is worse than none — flag and fall back). Compute `delta_pct = (fire − baseline) / max(baseline, epsilon) × 100`, `epsilon = max(baseline × 0.01, a small floor)`; use the fire-window **peak** for an "above" symptom / **trough** for a "below" one, and the baseline **mean**; add a ±5-minute lead-in/cool-down buffer to both windows; clamp displayed deltas at ±10000%. Rank suspects by absolute delta.
-- **Two early-stop gates (cost-bounding — borrowed from SigNoz's tiered method):**
-  - **Marginal-fire gate:** if the anchoring signal's breach is `< 10%` over its threshold **and** lasted `< 1` evaluation window, stop the fan-out and emit the single hypothesis *"the signal barely crossed — the alert/threshold may be too tight; tune it,"* not a hunt for a cause that isn't there.
-  - **Isolated-signal gate:** if **no** neighbor signal moves `≥ 25%` vs baseline, stop and conclude *"the target's own signal moved but nothing around it did"* → focus the hypotheses on the target's own instrumentation / data-source change / a silent downstream, **not** a cascade.
+- **Two tunable fan-out heuristics (defaults: 10% marginal breach, one evaluation window, 25% neighbor movement):** Record the selected thresholds and window before using them; they bound collection and never establish a cause. Sparse, missing, incomparable or zero-baseline data disables an absence conclusion.
+  - **Marginal-fire gate:** if the anchoring signal's breach is `< 10%` over its threshold **and** lasted `< 1` evaluation window, offer to narrow further collection and label threshold sensitivity as a hypothesis. A small breach can still be a real customer incident; do not recommend tuning without reviewing the declared objective and duration.
+  - **Isolated-signal gate:** if **no** neighbor signal moves `≥ 25%` vs baseline, and every selected neighbor read is comparable and complete, report only *"no movement above the selected threshold in the observed neighbor signals."* Unobserved dependencies and smaller but causal changes remain possible; choose the next probe from the unresolved evidence.
 - **Feed the deltas into the confidence rubric, never fabricate one.** A delta is emitted **only** from a real backend read, carries a new provenance tag `[delta@<now>]`, and supplies the rubric's *temporal-precedence* and *correlated-metric-evidence* signals. A missing or unreachable backend is an honest gap (`verdict=unknown`), never read as "flat/healthy". A signal that moved *with* the symptom but with no temporal ordering is labelled a **co-occurring signal**, never ranked as the cause. When no backend is reachable at all, skip this phase and say so — the report-only path (Phase 4's `else` branch) still stands.
 
 ## Phase 5: Walk the correlation chains (cascades + overlap agreement)
 
-If `correlation.json` exists, use both halves of it: the `cascades` connect the target to cause→effect chains the single-report view can't see, and the `overlaps` (`OVL-*` groups) say whether **two or more audits independently flagged the target service** — multi-stack agreement that corroborates the trouble is real.
+Recompute both candidate sets in memory from the exact selected report date using the shared correlation functions; do not trust an older global `correlation.json`. Use both halves: the `cascades` connect the target to cause→effect chains the single-report view can't see, and the `overlaps` (`OVL-*` groups) say whether **two or more qualified audit targets flagged the same verified service identity** — multi-stack agreement that corroborates the trouble is real.
 
 ```bash
 set -eu
-AUD="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}"; CORR="$AUD/correlation.json"; TARGET="checkout"
-[ -f "$CORR" ] || { echo "no correlation.json — correlating findings directly by shared resource; cascades and overlap groups not precomputed"; exit 0; }
-jq -r --arg t "$TARGET" '
-  (.cascades // [])[]
-  # Parenthesize the root-string test so the `|` stays LOCAL to that clause. Without
-  # the extra parens `|` binds looser than `or`, so `.` inside any(.effects[]?; …)
-  # would be the concatenated STRING (indexing a string with "effects" → crash),
-  # breaking the "target is an effect" case.
-  | select( ( ( .root_cause.title + " " + ((.root_cause.shared_resources // []) | join(" ")) ) | test($t;"i") )
-            or (any(.effects[]?; .title | test($t;"i"))) )
-  | "ROOT: \(.root_cause.finding_id) \(.root_cause.title)\n  EFFECTS: \([.effects[]? | "\(.finding_id) \(.title)"] | join(" | "))"' "$CORR"
-# Overlap agreement: did two or more audits independently flag the target service?
-# (Same loose test($t;"i") match as the rest of the skill; each group prints its
-# own service name so a prefix hit like cart→valkey-cart is visible, not silent.)
-jq -r --arg t "$TARGET" '
-  (.overlaps // [])
-  | map(select(.service | test($t; "i")))
-  | if length == 0 then
-      "no overlap group names \($t) — single-stack signal only; this changes nothing"
-    else
-      .[] | "OVERLAP \(.overlap_id): \(.targets | length) audits independently flagged \(.service): "
-            + ([.findings[] | "\(.target)/\(.finding_id) (\(.severity))"] | join(", "))
-    end' "$CORR"
+: "${RCA_TARGET:?Set the canonical selected target}"
+: "${RCA_RESOURCE:?Set the exact affected resource or finding ID}"
+: "${RCA_RUN_DATE:?Set the selected report run date}"
+sh "${CLAUDE_PLUGIN_ROOT}/skills/rca/scripts/read-evidence.sh" correlation
 ```
 
 How overlap agreement is weighed — supporting evidence only, never a cause:
 
 - **Cite it.** Each matched group goes into the Phase 7 Evidence list with a `[correlation]` tag: `[correlation] OVL-checkout: 2 audits independently flagged checkout: clickstack/TOPO-001 (info), lgtm/LGTM-035 (high)`.
-- **Agreement raises confidence — bounded.** Independent audits see the estate from different vantage points, so a group with ≥2 distinct `targets` whose member findings are *consistent with the cause already established by Phases 2–4* raises the RCA confidence at most one step (low→medium, medium→high). An overlap says "flagged by many", never "why" — it can never substitute for the report/probe evidence that names the cause.
+- **Agreement raises confidence — bounded.** Distinct audit targets can consume the same source path, so target count alone is not independent corroboration. After checking source independence, a group with ≥2 distinct targets whose member findings support the cause already established by Phases 2–4 may raise confidence at most one step (low→medium, medium→high). An overlap says "flagged by many", never "why" — it can never substitute for the report/probe evidence that names the cause.
 - **Weigh the members, not the raw count.** A member finding that names most of the estate (e.g. an info-severity "no service declares telemetry connections" finding that attaches to every group) is weak corroboration; what matters is the number of distinct audits (`targets | length`) and the member severities.
 - **Absence changes nothing.** No overlap group naming the target neither lowers confidence nor exonerates anything — a single-audit finding is often the only coverage a service has.
-- **Never invent.** Cite only `overlap_id`s and `finding_id`s actually present in `correlation.json`. If you enter this phase holding a finding id instead of a service name, the correlation-engine library exposes the same lookup keyed on finding id: source `skills/correlation-engine/lib/correlation-engine.sh` and call `correlation_find_related <finding-id>` to get the first overlap group containing that finding.
+- **Never invent.** Cite only `overlap_id`s and `finding_id`s returned by this target/date-qualified reader. A finding ID is still scoped to its audit target; the first same-named finding in a global file is not a valid fallback.
 
 ## Phase 5.5: Cross-tool coverage reframe
 
-`correlation.json` also carries a `coverage[]` array (built from other providers' `inventory.json`): when a **coverage gap** on the target service is actually covered by an **active, routed monitor in another tool**, it is classified `covered-elsewhere`. Use it so the RCA never tells someone they have "no alerting" on a service another tool actively pages on.
+The local reader recomputes `coverage[]` from current-generation findings and other providers' `inventory.json` for the selected report date: when a **coverage gap** on the target service is actually covered by an **active, routed monitor in another tool**, it is classified `covered-elsewhere`. It is configuration evidence, not proof of paging or human receipt; preserve its recommendation and assessment scope verbatim.
 
 ```bash
 set -eu
-AUD="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}"; CORR="$AUD/correlation.json"; TARGET="checkout"
-[ -f "$CORR" ] || exit 0
-jq -r --arg t "$TARGET" '
-  [ (.coverage // [])[] | select(.resource == $t) ] as $c
-  | if ($c | length) == 0 then "no cross-tool coverage record for \($t) — the gap stands as reported"
-    else ($c[] | "COVERAGE \(.classification) for \(.resource): "
-                 + ( if .classification=="covered-elsewhere"
-                     then ([.covered_by[] | "\(.provider):\(.inventory_name)→\(.routes_to)"] | join(", "))
-                     else .recommendation end )) end' "$CORR"
+: "${RCA_TARGET:?Set the canonical selected target}"
+: "${RCA_RESOURCE:?Set the exact affected resource or finding ID}"
+: "${RCA_RUN_DATE:?Set the selected report run date}"
+sh "${CLAUDE_PLUGIN_ROOT}/skills/rca/scripts/read-evidence.sh" coverage
 ```
 
 How it weighs:
 
-- **`covered-elsewhere` reframes, it does not exonerate.** When the target's finding is a coverage gap and `coverage[]` shows another provider actively covers it, cite it with a `[coverage]` tag and reframe the RCA from "no coverage" to **single-tool dependency** — "Azure-native alerting is absent on `checkout`, but Datadog monitor `checkout latency` actively covers it and routes to PagerDuty `[coverage]`". This may raise confidence at most one step (mirroring the bounded overlap rule), and only when the covering monitor plausibly watches the failing signal — say so as a caveat.
-- **`true-gap` is a real gap** — nothing covers it; keep the finding's severity and lead with it if it is on the causal path.
-- **`unmappable` changes nothing** — a name-only match is not confirmation; note it as a possible coverage to verify (`/scoutflo:map-topology`), never as coverage.
+- **`covered-elsewhere` reframes, it does not exonerate.** When the target's finding is a coverage gap and `coverage[]` shows another provider has a current, enabled, routed monitor for its verified identity, cite it with a `[coverage]` tag and reframe the RCA from "no coverage" to **single-tool dependency** — "Azure-native alerting is absent on `checkout`, but Datadog monitor `checkout latency` is configured for that identity and routes to PagerDuty; signal parity and delivery still need verification `[coverage]`". This may raise confidence at most one step (mirroring the bounded overlap rule), and only when the covering monitor plausibly watches the failing signal — say so as a caveat.
+- **`true-gap` means no matching coverage was observed within the explicitly declared, completely assessed targets.** Carry that boundary and the missing signal into the answer. It is never a claim that nothing in the customer estate covers it. All coverage output is advisory and leaves the source score/severity unchanged.
+- **`unmappable` preserves uncertainty.** Missing identity, unknown activation, unreadable inputs and incomplete target collection are evidence gaps. Retain the returned reason; never turn them into absent coverage.
 - **Never invent a covering monitor** not present in `coverage[]`.
 
 ## Phase 6: Weigh by business context
@@ -280,8 +242,8 @@ Open with a one-line **mode banner** so freshness is unmissable: `[live-verified
 - [delta@ts] <fire-vs-baseline neighbor-signal move that supports the cause, e.g. "payments dependency error-rate +8900% vs same-hour-yesterday, p99 +1180%, first rose 90s before checkout's restarts (temporal precedence)"; omit when no backend was reachable — never fabricate a delta>
 - [report@date] <finding-id: title (provider, severity)>
 - [topology@gen] <edge, confidence n, observed/asserted>
-- [correlation] <OVL-id: N audits independently flagged <service>: <target>/<finding-id> (<severity>), …  — omit when no overlap group names the target>
-- [coverage] <covered-elsewhere: <provider>:<monitor>→<receiver> actively covers <service> — reframes a "no alerting" gap as single-tool dependency; omit when no coverage record names the target, keep the gap as-is for a true-gap>
+- [correlation] <OVL-id: N qualified audit targets flagged <service>; source independence <verified/unknown>: <target>/<finding-id> (<severity>), …  — omit when no overlap group names the target>
+- [coverage] <covered-elsewhere: <provider>:<monitor>→<receiver> has a configured path for <qualified service> — reframes a "no alerting" gap as single-tool dependency; omit when no coverage record names the target, preserve the assessed-target boundary for a true-gap>
 
 **What I could NOT determine (do this to confirm):**
 <explicit gaps: blocked probes, suspects not reached, stale reports not re-probed; if signal was thin, say the cause is a hypothesis, not established>

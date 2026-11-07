@@ -234,10 +234,10 @@ printf '%s\n' '#!/bin/sh' 'case "$*" in "-u +%F") echo 2026-08-16;; *) exec /bin
 chmod +x "$WORK/pin-bin/date"
 cp "$WORK/scoped.json" "$WORK/trend-proof/splunk_oncall/2026-08-16/findings.json"
 cp "$WORK/scoped-history.jsonl" "$WORK/trend-proof/splunk_oncall/history.jsonl"
-TREND="$(env PATH="$WORK/pin-bin:$PATH" SCOUTFLO_AUDIT_DIR="$WORK/trend-proof" /bin/sh "$WORK/audit-all-trend.sh")"
+TREND="$(env PATH="$WORK/pin-bin:$PATH" CLAUDE_PLUGIN_ROOT="$ROOT" SCOUTFLO_AUDIT_DIR="$WORK/trend-proof" /bin/sh "$WORK/audit-all-trend.sh")"
 printf '%s' "$TREND" | grep -q 'splunk_oncall: 100 (last 1 compatible runs' || fail 'published audit-all recipe mixed triage and full history'
 cp "$WORK/legacy.json" "$WORK/trend-proof/splunk_oncall/2026-08-16/findings.json"
-TREND="$(env PATH="$WORK/pin-bin:$PATH" SCOUTFLO_AUDIT_DIR="$WORK/trend-proof" /bin/sh "$WORK/audit-all-trend.sh")"
+TREND="$(env PATH="$WORK/pin-bin:$PATH" CLAUDE_PLUGIN_ROOT="$ROOT" SCOUTFLO_AUDIT_DIR="$WORK/trend-proof" /bin/sh "$WORK/audit-all-trend.sh")"
 printf '%s' "$TREND" | grep -q 'splunk_oncall: 52 -> 64 (last 2 compatible runs' || fail 'published audit-all legacy recipe lost scope safety'
 echo "PASS"
 
@@ -327,7 +327,8 @@ cat > "$AFD/af-measured.json" <<'EOF'
 EOF
 AFM="$(sh "$VIZ" alert-fatigue "$AFD/af-measured.json" "$AFD" "$AFDATE")"
 printf '%s' "$AFM" | grep -q 'Measured fire-history (this run)' || fail "measured section heading missing"
-printf '%s' "$AFM" | grep -q '2 of 3 alerting objects cannot reach a human' || fail "reachability headline missing"
+printf '%s' "$AFM" | grep -q '2 of 3 alerting objects have no configured receiver in the assessed path' || fail "reachability headline missing"
+printf '%s' "$AFM" | grep -qi 'Alternative paths and human delivery remain unverified' || fail "measured routing promoted to human-delivery proof"
 printf '%s' "$AFM" | grep -q 'SNS topic has 0 subscribers' || fail "reachability by-reason missing"
 printf '%s' "$AFM" | grep -q 'Top offenders — ranked by measured fatigue impact' || fail "measured top-offenders missing"
 printf '%s' "$AFM" | grep -q 'Chronic / stuck' || fail "chronic section missing"
@@ -338,7 +339,8 @@ printf '%s' "$AFM" | awk '/chatbot-dlq/{a=NR} /envhealth/{b=NR} END{exit !(a<b)}
 # HTML: measured card + the two new metric tiles
 sh "$VIZ" alert-fatigue-html "$AFD/af-measured.json" "$AFD/afm.html" "$AFD" "$AFDATE" >/dev/null
 [ "$(grep -c '<!doctype html>' "$AFD/afm.html")" -eq 1 ] || fail "measured html not a single document"
-grep -q "can't reach a human (measured)" "$AFD/afm.html" || fail "unreachable metric tile missing from html"
+grep -q "no configured receiver (measured)" "$AFD/afm.html" || fail "unreachable metric tile missing from html"
+grep -q 'alternative paths and human delivery remain unverified' "$AFD/afm.html" || fail "html lacks human-delivery uncertainty"
 grep -q 'Measured fire-history' "$AFD/afm.html" || fail "measured card missing from html"
 grep -q 'chatbot-dlq' "$AFD/afm.html" || fail "measured top offender missing from html"
 grep -qE 'src="http|href="http|<link |<img ' "$AFD/afm.html" && fail "measured html references an external asset"
@@ -362,7 +364,8 @@ printf '%s' "$EX" | grep -q 'Posture: AT RISK' || fail "posture grade wrong (wan
 printf '%s' "$EX" | grep -q '1 critical · 1 high · 0 medium across 2 stack' || fail "posture counts wrong (cost is not a readiness stack)"
 # severity-first: the CRITICAL row must appear before the LOW $472 cost row
 printf '%s' "$EX" | awk '/AWS-011/{a=NR} /COST-AWS-008/{b=NR} END{exit !(a<b)}' || fail "\$472 cost finding was promoted above the critical (severity-first violated)"
-printf '%s' "$EX" | grep -q '21 of 30 alerting objects cannot reach a human' || fail "reachability headline missing"
+printf '%s' "$EX" | grep -q '21 of 30 alerting objects have no configured receiver in the assessed path' || fail "reachability headline missing"
+printf '%s' "$EX" | grep -q 'alternative paths and human delivery remain unverified' || fail "executive routing summary overclaims human delivery"
 printf '%s' "$EX" | grep -q 'Top cost lever:.*\$472/mo' || fail "top cost lever missing"
 printf '%s' "$EX" | grep -qi 'never a blended cross-domain score' || fail "honest-ranking footer missing"
 # degrade: empty estate says so

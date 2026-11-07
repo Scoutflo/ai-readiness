@@ -13,7 +13,7 @@ content-type and fail closed on non-JSON, exactly like the audits' doctor gates.
 
 | Source | Services | Call edges (traffic map) | Entry points | Workload objects for the export |
 | --- | --- | --- | --- | --- |
-| Kubernetes / Istio | yes (authoritative) | Istio: yes; plain: partial | Ingress/Gateway | yes — the only source the platform import accepts workloads from today |
+| Kubernetes / Istio | yes (authoritative) | Istio: configured routes; plain: configured entry paths | Ingress/Gateway | yes — the only source the platform import accepts workloads from today |
 | AWS | ECS services, Lambda functions, EC2 groups by tag | no (infrastructure sees placement, not calls) | ALB/NLB listeners + target groups | **no** — never fabricate; see the export rules below |
 | DigitalOcean | App Platform apps/components, tagged droplets | no | app ingress / load balancers | no |
 | New Relic | service entities (OTel `EXT` + agent `APM` domains) | **yes** — span-derived `relatedEntities` CALLS edges | no | no |
@@ -47,9 +47,9 @@ Resolve the profile/region from the config's `aws` block the same way
 on every call:
 
 ```bash
-set -eu
-AWS_PROFILE_CFG="your-aws-profile"   # from toolkit.yaml aws.profile (resolved in Phase 0)
-AWS_REGION_CFG="your-aws-region"     # from toolkit.yaml aws.region
+set -euo pipefail
+: "${AWS_PROFILE_CFG:?Set the selected AWS_PROFILE_CFG from the verified source config}"   # from toolkit.yaml aws.profile (resolved in Phase 0)
+: "${AWS_REGION_CFG:?Set the selected AWS_REGION_CFG from the verified source config}"     # from toolkit.yaml aws.region
 aws sts get-caller-identity --profile "${AWS_PROFILE_CFG}" --region "${AWS_REGION_CFG}" --output json | jq -e '.Account' >/dev/null
 
 # ECS: clusters -> services (the closest thing to workloads outside Kubernetes)
@@ -85,12 +85,12 @@ security group or subnet; that is placement, not traffic.
 ## DigitalOcean (App Platform, droplets)
 
 ```bash
-set -eu
+set -euo pipefail
 SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.scoutflo/env" ]; then SCOUTFLO_ENV="./.scoutflo/env"; else SCOUTFLO_ENV="$HOME/.scoutflo/env"; fi; }
 _SF_CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$_SF_CFG" ] || for _sf_c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_sf_c" ] && { _SF_CFG="$_sf_c"; break; }; done
 _SF_TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 if [ "$(sh "$_SF_TT" "$_SF_CFG" digitalocean kind 2>/dev/null || true)" = seq ]; then _sf_i=0; while [ "$_sf_i" -lt "$(sh "$_SF_TT" "$_SF_CFG" digitalocean count 2>/dev/null || echo 0)" ]; do [ -z "$(sh "$_SF_TT" "$_SF_CFG" digitalocean get "$_sf_i" token_env 2>/dev/null || true)" ] || { echo "digitalocean in ${_SF_CFG} is a list of targets that each name their own token_env, and this step reads DIGITALOCEAN_ACCESS_TOKEN by its default name, so it cannot tell which target's value to use. It stops instead of guessing: give that target a config of its own where digitalocean is a single block, and run with SCOUTFLO_CONFIG set to that file (and SCOUTFLO_AUDIT_DIR to its own folder)."; exit 1; }; _sf_i=$((_sf_i+1)); done; fi
-_sf_tv="$(sh "$_SF_TT" "$_SF_CFG" digitalocean get 0 token_env 2>/dev/null || true)"; if [ -n "$_sf_tv" ] && [ "$(sh "$_SF_TT" "$_SF_CFG" digitalocean kind 2>/dev/null || true)" != seq ]; then _sf_v="$(sh -c '( [ -f "$1" ] && . "$1" >/dev/null 2>&1; printenv -- "$2" ) 2>/dev/null || printenv -- "$2"' _ "$SCOUTFLO_ENV" "$_sf_tv" 2>/dev/null || true)"; if [ -n "$_sf_v" ]; then DIGITALOCEAN_ACCESS_TOKEN="$_sf_v"; export DIGITALOCEAN_ACCESS_TOKEN; else unset DIGITALOCEAN_ACCESS_TOKEN; echo "note: ${_sf_tv} (named by digitalocean.token_env) is not set in the secret store or the shell" >&2; fi; fi
+_sf_tv="$(sh "$_SF_TT" "$_SF_CFG" digitalocean get 0 token_env 2>/dev/null || true)"; if [ -n "$_sf_tv" ] && [ "$(sh "$_SF_TT" "$_SF_CFG" digitalocean kind 2>/dev/null || true)" != seq ]; then _sf_v="$(sh -c '( [ -f "$1" ] && { set -a; . "$1" >/dev/null 2>&1; set +a; }; printenv -- "$2" ) 2>/dev/null || printenv -- "$2"' _ "$SCOUTFLO_ENV" "$_sf_tv" 2>/dev/null || true)"; if [ -n "$_sf_v" ]; then DIGITALOCEAN_ACCESS_TOKEN="$_sf_v"; export DIGITALOCEAN_ACCESS_TOKEN; else unset DIGITALOCEAN_ACCESS_TOKEN; echo "note: ${_sf_tv} (named by digitalocean.token_env) is not set in the secret store or the shell" >&2; fi; fi
 [ -z "${_sf_tv:-}" ] || [ -n "${DIGITALOCEAN_ACCESS_TOKEN:-}" ] || { echo "${_sf_tv} is not set: save it with /scoutflo:connect (the plugin reads the secret store, not your shell); doctl would otherwise act as its own saved login"; exit 1; }
 # doctl resolves auth from digitalocean.token_env, same as audit-digitalocean.
 doctl apps list --output json | jq -r '.[] | .spec.name as $app | (.spec.services // [])[] | "do-app\t\($app)\t\(.name)"'
@@ -107,9 +107,9 @@ The one non-Kubernetes source that provides **call edges**. Same auth as
 NerdGraph query documents only:
 
 ```bash
-set -eu
-NR_API_HOST="api.newrelic.com"        # or api.eu.newrelic.com — from newrelic.region (Phase 0)
-NR_ACCT="your-account-id"             # from newrelic.account_id
+set -euo pipefail
+: "${NR_API_HOST:?Set api.newrelic.com or api.eu.newrelic.com from the selected New Relic config}"        # or api.eu.newrelic.com — from newrelic.region (Phase 0)
+: "${NR_ACCT:?Set the selected NR_ACCT from the verified source config}"             # from newrelic.account_id
 # NEW_RELIC_USER_KEY resolved from newrelic.api_key_env by the Phase-0 gate
 [ -n "${NEW_RELIC_USER_KEY:-}" ] || { echo "NEW_RELIC_USER_KEY is not set — run the Phase-0 source gate first"; exit 1; }
 NRB="$(mktemp)"
@@ -150,14 +150,18 @@ both this discovery step and the overlay.
 ## Sentry (projects as service identities)
 
 ```bash
-set -eu
+set -euo pipefail
 SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.scoutflo/env" ]; then SCOUTFLO_ENV="./.scoutflo/env"; else SCOUTFLO_ENV="$HOME/.scoutflo/env"; fi; }
 _SF_CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$_SF_CFG" ] || for _sf_c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_sf_c" ] && { _SF_CFG="$_sf_c"; break; }; done
 _SF_TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
 if [ "$(sh "$_SF_TT" "$_SF_CFG" sentry kind 2>/dev/null || true)" = seq ]; then _sf_i=0; while [ "$_sf_i" -lt "$(sh "$_SF_TT" "$_SF_CFG" sentry count 2>/dev/null || echo 0)" ]; do [ -z "$(sh "$_SF_TT" "$_SF_CFG" sentry get "$_sf_i" token_env 2>/dev/null || true)" ] || { echo "sentry in ${_SF_CFG} is a list of targets that each name their own token_env, and this step reads SENTRY_TOKEN by its default name, so it cannot tell which target's value to use. It stops instead of guessing: give that target a config of its own where sentry is a single block, and run with SCOUTFLO_CONFIG set to that file (and SCOUTFLO_AUDIT_DIR to its own folder)."; exit 1; }; _sf_i=$((_sf_i+1)); done; fi
-_sf_tv="$(sh "$_SF_TT" "$_SF_CFG" sentry get 0 token_env 2>/dev/null || true)"; if [ -n "$_sf_tv" ] && [ "$(sh "$_SF_TT" "$_SF_CFG" sentry kind 2>/dev/null || true)" != seq ]; then _sf_v="$(sh -c '( [ -f "$1" ] && . "$1" >/dev/null 2>&1; printenv -- "$2" ) 2>/dev/null || printenv -- "$2"' _ "$SCOUTFLO_ENV" "$_sf_tv" 2>/dev/null || true)"; if [ -n "$_sf_v" ]; then SENTRY_TOKEN="$_sf_v"; export SENTRY_TOKEN; else unset SENTRY_TOKEN; echo "note: ${_sf_tv} (named by sentry.token_env) is not set in the secret store or the shell" >&2; fi; fi
-SENTRY_HOST="https://sentry.io"       # or the self-hosted host from sentry.host
-SENTRY_ORG="your-org-slug"            # from sentry.org
+_sf_tv="$(sh "$_SF_TT" "$_SF_CFG" sentry get 0 token_env 2>/dev/null || true)"; if [ -n "$_sf_tv" ] && [ "$(sh "$_SF_TT" "$_SF_CFG" sentry kind 2>/dev/null || true)" != seq ]; then _sf_v="$(sh -c '( [ -f "$1" ] && { set -a; . "$1" >/dev/null 2>&1; set +a; }; printenv -- "$2" ) 2>/dev/null || printenv -- "$2"' _ "$SCOUTFLO_ENV" "$_sf_tv" 2>/dev/null || true)"; if [ -n "$_sf_v" ]; then SENTRY_TOKEN="$_sf_v"; export SENTRY_TOKEN; else unset SENTRY_TOKEN; echo "note: ${_sf_tv} (named by sentry.token_env) is not set in the secret store or the shell" >&2; fi; fi
+[ "$(sh "$_SF_TT" "$_SF_CFG" sentry kind 2>/dev/null || true)" != seq ] \
+  || { echo "Select one Sentry target in its own config before reading projects; never select the first target."; exit 1; }
+SENTRY_HOST="$(sh "$_SF_TT" "$_SF_CFG" sentry get 0 host 2>/dev/null || true)"
+[ -n "$SENTRY_HOST" ] || { echo "The selected sentry.host is missing; run /scoutflo:connect."; exit 1; }
+SENTRY_HOST="${SENTRY_HOST%/}"
+: "${SENTRY_ORG:?Set the selected SENTRY_ORG from the verified source config}"            # from sentry.org
 # SENTRY_TOKEN resolved from sentry.token_env by the Phase-0 gate
 [ -n "${SENTRY_TOKEN:-}" ] || { echo "SENTRY_TOKEN is not set — run the Phase-0 source gate first"; exit 1; }
 SB="$(mktemp)"
@@ -186,7 +190,7 @@ docs on a real instance (the standing verify-first rule):
 | --- | --- | --- |
 | Datadog (`datadog`) | APM service list + dependency map | the relevant catalog/dependency APIs are preview-stability; verify live first |
 | Groundcover (`groundcover`) | eBPF-observed service map | no verified service-map API in its documented surface today |
-| ClickStack/HyperDX (`clickstack`) | OTel trace-derived services | the v2 REST surface is session-cookie-auth and undocumented for this use |
+| ClickStack/HyperDX (`clickstack`) | OTel trace-derived services | the external v2 API uses Bearer auth, but this mapper has no grounded service-dependency recipe yet; use audit-clickstack for its supported catalog/alert checks |
 | Elastic APM (`elk`) | service map | API surface unverified for this use |
 | SigNoz (`signoz`) | OTel-native service list + dependencies | checked against the official public API spec (2026-09-21): no service-list or dependency endpoint is documented — only the generic query surface; stays verify-first until SigNoz documents one |
 
@@ -217,8 +221,9 @@ which is most of `topology.md`'s daily value.
 3. Conflicts are surfaced, never guessed: two sources disagreeing on a name
    (checkout vs checkout-svc) become one row with an alias note and an open
    question for the operator, mirroring the duplicate-name rule.
-4. Call edges come only from sources that observe calls (Istio, New Relic
-   spans). Never synthesize an edge from co-location, shared tags, or naming.
+4. Istio routing objects produce configured paths, while New Relic spans
+   produce observed calls. Preserve that distinction on every edge. Never
+   synthesize an edge from co-location, shared tags, or naming.
 
 ## Export rules for non-Kubernetes estates (topology-export.json)
 

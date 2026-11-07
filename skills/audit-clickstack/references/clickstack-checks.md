@@ -5,159 +5,28 @@ Runnable, read-only checks for every surface the [audit-clickstack](../SKILL.md)
 ## 1. Conventions
 
 - The tables, columns, system tables, and endpoint/auth model below were **confirmed on a live read** of a ClickStack all-in-one instance. Anything marked **confirm-live** (HyperDX JSON response shapes, some resource paths, the exact HyperDX auth header, and any ClickHouse system-table column not named here) needs verifying against your instance with a working credential (the Personal API Access Key, or the legacy session login below) before the skill asserts it. Never invent a table, column, endpoint, or field beyond what is confirmed.
-- **ClickHouse read surface:** HTTP on `:8123` (native `:9000` is not used by this audit). Every ClickHouse block authenticates as a **least-privilege read-only user** (see [CS-050](#7-cs-050--security-posture)) — that user is the read-only guarantee. The HTTP `readonly=1` setting is pinned as *defense-in-depth* on top of it, but note: a user that is **already read-only by profile** (a `users.xml` profile with `<readonly>1</readonly>` or `2`, common on locked-down/managed ClickHouse where RBAC access-management is disabled and a scoped user can't be created via SQL) will reject `?readonly=1` with `Code: 164 — Cannot modify 'readonly' setting in readonly mode`. That error itself proves the user is read-only, so `chq` falls back to the query without the param. The SQL is sent as the raw POST body with `--data-binary`; nothing is stored.
-- **HyperDX API auth (confirmed live on a v2.x all-in-one + against the v2.29 source):** HyperDX exposes **two** REST surfaces. (1) The **external API v2** — `/api/v2/alerts`, `/api/v2/dashboards`, `/api/v2/sources` — authenticates with the per-user **Personal API Access Key** (Settings → API Keys → the "Personal API Access Key" card, the user `accessKey`) sent as **`Authorization: Bearer`**; this is the audit's **primary** path. (2) The **internal** routes `/api/alerts|dashboards|sources` are **browser-session only** — they ignore a Bearer token (`401`), and HyperDX's web app then redirects any `401` to `/login` (this is the "email/password prompt" users hit when they try a token against these paths); they are only the **legacy session-login fallback**. The team **ingestion key** is a *different* token (OTLP ingest only) and returns `401` on `/api/v2` — never use it for reads. `/api/health` and `/api/config` are open; `/api/v1/*` external API does not exist on self-hosted v2 (that path is HyperDX Cloud only). **Path nuance (confirmed live):** reach the external API either directly on the API-server port (`<url>/api/v2/...`) or through the app proxy, which strips one leading `/api` so the working path is the **doubled** `<url>/api/api/v2/...`; the helper probes both and keeps whichever returns JSON (`HDX_V2`). **Legacy session fallback:** when only `clickstack.hyperdx_email_env` + `clickstack.hyperdx_password_env` are set, `POST /api/login/password` with `{email, password}` answers `303` and sets a `connect.sid` cookie that reads the internal routes; the cookie lives only in a `0600` `mktemp` jar, is deleted on exit, and is never printed, logged, or persisted. With no working credential (no Personal API Access Key and no login), CS-040/CS-041 are marked `not-in-scope` with that reason — never a wrong-key config error, never a confident fail.
-- Presence-check tokens and passwords only; never echo, log, or write a secret value anywhere. Rendered configs and API responses can embed webhook URLs with secrets — record their shape and host class (loopback, private, public), never the full URL. The HyperDX login password and the `connect.sid` session cookie are secrets under the same rule: the password is read only from the variable the config names, the cookie exists only inside the `0600` `mktemp` jar, and neither ever appears in terminal output, evidence, `raw/`, the report, or any persistent file.
-- `curl -fsS --max-time 20` is the default. Where a status code is itself the evidence (the unauthenticated default-user probe in CS-050), `-f` is dropped deliberately and `-w '%{http_code}'` is used; that block says so.
-- Time windows and thresholds are examples; tune to your ingest volume: `RECENT="INTERVAL 1 HOUR"` for coverage, `FRESH_LAG_S=900` for freshness, part-count and error-spike thresholds per your cluster size.
+- **ClickHouse read surface:** HTTP on `:8123` (native `:9000` is not used by this audit). Every ClickHouse block authenticates as a **least-privilege read-only user** (see [CS-050](#8-security-posture-cs-050)) — that user is the read-only guarantee. The HTTP `readonly=1` setting is pinned as *defense-in-depth* on top of it, but note: a user that is **already read-only by profile** (a `users.xml` profile with `<readonly>1</readonly>` or `2`, common on locked-down/managed ClickHouse where RBAC access-management is disabled and a scoped user can't be created via SQL) will reject `?readonly=1` with `Code: 164 — Cannot modify 'readonly' setting in readonly mode`. That error itself proves the user is read-only, so `chq` falls back to the query without the param. The fixed transport sends the SELECT/SHOW body, rejects redirects, caps response bytes and projects JSON before stdout; raw provider responses are never stored.
+- **HyperDX API auth (confirmed live on a v2.x all-in-one + against the v2.29 source):** HyperDX exposes **two** REST surfaces. (1) The **external API v2** — `/api/v2/alerts`, `/api/v2/dashboards`, `/api/v2/sources` — authenticates with the per-user **Personal API Access Key** (Settings → API Keys → the "Personal API Access Key" card, the user `accessKey`) sent as **`Authorization: Bearer`**; this is the audit's **primary** path. (2) The **internal** routes `/api/alerts|dashboards|sources` are **browser-session only** — they ignore a Bearer token (`401`), and HyperDX's web app then redirects any `401` to `/login` (this is the "email/password prompt" users hit when they try a token against these paths); they are only the **legacy session-login fallback**. The team **ingestion key** is a *different* token (OTLP ingest only) and returns `401` on `/api/v2` — never use it for reads. `/api/health` and `/api/config` are open; `/api/v1/*` external API does not exist on self-hosted v2 (that path is HyperDX Cloud only). **Path nuance (confirmed live):** reach the external API either directly on the API-server port (`<url>/api/v2/...`) or through the app proxy, which strips one leading `/api` so the working path is the **doubled** `<url>/api/api/v2/...`; the helper probes both and keeps whichever returns JSON (`HDX_V2`). **Legacy session fallback:** when only `clickstack.hyperdx_email_env` + `clickstack.hyperdx_password_env` are set, `POST /api/login/password` with `{email, password}` answers `303` and sets a `connect.sid` cookie that reads the internal routes; the fixed recipe holds the cookie in memory only and never prints, logs or persists it. With no working credential, CS-040/CS-041 are `blocked` with the exact read-access unlock. Missing credentials never prove inapplicability.
+- Presence-check tokens and passwords only; never echo, log, or write a secret value anywhere. Rendered configs and API responses can embed webhook URLs with secrets — record their shape and host class (loopback, private, public), never the full URL. The HyperDX login password and the `connect.sid` session cookie are secrets under the same rule: the password is read only from the variable the config names, the cookie exists only in process memory, and neither ever appears in terminal output, evidence, `raw/`, the report, or any persistent file.
+- The fixed ClickHouse transport enforces bounded reads and exact result/JSON shape checks; HTTP status alone is never data proof.
+- Time windows and thresholds are examples; tune to your ingest volume: `RECENT_MINUTES=60` for coverage, `FRESH_LAG_S=900` for freshness, part-count and error-spike thresholds per your cluster size.
 - The all-in-one/single-node build has **no replicas and no sharding**, so `system.replicas` is empty there — that is expected, not a finding. Replica checks apply to clustered ClickHouse.
 
-ClickHouse helper (declare once per session; every ClickHouse block below calls `chq`):
+ClickHouse helper (source anew in each shell; the private target/credential-bound probe receipt lasts at most 30 minutes):
 
 ```bash
 set -eu
-SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.scoutflo/env" ]; then SCOUTFLO_ENV="./.scoutflo/env"; else SCOUTFLO_ENV="$HOME/.scoutflo/env"; fi; }
-# Resolve the CURRENT clickstack target from ~/.scoutflo/toolkit.yaml — a single block, or the
-# SCOUTFLO_TARGET-selected item of a labeled list (the shared enumerator handles both; no yq
-# required). Every ClickHouse read below uses THIS target's own url + user + password; no ambient
-# default is read. Re-resolved per block because crossblock forbids threading vars between blocks.
-CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
-TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
-CS_N=$(sh "$TT" "$CFG" clickstack count)
-CS_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "${CS_N:-0}" ]; do [ "$(sh "$TT" "$CFG" clickstack label "$_i")" = "$SCOUTFLO_TARGET" ] && { CS_IDX=$_i; break; }; _i=$((_i+1)); done; fi
-[ "$(sh "$TT" "$CFG" clickstack kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" clickstack label "$CS_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no clickstack target in $CFG; labels: $(sh "$TT" "$CFG" clickstack labels | tr '\n' ' ')"; exit 1; }
-CH_URL=$(sh "$TT" "$CFG" clickstack get "$CS_IDX" clickhouse_url)     # clickstack.clickhouse_url for THIS target
-CH_USER=$(sh "$TT" "$CFG" clickstack get "$CS_IDX" clickhouse_user); [ -n "$CH_USER" ] || CH_USER="scoutflo_ro"   # clickstack.clickhouse_user (the connect recipe's scoped RO user; never falls through to the server `default`)
-# clickstack.clickhouse_password_env names the VARIABLE holding the password (e.g. CH_KEY); read it
-# with printenv on that name (default to CH_KEY when the key is absent). NEVER print the value.
-CH_KEY_VAR=$(sh "$TT" "$CFG" clickstack get "$CS_IDX" clickhouse_password_env); [ -n "$CH_KEY_VAR" ] || CH_KEY_VAR="CH_KEY"
-CH_KEY=$(sh -c '( [ -f "$1" ] && . "$1" >/dev/null 2>&1; printenv -- "$2" ) 2>/dev/null || printenv -- "$2"' _ "$SCOUTFLO_ENV" "$CH_KEY_VAR" 2>/dev/null || true)
-
-# One read-only SELECT. readonly=1 is defense-in-depth over the user's own read-only grants;
-# -f turns any write attempt, auth failure, or error into a hard non-zero exit. If the server
-# rejects readonly=1 (Code 164 — the user is already read-only by profile), retry without the
-# param: the read-only guarantee still holds from the scoped user, so this is safe, not a downgrade.
-# Probe the readonly=1 form ONCE per session and remember which form works.
-# Retrying readonly=1 on every call would land a Code-164 rejection per query in
-# system.errors — which CS-030 then reads back as "spiking READONLY errors": the
-# audit polluting the very signal it audits. One probe, then a stable form.
-CHQ_FORM=""   # set on first call: "ro" (readonly=1 accepted) or "plain" (profile-readonly user)
-chq() {
-  if [ -z "$CHQ_FORM" ]; then
-    # Assert the BODY is exactly 1 (not merely a 2xx): a reverse proxy or SSO page can
-    # answer 200 with HTML, which -f alone would accept and wrongly pin CHQ_FORM=ro.
-    if curl -fsS --max-time 20 -H "X-ClickHouse-User: ${CH_USER}" -H "X-ClickHouse-Key: ${CH_KEY}" \
-         "${CH_URL}/?readonly=1" --data-binary "SELECT 1" 2>/dev/null | grep -qx 1; then
-      CHQ_FORM="ro"
-    else
-      CHQ_FORM="plain"   # user is already read-only by profile (Code 164 on the param)
-    fi
-  fi
-  if [ "$CHQ_FORM" = "ro" ]; then
-    curl -fsS --max-time 20 -H "X-ClickHouse-User: ${CH_USER}" -H "X-ClickHouse-Key: ${CH_KEY}" \
-      "${CH_URL}/?readonly=1" --data-binary "$1"
-  else
-    curl -fsS --max-time 20 -H "X-ClickHouse-User: ${CH_USER}" -H "X-ClickHouse-Key: ${CH_KEY}" \
-      "${CH_URL}/" --data-binary "$1"
-  fi
-}
+. "${CLAUDE_PLUGIN_ROOT}/skills/audit-clickstack/scripts/clickhouse-context.sh"
+RECENT_MINUTES="${RECENT_MINUTES:-60}" # example, tune to signal cadence
+case "$RECENT_MINUTES" in ''|*[!0-9]*) echo 'Invalid recent window'; exit 2 ;; esac
+chq "SELECT 1"
 ```
 
-HyperDX helper (declare once per session; every HyperDX block below calls `hdx_get`):
+HyperDX collection is a fixed recipe; do not pipe unprojected API responses to a terminal or file. Run the [bounded source collection](hyperdx-source-evidence.md) after the doctor gate. It re-resolves the selected target and credential names in every fresh shell, distinguishes external v2 from legacy session routes, and writes only a safe projection. The API key mode uses `/api/v2` (or the documented same-origin proxy prefix); a selected key's denial is blocked, never a silent login-credential fallback. Session mode is selected only when no API key is configured, with cookies in memory.
 
 ```bash
 set -eu
-SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.scoutflo/env" ]; then SCOUTFLO_ENV="./.scoutflo/env"; else SCOUTFLO_ENV="$HOME/.scoutflo/env"; fi; }
-# Resolve the CURRENT clickstack target (single block or SCOUTFLO_TARGET-selected list item) via the
-# shared enumerator; HyperDX reads below use THIS target's own url + credential. Re-resolved per block.
-CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done; [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
-TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
-CS_N=$(sh "$TT" "$CFG" clickstack count)
-CS_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "${CS_N:-0}" ]; do [ "$(sh "$TT" "$CFG" clickstack label "$_i")" = "$SCOUTFLO_TARGET" ] && { CS_IDX=$_i; break; }; _i=$((_i+1)); done; fi
-[ "$(sh "$TT" "$CFG" clickstack kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" clickstack label "$CS_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no clickstack target in $CFG; labels: $(sh "$TT" "$CFG" clickstack labels | tr '\n' ' ')"; exit 1; }
-HDX_URL=$(sh "$TT" "$CFG" clickstack get "$CS_IDX" hyperdx_url); HDX_URL="${HDX_URL%/}"   # clickstack.hyperdx_url for THIS target (:8080 in the all-in-one)
-# Each *_env key names the VARIABLE holding a secret; read with printenv (default to the fixed var
-# name when the key is absent) and NEVER print the value. The PERSONAL API ACCESS KEY is the per-user
-# accessKey (NOT the team ingestion key); email/password are the optional legacy session-login fallback.
-HDX_API_KEY_VAR=$(sh "$TT" "$CFG" clickstack get "$CS_IDX" hyperdx_api_key_env); [ -n "$HDX_API_KEY_VAR" ] || HDX_API_KEY_VAR="HDX_API_KEY"
-HDX_API_KEY=$(sh -c '( [ -f "$1" ] && . "$1" >/dev/null 2>&1; printenv -- "$2" ) 2>/dev/null || printenv -- "$2"' _ "$SCOUTFLO_ENV" "$HDX_API_KEY_VAR" 2>/dev/null || true)
-HDX_EMAIL_VAR=$(sh "$TT" "$CFG" clickstack get "$CS_IDX" hyperdx_email_env); [ -n "$HDX_EMAIL_VAR" ] || HDX_EMAIL_VAR="HDX_EMAIL"
-HDX_EMAIL=$(sh -c '( [ -f "$1" ] && . "$1" >/dev/null 2>&1; printenv -- "$2" ) 2>/dev/null || printenv -- "$2"' _ "$SCOUTFLO_ENV" "$HDX_EMAIL_VAR" 2>/dev/null || true)
-HDX_PASSWORD_VAR=$(sh "$TT" "$CFG" clickstack get "$CS_IDX" hyperdx_password_env); [ -n "$HDX_PASSWORD_VAR" ] || HDX_PASSWORD_VAR="HDX_PASSWORD"
-HDX_PASSWORD=$(sh -c '( [ -f "$1" ] && . "$1" >/dev/null 2>&1; printenv -- "$2" ) 2>/dev/null || printenv -- "$2"' _ "$SCOUTFLO_ENV" "$HDX_PASSWORD_VAR" 2>/dev/null || true)
-[ -n "$HDX_API_KEY" ] || [ -n "$HDX_EMAIL" ] || { echo "no HyperDX credential set (neither a Personal API Access Key nor login email+password); HyperDX checks unavailable — run /scoutflo:connect"; exit 1; }
-
-# HyperDX auth model — confirmed live (v2.x all-in-one) + against the v2.29 source:
-#  - PRIMARY read path = the per-user PERSONAL API ACCESS KEY (Settings -> API Keys ->
-#    "Personal API Access Key"), sent as `Authorization: Bearer`, against the EXTERNAL API v2
-#    (/api/v2/alerts, /api/v2/dashboards, /api/v2/sources).
-#  - The team INGESTION key is a DIFFERENT token (OTLP ingest only); it 401s on /api/v2 — never use it here.
-#  - The internal routes /api/alerts|dashboards|sources are BROWSER-SESSION only: they ignore a Bearer token
-#    (-> 401), and HyperDX's web app then redirects any 401 to /login (the "email/password prompt" users see).
-#    They are only the LEGACY session-login fallback path, not the primary.
-#  - PATH nuance (confirmed live): reach the external API either directly on the API-server port
-#    (<url>/api/v2/...) OR through the app proxy, which strips one leading `/api`, so the working path is the
-#    DOUBLED <url>/api/api/v2/... . The probe resolves which form answers and stores it in HDX_V2.
-
-# hdx_get <resource>  (resource is like "/alerts", "/dashboards", "/sources"); GET only.
-# key mode -> Personal API Access Key (Bearer) on the resolved external-v2 base HDX_V2;
-# session mode -> the connect.sid cookie jar on the internal /api route (legacy fallback).
-hdx_get() {
-  if [ "$HDX_MODE" = "session" ]; then
-    curl -fsS --max-time 20 -b "$HDX_JAR" "${HDX_URL}/api$1"
-  else
-    curl -fsS --max-time 20 -H "Authorization: Bearer ${HDX_API_KEY}" "${HDX_URL}${HDX_V2}$1"
-  fi
-}
-
-# Probe once — never loop header variants; never turn an auth failure into a confident CS-040/041 fail.
-HDX_MODE="none"; HDX_IN_SCOPE=0; HDX_JAR=""; HDX_V2=""
-if [ -n "$HDX_API_KEY" ]; then
-  # Resolve the external-v2 base: try the direct form, then the app-proxy doubled form; keep whichever
-  # returns a real JSON alerts body (a 404/HTML means that path form is wrong on this deployment).
-  for _base in "/api/v2" "/api/api/v2"; do
-    HDX_KB="$(mktemp)"
-    HDX_KM=$(curl -s -o "$HDX_KB" -w '%{http_code} %{content_type}' --max-time 10 \
-      -H "Authorization: Bearer ${HDX_API_KEY}" "${HDX_URL}${_base}/alerts") || HDX_KM="000 -"
-    HDX_PROBE="${HDX_KM%% *}"; HDX_KCT="${HDX_KM#* }"
-    if [ "$HDX_PROBE" = "200" ] && printf '%s' "$HDX_KCT" | grep -qi json \
-         && jq -e 'type=="array" or has("data") or has("alerts")' "$HDX_KB" >/dev/null 2>&1; then
-      HDX_MODE="key"; HDX_IN_SCOPE=1; HDX_V2="$_base"; rm -f "$HDX_KB"; break
-    fi
-    rm -f "$HDX_KB"
-  done
-fi
-
-# Legacy session fallback — only when no working Personal API Access Key. Authenticate the way the UI does:
-# POST /api/login/password with {email,password} answers with a 303 redirect and sets a connect.sid cookie.
-# The cookie lands in a 0600 mktemp jar, is deleted on exit, and is NEVER printed, logged, echoed, or written
-# to any output file, report, or evidence — the jar path is the only thing the shell holds.
-if [ "$HDX_MODE" = "none" ] && [ -n "$HDX_EMAIL" ] && [ -n "$HDX_PASSWORD" ]; then
-  HDX_JAR="$(mktemp)"; chmod 600 "$HDX_JAR"
-  trap 'rm -f "$HDX_JAR"' EXIT INT TERM
-  jq -n --arg e "$HDX_EMAIL" --arg p "$HDX_PASSWORD" '{email: $e, password: $p}' \
-    | curl -s -o /dev/null --max-time 10 -c "$HDX_JAR" \
-        -H 'Content-Type: application/json' --data-binary @- \
-        "${HDX_URL}/api/login/password" || true
-  # Success is proven by the session REACHING THE API with a JSON body, not by the login status
-  # (a redirect) and not by a bare 200 (a proxy/SPA can answer 200 with an HTML login page).
-  HDX_SB="$(mktemp)"
-  HDX_META=$(curl -s -o "$HDX_SB" -w '%{http_code} %{content_type}' --max-time 10 -b "$HDX_JAR" "${HDX_URL}/api/alerts") || HDX_META="000 -"
-  HDX_SESS="${HDX_META%% *}"; HDX_SESS_CT="${HDX_META#* }"
-  if [ "$HDX_SESS" = "200" ] && printf '%s' "$HDX_SESS_CT" | grep -qi json && jq -e 'type=="array" or has("data") or has("alerts")' "$HDX_SB" >/dev/null 2>&1; then
-    HDX_MODE="session"; HDX_IN_SCOPE=1
-    echo "HyperDX session login OK (legacy fallback; GET /api/alerts -> 200 JSON with the session cookie) — CS-040/CS-041 scorable this run. Prefer a Personal API Access Key (Settings -> API Keys) to avoid storing a login."
-  elif [ "$HDX_SESS" = "200" ]; then
-    echo "HyperDX session login returned 200 but Content-Type='${HDX_SESS_CT}' (non-JSON HTML login/SPA page), so the session is NOT proven. CS-040/CS-041 = not-in-scope. Not a fail — never retry-loop the login."
-  else
-    echo "HyperDX session login did not yield a working session (GET /api/alerts -> ${HDX_SESS}); check hyperdx_email_env/hyperdx_password_env. CS-040/CS-041 = not-in-scope. Not a fail."
-  fi
-  rm -f "$HDX_SB"
-fi
-
-if [ "$HDX_IN_SCOPE" = "0" ] && { [ -z "$HDX_EMAIL" ] || [ -z "$HDX_PASSWORD" ]; }; then
-  echo "HyperDX not in scope: the Personal API Access Key did not authenticate the external API v2 (tried ${HDX_URL}/api/v2/alerts and ${HDX_URL}/api/api/v2/alerts). Common causes: the token is the team INGESTION key, not the per-user 'Personal API Access Key' (Settings -> API Keys); or hyperdx_url does not reach the API (point it at the API-server port, or the app that proxies /api). CS-040/CS-041 = not-in-scope (reason: no working Personal API Access Key). Optional legacy fallback: set clickstack.hyperdx_email_env + hyperdx_password_env via /scoutflo:connect. Not a fail."
-fi
+sh "${CLAUDE_PLUGIN_ROOT}/skills/audit-clickstack/scripts/collect-hyperdx.sh"
 ```
 
 ## 2. Check catalog
@@ -166,15 +35,15 @@ One permanent ID per check. IDs never change or get reused; retired checks keep 
 
 | ID | Category | Check | Typical fail severity |
 | --- | --- | --- | --- |
-| CS-007 | Telemetry coverage | Reachable ClickHouse with **zero rows across every `otel_*` table**, or HyperDX reachable with **zero alerts**, is a visibility/ingestion gap — blocks the coverage/alerting-dependent categories, never a confident 0 | info |
+| CS-007 | Telemetry coverage | Reachable ClickHouse with **zero rows across every `otel_*` table**, or a declared local detection requirement missing from a complete HyperDX list, is a visibility/ingestion gap — blocks the coverage/alerting-dependent categories, never a confident 0 | info |
 | CS-010 | Telemetry coverage | Logs, traces, and metrics tables carry recent data for the critical services | high |
 | CS-011 | Ingestion freshness | `max(Timestamp)` lag on `otel_logs` / `otel_traces` / `otel_metrics_*` within threshold (stale = broken pipeline) | high |
 | CS-020 | Retention | Each `otel_*` table has a deliberate TTL (unbounded = cost/compliance gap; too-short = data-loss gap) | high |
-| CS-030 | ClickHouse health | Part counts sane, replicas in sync, no spiking `system.errors` codes (discount the single `READONLY` (164) entry the section-1 probe itself may add on a profile-readonly user), no stuck mutations | high |
-| CS-040 | HyperDX alerting | Alerts exist **and** route to a live receiver (webhook/Slack/PagerDuty); an alert wired to nothing is the core failure | critical |
+| CS-030 | ClickHouse health | Part counts sane, replicas in sync, no spiking `system.errors` codes (read-probe code164 counts are diagnostic metadata, never evidence of a rejected INSERT), no stuck mutations | high |
+| CS-040 | HyperDX alerting | Every required configured alert channel resolves to the expected receiver; downstream delivery needs separate proof | critical |
 | CS-041 | Dashboards and sources | Dashboards exist and sources are connected for the critical services | medium |
 | CS-050 | Security posture | External `default` user requires a password; service users off `plaintext_password`; TLS on the wire; a least-privilege read-only user exists for audits | high |
-| CS-060 | ClickHouse health | Disk headroom vs telemetry growth — days-to-read-only before the disk fills and every INSERT is rejected (243 `NOT_ENOUGH_SPACE`) | high |
+| CS-060 | ClickHouse health | Measured disk headroom; forecast only with comparable time-separated disk measurements and stated assumptions | high |
 | CS-061 | ClickHouse health | Write-path INSERT failures — collector writes rejected by ClickHouse (`query_log` Insert exceptions; disk-full 243, merge backlog 252 `TOO_MANY_PARTS`, profile/replica 164 `READONLY`, quota 201 `QUOTA_EXCEEDED`) | high |
 
 ## 3. CS-007 — empty / hidden-scope guardrail (run first)
@@ -184,6 +53,10 @@ Run this **before scoring any coverage or alerting category**. It is the ClickSt
 Row census across every confirmed telemetry table (`count()` on a MergeTree table is cheap):
 
 ```bash
+set -eu
+. "${CLAUDE_PLUGIN_ROOT}/skills/audit-clickstack/scripts/clickhouse-context.sh"
+RECENT_MINUTES="${RECENT_MINUTES:-60}" # example, tune to signal cadence
+case "$RECENT_MINUTES" in ''|*[!0-9]*) echo 'Invalid recent window'; exit 2 ;; esac
 chq "SELECT table, total FROM (
   SELECT 'otel_logs'                          AS table, count() AS total FROM otel_logs
   UNION ALL SELECT 'otel_traces',                       count() FROM otel_traces
@@ -192,20 +65,14 @@ chq "SELECT table, total FROM (
   UNION ALL SELECT 'otel_metrics_histogram',            count() FROM otel_metrics_histogram
   UNION ALL SELECT 'otel_metrics_exponential_histogram',count() FROM otel_metrics_exponential_histogram
   UNION ALL SELECT 'otel_metrics_summary',              count() FROM otel_metrics_summary
-) ORDER BY total DESC FORMAT TabSeparatedWithNames"
+) ORDER BY total DESC FORMAT JSON"
 ```
 
-HyperDX alert census:
+HyperDX alert census comes from `raw/hyperdx-configuration.json`, only after checking its exact target, observation time and `resources.alerts.status`. The safe collection recipe names the current count and completeness; missing, denied, malformed or partially paged reads are not zero.
 
-```bash
-hdx_get /alerts | jq 'if type=="array" then length else (.data // .alerts // [] | length) end'
-# response shape confirm-live: the top-level key is confirm-against-your-instance; the census is "any alerts at all?"
-# (hdx_get is the section-1 helper: Bearer key, or the v2 session cookie when that path engaged)
-```
-
-- **Healthy target:** at least one `otel_*` table carries rows, and at least one HyperDX alert exists.
-- **Finding (CS-007):** if ClickHouse is reachable but **every** `otel_*` table returns `0`, emit CS-007 and mark the coverage-dependent categories (**CS-010, CS-011**) `blocked`. If HyperDX is reachable but returns **zero alerts**, emit CS-007 and mark the alerting-dependent categories (**CS-040, CS-041**) `blocked`. In both cases keep **CS-030 (DB health)** and **CS-050 (security)** scorable — they do not depend on telemetry rows — then **renormalize** the overall score over the categories that remain scorable. Never report a confident `0/100` from an empty read; the likely cause is that ingestion or the collector is down, or the read-only user cannot see the database, not that observability is confidently absent.
-- **Forbidden on both surfaces here:** SELECT / GET only; see section 8.
+- **ClickHouse empty:** when every successful table read is zero, emit CS-007 and block CS-010/CS-011 pending ingest/scope evidence. Keep independent health and security checks assessable. A denied table is unknown, not zero.
+- **HyperDX empty:** a complete zero-alert list is a configuration fact. Keep CS-041 assessable from its own sources, connections and dashboards. Apply declared alerting intent: required local detection absent → CS-007 with exact missing requirement; explicitly delegated alerting → CS-040 `not-in-scope` only with the C23 declaration or verified external coverage; unknown ownership → CS-040 `blocked` with an intent/evidence unlock. Do not infer the requirement from the organization label or from the existence of another tool.
+- **Forbidden:** no mutation or test notification from this audit.
 
 ## 4. ClickHouse telemetry: coverage and freshness (CS-010, CS-011)
 
@@ -214,27 +81,33 @@ hdx_get /alerts | jq 'if type=="array" then length else (.data // .alerts // [] 
 Recent rows per critical service, on the tables whose `ServiceName` column is confirmed (`otel_logs`, `otel_traces`):
 
 ```bash
+set -eu
+. "${CLAUDE_PLUGIN_ROOT}/skills/audit-clickstack/scripts/clickhouse-context.sh"
+RECENT_MINUTES="${RECENT_MINUTES:-60}" # example, tune to signal cadence
+case "$RECENT_MINUTES" in ''|*[!0-9]*) echo 'Invalid recent window'; exit 2 ;; esac
 chq "SELECT ServiceName, count() AS logs
-     FROM otel_logs WHERE Timestamp >= now() - INTERVAL 1 HOUR
-     GROUP BY ServiceName ORDER BY logs DESC FORMAT TabSeparatedWithNames"
+     FROM otel_logs WHERE Timestamp >= now() - INTERVAL ${RECENT_MINUTES} MINUTE
+     GROUP BY ServiceName ORDER BY logs DESC FORMAT JSON"
 
 chq "SELECT ServiceName, count() AS spans
-     FROM otel_traces WHERE Timestamp >= now() - INTERVAL 1 HOUR
-     GROUP BY ServiceName ORDER BY spans DESC FORMAT TabSeparatedWithNames"
+     FROM otel_traces WHERE Timestamp >= now() - INTERVAL ${RECENT_MINUTES} MINUTE
+     GROUP BY ServiceName ORDER BY spans DESC FORMAT JSON"
 ```
 
-Metrics presence — the `otel_metrics_*` column names are not confirmed, so coverage there is existence per table, not per service:
+Metrics table row counts are inventory only. Discover exact timestamp and service columns from `system.columns`; field names alone do not establish the intended service semantics. Record the confirmed per-table mapping and evidence in the current target's local `raw/metrics-service-map.json`, with `target`, `observed_at` and `mappings` entries containing `table`, `timestamp_column`, `service_column`, and `semantic_evidence_ref` and literal `service_semantics_confirmed: true`. This is an attended input, not generated from guesses. Run the fixed [metrics service read](../scripts/read-metrics-services.sh) only after that mapping is verified. Missing maps block the affected metrics checks.
 
 ```bash
-chq "SELECT 'gauge' AS kind, count() AS rows FROM otel_metrics_gauge
-     UNION ALL SELECT 'sum',                 count() FROM otel_metrics_sum
-     UNION ALL SELECT 'histogram',           count() FROM otel_metrics_histogram
-     UNION ALL SELECT 'exp_histogram',       count() FROM otel_metrics_exponential_histogram
-     UNION ALL SELECT 'summary',             count() FROM otel_metrics_summary
-     FORMAT TabSeparatedWithNames"
+set -eu
+. "${CLAUDE_PLUGIN_ROOT}/skills/audit-clickstack/scripts/clickhouse-context.sh"
+RECENT_MINUTES="${RECENT_MINUTES:-60}" # example, tune to signal cadence
+case "$RECENT_MINUTES" in ''|*[!0-9]*) echo 'Invalid recent window'; exit 2 ;; esac
+chq "SELECT table, name, type FROM system.columns
+     WHERE database = currentDatabase() AND table LIKE 'otel_metrics_%'
+     ORDER BY table, name FORMAT JSON"
+sh "${CLAUDE_PLUGIN_ROOT}/skills/audit-clickstack/scripts/read-metrics-services.sh"
 ```
 
-- **Healthy target:** every critical service from `topology.md` appears with recent rows in logs and traces; the metrics tables are non-empty for the metric kinds the services emit.
+- **Healthy target:** every critical service from `topology.md` appears with recent rows in logs and traces; each required metric kind has recent rows for that exact service. Unknown expected kinds or an unverified service selector are blocked, not passed from a table count.
 - **Finding (CS-010):** a critical service absent from the logs/traces census (zero recent rows) with the collector otherwise healthy is a coverage gap — name the service in `affected`. All signals empty for a service under a confirmed non-empty backend makes it critical. Zero because the backend genuinely holds no rows anywhere routes to CS-007, not a confident CS-010 fail.
 - **Forbidden:** SELECT only; see section 8.
 
@@ -243,208 +116,207 @@ chq "SELECT 'gauge' AS kind, count() AS rows FROM otel_metrics_gauge
 `otel_logs` and `otel_traces` carry a confirmed `Timestamp DateTime64(9)`:
 
 ```bash
-chq "SELECT 'otel_logs'  AS tbl, max(Timestamp) AS latest,
+set -eu
+. "${CLAUDE_PLUGIN_ROOT}/skills/audit-clickstack/scripts/clickhouse-context.sh"
+RECENT_MINUTES="${RECENT_MINUTES:-60}" # example, tune to signal cadence
+case "$RECENT_MINUTES" in ''|*[!0-9]*) echo 'Invalid recent window'; exit 2 ;; esac
+chq "SELECT 'otel_logs' AS tbl, ServiceName, max(Timestamp) AS latest,
             dateDiff('second', max(Timestamp), now()) AS lag_s FROM otel_logs
+     GROUP BY ServiceName
      UNION ALL
-     SELECT 'otel_traces',        max(Timestamp),
-            dateDiff('second', max(Timestamp), now())          FROM otel_traces
-     FORMAT TabSeparatedWithNames"
+     SELECT 'otel_traces', ServiceName, max(Timestamp),
+            dateDiff('second', max(Timestamp), now()) FROM otel_traces
+     GROUP BY ServiceName FORMAT JSON"
 ```
 
-For the `otel_metrics_*` tables, the timestamp column name is **confirm-live** — discover it from `system.columns` (a standard system table) instead of assuming one:
+Metrics use the verified per-service mapping and fixed recipe from CS-010. Compare every critical service and required signal, not just rows returned: a missing service in a fully assessed current scope is a gap; incomplete visibility is blocked. The query deliberately preserves old service maxima, so another busy service cannot hide a stale one.
 
-```bash
-# Discover the DateTime-typed column(s) on the metrics tables, then read max() of the one you confirm:
-chq "SELECT table, name, type FROM system.columns
-     WHERE database = currentDatabase() AND table LIKE 'otel_metrics_%'
-       AND type LIKE 'DateTime%'
-     ORDER BY table, name FORMAT TabSeparatedWithNames"
-# Then, substituting the confirmed column (shown here as <TS_COL>):
-# chq "SELECT max(<TS_COL>) AS latest, dateDiff('second', max(<TS_COL>), now()) AS lag_s FROM otel_metrics_gauge FORMAT TabSeparatedWithNames"
-```
-
-- **Healthy target:** `lag_s` on each active table is below `FRESH_LAG_S` (example `900`s); `latest` is recent.
-- **Finding (CS-011):** a lag far above threshold on a table that should be live means the ingestion pipeline (OTel collector or the writer into ClickHouse) has stalled — the store is reachable but no longer current, which silently ages out every downstream signal. Record the table, `latest`, and `lag_s` as evidence. A table that is legitimately empty (not stale) is CS-007/CS-010 territory, not CS-011.
-- **Forbidden:** SELECT only; see section 8.
+- **Healthy target:** each required service/signal has a non-future timestamp and lag below declared `FRESH_LAG_S` (example 900 seconds). Tune this to the declared emission cadence, including intentionally idle services.
+- **Finding (CS-011):** report exact service, target, table and measured lag against that threshold. No recent data with a known healthy sender supports a pipeline gap; absent sender expectation is an input gap. A global maximum cannot pass every service.
+- **Forbidden:** SELECT only; see section 9.
 
 ## 5. ClickHouse retention (CS-020)
 
-Retention on ClickStack telemetry is the per-table **TTL** clause, read from `system.tables.engine_full` (confirmed to carry the TTL, e.g. `TTL toDateTime(Timestamp) + toIntervalDay(30)` with `ttl_only_drop_parts = 1`) or from `SHOW CREATE TABLE`:
+Read table DDL only through `chq`, which retains raw DDL in memory and projects `ttl: {present,days,assessment}`. No engine definition or DDL string may be printed or saved, because engine arguments can contain credentials.
 
 ```bash
-chq "SELECT name, engine_full FROM system.tables
+set -eu
+. "${CLAUDE_PLUGIN_ROOT}/skills/audit-clickstack/scripts/clickhouse-context.sh"
+RECENT_MINUTES="${RECENT_MINUTES:-60}" # example, tune to signal cadence
+case "$RECENT_MINUTES" in ''|*[!0-9]*) echo 'Invalid recent window'; exit 2 ;; esac
+chq "SELECT name, create_table_query FROM system.tables
      WHERE database = currentDatabase() AND name LIKE 'otel_%'
-     ORDER BY name FORMAT TabSeparatedWithNames"
-
-# Per-table full DDL when you need the exact TTL expression:
-chq "SHOW CREATE TABLE otel_logs FORMAT TabSeparatedRaw"
+     ORDER BY name FORMAT JSON"
 ```
 
-- **Healthy target:** every `otel_*` telemetry table's `engine_full` contains a deliberate `TTL ...` clause with a retention period that matches the customer's stated policy.
-- **Finding (CS-020):** a telemetry table with **no TTL** is unbounded retention — a real cost and compliance gap; a TTL far **shorter** than the stated policy is a data-loss gap. Quote the table name and the presence/absence and value of the TTL clause. Remediation points at **[setup-clickstack#set-retention-ttl](../../setup-clickstack/SKILL.md#set-retention-ttl)** (`ALTER TABLE ... MODIFY TTL`).
-- **Forbidden:** SELECT / SHOW only — never `ALTER TABLE ... MODIFY TTL` from the audit; see section 8.
+- **Healthy target:** a recognized retention interval matches the declared policy or another current, evidenced lifecycle owner provides equivalent retention. `ttl.assessment=unknown` requires an attended interpretation of the expression; no inferred interval.
+- **Finding (CS-020):** no automatic TTL where the declared policy requires it, or a verified interval shorter/longer than that policy. TTL absence alone does not prove that actual storage grows forever. Record table, parsed interval and policy delta; never quote raw DDL. Point at [set-retention-ttl](../../setup-clickstack/SKILL.md#set-retention-ttl).
+- **Forbidden:** no ALTER or other change from this audit.
 
 ## 6. ClickHouse health (CS-030)
 
 The SSOT confirms `system.parts`, `system.replicas`, `system.errors`, and `system.mutations` exist, and confirms `system.errors` columns (`name`, `code`, `value`, `last_error_time`). For `parts`, `replicas`, and `mutations`, confirm the exact column names against your version first — this discovery read invents nothing:
 
 ```bash
+set -eu
+. "${CLAUDE_PLUGIN_ROOT}/skills/audit-clickstack/scripts/clickhouse-context.sh"
+RECENT_MINUTES="${RECENT_MINUTES:-60}" # example, tune to signal cadence
+case "$RECENT_MINUTES" in ''|*[!0-9]*) echo 'Invalid recent window'; exit 2 ;; esac
 chq "SELECT table, name FROM system.columns
      WHERE database = 'system' AND table IN ('parts','replicas','mutations','errors')
-     ORDER BY table, name FORMAT TabSeparatedWithNames"
+     ORDER BY table, name FORMAT JSON"
 ```
 
 Part pressure per telemetry table (`active` and `rows` are the confirmed part attributes; too many active parts means merges are falling behind):
 
 ```bash
+set -eu
+. "${CLAUDE_PLUGIN_ROOT}/skills/audit-clickstack/scripts/clickhouse-context.sh"
+RECENT_MINUTES="${RECENT_MINUTES:-60}" # example, tune to signal cadence
+case "$RECENT_MINUTES" in ''|*[!0-9]*) echo 'Invalid recent window'; exit 2 ;; esac
 chq "SELECT table, count() AS active_parts, sum(rows) AS rows
      FROM system.parts
      WHERE active AND database = currentDatabase() AND table LIKE 'otel_%'
-     GROUP BY table ORDER BY active_parts DESC FORMAT TabSeparatedWithNames"
+     GROUP BY table ORDER BY active_parts DESC FORMAT JSON"
 ```
 
 Error codes, spiking or recent (confirmed columns):
 
 ```bash
+set -eu
+. "${CLAUDE_PLUGIN_ROOT}/skills/audit-clickstack/scripts/clickhouse-context.sh"
+RECENT_MINUTES="${RECENT_MINUTES:-60}" # example, tune to signal cadence
+case "$RECENT_MINUTES" in ''|*[!0-9]*) echo 'Invalid recent window'; exit 2 ;; esac
 chq "SELECT name, code, value, last_error_time
      FROM system.errors
-     WHERE last_error_time >= now() - INTERVAL 1 HOUR
-     ORDER BY value DESC LIMIT 20 FORMAT TabSeparatedWithNames"
+     WHERE last_error_time >= now() - INTERVAL ${RECENT_MINUTES} MINUTE
+     ORDER BY value DESC LIMIT 20 FORMAT JSON"
 ```
 
 Stuck mutations and lagging replicas — the filter columns below are the standard ClickHouse names; confirm them from the discovery read above, since the SSOT confirms the table, not each column:
 
 ```bash
+set -eu
+. "${CLAUDE_PLUGIN_ROOT}/skills/audit-clickstack/scripts/clickhouse-context.sh"
+RECENT_MINUTES="${RECENT_MINUTES:-60}" # example, tune to signal cadence
+case "$RECENT_MINUTES" in ''|*[!0-9]*) echo 'Invalid recent window'; exit 2 ;; esac
 # Mutations still running / failed:
 chq "SELECT database, table, mutation_id, is_done, latest_fail_reason
-     FROM system.mutations WHERE is_done = 0 FORMAT TabSeparatedWithNames"
+     FROM system.mutations WHERE is_done = 0 FORMAT JSON"
 
+REPLICA_DELAY_S="${REPLICA_DELAY_S:-60}"; REPLICA_QUEUE_MAX="${REPLICA_QUEUE_MAX:-100}"
+case "$REPLICA_DELAY_S:$REPLICA_QUEUE_MAX" in *[!0-9:]*|:*|*:) echo "Invalid numeric replica thresholds"; exit 1 ;; esac
 # Replica health (clustered only; empty on the single-node/all-in-one build, which is expected):
 chq "SELECT database, table, is_readonly, absolute_delay, queue_size
      FROM system.replicas
-     WHERE is_readonly OR absolute_delay > 60 OR queue_size > 100
-     FORMAT TabSeparatedWithNames"
+     WHERE is_readonly OR absolute_delay > ${REPLICA_DELAY_S} OR queue_size > ${REPLICA_QUEUE_MAX}
+     FORMAT JSON"
 ```
 
-- **Healthy target:** active-part counts per table are within your merge budget; `system.errors` shows no recently-spiking code tied to ingestion or storage; no mutation stuck with `is_done = 0` and a `latest_fail_reason`; on a clustered install, no read-only replica and delay/queue near zero.
-- **Finding (CS-030):** a table with runaway active parts (merge backlog), a spiking error `code` with a fresh `last_error_time`, a stuck mutation, or a lagging/read-only replica each names a specific ClickHouse health problem — quote the row(s) as evidence. An empty `system.replicas` on a single-node build is not a finding.
+- **Healthy target:** active-part counts per table are within your merge budget; `system.errors` count deltas show no unexpected increase tied to ingestion or storage; a single cumulative snapshot is context only; no mutation stuck with `is_done = 0` and projected `fail_reason_present=true`; on a clustered install, no read-only replica and delay/queue near zero.
+- **Finding (CS-030):** a table with runaway active parts (merge backlog), a measured error-count increase across comparable samples for an exact `code`, a stuck mutation, or a lagging/read-only replica each names a specific ClickHouse health problem — quote the safe projected row(s) as evidence. An empty `system.replicas` on a single-node build is not a finding.
 - **Forbidden:** SELECT only — never `OPTIMIZE`, `SYSTEM ...`, or a mutation from the audit; see section 8.
 
 ## 6b. Capacity headroom and write-path failures (CS-060, CS-061)
 
-Two failure modes CS-030 (part counts/errors right now) and CS-011 (freshness) each only half-see: the disk trending toward full, and INSERTs being actively rejected. Verified live against ClickHouse 26.5 — `system.disks` and the `system.parts` columns below (`min_time`, `bytes_on_disk`, `active`, `database`, `table`) are confirmed present; the discovery read still runs first, since the SSOT confirms the table, not every column.
+Read headroom and retained footprint separately. These snapshots cannot measure net growth or identify which client caused a historical error. `MIN_FREE_PERCENT` (example 15) is a declared, tuneable headroom target; `ERROR_WINDOW_MINUTES` (example 60) sets the observed error window.
 
 ```bash
-# Confirm columns before use (never-invent-a-column).
-chq "SELECT name FROM system.columns WHERE database='system' AND table='parts'
-     AND name IN ('min_time','bytes_on_disk','active','database','table') FORMAT TabSeparated"
-
-# CS-060: disk headroom, per-table footprint, observed growth -> days-to-read-only.
-chq "SELECT name, free_space, total_space, round(100*(total_space-free_space)/total_space,1) AS used_pct
-     FROM system.disks ORDER BY used_pct DESC FORMAT TabSeparatedWithNames"
-chq "SELECT table, sum(bytes_on_disk) AS bytes, min(min_time) AS oldest, max(min_time) AS newest
+set -eu
+. "${CLAUDE_PLUGIN_ROOT}/skills/audit-clickstack/scripts/clickhouse-context.sh"
+RECENT_MINUTES="${RECENT_MINUTES:-60}" # example, tune to signal cadence
+case "$RECENT_MINUTES" in ''|*[!0-9]*) echo 'Invalid recent window'; exit 2 ;; esac
+ERROR_WINDOW_MINUTES="${ERROR_WINDOW_MINUTES:-60}"
+case "$ERROR_WINDOW_MINUTES" in ''|*[!0-9]*) echo 'Invalid numeric error window'; exit 1 ;; esac
+chq "SELECT name, free_space, total_space, round(100*(total_space-free_space)/nullIf(total_space,0),1) AS used_pct
+     FROM system.disks ORDER BY used_pct DESC FORMAT JSON"
+chq "SELECT table, sum(bytes_on_disk) AS bytes
      FROM system.parts WHERE active AND database=currentDatabase() AND table LIKE 'otel_%'
-     GROUP BY table ORDER BY bytes DESC FORMAT TabSeparatedWithNames"
-# days_to_full = free_space / daily_growth, where daily_growth = bytes / age_days (newest-oldest).
+     GROUP BY table ORDER BY bytes DESC FORMAT JSON"
 chq "SELECT name, value FROM system.merge_tree_settings
-     WHERE name IN ('parts_to_throw_insert','parts_to_delay_insert','max_parts_in_total') FORMAT TabSeparatedWithNames"
-
-# CS-061: the exact codes that reject a write. system.errors shows codes that have OCCURRED (value>0);
-# on the benchmark only 164 READONLY has fired (the profile-readonly read-user path). Write-path
-# rejection codes: 243 NOT_ENOUGH_SPACE (disk full), 252 TOO_MANY_PARTS (merge backlog), 164 READONLY
-# (profile-readonly user, OR a replica in Keeper-readonly state — the all-in-one build has no replicas,
-# so there it is only the profile path), 201 QUOTA_EXCEEDED. When reading 164, discount the single
-# READONLY row the section-1 readonly=1 probe itself adds on a profile-readonly user.
+     WHERE name IN ('parts_to_throw_insert','parts_to_delay_insert','max_parts_in_total') FORMAT JSON"
 chq "SELECT name, code, value, last_error_time FROM system.errors
-     WHERE last_error_time >= now() - INTERVAL 1 HOUR AND code IN (243,252,164,201,241,394)
-     ORDER BY value DESC FORMAT TabSeparatedWithNames"
-# Fresh rejected INSERTs from query_log (needs log_queries=1):
+     WHERE last_error_time >= now() - INTERVAL ${ERROR_WINDOW_MINUTES} MINUTE AND code IN (243,252,164,201,241,394)
+     ORDER BY value DESC FORMAT JSON"
 chq "SELECT event_time, exception_code, count() AS n FROM system.query_log
-     WHERE type='ExceptionWhileProcessing' AND query_kind='Insert' AND event_time >= now() - INTERVAL 1 HOUR
-     GROUP BY event_time, exception_code ORDER BY event_time DESC LIMIT 20 FORMAT TabSeparatedWithNames"
+     WHERE type IN ('ExceptionWhileProcessing','ExceptionBeforeStart') AND query_kind='Insert'
+       AND event_time >= now() - INTERVAL ${ERROR_WINDOW_MINUTES} MINUTE
+     GROUP BY event_time, exception_code ORDER BY event_time DESC LIMIT 20 FORMAT JSON"
 ```
 
-- **Healthy (CS-060):** every disk's days-to-full is comfortably beyond your retention window. **Finding (CS-060, high):** a disk will hit read-only in N days at the observed growth rate — state the disk, `used_pct`, the dominant `otel_*` table by bytes, and the computed days-to-full. Blast radius: at 243 `NOT_ENOUGH_SPACE` **every** `otel_*` INSERT is rejected at once, not one table. Remediation `setup-clickstack#manage-storage-capacity` (or `#set-retention-ttl` to reclaim by shortening TTL).
-- **Healthy (CS-061):** no fresh Insert exceptions; no recent write-path error code. **Finding (CS-061, high):** fresh Insert `ExceptionWhileProcessing` rows or a spiking write-path code — name the code and what it means (243 disk-full → CS-060; 252 too-many-parts → `#manage-merge-pressure`; 164 profile/replica readonly; 201 quota). This is the check that distinguishes "collector stopped sending" (CS-011 stale, no insert exceptions) from "collector still sending, ClickHouse rejecting every write" (fresh exceptions) — remediation `setup-clickstack#fix-collector-pipeline` or the code-specific anchor.
-- **Forbidden:** SELECT only — never `ALTER`, `OPTIMIZE`, `SYSTEM`, or a mutation; see section 8.
+- **CS-060:** report each measured disk's free percent versus the declared target and the observed table footprint. If comparable same-disk samples exist, calculate net used-byte change divided by elapsed time, explicitly accounting for retention, merges, other writers and disk resizing. A positive sustained slope may support a conditional forecast; otherwise forecast is unverified. **Never use retained bytes / part age as growth or predict a full date from it.** Failure affects the evidenced disk/write path; do not claim every table fails without a disk-to-table mapping.
+- **CS-061:** actual recent Insert exceptions support rejected-write findings. Record code, count and window. A cumulative `system.errors` counter, even with a recent timestamp, cannot establish either a spike or a failed collector INSERT. Read-only probes can generate code164; the helper's target-bound probe receipt exposes their count, and those read errors never become write-path evidence. If query logging is disabled or inaccessible, keep this check blocked pending equivalent collector evidence.
+- Remediate through [manage-storage-capacity](../../setup-clickstack/SKILL.md#manage-storage-capacity), [manage-merge-pressure](../../setup-clickstack/SKILL.md#manage-merge-pressure) or [fix-collector-pipeline](../../setup-clickstack/SKILL.md#fix-collector-pipeline) only for the evidenced cause. No mutation from this audit.
 
 ## 7. HyperDX alerting and dashboards (CS-040, CS-041)
 
-HyperDX endpoints are auth-gated: run them only when the section-1 helper resolved an auth mode (`HDX_IN_SCOPE=1` — a working REST key, or the v2 session cookie), and always through `hdx_get`. Response shapes and some resource paths are **confirm-live**: enumerate them against your instance and confirm the field names before crediting a check.
+Use [hyperdx-source-evidence.md](hyperdx-source-evidence.md) and the safe projection. It handles the current external-v2 `channel.webhookId` and `channels[]` forms separately from legacy session lists. Configured channels, receiver resolution, downstream routing, incident creation and human receipt are separate proof stages.
 
-### CS-040 — alerting reaches a human
+### CS-040 — configured alert destination integrity
 
-```bash
-hdx_get /alerts | jq .
-```
+For each observed alert and each channel, use the exact `receiver_id` join:
 
-Field names are confirm-live, so inspect the raw JSON once, confirm which field carries the destination, then follow each alert to its receiver. **Receiver resolution (confirmed live against v2.35):** a *healthy* alert's channel carries `{type: "webhook", webhookId: "<id>"}` — and the broken case observed live is a channel of just `{type: "webhook"}` with **no `webhookId` at all**: that alert evaluates and pages nobody, and it is exactly the CS-040 fail. Test for a **resolvable id**, never for keyword presence — a `tostring | test("webhook")` scan marks the id-less channel "wired" because the word "webhook" appears in it, scoring the estate's core failure as a pass (a real false-green, caught live). Resolve each id with `GET /api/webhooks?service=<kind>` — on v2.35 the `service` query param is **required** (a bare `GET /api/webhooks` returns 400 ZodError) and the enum is lowercase `slack | generic | incidentio`; enumerate all three and concatenate. Match the `webhookId` to the webhook object's id and read its `url`. Record only the **host class** of that url (loopback / private / public / placeholder — e.g. a `webhook.site` or `example.com` host is a placeholder, a real finding), never the full URL (v2.35 itself masks webhook URL paths in the API response).
+- `missing-id` is a defective configured webhook channel. `absent` means the ID is absent from a fully paged, reconciled webhook list. Record the alert ID/channel, impact and receiver repair. Neither means every alternative channel fails.
+- `blocked` means the shape, collection or ID resolution is unknown. A partial/denied list cannot prove absence. An unrecognized channel is blocked rather than silently dropped.
+- `resolved` means that exact configuration object exists. Loopback/placeholder destinations require review and a declared intentional-test exception if retained. Private hosts can be valid intermediaries; inspect their onward mapping under the appropriate source audit. No hostname proves an enabled, reachable downstream policy or a human receipt.
+- `enabled` is an observed boolean only when the API state has known semantics; unknown state stays null. `DISABLED` is not active coverage. Current multi-channel alerts are checked once per channel; the legacy mirrored `channel` is not a second channel.
 
-```bash
-# Per alert: does the channel carry a RESOLVABLE receiver id? (id presence, not keyword match)
-hdx_get /alerts \
-  | jq -r '(if type=="array" then . else (.data // .alerts // []) end)[]
-           | {id: (.id // ._id // "?"),
-              channel_type: (.channel.type // "none"),
-              receiver_id: (.channel.webhookId // .channel.slackId // .channel.id // null)}
-           | "\(.id)\tchannel=\(.channel_type)\treceiver_id=\(.receiver_id // "MISSING")"'
-# Any MISSING row = CS-040 fail (the alert routes to nobody). Then resolve the ids:
-for svc in slack generic incidentio; do
-  hdx_get "/webhooks?service=${svc}"
-done | jq -s 'map(if type=="array" then . else (.data // []) end) | add | map({id: (.id // ._id), host_class: "inspect .url host class, never record the full URL"})'
-```
+A CS-040 pass establishes complete applicable **configuration** assessment only. Report downstream delivery `unverified` until separately evidenced. Use [setup-clickstack#create-hyperdx-alert](../../setup-clickstack/SKILL.md#create-hyperdx-alert) for confirmed receiver repairs. The source packet feeds On-Call's bound verification only after exact protected-route evidence is supplied; an intermediary host or VictorOps-looking handle remains a candidate. Never GET an incoming-alert URL to test it.
 
-- **Healthy target:** at least one alert exists **and** every alert resolves to a live receiver — a webhook, Slack, or PagerDuty destination that is real (not empty, not a loopback/placeholder host).
-- **Finding (CS-040):** an alert that references no receiver, or a receiver whose target is empty / a loopback / a placeholder, is the core failure — the alert evaluates and pages nobody. Record the alert name and the receiver's host class (e.g. "receiver target is a loopback address"), never the full webhook URL. Zero alerts entirely routes to CS-007, not a confident CS-040 fail. **If the section-1 helper ended with `HDX_IN_SCOPE=0` (the key 401s on HyperDX v2.x and no login credentials are configured, or the v2 session login failed), mark CS-040 `not-in-scope` with the matching reason — "HyperDX v2.x REST API is session-authenticated; the apiKey is ingestion-only" or "HyperDX v2 session login failed" — and renormalize the score over the remaining categories; never a fail, never a wrong-key error. With `HDX_MODE=session` the category scores normally through `hdx_get`.** Remediation points at **[setup-clickstack#create-hyperdx-alert](../../setup-clickstack/SKILL.md#create-hyperdx-alert)**.
-- **Forbidden:** GET only — never `POST`/`PUT`/`PATCH`/`DELETE` on `/api/alerts` (no test alerts, no "quick fix"); see section 8.
+Zero alerts follows CS-007's intent rule; it does not make CS-041 fail or disappear. An inaccessible HyperDX plane is `blocked`, not an exclusion justified by missing credentials.
 
-### CS-041 — dashboards and sources
+### CS-041 — dashboards, sources and connections
 
-The `/api/dashboards` and `/api/sources` paths and their response shapes are **confirm-live** — confirm both against your instance:
+Assess independently of the alert count. Follow dashboard tile `config.sourceId` to a returned source and its `connection` to the exact returned connection ID. The safe projection retains these references; sources/connections with no server total support positive joins only, not confident absence. `meta.skipped` on connections makes omitted objects explicit. Missing or duplicate IDs, malformed pages and inaccessible resources stay blocked.
 
-```bash
-hdx_get /dashboards | jq .   # path + shape confirm-live
-hdx_get /sources    | jq .   # path + shape confirm-live
-```
-
-- **Healthy target:** at least one dashboard exists for the critical services, and the sources they read from are connected (each source points at a reachable ClickHouse table/database).
-- **Finding (CS-041):** no dashboard for a critical service, or a source that is disconnected / points at a table with no data, is a correlation gap — responders have nothing to open during an incident. Name the service or source in `affected`. Confirm field names against the raw JSON before asserting a source is disconnected.
-- **Forbidden:** GET only — never `POST`/`PUT`/`PATCH`/`DELETE`; see section 8.
+A resolved connection ID proves configured linkage, **not** connectivity, table existence, signal freshness or dashboard usefulness. Before using any ClickHouse read as source-data proof, compare the exact HyperDX connection endpoint, database and table with the selected ClickHouse target in an attended, redacted view. Record the comparison result and source/connection IDs only. The safe packet intentionally omits endpoint/database/table values; its `data_binding` stays unverified until that exact comparison exists. A source attached to another regional endpoint must not inherit this target's data proof. Then verify the specific service/signal through the confirmed owning lane. A source/query shape outside the supported projection needs an attended, redacted read; never print raw SQL, filters, connection credentials or full URLs to discover it. A critical service without a useful dashboard/source is a finding only when its requirement and collection scope are established. Retest repaired source/destination IDs through a fresh collection and the relevant safe data read.
 
 ## 8. Security posture (CS-050)
 
 Read the user inventory from `system.users` (confirmed columns include `name`, `auth_type`, `host_ip`, `host_names*`, `default_roles_*`, `grantees_*`, `valid_until`, `default_database`):
 
 ```bash
-chq "SELECT name, auth_type, host_ip FROM system.users ORDER BY name FORMAT TabSeparatedWithNames"
+set -eu
+. "${CLAUDE_PLUGIN_ROOT}/skills/audit-clickstack/scripts/clickhouse-context.sh"
+RECENT_MINUTES="${RECENT_MINUTES:-60}" # example, tune to signal cadence
+case "$RECENT_MINUTES" in ''|*[!0-9]*) echo 'Invalid recent window'; exit 2 ;; esac
+chq "SELECT name, auth_type, host_ip FROM system.users ORDER BY name FORMAT JSON"
 
 # Confirm the audit user is genuinely least-privilege (read-only grants only):
-chq "SHOW GRANTS FOR ${CH_USER} FORMAT TabSeparatedRaw"
+chq "SHOW GRANTS FOR ${CH_USER} FORMAT JSON"
 ```
 
-Prove the external `default` user is not open — this probe sends **no** credentials, so the status code is the evidence and `-f` is dropped deliberately:
+Probe the unauthenticated path with the fixed bounded helper. It sends no credential and requires an exact ClickHouse response, not just HTTP 200:
 
 ```bash
-curl -s -o /dev/null -w 'unauth default-user query: %{http_code}\n' --max-time 10 \
-  "${CH_URL}/?query=SELECT%201"
+set -eu
+. "${CLAUDE_PLUGIN_ROOT}/skills/audit-clickstack/scripts/clickhouse-context.sh"
+RECENT_MINUTES="${RECENT_MINUTES:-60}" # example, tune to signal cadence
+case "$RECENT_MINUTES" in ''|*[!0-9]*) echo 'Invalid recent window'; exit 2 ;; esac
+chq_default_probe
 ```
 
-TLS on the wire — confirm the audit is reaching ClickHouse over a TLS listener rather than plaintext across an untrusted network (the specific secure port is instance-specific; do not assume one):
+Classify the configured transport in a fresh shell without making a query:
 
 ```bash
-# If CH_URL is http:// on a non-loopback host, that is the posture concern to record.
-printf '%s\n' "$CH_URL" | grep -qE '^https://' && echo "TLS: audit endpoint is https" || echo "TLS: audit endpoint is plaintext http — confirm a TLS listener exists"
+set -eu
+. "${CLAUDE_PLUGIN_ROOT}/skills/audit-clickstack/scripts/target-context.sh"
+case "$CH_URL" in
+  https://*) echo 'Configured audit endpoint uses HTTPS; this does not prove other listeners are secured' ;;
+  http://*) echo 'Configured audit endpoint uses HTTP; assess actual loopback/tunnel/trust boundary before finding insecure transport' ;;
+  *) echo 'Transport unverified: no valid ClickHouse endpoint'; exit 1 ;;
+esac
 ```
 
-- **Healthy target:** the unauthenticated `default`-user probe returns an auth-required status (e.g. `403`/`516`), not `200`; service users use `sha256_password` / `double_sha1_password`, not `plaintext_password`; the audit reaches ClickHouse over TLS; and a dedicated least-privilege read-only user exists for audits (its `SHOW GRANTS` shows only `SELECT`/`SHOW`-class grants).
-- **Finding (CS-050):** a `200` from the unauthenticated probe means the external `default` user has no password — critical exposure. A service user on `auth_type = plaintext_password` is a real posture finding (credentials stored recoverable). Plaintext HTTP to ClickHouse across an untrusted network is a transport-security finding. No scoped read-only user (audits running as an over-privileged account) is a least-privilege finding. Record the user name and `auth_type`, never any `auth_params` value. Remediation points at **[setup-clickstack#harden-clickhouse-auth](../../setup-clickstack/SKILL.md#harden-clickhouse-auth)** (move a `plaintext_password` user to sha256; require the `default`-user password) and **[setup-clickstack#create-read-only-user](../../setup-clickstack/SKILL.md#create-read-only-user)** (a scoped read-only ClickHouse user for audits).
-- **Forbidden:** SELECT / SHOW only — never `CREATE USER`, `ALTER USER`, `GRANT`, or `REVOKE` from the audit; those are setup-clickstack's job; see section 9.
+- **Healthy target:** `default_user_access=denied` means this unauthenticated ClickHouse query was denied; it does not prove a particular password policy. `unverified` (including HTML 200 or a generic proxy denial) is blocked. Service authentication, grants and transport are assessed from their own observations and declared trust boundary.
+- **Finding (CS-050):** `accessible` proves this unauthenticated query returned the exact ClickHouse result `1`; assess exposure from the actual listener and network boundary. `plaintext_password` is a credential-storage posture finding. Raw grants and `auth_params` are never persisted: use projected privilege metadata and host-scope classification. An unknown privilege or policy expression blocks the least-privilege conclusion.
+- **Forbidden:** no CREATE/ALTER USER, GRANT or REVOKE. Use [harden-clickhouse-auth](../../setup-clickstack/SKILL.md#harden-clickhouse-auth) or [create-read-only-user](../../setup-clickstack/SKILL.md#create-read-only-user) for confirmed gaps.
 
 ## 9. Forbidden mutations (both surfaces)
 
 This audit is strictly read-only. Every command above is a `SELECT`/`SHOW` over ClickHouse HTTP `:8123` (as the read-only user, with `readonly=1` pinned) or a `GET` on the HyperDX `/api/<resource>` API. The following are **never** issued from audit-clickstack — they belong to `setup-clickstack`, under its confirm-then-verify change protocol:
 
 - **ClickHouse (DDL/DML/admin):** `INSERT`, `ALTER`, `CREATE`, `DROP`, `TRUNCATE`, `RENAME`, `OPTIMIZE`, `DETACH`, `ATTACH`, `SYSTEM ...`, and any `CREATE USER` / `ALTER USER` / `GRANT` / `REVOKE`. The `readonly=1` HTTP setting is the server-side belt that rejects these even if a command leaks in; the read-only user's grants are the braces.
-- **HyperDX API:** any `POST`, `PUT`, `PATCH`, or `DELETE` on any `/api/*` resource — no test alerts, no dashboard edits, no source changes, no "harmless" writes — with **exactly one deliberate exception**: the section-1 helper's `POST /api/login/password`, an *authentication handshake, not a resource write*. It exists only because HyperDX v2.x gates its read endpoints behind a session; it creates or modifies no alert, dashboard, source, or any other observability object, runs at most once per audit session (never in a retry loop), its request body is never logged, and the resulting session cookie lives only in the `0600` `mktemp` jar deleted on exit. Any other non-GET against HyperDX remains a bug in the skill.
+- **HyperDX API:** any `POST`, `PUT`, `PATCH`, or `DELETE` on any `/api/*` resource — no test alerts, no dashboard edits, no source changes, no "harmless" writes — with **exactly one deliberate exception**: the fixed recipe's `POST /api/login/password`, an *authentication handshake, not a resource write*. It exists only because HyperDX v2.x gates its read endpoints behind a session; it creates or modifies no alert, dashboard, source, or any other observability object, runs at most once per recipe invocation (never in a retry loop), its request body is never logged, and the resulting session cookie remains only in memory for that invocation. Any other non-GET against HyperDX remains a bug in the skill.
 
 A write attempt is a bug in the skill, not a finding; if any block above ever needs a mutation to produce evidence, that is the wrong command — read the state instead, and route the change to `setup-clickstack`.

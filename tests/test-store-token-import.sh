@@ -172,12 +172,17 @@ run "$WORK/pd-u.sh" "$WORK/store-c" "$WORK/pd-custom.yaml" > /dev/null && fail "
 echo "PASS"
 
 echo "Test 3: a published Datadog prelude binds both keys from their own variables"
-prelude "$ROOT/skills/audit-datadog/references/datadog-checks.md" '"$_SF_CFG" datadog get 0 app_key_env' > "$WORK/dd-pre.sh"
-grep -q 'datadog get 0 api_key_env' "$WORK/dd-pre.sh" || fail "could not extract a datadog prelude with both keys"
-{ echo 'set -eu'; cat "$WORK/dd-pre.sh"; echo 'echo "api=${DATADOG_API_KEY-<unset>} app=${DATADOG_APP_KEY-<unset>}"'; } > "$WORK/dd.sh"
+# Datadog publishes a sourced, stateless helper. Execute that exact source line and
+# its credential function; extracting obsolete inline bindings would miss the real path.
+awk '/^\. .*skills\/audit-datadog\/scripts\/datadog-context.sh/ {print; exit}' "$ROOT/skills/audit-datadog/SKILL.md" > "$WORK/dd-pre.sh"
+grep -q 'datadog-context.sh' "$WORK/dd-pre.sh" || fail "could not extract the published Datadog source prelude"
+{ echo 'set -eu'; cat "$WORK/dd-pre.sh"; echo 'dd_credentials'; echo 'echo "api=${DATADOG_API_KEY-<unset>} app=${DATADOG_APP_KEY-<unset>}"'; } > "$WORK/dd.sh"
 printf 'datadog:\n  site: datadoghq.com\n  api_key_env: DD_RO_API\n  app_key_env: DD_RO_APP\n' > "$WORK/dd.yaml"
 printf "export DATADOG_API_KEY=wrong-api\nexport DATADOG_APP_KEY=wrong-app\nexport DD_RO_API=right-api\nexport DD_RO_APP=right-app\n" > "$WORK/store-dd"
-x "datadog key pair" "api=right-api app=right-app" "$(run "$WORK/dd.sh" "$WORK/store-dd" "$WORK/dd.yaml")"
+x "datadog key pair" "api=right-api app=right-app" "$(run "$WORK/dd.sh" "$WORK/store-dd" "$WORK/dd.yaml" SCOUTFLO_AUDIT_DIR="$WORK/dd-audits")"
+sed 's/^export //' "$WORK/store-dd" > "$WORK/store-dd-assign"
+x "datadog assignment-only store" "api=right-api app=right-app" "$(run "$WORK/dd.sh" "$WORK/store-dd-assign" "$WORK/dd.yaml" SCOUTFLO_AUDIT_DIR="$WORK/dd-audits")"
+if run "$WORK/dd.sh" "$WORK/store-c" "$WORK/dd.yaml" SCOUTFLO_AUDIT_DIR="$WORK/dd-audits" DATADOG_API_KEY=wrong-api DATADOG_APP_KEY=wrong-app >/dev/null; then fail "Datadog silently fell back from missing named keys"; fi
 echo "PASS"
 
 echo "Test 4: a published doctl prelude stops when the configured token is unset, so doctl never uses its own login"

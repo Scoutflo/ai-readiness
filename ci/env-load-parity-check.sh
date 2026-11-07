@@ -33,6 +33,23 @@ FAIL=0
 check_layered() {
   cl_f="$1"; cl_name="$2"
   [ -f "$cl_f" ] || return 0
+  # Datadog imports only its selected pair in a sourced, stateless helper.
+  # Verify the exact call site AND the real layered loader; a prose mention cannot pass.
+  if [ "$cl_name" = audit-datadog ] && grep -qF '. "${CLAUDE_PLUGIN_ROOT}/skills/audit-datadog/scripts/datadog-context.sh"' "$cl_f"; then
+    cl_helper="$DIR/skills/audit-datadog/scripts/datadog-context.sh"
+    if [ -f "$cl_helper" ] && grep -qF 'SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"' "$cl_helper" \
+      && grep -qF '[ -f ./.scoutflo/env ]' "$cl_helper" && grep -qF '$HOME/.scoutflo/env' "$cl_helper" \
+      && grep -qF '"$SCOUTFLO_ENV" "$DD_API_VAR"' "$cl_helper" && grep -qF '"$SCOUTFLO_ENV" "$DD_APP_VAR"' "$cl_helper" \
+      && grep -qF '. "$1"' "$cl_helper"; then return 0; fi
+  fi
+  if [ "$cl_name" = audit-clickstack ] && grep -qF '. "${CLAUDE_PLUGIN_ROOT}/skills/audit-clickstack/scripts/target-context.sh"' "$cl_f"; then
+    cl_helper="$DIR/skills/audit-clickstack/scripts/target-context.sh"
+    if [ -f "$cl_helper" ] && grep -qF 'SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"' "$cl_helper" \
+      && grep -qF '[ -f ./.scoutflo/env ]' "$cl_helper" && grep -qF '$HOME/.scoutflo/env' "$cl_helper" \
+      && grep -qF '. "$1"' "$cl_helper" \
+      && grep -qF 'cs_secret clickhouse_password_env CH_KEY' "$DIR/skills/audit-clickstack/scripts/clickhouse-context.sh" \
+      && grep -qF 'cs_secret hyperdx_api_key_env HDX_API_KEY' "$DIR/skills/audit-clickstack/scripts/collect-hyperdx.sh"; then return 0; fi
+  fi
   if ! grep -qF 'SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"' "$cl_f" \
      || ! grep -qF '[ -f "./.scoutflo/env" ]' "$cl_f" \
      || ! grep -qF '$HOME/.scoutflo/env' "$cl_f" \

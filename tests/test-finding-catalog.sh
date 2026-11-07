@@ -147,7 +147,9 @@ done
 # An isolated plugin fixture proves prose, ranges, cross-reference tables and
 # fenced examples do not manufacture catalog entries; no source files are edited.
 mkdir -p "$WORK/plugin/report-standard" "$WORK/plugin/.claude-plugin" "$WORK/plugin/skills/audit-fixture/references"
-cp "$ROOT/report-standard/check-findings.sh" "$WORK/plugin/report-standard/"
+cp "$ROOT/report-standard/check-findings.sh" "$ROOT/report-standard/check-correlation-evidence.sh" "$WORK/plugin/report-standard/"
+mkdir -p "$WORK/plugin/skills/correlation-engine/lib"
+cp "$ROOT/skills/correlation-engine/lib/service-identity.jq" "$WORK/plugin/skills/correlation-engine/lib/"
 cp "$ROOT/.claude-plugin/plugin.json" "$WORK/plugin/.claude-plugin/"
 CHECK="$WORK/plugin/report-standard/check-findings.sh"
 cat > "$WORK/plugin/skills/audit-fixture/SKILL.md" <<'MARKDOWN'

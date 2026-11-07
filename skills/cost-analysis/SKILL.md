@@ -1,6 +1,6 @@
 ---
 name: cost-analysis
-description: 'Internal roll-up harness (v0.1.67+): inside /scoutflo:audit-all, aggregates the cost-optimization findings the individual audits already wrote (area cost-optimization — AWSOPT-*, DDOPT-*), annotates exact-target overlaps via same-run correlation.json, and writes a combined cost roll-up. It ALWAYS regenerates (no skip, no cache) and re-reads existing findings only; it does NOT query providers. For a DEEP, live, per-resource cost analysis, use /scoutflo:audit-cost. Use when you ask "combine existing cost findings" or "summarize audit savings". Wired into /scoutflo:audit-all after the correlation engine.'
+description: 'Internal roll-up harness (v0.1.67+): inside /scoutflo:audit-all, aggregates the cost-optimization findings the individual audits already wrote (area cost-optimization — AWSOPT-*, DDOPT-*), annotates exact-target overlaps from current qualified evidence, and writes a combined cost roll-up. It ALWAYS regenerates (no skip, no cache) and re-reads existing findings only; it does NOT query providers. For a DEEP, live, per-resource cost analysis, use /scoutflo:audit-cost. Use when you ask "combine existing cost findings" or "summarize audit savings". Wired into /scoutflo:audit-all after the correlation engine.'
 ---
 
 # Cost Analysis (roll-up harness)
@@ -62,8 +62,10 @@ verbatim; a presence-fact finding leaves it `null`:
 }
 ```
 
-**This data is already fresh.** No cost-analysis API calls needed; this skill just
-reads every audit's `area: "cost-optimization"` findings.
+Freshness comes from the source audit and its completion receipt. With a current
+`run-plan.json`, only completed, unchanged targets from that selected run are read.
+Without a current plan, dated legacy artifacts remain readable; their directory date
+alone does not prove live freshness. See the [shared evidence contract](../../report-standard/service-evidence.md).
 
 **Stage 2: Cost-Analysis Aggregates (This Skill)**
 
@@ -74,8 +76,10 @@ For each audit findings.json (skips the all/ and cost-analysis/ dirs):
 
 Merge all cost findings → one array
 
-Check correlation.json:
-  ├─ Same run date, source target and finding ID in an overlap group?
+Resolve overlaps:
+  ├─ Current selected run: recompute qualified overlaps from verified inputs
+  ├─ Legacy dated run: read same-date correlation.json
+  ├─ Exact source target and finding ID in an overlap group?
   ├─ Mark deduplicated=true with the overlap recommendation
   └─ Keep it visible (annotated, never dropped)
 
@@ -129,7 +133,7 @@ Output:
     "annual_savings_identified": 3840,
     "deduplicated_overlaps": 0
   },
-  "note": "Savings totals sum only provider-native recommendation figures (Compute Optimizer, Cost Explorer, Datadog usage). Presence-fact findings carry no invented dollar value.",
+  "note": "Savings totals sum only provider-native recommendation figures (for example Compute Optimizer or Cost Explorer recommendations). Presence-fact findings carry no invented dollar value.",
   "trend": {
     "last_5_runs": [
       {"date": "2026-07-27", "monthly_savings_identified": 550, "state": "analyzed"},
@@ -158,7 +162,7 @@ The legacy `deduplicated` field is retained for compatibility and means overlap 
 
 This roll-up does **not** compute a 0–100 health score — cost is a ranked-savings axis, not a reliability grade, and inventing a "cost score" would be an invented number. It presents the overlap-annotated findings **ranked by provider-native monthly savings** (`estimated_monthly_savings_usd`, largest first); presence-fact findings with no figure (`null`) sort to the end. Each finding also carries a derived `roi_annual` (its monthly figure × 12), so ranking by monthly or annual savings yields the same order. `cost_sensitivity` is read from business context and recorded in the output, but the current roll-up does not re-sort by it.
 
-The only headline figures are provider-native, copied verbatim: `monthly_savings_identified` and `annual_savings_identified` (the sum of the ranked findings' own `estimated_monthly_savings_usd` / `roi_annual`), plus the `findings_with_native_savings_figure` vs `presence_fact_findings` split. Same-run exact-target overlaps flagged by `correlation.json` are marked `deduplicated=true` for review; the sum remains unadjusted and is not a claim of unique savings. The trend line tracks `monthly_savings_identified` over runs, not a score.
+The only headline figures are provider-native, copied verbatim: `monthly_savings_identified` and `annual_savings_identified` (the sum of the ranked findings' own `estimated_monthly_savings_usd` / `roi_annual`), plus the `findings_with_native_savings_figure` vs `presence_fact_findings` split. Same-run exact-target overlaps from qualified correlation evidence are marked `deduplicated=true` for review; the sum remains unadjusted and is not a claim of unique savings. The trend line tracks `monthly_savings_identified` over runs, not a score.
 
 ## Business Context Integration
 
@@ -184,7 +188,7 @@ Example `business_context.json` (or the same keys under the legacy `topology.jso
 
 ## Run behavior — always regenerate, zero API calls
 
-- **Always runs.** Every invocation rebuilds the roll-up from the findings present now; there is no skip and no `--force`. Removing the old 24h skip removes the only path that could serve a stale roll-up.
+- **Always runs.** Every invocation rebuilds the roll-up from the findings present now; there is no skip and no `--force`. A selected-run roll-up binds to its exact completed-input snapshot; a changed or malformed current plan requires regeneration before consumption.
 - **Zero API calls.** It reads local `findings.json` and `correlation.json` only — it never calls a provider. (The deep, live provider queries belong to `/scoutflo:audit-cost` and the individual audits, not here.)
 - **Log output:** `[cost-analysis] Starting analysis for <date>` → `[cost-analysis] Report complete: …/cost-analysis/<date>/findings.json`, or `[cost-analysis] No cost findings available` when no audit emitted a cost-optimization finding.
 
@@ -192,9 +196,9 @@ Because it makes no API calls, there is nothing to cache: the token cost is only
 
 ## Graceful Degradation
 
-**If correlation.json not available:**
-- Still aggregates findings from all audits
-- Skips the deduplication pass (findings pass through unannotated)
+**If correlation.json is unavailable:**
+- A selected run recomputes qualified overlap candidates from verified source findings.
+- A legacy dated run aggregates the eligible supplied findings without overlap annotations.
 - No score is involved either way — this roll-up never scores
 
 **If no business_context set:**

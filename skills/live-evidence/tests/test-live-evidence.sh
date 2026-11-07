@@ -6,6 +6,8 @@ set -eu
 
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 LIB="$ROOT/skills/live-evidence/lib/live-evidence.sh"
+# Exercise the packaged shared redactor, never an inherited installation.
+export CLAUDE_PLUGIN_ROOT="$ROOT"
 fail() { echo "FAIL: $1" >&2; exit 1; }
 
 echo "=== live-evidence lib self-test ==="
@@ -75,12 +77,13 @@ le_can_probe my-ctx || fail "actual le_can_probe healthy path regressed"
 if le_can_probe other-ctx; then fail "le_can_probe accepted absent context"; fi
 
 echo "Test 6aa: successful probe fields and two-read ownership remain intact"
+CANARY=$(printf 'C%.0s' $(seq 1 48))
 kubectl() {
   case " $* " in
     *' get pod '*) printf '%s\n' '{"metadata":{"ownerReferences":[{"kind":"ReplicaSet","name":"fixture-rs"}]},"status":{"phase":"Running","containerStatuses":[{"name":"app","restartCount":2,"lastState":{"terminated":{"reason":"OOMKilled","exitCode":137}}}]}}' ;;
     *' get rs '*) printf '%s\n' '{"metadata":{"ownerReferences":[{"kind":"Deployment","name":"fixture-deploy"}]}}' ;;
-    *' get events '*) printf '%s\n' '{"items":[{"reason":"BackOff","count":2}]}' ;;
-    *' get deploy '*) printf '%s\n' '{"status":{"replicas":2,"readyReplicas":1,"unavailableReplicas":1}}' ;;
+    *' get events '*) printf '{"items":[{"reason":"BackOff","count":2,"message":"Bearer %s"}]}\n' "$CANARY" ;;
+    *' get deploy '*) printf '{"status":{"replicas":2,"readyReplicas":1,"unavailableReplicas":1,"conditions":[{"type":"Progressing","message":"Bearer %s"}]}}\n' "$CANARY" ;;
     *' logs '*) printf '%s\n' 'fixture log line' ;;
     *) return 97 ;;
   esac
@@ -90,6 +93,23 @@ probe_events my-ctx fixture pod | jq -e '.[0].reason=="BackOff"' >/dev/null || f
 probe_rollout my-ctx fixture deployment | jq -e '.unavailable==1' >/dev/null || fail "rollout evidence lost"
 [ "$(probe_owner my-ctx fixture pod | wc -l | tr -d ' ')" -eq 2 ] || fail "owner chain lost"
 [ "$(probe_logs_previous my-ctx fixture pod)" = 'fixture log line' ] || fail "successful log read lost"
+
+echo "Test 6ab: event and rollout messages are redacted before stdout"
+for probe in probe_events probe_rollout; do
+  out="$("$probe" my-ctx fixture fixture)" || fail "$probe lost valid evidence during redaction"
+  printf '%s' "$out" | jq -e . >/dev/null || fail "$probe emitted malformed JSON after redaction"
+  printf '%s' "$out" | grep -Fq "$CANARY" && fail "$probe leaked free-text credential canary"
+  printf '%s' "$out" | grep -q 'REDACTED' || fail "$probe did not preserve redacted message evidence"
+done
+
+echo "Test 6ac: missing shared redactor withholds all free-text evidence"
+for probe in probe_events probe_rollout probe_logs_previous; do
+  if out="$(unset -f redact_content 2>/dev/null || true; unset CLAUDE_PLUGIN_ROOT; "$probe" my-ctx fixture fixture 2>/dev/null)"; then
+    fail "$probe accepted missing shared redactor"
+  fi
+  [ -z "$out" ] || fail "$probe emitted raw or partial evidence without shared redaction"
+done
+
 kubectl() {
   case " $* " in *' get pod '*) printf '%s\n' '{"metadata":{"ownerReferences":[{"kind":"ReplicaSet","name":"fixture-rs"}]}}' ;; *) return 1 ;; esac
 }

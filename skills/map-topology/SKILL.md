@@ -19,7 +19,7 @@ Maps how traffic moves through your estate and writes the result to `./scoutflo-
   overlay adds observed database edges on ANY estate — including a pure
   Kubernetes one.
 
-Every operation is read-only (`get`/`list`/GraphQL-and-REST reads only); the only write is the local `topology.md` file.
+Every operation is read-only (`get`/`list`/GraphQL-and-REST reads only); writes are limited to local projected evidence, worklists and topology artifacts.
 
 Full command recipes live in [references/istio-queries.md](references/istio-queries.md) (the Kubernetes/Istio paths), [references/non-k8s-sources.md](references/non-k8s-sources.md) (the cloud/APM/guided paths, merge rules, and non-Kubernetes export rules), and the Cloud Mode cookbooks — [references/cloud-mode-aws.md](references/cloud-mode-aws.md) (also home of the shared rules: evidence composition, access tiers, redaction), [references/cloud-mode-digitalocean.md](references/cloud-mode-digitalocean.md), [references/cloud-mode-azure.md](references/cloud-mode-azure.md), [references/cloud-mode-gcp.md](references/cloud-mode-gcp.md), [references/cloud-mode-apm-overlay.md](references/cloud-mode-apm-overlay.md), and [references/cloud-mode-fallbacks.md](references/cloud-mode-fallbacks.md) (every denial's next move). This file holds the workflow; go to the cookbooks for the exact blocks each phase names.
 
@@ -46,7 +46,7 @@ Keep `./scoutflo-audits/` out of public version control. The map names your name
 
 | Requirement | Why | Required |
 | --- | --- | --- |
-| `jq` | JSON parsing, every path | yes |
+| `jq`, Python 3.8+, Bash | JSON parsing, bounded local transforms and pipeline failure handling | yes |
 | **At least one topology source** in `~/.scoutflo/toolkit.yaml`: `kubernetes` (richest), or any of `aws`, `digitalocean`, `azure`, `gcp`, `newrelic`, `sentry` — or a metrics store (`prometheus`/`mimir`/`victoriametrics`) carrying Tempo service-graph data | names what to map; Phase 0 routes to the best configured source (a metrics store counts only when its one-metric probe finds service-graph data) | yes — with **none**, the guided capture runs instead of a dead-end |
 | `kubectl` | every cluster read | only on the Kubernetes path |
 | `istioctl` | proxy sync status on the mesh path | no; the mesh path degrades to `kubectl`-only checks, the other paths never need it |
@@ -58,14 +58,14 @@ Managed clusters (EKS, GKE, AKS) whose context is not yet in your kubeconfig: fe
 
 map-topology is **per-cluster**: one run maps one cluster and writes one `topology.md`. A single `kubernetes` block is the whole story — nothing below changes for it. When `kubernetes` is instead a **labeled list** of contexts — the same shape `audit-kubernetes` iterates — run map-topology **once per labeled context**: select the target with `SCOUTFLO_TARGET=<label>` and resolve its `context` through the shared enumerator `report-standard/toolkit-targets.sh` (`count`/`label`/`get`), never a single `kubernetes.context` scalar (Phase 0 does exactly this). Give each cluster its **own** map by pointing `SCOUTFLO_AUDIT_DIR` at a per-cluster directory, so each run writes its own `topology.md` and `topology-export.json` instead of overwriting the last (audits read both from that same `SCOUTFLO_AUDIT_DIR` root, so a per-cluster workspace keeps map and audits aligned). One shared `topology.md` reused across clusters would describe the wrong cluster for all but one — the same-service-name-across-clusters hazard the Common Failure Modes table already warns about.
 
-If `/scoutflo:doctor` is set up, run it first; it validates the same context this skill depends on.
+Run `/scoutflo:doctor` for every configured source first; it validates the same context this skill depends on.
 
 ## Phase 0: Preflight, source routing, and live-safety gate
 
 **Route to a source first — never assume Kubernetes, never dead-end without it.**
 
 ```bash
-set -eu
+set -euo pipefail
 CFG="${SCOUTFLO_CONFIG:-}"
 [ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done
 [ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
@@ -93,24 +93,9 @@ With `kubernetes` among the sources, continue below exactly as before. Without i
 **Kubernetes path only, from here to Phase 2C.** Never map a cluster you have not positively identified. Every command pins `--context "${KUBE_CONTEXT}"`; the ambient kubeconfig default is never trusted.
 
 ```bash
-set -eu
-CFG="${SCOUTFLO_CONFIG:-}"
-[ -n "$CFG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CFG="$_c"; break; }; done
-[ -n "$CFG" ] || CFG="$HOME/.scoutflo/toolkit.yaml"
-
-# Resolve the kubernetes context through the shared enumerator so a single block (one `context`)
-# and a labeled LIST of targets read the SAME way — never assume a single `kubernetes.context`
-# scalar, no yq required. A single block returns its own `context` (behaves identically to before);
-# a labeled list returns the SCOUTFLO_TARGET-selected item's `context`. map-topology maps ONE
-# cluster per run — re-run once per label for a multi-cluster estate (see Prerequisites).
-TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
-K8S_N=$(sh "$TT" "$CFG" kubernetes count)
-[ "${K8S_N:-0}" -ge 1 ] || { echo "no kubernetes target configured in $CFG — this block is the Kubernetes route; use the Phase-0 source routing (a non-Kubernetes estate maps via Phase 2D, never a dead-end)"; exit 1; }
-K8S_IDX=0; if [ -n "${SCOUTFLO_TARGET:-}" ]; then _i=0; while [ "$_i" -lt "$K8S_N" ]; do [ "$(sh "$TT" "$CFG" kubernetes label "$_i")" = "$SCOUTFLO_TARGET" ] && { K8S_IDX=$_i; break; }; _i=$((_i+1)); done; fi
-[ "$(sh "$TT" "$CFG" kubernetes kind)" != seq ] || [ -z "${SCOUTFLO_TARGET:-}" ] || [ "$(sh "$TT" "$CFG" kubernetes label "$K8S_IDX")" = "$SCOUTFLO_TARGET" ] || { echo "SCOUTFLO_TARGET=${SCOUTFLO_TARGET} matches no kubernetes target in $CFG; labels: $(sh "$TT" "$CFG" kubernetes labels | tr '\n' ' ')"; exit 1; }
-K8S_LABEL=$(sh "$TT" "$CFG" kubernetes label "$K8S_IDX"); KUBE_CONTEXT=$(sh "$TT" "$CFG" kubernetes get "$K8S_IDX" context)
-[ -n "$KUBE_CONTEXT" ] || { echo "kubernetes target '${K8S_LABEL:-?}' has no context in $CFG; run /scoutflo:connect"; exit 1; }
-[ "${K8S_N}" -gt 1 ] && echo "note: ${K8S_N} kubernetes targets configured — mapping '${K8S_LABEL}' only; re-run once per label (SCOUTFLO_TARGET=<label>), each with its own SCOUTFLO_AUDIT_DIR" || true
+set -euo pipefail
+. "${CLAUDE_PLUGIN_ROOT:?Set the installed plugin root}/skills/map-topology/scripts/context.sh"
+map_context
 
 command -v kubectl >/dev/null || { echo "kubectl not installed"; exit 1; }
 command -v jq >/dev/null      || { echo "jq not installed"; exit 1; }
@@ -150,13 +135,14 @@ One cheap call counts what the run will map. The thresholds are named variables 
 Before sizing, pick the `NS_EXCLUDE` preset for your provider — GKE, EKS, AKS, or vanilla (cookbook: "Namespace-exclude presets") — then extend it; the vanilla default leaves managed-cluster system namespaces (`gke-managed-*`, `gmp-system`, `aws-observability`, `gatekeeper-system`, ...) in the map and in these counts, and the same value must be used in every block of the run.
 
 ```bash
-set -eu
-KUBE_CONTEXT="your-kube-context"   # the context resolved in Phase 0 (single block, or the SCOUTFLO_TARGET-selected list item)
-NS_EXCLUDE="^(kube-system|kube-public|kube-node-lease|istio-system)$"   # vanilla preset; pick your provider's (cookbook: "Namespace-exclude presets"), then extend
+set -euo pipefail
+. "${CLAUDE_PLUGIN_ROOT:?Set the installed plugin root}/skills/map-topology/scripts/context.sh"
+map_context
+# NS_EXCLUDE is resolved from SCOUTFLO_NAMESPACE_EXCLUDE by map_context.
 SMALL_MAX_WORKLOADS="30"     # single-pass ceiling; example, tune to your environment
 MEDIUM_MAX_WORKLOADS="150"   # one-run ceiling; example, tune to your environment
 
-counts=$(kubectl --context "${KUBE_CONTEXT}" get namespaces,deployments,statefulsets,daemonsets -A -o json \
+counts=$(map_get namespaces,deployments,statefulsets,daemonsets -A \
 | jq -r --arg ex "${NS_EXCLUDE}" '
     ([.items[] | select(.kind == "Namespace") | select(.metadata.name | test($ex) | not)] | length) as $ns
     | ([.items[] | select(.kind != "Namespace") | select(.metadata.namespace | test($ex) | not)] | length) as $wl
@@ -172,8 +158,8 @@ Expected: one line, for example `estate: namespaces=14 workloads=52 sizing-path=
 
 | Path | When | How the run behaves |
 | --- | --- | --- |
-| small | workloads at most `SMALL_MAX_WORKLOADS` | Phases run as written: cluster-wide calls, intermediates in a throwaway temp dir, one sitting. No worklist, no batching. |
-| medium | workloads at most `MEDIUM_MAX_WORKLOADS` | Same cluster-wide calls, still one run, but declare `TMP="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/map-topology/$(date -u +%F)"` in every block instead of the mktemp default, so a failed collection step is redone alone instead of restarting the run. |
+| small | workloads at most `SMALL_MAX_WORKLOADS` | Phases run as written: cluster-wide calls, compact projected intermediates in the selected working directory, one sitting. No worklist, no batching. |
+| medium | workloads at most `MEDIUM_MAX_WORKLOADS` | Same cluster-wide calls, still one run, reuse the deterministic selected working directory, so a failed collection step is redone alone instead of restarting the run. |
 | large | above `MEDIUM_MAX_WORKLOADS` | Namespace batches against a durable worklist with resume support; see [Large clusters: worklist, batches, and resume](#large-clusters-worklist-batches-and-resume). |
 
 Proportionality is a rule in both directions:
@@ -184,17 +170,23 @@ Proportionality is a rule in both directions:
 ### Detect the mesh
 
 ```bash
-set -eu
-KUBE_CONTEXT="your-kube-context"   # the context resolved in Phase 0 (single block, or the SCOUTFLO_TARGET-selected list item)
+set -euo pipefail
+. "${CLAUDE_PLUGIN_ROOT:?Set the installed plugin root}/skills/map-topology/scripts/context.sh"
+map_context
 
-if kubectl --context "${KUBE_CONTEXT}" get crd virtualservices.networking.istio.io >/dev/null 2>&1; then
+if ! MESH_RESOURCES=$(kubectl --context "${KUBE_CONTEXT}" api-resources --api-group=networking.istio.io -o name 2>/dev/null); then
+  echo "Mesh discovery unavailable; do not conclude CRDs are absent" >&2; exit 1
+fi
+if printf '%s\n' "$MESH_RESOURCES" | grep -qx 'virtualservices.networking.istio.io'; then
   echo "istio CRDs: present"
 else
   echo "istio CRDs: absent"
 fi
 kubectl --context "${KUBE_CONTEXT}" get deploy -A -l app=istiod \
   -o jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name} ready={.status.readyReplicas}{"\n"}{end}'
-istioctl --context "${KUBE_CONTEXT}" version 2>/dev/null || echo "istioctl not installed (optional)"
+if command -v istioctl >/dev/null 2>&1; then
+  istioctl --context "${KUBE_CONTEXT}" version || { echo "istioctl probe failed; retain unavailable state" >&2; exit 1; }
+else echo "istioctl not installed (optional)"; fi
 ```
 
 Decision rule:
@@ -407,11 +399,13 @@ cookbook and apply verbatim everywhere:
    groups get ONE batched question, never per-resource interrogation.
 
 On a large estate (in-scope services above the same large-path threshold
-Phase 1 uses — example, tune to your estate), the per-service declared lane
-runs through the same run-directory worklist/lock/resume mechanism as the
-large cluster path, with one row per service instead of per namespace — an
-interrupted cloud mapping resumes at the service that failed, never from
-zero.
+Phase 1 uses — example, tune to your estate), use the separate local
+[Cloud Mode service worklist](references/cloud-worklist.md). Its actual
+initialize/claim/receipt/finish commands bind selected target metadata and
+capture generations, retain interrupted batches, and reject scope or
+evidence drift. Every selected service and declared lane needs an assessment
+receipt before publication. Completed assessment is distinct from complete
+collection: blocked and partial lanes remain explicit map coverage gaps.
 
 Multi-target discipline: with a labeled cloud list (`aws` profiles, `azure`
 subscriptions), Phase 2E runs per label through the shared enumerator exactly
@@ -421,12 +415,12 @@ by construction.
 
 ## Large clusters: worklist, batches, and resume
 
-Runs on the large path only. All state lives under a run-ID-keyed run directory `./scoutflo-audits/map-topology/runs/<RUN_ID>/` (see [Run-ID keying](#run-id-keying) below), not a calendar-date directory: the worklist, the raw per-namespace pulls, the step TSVs, and the partial map. It is working state, not a report; delete the run directory after `topology.md` is written, or delete it to force a fresh start.
+Runs on the large path only. All state lives under a run-ID-keyed run directory `./scoutflo-audits/map-topology/runs/<RUN_ID>/` (see [Run-ID keying](#run-id-keying) below), not a calendar-date directory: the worklist, the projected per-namespace pulls, the step TSVs, and the partial map. It is working state, not a report; retain the run directory with its capture receipts until you no longer need the evidence. To start a new run, explicitly set `SCOUTFLO_TOPOLOGY_NEW_RUN=1` for the init command; an incomplete run is never discarded.
 
 0. **Find a resumable run, or start a new one** (cookbook: "Worklist build and resume"). Before minting a new `RUN_ID`, scan `./scoutflo-audits/map-topology/runs/*/worklist.tsv` for one with pending rows and offer to resume it. Only mint a fresh `RUN_ID` when nothing resumable is found.
 1. **Build or resume the worklist** (cookbook: "Worklist build and resume"). One row per in-scope namespace, status `pending` or `done`. If the resumed run's worklist already exists, the run continues from it: it prints done and pending counts and continues with pending namespaces only. Never rebuild an existing worklist; rebuilding forgets progress.
-2. **Lock, then pull one batch** (cookbook: "Worklist lock" and "Batch pull"). Acquire `worklist.lock` in the run directory before reading pending rows; a lock older than `LOCK_STALE_MINUTES` (30 minutes, example, tune to your batch size) is abandoned and safe to reclaim. Take the next `BATCH_SIZE` pending namespaces and pull raw JSON per namespace for the kinds the chosen path needs. A namespace is marked `done` only after all of its pulls succeed, so an interrupted batch resumes at the namespace that failed. Release the lock once the batch's rows are marked.
-3. **Merge and collect** (cookbook: "Merge raw pulls"). Merge the raw pulls into the same JSON shape the cluster-wide calls produce, then run the same collection filters against the merged files. Producer swap only; the filter bodies do not change.
+2. **Pull one batch** (cookbook: "Batch pull"). The batch command acquires an atomic `worklist.lock` directory and holds it throughout capture. A lock's age never authorizes reclaiming it. Take the next `SCOUTFLO_TOPOLOGY_BATCH_SIZE` pending namespaces and project every selected kind before saving. A namespace is marked `done` only after all its captures and their digest receipt succeed; an interrupted namespace remains pending. The command releases its lock on ordinary success or failure.
+3. **Merge and collect** (cookbook: "Merge projected pulls"). Merge the projected pulls into the same JSON shape the cluster-wide calls produce, then run the same collection filters against the merged files. Producer swap only; the filter bodies do not change.
 4. **Assemble incrementally.** After each batch, recompose `topology.partial.md` in the run directory from all step TSVs accumulated so far, and print progress (`done=X pending=Y`). Repeat from step 2 until the worklist has zero pending rows.
 
 ### Run-ID keying
@@ -434,32 +428,19 @@ Runs on the large path only. All state lives under a run-ID-keyed run directory 
 A calendar-date run directory breaks when a run crosses midnight UTC mid-batch: the date rolls over and the next batch either lands in a fresh, empty directory or the skill has to guess which date directory is "still mine". This skill keys its run directory by `RUN_ID`, the first-seen timestamp of that specific run, generated once and reused for every command block in the run:
 
 ```bash
-set -eu
-AUDIT_ROOT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/map-topology"
-RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)"   # first-seen timestamp of this run; stable for its lifetime
-RUN_DIR="${AUDIT_ROOT}/runs/${RUN_ID}"
-mkdir -p "${RUN_DIR}/raw"
-echo "${RUN_ID}" > "${RUN_DIR}/run-id"
-echo "run: ${RUN_ID}"
+set -euo pipefail
+. "${CLAUDE_PLUGIN_ROOT:?Set the installed plugin root}/skills/map-topology/scripts/context.sh"
+map_context
+map_run init
 ```
 
 Before running the block above, scan for a resumable run so an interrupted mapping does not restart from namespace one:
 
 ```bash
-set -eu
-AUDIT_ROOT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/map-topology"
-resumable=""
-if [ -d "${AUDIT_ROOT}/runs" ]; then
-  for d in "${AUDIT_ROOT}/runs"/*/; do
-    [ -f "${d}worklist.tsv" ] || continue
-    pending=$(awk -F'\t' '$2 == "pending"' "${d}worklist.tsv" | wc -l | tr -d ' ')
-    [ "${pending}" -gt 0 ] || continue
-    resumable="${d}"
-    echo "resumable run found: ${d} (pending=${pending})"
-  done
-fi
-[ -n "${resumable}" ] && echo "resume ${resumable}? offer this to the user before proceeding" \
-  || echo "no resumable run found; safe to start a new one"
+set -euo pipefail
+. "${CLAUDE_PLUGIN_ROOT:?Set the installed plugin root}/skills/map-topology/scripts/context.sh"
+map_context
+map_run status
 ```
 
 Two hard rules:
@@ -469,7 +450,10 @@ Two hard rules:
 
 ## Phase 3: Write topology.md and topology-export.json
 
-Two artifacts, same inventory: `topology.md` for humans and audits, and `./scoutflo-audits/topology-export.json`, the machine-readable form aligned to the Scoutflo platform's topology import contract. Compose the JSON per [references/scoutflo-export.md](references/scoutflo-export.md): every service with its correlation attributes (`service_name`, `namespace`, `cluster_id`, `app`), every workload resource with its four mandatory attributes plus its optional `image`, `image_digest`, and `source_repo_evidence[]` (the Tier-3 candidates from Phase 2C — a build-origin breadcrumb for `map-repos` to verify, never a repo identity by itself), one resource per watchpoints backend, and the edge families (`DEPLOYED_AS`, `PART_OF`, `ROUTES_TO`, `CALLS`, `SENDS_METRICS_TO`, `SENDS_LOGS_TO`, `SENDS_TRACES_TO`, `MONITORED_BY`, `USES`). When Phase 2E ran, also emit the cloud resources and the reviewed service→resource connections per the export cookbook's **Cloud Mode** section (additive; Tier-C questions and unconfirmed low-tier candidates are never exported as edges). Validate with `jq empty` before moving it into place. Audits read this file for the Scoutflo Topology Readiness section of their reports.
+After producing separate maps for multiple targets, use [estate composition](references/estate-composition.md) to write a local `estate-topology.json` and companion review. It preserves target-qualified identities, source hashes, configured versus observed traffic, and unresolved branches. Keep the per-target export unchanged; the composed artifact is not a server import.
+
+
+Two artifacts, same inventory: `topology.md` for humans and audits, and `./scoutflo-audits/topology-export.json`, the plugin's canonical local machine-readable form. A server import requires separate translation and validation against its exact current route; local JSON validity does not prove server acceptance. Compose the JSON per [references/scoutflo-export.md](references/scoutflo-export.md): every service with its correlation attributes (`service_name`, `namespace`, `cluster_id`, `app`), every workload resource with its four mandatory attributes plus its optional `image`, `image_digest`, and `source_repo_evidence[]` (the Tier-3 candidates from Phase 2C — a build-origin breadcrumb for `map-repos` to verify, never a repo identity by itself), one resource per watchpoints backend, and the edge families (`DEPLOYED_AS`, `PART_OF`, `ROUTES_TO`, `CALLS`, `SENDS_METRICS_TO`, `SENDS_LOGS_TO`, `SENDS_TRACES_TO`, `MONITORED_BY`, `USES`). When Phase 2E ran, also emit the cloud resources and the reviewed service→resource connections per the export cookbook's **Cloud Mode** section (additive; Tier-C questions and unconfirmed low-tier candidates are never exported as edges). Validate with `jq empty` before moving it into place. Audits read this file for the Scoutflo Topology Readiness section of their reports.
 
 **Inventory (by environment) — the "what exists" view, saved and reused.** After the export is written and validated, render a complete per-environment inventory into `topology.md` from it — never hand-write it, regenerate it (same rule as the export): `sh report-standard/render-report-viz.sh topology-inventory "${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/topology-export.json"` produces the `## Inventory (by environment)` section — per-environment server/datastore counts and **environment twins** (a base name that appears in only one environment is flagged, "intended, or a missing environment?"). Place it right after the Services section. It is the complete catalog **independent of edges** (a server is listed whether or not a connection was found for it), so a lopsided or mislabeled estate is visible at a glance; it is derived from the saved `topology-export.json`, so a re-run refreshes it deterministically and never drifts from the map.
 
@@ -567,9 +551,10 @@ Rules:
 If `./scoutflo-audits/topology.md` already exists, copy it aside before writing anything, then compare (cookbook: "Delta helpers" for the exact extraction commands):
 
 ```bash
-set -eu
+set -euo pipefail
 OUT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/topology.md"
-TMP="${TMP:-$(mktemp -d)}"
+. "${CLAUDE_PLUGIN_ROOT:?Set the installed plugin root}/skills/map-topology/scripts/context.sh"
+map_paths
 [ -f "${OUT}" ] && cp "${OUT}" "${TMP}/topology.prev.md" && echo "previous map saved" || echo "first run"
 ```
 
@@ -590,10 +575,14 @@ TMP="${TMP:-$(mktemp -d)}"
 The write is unverified until re-read:
 
 ```bash
-set -eu
+set -euo pipefail
 OUT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/topology.md"
 EXPORT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/topology-export.json"
 [ -f "${OUT}" ] || { echo "topology.md was not written"; exit 1; }
+for heading in 'Services' 'Traffic map' 'Entry points' 'Integration watchpoints'; do
+  grep -qx "## $heading" "$OUT" || { echo "Missing topology section: $heading" >&2; exit 1; }
+done
+grep -q '^## Changes since ' "$OUT" || { echo "Missing topology changes section" >&2; exit 1; }
 awk '/^## /' "${OUT}"
 awk -F'|' '/^## Services/{f=1;next} /^## /{f=0} f && /^\|/ {n++} END {print n-2, "service rows"}' "${OUT}"
 jq -e '.version == "scoutflo-topology-export/v1"' "${EXPORT}" >/dev/null || { echo "topology-export.json missing or invalid"; exit 1; }
@@ -605,18 +594,10 @@ Expected: all five section headers (`Services`, `Traffic map`, `Entry points`, `
 On the large path, also prove the worklist finished before trusting the map:
 
 ```bash
-set -eu
-AUDIT_ROOT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/map-topology"
-# RUN_DIR is the run-ID-keyed directory from this run (see Run-ID keying above); if this
-# block runs in a fresh shell, fall back to the most recently modified run directory.
-RUN_DIR="${RUN_DIR:-$(ls -dt "${AUDIT_ROOT}"/runs/*/ 2>/dev/null | head -n 1 | sed 's:/$::')}"
-if [ -n "${RUN_DIR}" ] && [ -f "${RUN_DIR}/worklist.tsv" ]; then
-  pending=$(awk -F'\t' '$2 == "pending"' "${RUN_DIR}/worklist.tsv" | wc -l | tr -d ' ')
-  echo "worklist pending: ${pending}"
-  [ "${pending}" -eq 0 ] || { echo "worklist incomplete; do not replace topology.md yet"; exit 1; }
-else
-  echo "no worklist (small or medium path); nothing to assert"
-fi
+set -euo pipefail
+. "${CLAUDE_PLUGIN_ROOT:?Set the installed plugin root}/skills/map-topology/scripts/context.sh"
+map_context
+map_run complete
 ```
 
 Expected: `worklist pending: 0` on a completed large run, and exit 0. A nonzero pending count means the run must resume batching, not publish.
@@ -626,31 +607,13 @@ Expected: `worklist pending: 0` on a completed large run, and exit 0. A nonzero 
 This skill is the only place in the toolkit that can check [topology-readiness.md](../../report-standard/topology-readiness.md)'s T1 (service identity) and T2 (workload attributes) without any live provider call — everything both checks need is already in `topology-export.json`, because this skill just wrote it. Every audit skill re-derives the same T1/T2 verdict later per critical service; running it once here means you see an identity or workload gap immediately; on the first map, not after connecting a provider and waiting for an audit to reach that service.
 
 ```bash
-set -eu
+set -euo pipefail
+: "${CLAUDE_PLUGIN_ROOT:?Set the installed plugin root}"
 EXPORT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/topology-export.json"
-{
-  printf 'service\tT1-identity\tT2-workload\n'
-  jq -r '
-    . as $root
-    | .services[] as $svc
-    | ($svc.attributes // {}) as $attr
-    | (($svc.name != null) and ($svc.service_type != null) and ($svc.environment != null)
-       and ($svc.business_criticality != null) and ($attr.service_name != null)
-       and ($attr.namespace != null) and ($attr.cluster_id != null)) as $t1
-    | ([$root.relationships[] | select(.relation == "DEPLOYED_AS" and .from.name == $svc.name)]) as $deploy_edges
-    | (($deploy_edges | length) > 0) as $has_deploy_edge
-    | (if $has_deploy_edge then
-         ($deploy_edges[0].to.name) as $wl_name
-         | (($root.resources[] | select(.name == $wl_name) | .attributes) // {}) as $wl_attr
-         | (($wl_attr.cluster_id != null) and ($wl_attr.namespace != null)
-            and ($wl_attr.workload_name != null) and ($wl_attr.workload_type != null))
-       else false end) as $t2
-    | "\($svc.name)\t\(if $t1 then "pass" else "fail" end)\t\(if $t2 then "pass" else "fail" end)"
-  ' "$EXPORT"
-} | column -t -s "$(printf '\t')"
+python3 "$CLAUDE_PLUGIN_ROOT/skills/map-topology/lib/identity-check.py" "$EXPORT"
 ```
 
-Expected: one row per service. A service failing T1 is missing a required field or a correlation attribute (`service_name`/`namespace`/`cluster_id`) — usually a `service_type`, `environment`, or `business_criticality` that was never confirmed with the user (never invent these; ask once per run, per this skill's own rule above). A service failing T2 has no `DEPLOYED_AS` edge, or its workload resource is missing one of the four mandatory attributes — both mean the service-to-workload join in Phase 2B (or 2A) didn't find a backing object; check the Endpoint backing check output for that service.
+Expected: one row per service and exit 0 only when all T1/T2 checks pass. Every DEPLOYED_AS edge must name a resource in the same cluster and namespace with a valid workload type; an ambiguous resource name or any bad edge fails T2. A service failing T1 is missing a required field or a correlation attribute (`service_name`/`namespace`/`cluster_id`) — usually a `service_type`, `environment`, or `business_criticality` that was never confirmed with the user (never invent these; ask once per run, per this skill's own rule above). A service failing T2 has a missing, ambiguous or wrongly scoped workload link; use the printed reason and the Endpoint backing check output to locate the gap.
 
 State the count in the terminal close-out ("N of M services pass T1/T2 structural checks"; when Phase 2E ran, add the connection line: "K confirmed resource connections across J services; L candidates / open questions pending in the map") and, when any service fails, name it and the exact missing field — this is what you fix before an audit's own Topology Readiness section can move past `not-ready` for that service, since T1/T2 gate T3-T6 (a `not-ready` verdict never evaluates the observability-edge checks). Do not compute T3-T6 here: those need each provider's live state, which only the matching audit skill can verify.
 
@@ -713,17 +676,17 @@ Close by telling the user, in the terminal:
 | System and mesh namespaces flood the service list | Apply `NS_EXCLUDE` and print the excluded list in the map header so omissions are visible |
 | Managed-cluster system namespaces (`gke-managed-*`, `gmp-system`, `aws-observability`, `gatekeeper-system`, ...) mapped as services because the vanilla `NS_EXCLUDE` default only knows vanilla Kubernetes — confirmed on a real GKE cluster | Pick the provider preset (GKE, EKS, AKS, or vanilla) from the cookbook's "Namespace-exclude presets" in Phase 1, extend it, and use the same value in every block of the run |
 | Image tag `latest` recorded as a version | Resolve versions by label precedence and record `latest` or missing tags as `unknown` |
-| Call graph invented from service naming conventions on the fallback path | Only emit traffic rows backed by an object: Ingress backend, Service selector, VirtualService, or ServiceEntry |
+| Call graph invented from service naming conventions or configuration promoted to traffic | Record Ingress/selector/VirtualService/ServiceEntry edges as configured relationships; observed traffic requires a separate trace, flow/request log or delivery receipt. See estate composition. |
 | Worklist and batches run on a tiny cluster | Size the estate first; at or below `SMALL_MAX_WORKLOADS` the small path runs one pass with no worklist file |
 | Interrupted large run restarted from zero, re-pulling every namespace | Resume from `worklist.tsv` in the run directory; only pending namespaces are pulled again |
 | Partial large-path map replaces the shared topology.md | Only a run whose worklist has zero pending rows may write `./scoutflo-audits/topology.md`; partial maps stay in the run directory |
 | Run crosses UTC midnight and the next batch lands in a fresh, empty date directory, abandoning everything already pulled | Key the run directory by `RUN_ID` (first-seen timestamp of the run), never by calendar date |
-| Two invocations pull the same batch of namespaces at once and corrupt the worklist | Acquire `worklist.lock` before claiming a batch; treat a lock older than `LOCK_STALE_MINUTES` as abandoned and reclaim it |
+| Two invocations pull the same batch of namespaces at once and corrupt the worklist | The batch owns an atomic lock for its lifetime; never reclaim a lock from age alone. Verify the recorded process and host before manual recovery |
 | Mesh path chosen correctly (CRDs present, istiod ready) but the cluster is mesh-inert everywhere except a small sandbox namespace, so mesh-derived rows are near-empty | The gate is right even when its yield is thin: sidecar coverage and VirtualService/DestinationRule/Gateway/ServiceEntry counts near zero outside one namespace mean the mesh is installed but barely adopted, not a bug. Report the true sidecar coverage ratio rather than assuming the mesh path implies mesh-wide routing data. Confirmed live: a real cluster with Istio CRDs + a ready istiod had 0 sidecars across 27 namespaces except one `istio-injection=enabled` test namespace, where all mesh objects (1 VirtualService, 1 DestinationRule, 1 Gateway, 1 ServiceEntry) also lived. |
 | Two same-named Services in different namespaces collapse into one map row / one watchpoints row | Qualify every colliding service as `<service>.<namespace>` in the map and the export (`attributes.service_name` keeps the bare name); the watchpoints table carries a Namespace column and carry-forward keys on Namespace + Service |
 | A non-Kubernetes estate treated as "can't proceed" | Phase-0 routing maps from aws/digitalocean/newrelic/sentry, or runs the guided capture — the kubernetes block is the richest source, not a prerequisite |
 | A workload object fabricated for an ECS/Lambda/VM service | The platform import's workload types are Kubernetes-only today; the export ships services + evidenced edges and states the limit — never an invented `kubernetes_deployment` |
-| An edge inferred from placement (shared SG/subnet/tag/name) | Only call-observing sources (Istio, New Relic spans) produce Traffic-map edges; infrastructure proximity is placement, not traffic |
+| An edge inferred from placement (shared SG/subnet/tag/name) | Istio objects describe configured routing; New Relic spans describe observed calls. Preserve the evidence class; placement alone produces neither |
 | New Relic queried on one entity domain only | OTel services are `EXT`, agent services are `APM` — query both or half the estate is invisible |
 | A service→resource edge drawn from a name guess or tag co-location | Cloud Mode edges exist only with a join thread (host/logical-name/ref match, ESM, IAM ARN, SG path); intent-class signals never materialize an edge (cookbook: "Evidence composition and confidence") |
 | A raw task definition / function config (env values included) written to disk or echoed | Extraction is in-stream: key + host + port + db name survive, values never do; temp files deleted in-block (cookbook: "Redaction discipline for configuration values") |

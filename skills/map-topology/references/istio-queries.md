@@ -6,19 +6,20 @@ Shared variable conventions used by every block:
 
 ```bash
 # Resolved from ~/.scoutflo/toolkit.yaml
-KUBE_CONTEXT="your-kube-context"   # kubernetes.context
+. "${CLAUDE_PLUGIN_ROOT:?Set the installed plugin root}/skills/map-topology/scripts/context.sh"
+map_context
 # Namespaces to skip. This is the vanilla-Kubernetes preset; on a managed
 # cluster pick your provider's preset from "Namespace-exclude presets"
 # below, then extend with operator or system namespaces you do not want
 # in the map.
-NS_EXCLUDE="^(kube-system|kube-public|kube-node-lease|istio-system)$"
+NS_EXCLUDE="${SCOUTFLO_NAMESPACE_EXCLUDE:-^(kube-system|kube-public|kube-node-lease|istio-system)$}"
 # Working directory for intermediate TSVs; reuse one TMP across all blocks.
-TMP="${TMP:-$(mktemp -d)}"
+# TMP resolves to the same selected target directory in every fresh shell.
 ```
 
-On the medium sizing path (chosen in SKILL.md Phase 1), replace the `TMP` declaration in each block with `TMP="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/map-topology/$(date -u +%F)"` (after `mkdir -p` on that path) so intermediates survive a shell restart and a failed step can be redone alone. A medium-path run stays inside one calendar day by definition (one run, one sitting), so date-keying is safe there.
+Every block resolves context and output afresh from the selected config. Set `SCOUTFLO_NAMESPACE_EXCLUDE` once in the calling environment to select a provider preset. Projected captures omit env values, command arguments, arbitrary annotations and credentials before stdout or disk. Unsupported/redacted identity stays unresolved. On the medium sizing path (chosen in SKILL.md Phase 1), the default working directory is `TMP="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/map-topology/$(date -u +%F)"` (after `mkdir -p` on that path) so intermediates survive a shell restart and a failed step can be redone alone. If a small/medium run crosses midnight, keep its explicit `SCOUTFLO_TOPOLOGY_WORK_DIR` fixed; do not split its artifacts across date folders.
 
-On the large sizing path, replace the `TMP` declaration with `TMP="${RUN_DIR}"`, where `RUN_DIR` is the run-ID-keyed directory from [SKILL.md's Run-ID keying](../SKILL.md#run-id-keying): `./scoutflo-audits/map-topology/runs/<RUN_ID>/`. A large-path run can cross midnight UTC mid-batch, so it is keyed by `RUN_ID` (the run's first-seen timestamp), never by calendar date; see "Worklist build and resume" and "Worklist lock" below for the exact commands.
+On the large sizing path, set `SCOUTFLO_TOPOLOGY_WORK_DIR` to the verified run directory, where `RUN_DIR` is the run-ID-keyed directory from [SKILL.md's Run-ID keying](../SKILL.md#run-id-keying): `./scoutflo-audits/map-topology/runs/<RUN_ID>/`. A large-path run can cross midnight UTC mid-batch, so it is keyed by `RUN_ID` (the run's first-seen timestamp), never by calendar date; see "Worklist build and resume" and "Worklist lock" below for the exact commands.
 
 ## Namespace-exclude presets
 
@@ -28,7 +29,7 @@ Pick the preset for your provider, paste it as the `NS_EXCLUDE` value in every b
 
 ```bash
 # Vanilla Kubernetes (the default used in every block in this cookbook)
-NS_EXCLUDE="^(kube-system|kube-public|kube-node-lease|istio-system)$"
+NS_EXCLUDE="${SCOUTFLO_NAMESPACE_EXCLUDE:-^(kube-system|kube-public|kube-node-lease|istio-system)$}"
 
 # GKE: adds GKE-managed system namespaces, Google Managed Prometheus
 # (gmp-*; gke-gmp-system on some versions), Config Sync, and Config
@@ -54,12 +55,13 @@ NS_EXCLUDE="^(kube-.*|istio-system|gatekeeper-system|azure-arc|aks-istio-.*)$"
 Namespaces in scope with their Istio labels. Works on both paths; on the fallback path the label columns just read `-`.
 
 ```bash
-set -eu
-KUBE_CONTEXT="your-kube-context"
-NS_EXCLUDE="^(kube-system|kube-public|kube-node-lease|istio-system)$"
-TMP="${TMP:-$(mktemp -d)}"
+set -euo pipefail
+. "${CLAUDE_PLUGIN_ROOT:?Set the installed plugin root}/skills/map-topology/scripts/context.sh"
+map_context
+NS_EXCLUDE="${SCOUTFLO_NAMESPACE_EXCLUDE:-^(kube-system|kube-public|kube-node-lease|istio-system)$}"
+# TMP resolves to the same selected target directory in every fresh shell.
 
-kubectl --context "${KUBE_CONTEXT}" get ns -o json \
+map_get ns \
 | jq -r --arg ex "${NS_EXCLUDE}" '
     .items[]
     | select(.metadata.name | test($ex) | not)
@@ -84,12 +86,13 @@ only `.spec.containers` would read a fully-meshed native-sidecar cluster as 100%
 unadopted and flag every workload as a coverage gap.
 
 ```bash
-set -eu
-KUBE_CONTEXT="your-kube-context"
-NS_EXCLUDE="^(kube-system|kube-public|kube-node-lease|istio-system)$"
-TMP="${TMP:-$(mktemp -d)}"
+set -euo pipefail
+. "${CLAUDE_PLUGIN_ROOT:?Set the installed plugin root}/skills/map-topology/scripts/context.sh"
+map_context
+NS_EXCLUDE="${SCOUTFLO_NAMESPACE_EXCLUDE:-^(kube-system|kube-public|kube-node-lease|istio-system)$}"
+# TMP resolves to the same selected target directory in every fresh shell.
 
-kubectl --context "${KUBE_CONTEXT}" get pods -A -o json \
+map_get pods -A \
 | jq -r --arg ex "${NS_EXCLUDE}" '
     .items[]
     | select(.metadata.namespace | test($ex) | not)
@@ -106,8 +109,9 @@ Expected: one line per meshed app, `namespace  app  version`. Empty output in an
 Sync state, when `istioctl` is installed:
 
 ```bash
-set -eu
-KUBE_CONTEXT="your-kube-context"
+set -euo pipefail
+. "${CLAUDE_PLUGIN_ROOT:?Set the installed plugin root}/skills/map-topology/scripts/context.sh"
+map_context
 istioctl --context "${KUBE_CONTEXT}" proxy-status
 ```
 
@@ -118,13 +122,14 @@ Expected: one row per proxy with `SYNCED` in the CDS/LDS/EDS/RDS columns. `STALE
 Deployments, StatefulSets, and DaemonSets with a resolved version. Version precedence: `version` pod label, then `app.kubernetes.io/version`, then a non-`latest` image tag, else `unknown`.
 
 ```bash
-set -eu
-KUBE_CONTEXT="your-kube-context"
-NS_EXCLUDE="^(kube-system|kube-public|kube-node-lease|istio-system)$"
-TMP="${TMP:-$(mktemp -d)}"
+set -euo pipefail
+. "${CLAUDE_PLUGIN_ROOT:?Set the installed plugin root}/skills/map-topology/scripts/context.sh"
+map_context
+NS_EXCLUDE="${SCOUTFLO_NAMESPACE_EXCLUDE:-^(kube-system|kube-public|kube-node-lease|istio-system)$}"
+# TMP resolves to the same selected target directory in every fresh shell.
 
 for kind in deployment statefulset daemonset; do
-  kubectl --context "${KUBE_CONTEXT}" get "${kind}" -A -o json \
+  map_get "${kind}" -A \
   | jq -r --arg kind "${kind}" --arg ex "${NS_EXCLUDE}" '
       .items[]
       | select(.metadata.namespace | test($ex) | not)
@@ -145,13 +150,14 @@ Expected: one line per workload, `namespace  kind/name  version`. The `split("/"
 For each workload, capture the full image ref, its digest, and a **heuristic** `candidate_repo` parsed from the registry path — the free, no-new-access tier of the evidence model in [scoutflo-export.md](scoutflo-export.md#source_repo_evidence--tiered-typed-servicerepo-evidence-optional-additive). This only *captures a candidate*; `map-repos` verifies it live against GitHub before ever proposing it. It never becomes a mapping here.
 
 ```bash
-set -eu
-KUBE_CONTEXT="your-kube-context"
-NS_EXCLUDE="^(kube-system|kube-public|kube-node-lease|istio-system)$"
-TMP="${TMP:-$(mktemp -d)}"
+set -euo pipefail
+. "${CLAUDE_PLUGIN_ROOT:?Set the installed plugin root}/skills/map-topology/scripts/context.sh"
+map_context
+NS_EXCLUDE="${SCOUTFLO_NAMESPACE_EXCLUDE:-^(kube-system|kube-public|kube-node-lease|istio-system)$}"
+# TMP resolves to the same selected target directory in every fresh shell.
 
 for kind in deployment statefulset daemonset; do
-  kubectl --context "${KUBE_CONTEXT}" get "${kind}" -A -o json \
+  map_get "${kind}" -A \
   | jq -c --arg kind "${kind}" --arg ex "${NS_EXCLUDE}" '
       # candidate_repo = last two path segments after the registry host, tag/digest stripped.
       # Only strip a host when there is >1 segment: a bare "postgres:18.4" is name:tag,
@@ -191,18 +197,19 @@ Expected: a JSON array, one object per workload, each with `image`, `image_diges
 Authoritative service→repo evidence, read from ArgoCD Application CRs with the same kubeconfig as every other block — no ArgoCD API, no new credential; needs only `get`/`list` on `applications.argoproj.io`. Read-only: this block never creates, syncs, patches, or refreshes an Application.
 
 ```bash
-set -eu
-KUBE_CONTEXT="your-kube-context"
-TMP="${TMP:-$(mktemp -d)}"
+set -euo pipefail
+. "${CLAUDE_PLUGIN_ROOT:?Set the installed plugin root}/skills/map-topology/scripts/context.sh"
+map_context
+# TMP resolves to the same selected target directory in every fresh shell.
 
 # Distinguish "CRD absent" (a normal estate) from "cannot reach the cluster" (an error
 # that must be reported, never mis-read as absence).
 if ! API_OUT=$(kubectl --context "${KUBE_CONTEXT}" api-resources --api-group=argoproj.io 2>&1); then
-  echo "ERROR: could not query api-resources (${API_OUT}); fix cluster access before concluding anything about ArgoCD" >&2
+  echo "ERROR: could not query api-resources; fix cluster access before concluding anything about ArgoCD" >&2
 elif ! printf '%s\n' "${API_OUT}" | grep -q '^applications '; then
   echo "no ArgoCD Application CRD on this cluster — Tier 2 evidence not available (normal, skipping)"
 else
-  kubectl --context "${KUBE_CONTEXT}" get applications.argoproj.io -A -o json \
+  map_get applications.argoproj.io -A \
   | jq -c '
       # candidate_repo = owner/name from the repoURL (https or ssh form), .git suffix stripped.
       def repo_label($u):
@@ -216,7 +223,9 @@ else
       # A Helm-chart source (spec.source.chart set) deploys a packaged chart from a chart
       # registry — its repoURL is NOT a source-code repository. Emitting it as evidence
       # plants a false "authoritative" candidate; skip it with a visible note instead.
-      | if (($src.chart // "") != "") then
+      | if ((.spec.sources // []) | length) > 1 then
+          { application: .metadata.name, skipped: "multiple sources require independent source-to-workload assessment; no repository or revision evidence emitted" }
+        elif (($src.chart // "") != "") then
           { application: .metadata.name, skipped: "helm-chart source (\($src.chart)) — a chart registry is not a source repo; no evidence emitted" }
         else
       # Multi-source apps report per-source SHAs in status.sync.revisions (parallel to
@@ -241,7 +250,9 @@ else
 fi
 ```
 
-Expected: one JSON object per Application. A Helm-chart source prints a `skipped` note and emits **no** evidence (a chart registry is not a source repo). Otherwise: `candidate_repo` as `owner/name`, `subpath` from `spec.source.path`, `branch_ref` from `targetRevision` when it is a ref, `deployed_revision` at the **object level** — only when the synced revision is a real 40-hex SHA (multi-source apps read `status.sync.revisions[0]`; a never-synced Application yields `null`, never a branch name masquerading as a commit) — and **`managed_workloads`**, the workloads this Application actually manages, from `status.resources`. At Phase-3 composition the Application's `deployed_revision` lands as a **workload-level attribute** (sibling of `image`/`image_digest`) on each joined workload, per the agreed contract shape — never nested inside the `source_repo_evidence[]` entries.
+Expected: one JSON object per Application. A Helm-chart source prints a `skipped` note and emits **no** evidence (a chart registry is not a source repo). Otherwise: `candidate_repo` as `owner/name`, `subpath` from `spec.source.path`, `branch_ref` from `targetRevision` when it is a ref, `deployed_revision` at the **object level** — only when the synced revision is a real 40-hex SHA (an Application with one `spec.sources` entry reads `status.sync.revisions[0]`; a never-synced Application yields `null`, never a branch name masquerading as a commit) — and **`managed_workloads`**, the workloads this Application actually manages, from `status.resources`. At Phase-3 composition the Application's `deployed_revision` lands as a **workload-level attribute** (sibling of `image`/`image_digest`) on each joined workload, per the agreed contract shape — never nested inside the `source_repo_evidence[]` entries.
+
+This bounded recipe accepts either `spec.source` or a single entry in `spec.sources` (paired with `status.sync.revisions[0]`). Applications with multiple sources emit a visible `skipped` note: independently assess which source produced each workload before attaching any repository or revision. The first source alone cannot establish every workload's origin.
 
 **The join (how evidence reaches workloads):** `managed_workloads` is the mechanical join — in Phase 3, attach the Application's `source_repo_evidence` entry to each export workload whose `namespace` + `workload_name` + `workload_type` match a `managed_workloads` row. A never-synced Application has no `status.resources` and therefore joins to nothing: record it in the map as an unattached ArgoCD note ("Application X declares repo Y for namespace Z but has never synced") and let `map-repos` present it to the user — never guess a workload for it, and never attach by `dest_namespace` alone (a namespace is not a workload).
 
@@ -251,9 +262,10 @@ Expected: one JSON object per Application. A Helm-chart source prints a `skipped
 The authoritative image-side signal: an image built by modern CI stamps the source repo and the exact commit into its config labels — `org.opencontainers.image.source` (the repo URL) and `org.opencontainers.image.revision` (the commit SHA). Reading them needs the image **config blob**, not `kubectl` — `crane` is the clean way (it handles the token dance, multi-arch indexes, and every registry uniformly). Optional prerequisite: `crane` (`go install github.com/google/go-containerregistry/cmd/crane@latest`, or `brew install crane`); for a private registry, `crane auth login <registry>` first (or a registry-read credential in the environment). When `crane` is absent this tier is skipped cleanly — Tier 2 (ArgoCD) and Tier 3 (image-path) still run; many images carry no such labels, and that is normal, not a gap.
 
 ```bash
-set -eu
-KUBE_CONTEXT="your-kube-context"
-TMP="${TMP:-$(mktemp -d)}"
+set -euo pipefail
+. "${CLAUDE_PLUGIN_ROOT:?Set the installed plugin root}/skills/map-topology/scripts/context.sh"
+map_context
+# TMP resolves to the same selected target directory in every fresh shell.
 
 if ! command -v crane >/dev/null 2>&1; then
   echo "crane not installed — Tier 1 (OCI image labels) skipped (Tiers 2-3 still run). Install: brew install crane"
@@ -286,17 +298,18 @@ Expected: one JSON object per unique image. An image whose config carries `org.o
 
 ## Service-to-workload join
 
-Joins Services to workloads whose pod-template labels satisfy the Service selector, within the same namespace. Used on both paths.
+Joins Services to workloads whose pod-template labels satisfy the complete Service selector, within the same namespace. Projection omission makes the selector unresolved; never broaden it by dropping keys. Used on both paths.
 
 ```bash
-set -eu
-KUBE_CONTEXT="your-kube-context"
-NS_EXCLUDE="^(kube-system|kube-public|kube-node-lease|istio-system)$"
-TMP="${TMP:-$(mktemp -d)}"
+set -euo pipefail
+. "${CLAUDE_PLUGIN_ROOT:?Set the installed plugin root}/skills/map-topology/scripts/context.sh"
+map_context
+NS_EXCLUDE="${SCOUTFLO_NAMESPACE_EXCLUDE:-^(kube-system|kube-public|kube-node-lease|istio-system)$}"
+# TMP resolves to the same selected target directory in every fresh shell.
 
-kubectl --context "${KUBE_CONTEXT}" get svc -A -o json > "${TMP}/svc.json"
+map_get svc -A > "${TMP}/svc.json"
 for kind in deployment statefulset daemonset; do
-  kubectl --context "${KUBE_CONTEXT}" get "${kind}" -A -o json \
+  map_get "${kind}" -A \
   | jq --arg kind "${kind}" '.items[] | .kind = $kind'
 done | jq -s '.' > "${TMP}/workloads.json"
 
@@ -305,6 +318,7 @@ jq -r -n --arg ex "${NS_EXCLUDE}" \
   $s[0].items[] as $svc
   | select($svc.metadata.namespace | test($ex) | not)
   | select(($svc.spec.type // "ClusterIP") != "ExternalName")
+  | select($svc.spec.selector_projection_complete == true)
   | ($svc.spec.selector // {}) as $sel
   | select(($sel | length) > 0)
   | $w[0][] as $wl
@@ -323,11 +337,12 @@ Expected: one line per Service/workload pair, `namespace  service  kind/name  po
 `ExternalName` services are external dependencies, not workloads:
 
 ```bash
-set -eu
-KUBE_CONTEXT="your-kube-context"
-NS_EXCLUDE="^(kube-system|kube-public|kube-node-lease|istio-system)$"
+set -euo pipefail
+. "${CLAUDE_PLUGIN_ROOT:?Set the installed plugin root}/skills/map-topology/scripts/context.sh"
+map_context
+NS_EXCLUDE="${SCOUTFLO_NAMESPACE_EXCLUDE:-^(kube-system|kube-public|kube-node-lease|istio-system)$}"
 
-kubectl --context "${KUBE_CONTEXT}" get svc -A -o json \
+map_get svc -A \
 | jq -r --arg ex "${NS_EXCLUDE}" '
     .items[]
     | select(.metadata.namespace | test($ex) | not)
@@ -342,12 +357,13 @@ Expected: usually empty. Any line becomes a `-> external` row in the traffic map
 Ready endpoint addresses per Service. Zero addresses for a selector-bearing Service means backendless: list it, do not guess.
 
 ```bash
-set -eu
-KUBE_CONTEXT="your-kube-context"
-NS_EXCLUDE="^(kube-system|kube-public|kube-node-lease|istio-system)$"
-TMP="${TMP:-$(mktemp -d)}"
+set -euo pipefail
+. "${CLAUDE_PLUGIN_ROOT:?Set the installed plugin root}/skills/map-topology/scripts/context.sh"
+map_context
+NS_EXCLUDE="${SCOUTFLO_NAMESPACE_EXCLUDE:-^(kube-system|kube-public|kube-node-lease|istio-system)$}"
+# TMP resolves to the same selected target directory in every fresh shell.
 
-kubectl --context "${KUBE_CONTEXT}" get endpoints -A -o json \
+map_get endpoints -A \
 | jq -r --arg ex "${NS_EXCLUDE}" '
     .items[]
     | select(.metadata.namespace | test($ex) | not)
@@ -364,12 +380,13 @@ Expected: `namespace  service  ready-address-count`. Recent clusters print a dep
 One row per route destination. Checks `http`, `tcp`, and `tls` route blocks.
 
 ```bash
-set -eu
-KUBE_CONTEXT="your-kube-context"
-NS_EXCLUDE="^(kube-system|kube-public|kube-node-lease|istio-system)$"
-TMP="${TMP:-$(mktemp -d)}"
+set -euo pipefail
+. "${CLAUDE_PLUGIN_ROOT:?Set the installed plugin root}/skills/map-topology/scripts/context.sh"
+map_context
+NS_EXCLUDE="${SCOUTFLO_NAMESPACE_EXCLUDE:-^(kube-system|kube-public|kube-node-lease|istio-system)$}"
+# TMP resolves to the same selected target directory in every fresh shell.
 
-kubectl --context "${KUBE_CONTEXT}" get virtualservices -A -o json \
+map_get virtualservices -A \
 | jq -r --arg ex "${NS_EXCLUDE}" '
     .items[]
     | select(.metadata.namespace | test($ex) | not)
@@ -394,12 +411,13 @@ Limitation — VirtualService **delegation** is not followed. A parent VS that u
 Subsets are the version axis: they name the label sets traffic can be split across.
 
 ```bash
-set -eu
-KUBE_CONTEXT="your-kube-context"
-NS_EXCLUDE="^(kube-system|kube-public|kube-node-lease|istio-system)$"
-TMP="${TMP:-$(mktemp -d)}"
+set -euo pipefail
+. "${CLAUDE_PLUGIN_ROOT:?Set the installed plugin root}/skills/map-topology/scripts/context.sh"
+map_context
+NS_EXCLUDE="${SCOUTFLO_NAMESPACE_EXCLUDE:-^(kube-system|kube-public|kube-node-lease|istio-system)$}"
+# TMP resolves to the same selected target directory in every fresh shell.
 
-kubectl --context "${KUBE_CONTEXT}" get destinationrules -A -o json \
+map_get destinationrules -A \
 | jq -r --arg ex "${NS_EXCLUDE}" '
     .items[]
     | select(.metadata.namespace | test($ex) | not)
@@ -418,11 +436,12 @@ Expected: `namespace  destinationrule  host  subset  labels`. A subset reference
 Always the full resource name; the short name `gateways` can resolve to the Kubernetes Gateway API kind instead.
 
 ```bash
-set -eu
-KUBE_CONTEXT="your-kube-context"
-TMP="${TMP:-$(mktemp -d)}"
+set -euo pipefail
+. "${CLAUDE_PLUGIN_ROOT:?Set the installed plugin root}/skills/map-topology/scripts/context.sh"
+map_context
+# TMP resolves to the same selected target directory in every fresh shell.
 
-kubectl --context "${KUBE_CONTEXT}" get gateways.networking.istio.io -A -o json \
+map_get gateways.networking.istio.io -A \
 | jq -r '
     .items[]
     | .metadata.namespace as $ns | .metadata.name as $gw
@@ -441,12 +460,13 @@ Expected: `namespace  gateway  port/protocol  hosts`. Join against `vs-routes.ts
 External dependencies the mesh knows about.
 
 ```bash
-set -eu
-KUBE_CONTEXT="your-kube-context"
-NS_EXCLUDE="^(kube-system|kube-public|kube-node-lease|istio-system)$"
-TMP="${TMP:-$(mktemp -d)}"
+set -euo pipefail
+. "${CLAUDE_PLUGIN_ROOT:?Set the installed plugin root}/skills/map-topology/scripts/context.sh"
+map_context
+NS_EXCLUDE="${SCOUTFLO_NAMESPACE_EXCLUDE:-^(kube-system|kube-public|kube-node-lease|istio-system)$}"
+# TMP resolves to the same selected target directory in every fresh shell.
 
-kubectl --context "${KUBE_CONTEXT}" get serviceentries -A -o json \
+map_get serviceentries -A \
 | jq -r --arg ex "${NS_EXCLUDE}" '
     .items[]
     | select(.metadata.namespace | test($ex) | not)
@@ -465,12 +485,13 @@ Expected: `namespace  serviceentry  hosts  location  resolution`. `MESH_EXTERNAL
 Used on both paths; clusters often run plain Ingress alongside a mesh.
 
 ```bash
-set -eu
-KUBE_CONTEXT="your-kube-context"
-NS_EXCLUDE="^(kube-system|kube-public|kube-node-lease|istio-system)$"
-TMP="${TMP:-$(mktemp -d)}"
+set -euo pipefail
+. "${CLAUDE_PLUGIN_ROOT:?Set the installed plugin root}/skills/map-topology/scripts/context.sh"
+map_context
+NS_EXCLUDE="${SCOUTFLO_NAMESPACE_EXCLUDE:-^(kube-system|kube-public|kube-node-lease|istio-system)$}"
+# TMP resolves to the same selected target directory in every fresh shell.
 
-kubectl --context "${KUBE_CONTEXT}" get ingress -A -o json \
+map_get ingress -A \
 | jq -r --arg ex "${NS_EXCLUDE}" '
     .items[]
     | select(.metadata.namespace | test($ex) | not)
@@ -489,108 +510,54 @@ Expected: `namespace  ingress  host  path  backend-service  port`. Each backend 
 
 ## Worklist build and resume
 
-Large path only (SKILL.md: "Large clusters: worklist, batches, and resume"). The worklist is the durable record of which namespaces are mapped; an interrupted run resumes from it instead of restarting. `RUN_DIR` is keyed by `RUN_ID`, the run's first-seen timestamp, never by calendar date, so a run that crosses UTC midnight keeps writing into the same directory. This block finds a resumable run first (a run directory whose worklist still has pending rows); only when none exists does it mint a new `RUN_ID`. `RUN_DIR` never carries a trailing slash; every path below joins it with `/`.
+Large path only (SKILL.md: "Large clusters: worklist, batches, and resume"). The worklist is the durable record of which namespaces are mapped; an interrupted run resumes from it instead of restarting. `RUN_DIR` is keyed by `RUN_ID`, the run's first-seen timestamp, never by calendar date, so a run that crosses UTC midnight keeps writing into the same directory. This block finds a resumable run first (a run directory whose worklist still has pending rows); only when no active run exists does it mint a new `RUN_ID`. A completed active run stays visible as prior evidence; set `SCOUTFLO_TOPOLOGY_NEW_RUN=1` explicitly when starting a new collection. `RUN_DIR` never carries a trailing slash; every path below joins it with `/`.
 
 ```bash
-set -eu
-KUBE_CONTEXT="your-kube-context"
-NS_EXCLUDE="^(kube-system|kube-public|kube-node-lease|istio-system)$"
-AUDIT_ROOT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/map-topology"
-
-resumable=""
-if [ -d "${AUDIT_ROOT}/runs" ]; then
-  for d in "${AUDIT_ROOT}/runs"/*/; do
-    [ -f "${d}worklist.tsv" ] || continue
-    pending=$(awk -F'\t' '$2 == "pending"' "${d}worklist.tsv" | wc -l | tr -d ' ')
-    [ "${pending}" -gt 0 ] || continue
-    resumable="${d%/}"   # strip the glob's trailing slash so RUN_DIR stays slash-free
-  done
-fi
-
-if [ -n "${resumable}" ]; then
-  RUN_DIR="${resumable}"
-  echo "resuming ${RUN_DIR}"
-else
-  RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)"   # first-seen timestamp of this run; stable for its lifetime
-  RUN_DIR="${AUDIT_ROOT}/runs/${RUN_ID}"
-  mkdir -p "${RUN_DIR}/raw"
-  kubectl --context "${KUBE_CONTEXT}" get ns -o json \
-  | jq -r --arg ex "${NS_EXCLUDE}" '
-      .items[] | select(.metadata.name | test($ex) | not)
-      | [.metadata.name, "pending"] | @tsv' > "${RUN_DIR}/worklist.tsv"
-  echo "worklist created: ${RUN_DIR}"
-fi
-awk -F'\t' '{c[$2]++} END {printf "done=%d pending=%d\n", c["done"]+0, c["pending"]+0}' "${RUN_DIR}/worklist.tsv"
+set -euo pipefail
+. "${CLAUDE_PLUGIN_ROOT:?Set the installed plugin root}/skills/map-topology/scripts/context.sh"
+map_context
+map_run init
 ```
 
 Expected: `worklist created: <RUN_DIR>` then `done=0 pending=<n>` on a fresh run, or `resuming <RUN_DIR>` with a nonzero `done` count. Never delete or rebuild an existing worklist mid-run; that forgets progress.
 
 ## Worklist lock
 
-Acquire this lock before claiming a batch, release it right after. It prevents two invocations against the same estate from double-claiming the same namespaces. A lock older than `LOCK_STALE_MINUTES` is treated as abandoned (the process that held it died, or the machine slept) and is safe to reclaim.
+Acquire this lock before claiming a batch, release it right after. It prevents two invocations against the same estate from double-claiming the same namespaces. The batch command acquires an atomic directory lock for its entire execution. Time alone never makes a lock safe to reclaim. If a process was killed, verify the recorded PID and host before manually removing its lock directory.
 
 ```bash
-set -eu
-RUN_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/map-topology/runs/20260717T140500Z"   # example; the resolved run directory
-LOCK_STALE_MINUTES="30"   # example, tune to your batch size and expected run length
-LOCK="${RUN_DIR}/worklist.lock"
-
-now_epoch=$(date -u +%s)
-if [ -f "${LOCK}" ]; then
-  lock_pid=$(awk -F'\t' 'NR==1{print $1}' "${LOCK}")
-  lock_epoch=$(awk -F'\t' 'NR==1{print $2}' "${LOCK}")
-  age_minutes=$(( (now_epoch - lock_epoch) / 60 ))
-  if [ "${age_minutes}" -lt "${LOCK_STALE_MINUTES}" ]; then
-    echo "worklist locked by pid ${lock_pid}, age ${age_minutes}m; stop, do not claim a batch"
-    exit 1
-  fi
-  echo "existing lock is ${age_minutes}m old (>= ${LOCK_STALE_MINUTES}m); treating as abandoned and reclaiming"
-fi
-printf '%s\t%s\n' "$$" "${now_epoch}" > "${LOCK}"
-echo "lock acquired: pid=$$ at ${now_epoch}"
+set -euo pipefail
+. "${CLAUDE_PLUGIN_ROOT:?Set the installed plugin root}/skills/map-topology/scripts/context.sh"
+map_context
+map_run lock-status
 ```
 
-Expected: `lock acquired: pid=<pid> at <epoch>` and exit 0. Follow with the batch pull below, then remove `${LOCK}` once the batch's namespaces are marked `done`. If the lock check exits 1, stop; do not claim a batch while another process holds a live lock.
+Expected: `batch lock available`; the following batch performs the atomic acquisition. A locked result is a stop, even when the lock is old.
 
 ## Batch pull
 
-Pulls raw JSON for the next `BATCH_SIZE` pending namespaces. Run as written, do not modify flags; with `set -eu`, a failed pull aborts before the namespace is marked `done`, so a re-run resumes at the namespace that failed. Run "Worklist lock" above immediately before this block, and remove the lock file immediately after.
+Pulls projected JSON for the next `BATCH_SIZE` pending namespaces. Run as written, do not modify flags; with `set -eu`, a failed pull aborts before the namespace is marked `done`, so a re-run resumes at the namespace that failed. The batch command owns and releases its lock; the separate lock-status recipe is diagnostic only. A failed read keeps that namespace pending.
 
 ```bash
-set -eu
-KUBE_CONTEXT="your-kube-context"
-RUN_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/map-topology/runs/20260717T140500Z"   # example; the resolved run directory
-BATCH_SIZE="10"   # namespaces per batch; example, tune to your environment
-# Kinds pulled per namespace on the fallback path. On the mesh path use instead:
-# KINDS="deployment statefulset daemonset service endpoints ingress pod virtualservice destinationrule serviceentry"
-KINDS="deployment statefulset daemonset service endpoints ingress"
-
-BATCH=$(awk -F'\t' '$2 == "pending" {print $1}' "${RUN_DIR}/worklist.tsv" | head -n "${BATCH_SIZE}")
-[ -n "${BATCH}" ] || { echo "worklist complete: nothing pending"; exit 0; }
-
-for ns in ${BATCH}; do
-  for kind in ${KINDS}; do
-    kubectl --context "${KUBE_CONTEXT}" get "${kind}" -n "${ns}" -o json \
-      > "${RUN_DIR}/raw/${ns}.${kind}.json"
-  done
-  awk -F'\t' -v ns="${ns}" 'BEGIN{OFS="\t"} $1 == ns {$2 = "done"} {print}' \
-    "${RUN_DIR}/worklist.tsv" > "${RUN_DIR}/worklist.tmp"
-  mv "${RUN_DIR}/worklist.tmp" "${RUN_DIR}/worklist.tsv"
-  echo "done: ${ns}"
-done
-awk -F'\t' '{c[$2]++} END {printf "done=%d pending=%d\n", c["done"]+0, c["pending"]+0}' "${RUN_DIR}/worklist.tsv"
-rm -f "${RUN_DIR}/worklist.lock"
+set -euo pipefail
+. "${CLAUDE_PLUGIN_ROOT:?Set the installed plugin root}/skills/map-topology/scripts/context.sh"
+map_context
+# Example batch size; tune through SCOUTFLO_TOPOLOGY_BATCH_SIZE.
+# Mesh kinds can be set once through SCOUTFLO_TOPOLOGY_KINDS.
+map_run batch
 ```
 
-Expected: one `done: <namespace>` line per namespace in the batch, then the updated counts. Repeat "Worklist lock" then this block until it prints `worklist complete: nothing pending`. Cluster-scoped inventory (namespace labels, istiod, `gateways.networking.istio.io`, `istioctl proxy-status`) is never batched; pull it once per run with the blocks above.
+Expected: one `done: <namespace>` line per namespace in the batch, then the updated counts. Repeat until `pending=0`, then run `map_run complete` to verify every captured file against its receipt. Cluster-scoped inventory (namespace labels, istiod, `gateways.networking.istio.io`, `istioctl proxy-status`) is never batched; pull it once per run with the blocks above.
 
-## Merge raw pulls
+## Merge projected pulls
 
-Merges the per-namespace raw files into the same shape as a cluster-wide `kubectl get <kind> -A -o json`, so the collection filters in this cookbook run unchanged against them.
+Merges the per-namespace projected files into the same shape as a cluster-wide `kubectl get <kind> -A -o json`, so the collection filters in this cookbook run unchanged against them.
 
 ```bash
-set -eu
-RUN_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/map-topology/runs/20260717T140500Z"   # example; the resolved run directory from "Worklist build and resume"
+set -euo pipefail
+. "${CLAUDE_PLUGIN_ROOT:?Set the installed plugin root}/skills/map-topology/scripts/context.sh"
+map_context
+RUN_DIR="$(map_run path)"
 for kind in deployment statefulset daemonset service endpoints ingress; do
   jq -s '{items: [.[].items[]]}' "${RUN_DIR}/raw/"*".${kind}.json" > "${RUN_DIR}/merged.${kind}.json"
   echo "${kind}: $(jq -r '.items | length' "${RUN_DIR}/merged.${kind}.json") objects"
@@ -602,9 +569,11 @@ Expected: one count line per kind, covering every namespace pulled so far. Mesh 
 Worked example, the "Workloads and versions" filter fed from the merge. Producer swap only; the filter body is unchanged:
 
 ```bash
-set -eu
-NS_EXCLUDE="^(kube-system|kube-public|kube-node-lease|istio-system)$"
-RUN_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/map-topology/runs/20260717T140500Z"   # example; the resolved run directory from "Worklist build and resume"
+set -euo pipefail
+NS_EXCLUDE="${SCOUTFLO_NAMESPACE_EXCLUDE:-^(kube-system|kube-public|kube-node-lease|istio-system)$}"
+. "${CLAUDE_PLUGIN_ROOT:?Set the installed plugin root}/skills/map-topology/scripts/context.sh"
+map_context
+RUN_DIR="$(map_run path)"
 
 for kind in deployment statefulset daemonset; do
   jq -r --arg kind "${kind}" --arg ex "${NS_EXCLUDE}" '
@@ -623,8 +592,10 @@ done | sort | tee "${RUN_DIR}/workloads.tsv"
 For the "Service-to-workload join", build its two inputs from the merge, then run only the final `jq -n --slurpfile` join command from that section with `TMP` declared as `${RUN_DIR}`; skip the two kubectl pulls at its top:
 
 ```bash
-set -eu
-RUN_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/map-topology/runs/20260717T140500Z"   # example; the resolved run directory from "Worklist build and resume"
+set -euo pipefail
+. "${CLAUDE_PLUGIN_ROOT:?Set the installed plugin root}/skills/map-topology/scripts/context.sh"
+map_context
+RUN_DIR="$(map_run path)"
 cp "${RUN_DIR}/merged.service.json" "${RUN_DIR}/svc.json"
 for kind in deployment statefulset daemonset; do
   jq --arg kind "${kind}" '.items[] | .kind = $kind' "${RUN_DIR}/merged.${kind}.json"
@@ -641,8 +612,10 @@ Extract comparable keys from a previous `topology.md`. Run only after copying th
 Service keys (`namespace/service`) from a map file's Services table:
 
 ```bash
-set -eu
-TMP="${TMP:-$(mktemp -d)}"
+set -euo pipefail
+. "${CLAUDE_PLUGIN_ROOT:?Set the installed plugin root}/skills/map-topology/scripts/context.sh"
+map_paths
+# TMP resolves to the same selected target directory in every fresh shell.
 PREV="${TMP}/topology.prev.md"   # copied aside in SKILL.md Phase 4
 
 awk -F'|' '
@@ -657,8 +630,10 @@ wc -l "${TMP}/services.prev.txt"
 Produce `services.new.txt` the same way from the freshly composed `${TMP}/topology.new.md`, then:
 
 ```bash
-set -eu
-TMP="${TMP:-$(mktemp -d)}"
+set -euo pipefail
+. "${CLAUDE_PLUGIN_ROOT:?Set the installed plugin root}/skills/map-topology/scripts/context.sh"
+map_paths
+# TMP resolves to the same selected target directory in every fresh shell.
 echo "added:";   comm -13 "${TMP}/services.prev.txt" "${TMP}/services.new.txt"
 echo "removed:"; comm -23 "${TMP}/services.prev.txt" "${TMP}/services.new.txt"
 ```
@@ -668,8 +643,10 @@ Expected: zero or more `namespace/service` keys under each label. `comm` require
 Rewired detection, by diffing the routing sections of both files:
 
 ```bash
-set -eu
-TMP="${TMP:-$(mktemp -d)}"
+set -euo pipefail
+. "${CLAUDE_PLUGIN_ROOT:?Set the installed plugin root}/skills/map-topology/scripts/context.sh"
+map_paths
+# TMP resolves to the same selected target directory in every fresh shell.
 for section in "Traffic map" "Entry points"; do
   for run in prev new; do
     awk -v s="## ${section}" '
@@ -687,8 +664,10 @@ Expected: empty diffs when routing is unchanged. Each `-`/`+` row pair for a ser
 Watchpoints carry-forward source rows:
 
 ```bash
-set -eu
-TMP="${TMP:-$(mktemp -d)}"
+set -euo pipefail
+. "${CLAUDE_PLUGIN_ROOT:?Set the installed plugin root}/skills/map-topology/scripts/context.sh"
+map_paths
+# TMP resolves to the same selected target directory in every fresh shell.
 PREV="${TMP}/topology.prev.md"
 
 awk '

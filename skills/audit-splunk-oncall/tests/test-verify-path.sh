@@ -13,7 +13,7 @@ cat > "$WORK/plugin/skills/audit-splunk-oncall/scripts/collect.sh" <<'STUB'
 set -eu
 [ "${FIXTURE_FAILURE:-}" != yes ] || exit 1
 if [ "$#" -gt 0 ]; then
-  [ "$#" -eq 2 ] && [ "$1" = --source-route-env ] && [ "$2" = FIXTURE_ROUTE ] || exit 90
+  [ "$#" -eq 2 ] && [ "$1" = --source-records ] || exit 90
 fi
 printf '%s\n' "${1:-collect}" >> "$FIXTURE_CALLS"
 cat "$FIXTURE_SNAPSHOT"
@@ -41,6 +41,8 @@ cat > "$WORK/base.json" <<'JSON'
 JSON
 reset_case() {
   cp "$WORK/base.json" "$WORK/snapshot.json"
+  jq --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '.credential_binding={api_id_env:"READ_ID",api_key_env:"READ_KEY",fingerprint:("a"*64)} | .source_matches={schema:"scoutflo-oncall-source-matches/v1",target:.target,credential_binding:.credential_binding,source_provider:"generic",source_target:"generic/region-a",observed_at:$at,source_sha256:("b"*64),receipt_sha256:("c"*64),records:[{record_id:"record-one",source_id:"monitor-one",source_definition_sha256:("d"*64),verification_kind:"api-read",expected_policy:"policy-one",expected_team:"team-one",status:"compared",binding_verified:true,route_aliases:["route-1"],policies:["policy-one","policy-two"]}]}' "$WORK/snapshot.json" > "$WORK/next.json"
+  mv "$WORK/next.json" "$WORK/snapshot.json"
   : > "$WORK/calls"
   check=SOC-001; minimum=1; selected='["policy-one"]'; team=team-one; source_scope=''; source_file=''; failure=''; max_age=3600; clock_skew=60; triage=0
 }
@@ -51,7 +53,7 @@ run() {
   env -i PATH="$TEST_PATH" HOME="$WORK/home" CLAUDE_PLUGIN_ROOT="$WORK/plugin" \
     SCOUTFLO_TRIAGE="$triage" SCOUTFLO_VERIFY_CHECK="$check" SCOUTFLO_VERIFY_POLICY=policy-one SCOUTFLO_VERIFY_TEAM="$team" \
     SCOUTFLO_VERIFY_POLICIES="$selected" SCOUTFLO_VERIFY_MIN_RESPONDERS="$minimum" \
-    SCOUTFLO_VERIFY_SOURCE_EVIDENCE="$source_file" SCOUTFLO_VERIFY_SOURCE_SCOPE="$source_scope" \
+    SCOUTFLO_VERIFY_SOURCE_EVIDENCE="$source_file" SCOUTFLO_VERIFY_SOURCE_RECORD=record-one SCOUTFLO_VERIFY_SOURCE_SCOPE="$source_scope" \
     SCOUTFLO_VERIFY_SOURCE_MAX_AGE_SECONDS="$max_age" SCOUTFLO_VERIFY_CLOCK_SKEW_SECONDS="$clock_skew" \
     FIXTURE_SNAPSHOT="$WORK/snapshot.json" FIXTURE_CALLS="$WORK/calls" FIXTURE_FAILURE="$failure" \
     sh "$WORK/verify.sh" > "$WORK/result" 2>&1 || rc=$?
@@ -99,22 +101,26 @@ reset_case; failure=yes; run 2
 reset_case; check=SOC-007; run 2; [ ! -s "$WORK/calls" ]
 source_scope=none; team=''; run 3; [ ! -s "$WORK/calls" ]
 reset_case; check=SOC-007; source_file="$WORK/source.json"
-jq -n --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '{source_id:"monitor-example",observed_at:$at,route_env:"FIXTURE_ROUTE",expected_policy:"policy-one",expected_team:"team-one",verified:true}' > "$source_file"
-run 0; grep -q '^--source-route-env$' "$WORK/calls"
-mutate '.source_match.route_aliases=[]'; run 1
-mutate '.source_match.route_aliases=["route-1","route-2"]'; run 2
-mutate '.source_match.route_aliases=["route-1"] | .source_match.policies=["policy-two"]'; run 1
-mutate 'del(.source_match)'; run 2
-: > "$WORK/calls"
-jq '.observed_at="2000-01-01T00:00:00Z"' "$source_file" > "$WORK/stale.json"; source_file="$WORK/stale.json"
-run 2; [ ! -s "$WORK/calls" ]
+printf '%s\n' '{"schema":"synthetic-bound-collector-input"}' > "$source_file"
+run 0; grep -q '^--source-records$' "$WORK/calls"
+mutate '.source_matches.records[0].route_aliases=[]'; run 1
+mutate '.source_matches.records[0].route_aliases=["route-1","route-2"]'; run 2
+mutate '.source_matches.records[0].route_aliases=["route-1"] | .source_matches.records[0].policies=["policy-two"]'; run 1
+mutate 'del(.source_matches)'; run 2
 reset_case; check=SOC-007; source_file="$WORK/source.json"
-jq -n '{source_id:"monitor-example",observed_at:((now-120)|floor|todateiso8601),route_env:"FIXTURE_ROUTE",expected_policy:"policy-one",expected_team:"team-one",verified:true}' > "$source_file"
-max_age=10; run 2; [ ! -s "$WORK/calls" ]
+mutate '.source_matches.observed_at="2000-01-01T00:00:00Z"'; run 2
+reset_case; check=SOC-007; source_file="$WORK/source.json"
+mutate '.source_matches.observed_at=((now-120)|floor|todateiso8601)'
+max_age=10; run 2
 max_age=300; run 0
-jq '.observed_at=((now+300)|floor|todateiso8601)' "$source_file" > "$WORK/future.json"; source_file="$WORK/future.json"
-: > "$WORK/calls"; run 2; [ ! -s "$WORK/calls" ]
+mutate '.source_matches.observed_at=((now+300)|floor|todateiso8601)'; run 2
 clock_skew=600; run 0
+reset_case; check=SOC-007; source_file="$WORK/source.json"
+mutate '.target="splunk_oncall/other"'; run 2
+reset_case; check=SOC-007; source_file="$WORK/source.json"
+mutate '.source_matches.records[0].expected_policy="policy-two"'; run 2
+reset_case; check=SOC-007; source_file="$WORK/source.json"
+mutate '.source_matches.records[0].status="blocked" | .source_matches.records[0].binding_verified=false'; run 2
 for bad_window in 0 -1 1.5 invalid 1e999; do
   : > "$WORK/calls"; max_age=$bad_window; run 2; [ ! -s "$WORK/calls" ]
   max_age=3600; clock_skew=$bad_window; run 2; [ ! -s "$WORK/calls" ]

@@ -12,3 +12,5 @@
 5. **Severity-first, `$` never promotes.** The one-pager ranks severity-first with recoverable points then `$` as an in-band tiebreaker; a large cost figure never outranks a critical, and there is no blended risk score.
 
 **Must not:** analyze a signals file that failed validation; present a `spec-only` provider as live-verified; headline full-estate reachability from a resolved subset; emit a bare "HEALTHY" from a triage/partial run; fabricate a fire count, ratio, MTTA/MTTR, or off-hours number for a tier with no data; or promote a low-severity `$` finding above a critical in the exec one-pager.
+
+**Selected-run precision:** a run starting at `10:00:00.600000Z` must reject measurements, collected provider coverage and incident feeds generated at `10:00:00Z` or `.599999Z`. Equal `.6Z` and later `.600001Z` remain valid; generation later than the current instant in the same second is withheld. Compare instants without dropping fractions, and apply the same rule when validating saved roll-ups.

@@ -97,7 +97,11 @@ if [ -f "$SCOUTFLO_ENV" ]; then
   # buffered here and surfaced as a matrix row once row()/MATRIX exist (below).
   set +eu
   # shellcheck disable=SC1090
-  . "$SCOUTFLO_ENV" || { STORE_LOAD_FAILED=1; note "doctor: warning: could not source ${SCOUTFLO_ENV}; a pasted line may be malformed (continuing with current environment)"; }
+  if sh -eu -c '. "$1"' _ "$SCOUTFLO_ENV" >/dev/null 2>&1; then
+    . "$SCOUTFLO_ENV" >/dev/null 2>&1 || STORE_LOAD_FAILED=1
+  else
+    STORE_LOAD_FAILED=1
+  fi
   set -eu
 fi
 
@@ -325,27 +329,65 @@ resolve_token_t() {
   fi
 }
 
+# Resolve documented metrics basic credentials independently from bearer auth.
+# Callers pass METRICS_BASIC explicitly; other providers cannot inherit it.
+resolve_metrics_token() {
+  resolve_token "$1"
+  METRICS_BASIC=""
+  mb_user_var="$(cfg "$1" basic_user_env)"; mb_pass_var="$(cfg "$1" basic_pass_env)"
+  [ -n "$mb_user_var$mb_pass_var" ] || return 0
+  TOKEN=""  # A configured basic pair takes precedence, including on failure.
+  TOKEN_STATE=missing
+  if [ -z "$mb_user_var" ] || [ -z "$mb_pass_var" ]; then
+    TOKEN_VAR="${mb_user_var:-basic_user_env}"
+    [ -n "$mb_pass_var" ] || TOKEN_VAR=basic_pass_env
+    row "$1" basic-auth-config yes "$TOKEN_VAR" fail - 'Both basic_user_env and basic_pass_env must name variables; no request was sent'
+    return 0
+  fi
+  mb_user="$(printenv "$mb_user_var" 2>/dev/null || true)"
+  mb_pass="$(printenv "$mb_pass_var" 2>/dev/null || true)"
+  if [ -z "$mb_user" ]; then TOKEN_VAR="$mb_user_var"; return 0; fi
+  if [ -z "$mb_pass" ]; then TOKEN_VAR="$mb_pass_var"; return 0; fi
+  METRICS_BASIC="${mb_user}:${mb_pass}"
+  TOKEN_VAR="${mb_user_var} + ${mb_pass_var}"; TOKEN_STATE=set
+}
+
 # --- HTTP helpers ---------------------------------------------------------------
 
-# http_get <url> <token-or-empty>: sets HTTP_CODE ("000" on transport failure)
-# and CURL_RC. The Authorization header is attached only when the token is
+# http_get <url> <token-or-empty> [basic-pair] [JSON-predicate]: sets HTTP_CODE,
+# CURL_RC and, for JSON probes, HTTP_JSON_VALID and HTTP_PROBE_HINT. The Authorization header is attached only when the token is
 # non-empty, so an empty bearer header is never sent.
 # status-probe-ok: this is the reachability primitive for text/plain readiness
 # endpoints (loki/tempo/mimir /ready, which return "ready", not JSON). Probes that
-# must prove authorized DATA access assert a JSON body via live_check's jq arg or
-# authed_json_check instead of calling http_get directly.
+# must prove authorized DATA access supply the JSON predicate (directly or via
+# live_check) or use authed_json_check.
 http_get() {
-  hg_url="$1"; hg_tok="$2"
-  CURL_RC=0
-  if [ -n "$hg_tok" ]; then
+  hg_url="$1"; hg_tok="$2"; hg_basic="${3:-}"; hg_jq="${4:-}"
+  HTTP_JSON_VALID=0; HTTP_PROBE_HINT=""; HTTP_CODE=000; CURL_RC=0
+  set --
+  if [ -n "$hg_basic" ]; then set -- --user "$hg_basic"
+  elif [ -n "$hg_tok" ]; then set -- -H "Authorization: Bearer ${hg_tok}"; fi
+  if [ -z "$hg_jq" ]; then
     HTTP_CODE="$(curl -s -o /dev/null -w '%{http_code}' \
-      --connect-timeout "$CONNECT_TIMEOUT" --max-time "$MAX_TIME" \
-      -H "Authorization: Bearer ${hg_tok}" "$hg_url")" || CURL_RC=$?
-  else
-    HTTP_CODE="$(curl -s -o /dev/null -w '%{http_code}' \
-      --connect-timeout "$CONNECT_TIMEOUT" --max-time "$MAX_TIME" \
-      "$hg_url")" || CURL_RC=$?
+      --connect-timeout "$CONNECT_TIMEOUT" --max-time "$MAX_TIME" "$@" "$hg_url")" || CURL_RC=$?
+    return
   fi
+  hg_version="$(curl --version 2>/dev/null | awk 'NR==1 {print $2}')"
+  if ! printf '%s\n' "$hg_version" | awk -F. '$1 ~ /^[0-9]+$/ && $2 ~ /^[0-9]+$/ && ($1+0>8 || ($1+0==8 && $2+0>=4)) {ok=1} END {exit !ok}'; then
+    CURL_RC=2; HTTP_PROBE_HINT='curl 8.4 or newer is required for bounded JSON API probes'; return
+  fi
+  # JSON API responses may include channel credentials. Never persist raw data.
+  hg_response="$(curl -q -s --proto '=http,https' --max-filesize 2097152 --max-redirs 0 \
+    --connect-timeout "$CONNECT_TIMEOUT" --max-time "$MAX_TIME" "$@" \
+    -w '\n%{http_code} %{content_type}' "$hg_url")" || CURL_RC=$?
+  hg_meta="$(printf '%s\n' "$hg_response" | tail -n 1)"
+  HTTP_CODE="${hg_meta%% *}"; HTTP_CT="${hg_meta#* }"
+  if [ "$CURL_RC" -eq 0 ] && [ "$HTTP_CODE" = 200 ] && \
+    printf '%s' "$HTTP_CT" | grep -qi json && \
+    printf '%s\n' "$hg_response" | sed '$d' | jq -e -s "length == 1 and (.[0] | (${hg_jq}))" >/dev/null 2>&1; then
+    HTTP_JSON_VALID=1
+  fi
+  unset hg_response hg_meta
 }
 
 transport_hint() {
@@ -364,10 +406,10 @@ transport_hint() {
 
 http_hint() {
   case "$1" in
-    401) echo "HTTP 401: the endpoint is UP but rejected the credential — the token is missing, malformed, expired, or revoked (this is NOT a scope problem; that is 403). A well-formed token that still 401s is expired/revoked: re-mint a fresh token of the SAME type per connect references/providers.md and re-export — widening scopes will not fix a 401" ;;
-    403) echo "HTTP 403: the token authenticated (so it is valid, distinct from a 401 bad/expired token) but its scope or role is too low; widen the EXISTING token's permissions to the tier scopes in connect references/providers.md — do not re-mint" ;;
-    404) echo "HTTP 404: wrong path, wrong region host, or a path prefix; verify the endpoint against your deployment" ;;
-    *)   echo "HTTP $1: unexpected status; inspect the endpoint manually" ;;
+    401) echo "HTTP 401: authentication was refused. This status alone cannot distinguish a missing, invalid or expired credential, a wrong endpoint, or provider-specific permission rules. Verify the selected target and credential type with its administrator; do not infer a need for wider access" ;;
+    403) echo "HTTP 403: access was refused. This status alone does not prove the token is valid or that broader permissions are needed; verify the target, region, credential type and documented required scopes before requesting any access change" ;;
+    404) echo "HTTP 404: resource/path unavailable or access concealed; verify the endpoint and selected scope against your deployment" ;;
+    *) echo "HTTP $1: unexpected status; inspect the endpoint manually" ;;
   esac
 }
 
@@ -378,25 +420,24 @@ http_hint() {
 # closed instead of scoring a false pass. Without the filter it stays status-only, which
 # is correct for genuine text/plain readiness endpoints (e.g. loki/tempo /ready → "ready").
 live_check() {
-  lc_int="$1"; lc_chk="$2"; lc_url="$3"; lc_env="$4"; lc_tok="$5"; lc_jq="${6:-}"
+  lc_int="$1"; lc_chk="$2"; lc_url="$3"; lc_env="$4"; lc_tok="$5"; lc_jq="${6:-}"; lc_basic="${7:-}"
+  set --
+  if [ -n "$lc_basic" ]; then set -- --user "$lc_basic"
+  elif [ -n "$lc_tok" ]; then set -- -H "Authorization: Bearer ${lc_tok}"; fi
   note "doctor: checking ${lc_int} ${lc_chk}: GET ${lc_url}"
   # Alertmanager status embeds loaded YAML, including incoming routing keys.
   # Keep this response in memory: even a temporary raw file breaks capture safety.
   if [ "$lc_int" = alertmanager ] && [ "$lc_chk" = status ]; then
     lc_curl_version="$(curl --version 2>/dev/null | awk 'NR==1 {print $2}')"
-    if ! printf '%s\n' "$lc_curl_version" | awk -F. '$1>8 || ($1==8 && $2>=4) {ok=1} END {exit !ok}'; then
+    if ! printf '%s\n' "$lc_curl_version" | awk -F. '$1 ~ /^[0-9]+$/ && $2 ~ /^[0-9]+$/ && ($1+0>8 || ($1+0==8 && $2+0>=4)) {ok=1} END {exit !ok}'; then
       row "$lc_int" "$lc_chk" yes "$lc_env" fail - 'curl 8.4 or newer is required for bounded Alertmanager status reads'
       return
     fi
     CURL_RC=0
-    if [ -n "$lc_tok" ]; then
-      lc_response="$(curl -q -s --connect-timeout "$CONNECT_TIMEOUT" --max-time "$MAX_TIME" \
-        --proto '=http,https' --max-filesize 2097152 --max-redirs 0 -H "Authorization: Bearer ${lc_tok}" \
-        -w '\n%{http_code} %{content_type}' "$lc_url")" || CURL_RC=$?
-    else
-      lc_response="$(curl -q -s --connect-timeout "$CONNECT_TIMEOUT" --max-time "$MAX_TIME" \
-        --proto '=http,https' --max-filesize 2097152 --max-redirs 0 -w '\n%{http_code} %{content_type}' "$lc_url")" || CURL_RC=$?
-    fi
+    lc_response="$(curl -q -s --connect-timeout "$CONNECT_TIMEOUT" --max-time "$MAX_TIME" \
+      --proto '=http,https' --max-filesize 2097152 --max-redirs 0 "$@" \
+      -w '\n%{http_code} %{content_type}' "$lc_url")" || CURL_RC=$?
+
     lc_meta="$(printf '%s\n' "$lc_response" | tail -n 1)"
     HTTP_CODE="${lc_meta%% *}"; HTTP_CT="${lc_meta#* }"
     if [ "$CURL_RC" -ne 0 ]; then
@@ -413,7 +454,7 @@ live_check() {
     return
   fi
   if [ -z "$lc_jq" ]; then
-    http_get "$lc_url" "$lc_tok"
+    http_get "$lc_url" "$lc_tok" "$lc_basic"
     if [ "$CURL_RC" -ne 0 ]; then
       row "$lc_int" "$lc_chk" yes "$lc_env" fail "000" "$(transport_hint "$CURL_RC") (${lc_url})"
     elif [ "$HTTP_CODE" = "200" ]; then
@@ -423,29 +464,18 @@ live_check() {
     fi
     return
   fi
-  # JSON-asserting path: keep the body, add %{content_type}, require real JSON on a 200.
-  lc_body="$(mktemp)"; CURL_RC=0
-  if [ -n "$lc_tok" ]; then
-    lc_meta="$(curl -s -o "$lc_body" -w '%{http_code} %{content_type}' \
-      --connect-timeout "$CONNECT_TIMEOUT" --max-time "$MAX_TIME" \
-      -H "Authorization: Bearer ${lc_tok}" "$lc_url")" || CURL_RC=$?
-  else
-    lc_meta="$(curl -s -o "$lc_body" -w '%{http_code} %{content_type}' \
-      --connect-timeout "$CONNECT_TIMEOUT" --max-time "$MAX_TIME" "$lc_url")" || CURL_RC=$?
-  fi
-  HTTP_CODE="${lc_meta%% *}"; HTTP_CT="${lc_meta#* }"
-  if [ "$CURL_RC" -ne 0 ]; then
+  http_get "$lc_url" "$lc_tok" "$lc_basic" "$lc_jq"
+  if [ -n "$HTTP_PROBE_HINT" ]; then
+    row "$lc_int" "$lc_chk" yes "$lc_env" fail - "$HTTP_PROBE_HINT"
+  elif [ "$CURL_RC" -ne 0 ]; then
     row "$lc_int" "$lc_chk" yes "$lc_env" fail "000" "$(transport_hint "$CURL_RC") (${lc_url})"
-  elif [ "$HTTP_CODE" = "200" ]; then
-    if printf '%s' "$HTTP_CT" | grep -qi json && jq -e "$lc_jq" "$lc_body" >/dev/null 2>&1; then
-      row "$lc_int" "$lc_chk" yes "$lc_env" pass "$HTTP_CODE" "-"
-    else
-      row "$lc_int" "$lc_chk" yes "$lc_env" fail "$HTTP_CODE" "200 but Content-Type='${HTTP_CT}' / body is not the expected JSON (${lc_jq}): looks like an HTML login/SPA/proxy page, not the API — verify the URL and that no SSO proxy fronts it"
-    fi
+  elif [ "$HTTP_CODE" = 200 ] && [ "$HTTP_JSON_VALID" -eq 1 ]; then
+    row "$lc_int" "$lc_chk" yes "$lc_env" pass "$HTTP_CODE" '-'
+  elif [ "$HTTP_CODE" = 200 ]; then
+    row "$lc_int" "$lc_chk" yes "$lc_env" fail "$HTTP_CODE" '200 but not one expected JSON response; API access is unverified. Check the selected URL and any SSO/proxy. No raw body retained'
   else
     row "$lc_int" "$lc_chk" yes "$lc_env" fail "$HTTP_CODE" "$(http_hint "$HTTP_CODE")"
   fi
-  rm -f "$lc_body"
 }
 
 # authed_json_check <int> <chk> <url> <env-label> <jq-filter> <header-name> <header-value> [method] [data]
@@ -457,6 +487,10 @@ live_check() {
 # DD-API-KEY, SIGNOZ-API-KEY, Basic via -u done by the caller) and GET or POST.
 authed_json_check() {
   aj_int="$1"; aj_chk="$2"; aj_url="$3"; aj_env="$4"; aj_jq="$5"; aj_hn="$6"; aj_hv="$7"; aj_method="${8:-GET}"; aj_data="${9:-}"; aj_403_extra="${10:-}"
+  if [ -z "$aj_env" ] || [ "$aj_env" = none ] || [ "$aj_env" = - ] || [ -z "$aj_hv" ] || [ "$aj_hv" = 'Bearer ' ]; then
+    row "$aj_int" "$aj_chk" yes "${aj_env:-none}" env-missing - 'Authenticated probe requires a named, nonempty credential for the selected target; configure it with /scoutflo:connect'
+    return
+  fi
   note "doctor: checking ${aj_int} ${aj_chk}: ${aj_method} ${aj_url}"
   aj_body="$(mktemp)"; aj_rc=0
   if [ "$aj_method" = "POST" ]; then
@@ -492,6 +526,33 @@ authed_json_check() {
     row "$aj_int" "$aj_chk" yes "$aj_env" fail "$aj_code" "$aj_hint"
   fi
   rm -f "$aj_body"
+}
+
+# Plain-text SELECT 1 is a read-by-effect probe, not a JSON endpoint.
+clickhouse_check() {
+  _ch_int=$1; _ch_url=$2; _ch_user=$3; _ch_password=$4; _ch_env=$5
+  _ch_version="$(curl --version 2>/dev/null | awk 'NR==1 {print $2}')"
+  if ! printf '%s\n' "$_ch_version" | awk -F. '$1 ~ /^[0-9]+$/ && $2 ~ /^[0-9]+$/ && ($1+0>8 || ($1+0==8 && $2+0>=4)) {ok=1} END {exit !ok}'; then
+    row "$_ch_int" clickhouse yes "$_ch_env" fail - 'curl 8.4 or newer is required for bounded ClickHouse reads'; return
+  fi
+  note "doctor: checking ${_ch_int} clickhouse: SELECT 1 against ${_ch_url}"
+  set -- -H "X-ClickHouse-User: $_ch_user"
+  [ -z "$_ch_password" ] || set -- "$@" -H "X-ClickHouse-Key: $_ch_password"
+  _ch_rc=0
+  # status-probe-ok: exact text result AND HTTP200 required for this SQL read.
+  _ch_response="$(curl -q -s --proto '=http,https' --max-filesize 65536 \
+    --connect-timeout "$CONNECT_TIMEOUT" --max-time "$MAX_TIME" "$@" \
+    -w '\n%{http_code}' --data-binary 'SELECT 1' "${_ch_url%/}/" 2>/dev/null)" || _ch_rc=$?
+  _ch_status="$(printf '%s\n' "$_ch_response" | tail -n 1)"
+  _ch_body="$(printf '%s\n' "$_ch_response" | sed '$d')"
+  if [ "$_ch_rc" -eq 0 ] && [ "$_ch_status" = 200 ] && [ "$_ch_body" = 1 ]; then
+    row "$_ch_int" clickhouse yes "$_ch_env" pass 200 -
+  else
+    [ "$_ch_rc" -eq 0 ] || _ch_status=000
+    case "$_ch_status" in [0-9][0-9][0-9]) ;; *) _ch_status=000;; esac
+    row "$_ch_int" clickhouse yes "$_ch_env" fail "$_ch_status" 'SELECT 1 did not return HTTP200 and the expected result; dependent checks remain blocked. Verify the selected endpoint and read credentials'
+  fi
+  _ch_response=""; _ch_body=""; _ch_password=""
 }
 
 # token_gate <integration> <check...>: when TOKEN_STATE=missing, records the
@@ -534,6 +595,7 @@ fi
 # Buffered secret-store parse failure (detected above before row()/MATRIX existed).
 if [ "$STORE_LOAD_FAILED" -eq 1 ]; then
   row env store-load yes - fail - "~/.scoutflo/env failed to parse (a pasted line may have wrapped, or has a stray char like == or a space in the variable name) — fix that line or re-run /scoutflo:connect, then rerun doctor."
+  exit 3
 fi
 
 # --- grafana ---------------------------------------------------------------------
@@ -1093,7 +1155,7 @@ else
         row "$SOC_INT" team-read yes - skipped - "blocked: both management credential variables must be set"
       elif ! command -v jq >/dev/null 2>&1 || ! command -v curl >/dev/null 2>&1; then
         row "$SOC_INT" team-read yes - fail - "missing curl or jq; install both before verifying Splunk On-Call"
-      elif ! curl --version 2>/dev/null | awk 'NR==1 {split($2,v,"."); if (v[1]>8 || (v[1]==8 && v[2]>=4)) ok=1} END {exit !ok}'; then
+      elif ! curl --version 2>/dev/null | awk 'NR==1 {split($2,v,"."); if (v[1] ~ /^[0-9]+$/ && v[2] ~ /^[0-9]+$/ && (v[1]+0>8 || (v[1]+0==8 && v[2]+0>=4))) ok=1} END {exit !ok}'; then
         row "$SOC_INT" team-read yes - fail - "curl 8.4 or newer is required to bound unknown-length response bodies"
       elif printf '%s' "$SOC_ID$SOC_KEY" | LC_ALL=C grep -q '[[:cntrl:]]' || [ "$(printf '%s' "$SOC_ID$SOC_KEY" | wc -l | tr -d ' ')" -ne 0 ]; then
         row "$SOC_INT" env yes - fail - "management credentials contain control characters; re-enter them using the protected secret-store flow"
@@ -1206,7 +1268,7 @@ fi
 # via the shared enumerator; when it is a list, validate each stack's runtime_mode + probe
 # each stack's stores per label, and set LGTM_MULTI=1 so the single-block loki/tempo/mimir/vm
 # sections below (which read the top-level blocks) are skipped — their stores live in the list.
-TT_LG="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+TT_LG="$TT"
 LG_KIND="$(sh "$TT_LG" "$CONFIG" lgtm kind 2>/dev/null || echo absent)"
 LGTM_MULTI=0
 if [ "$LG_KIND" = seq ]; then
@@ -1299,7 +1361,7 @@ if [ -z "$PROM_URL" ] && [ -z "$AM_URL" ]; then
   row prometheus configured no - skipped - "add a prometheus block via /scoutflo:connect if you run Prometheus"
   row alertmanager configured no - skipped - "-"
 else
-  resolve_token prometheus
+  resolve_metrics_token prometheus
   PROM_BLOCKED=0
   if [ "$TOKEN_STATE" = "missing" ]; then
     PROM_BLOCKED=1
@@ -1315,7 +1377,7 @@ else
     else
       # vector(1) succeeds on a server with zero targets: it tests the API, not the fleet.
       # Assert the Prometheus JSON envelope so a 200 HTML/proxy page fails closed.
-      live_check prometheus query "${PROM_URL}/api/v1/query?query=vector%281%29" "${TOKEN_VAR:-none}" "$TOKEN" '.status=="success"'
+      live_check prometheus query "${PROM_URL}/api/v1/query?query=vector%281%29" "${TOKEN_VAR:-none}" "$TOKEN" '.status=="success"' "$METRICS_BASIC"
     fi
   else
     row prometheus configured no - skipped - "prometheus.url is empty; only alertmanager_url is set"
@@ -1326,7 +1388,7 @@ else
     if [ "$PROM_BLOCKED" -eq 1 ]; then
       row alertmanager status yes "$TOKEN_VAR" skipped - "blocked: ${TOKEN_VAR} is not set — see the ${TOKEN_VAR} env row above, then rerun"
     else
-      live_check alertmanager status "${AM_URL}/api/v2/status" "${TOKEN_VAR:-none}" "$TOKEN" '.cluster != null or .versionInfo != null'
+      live_check alertmanager status "${AM_URL}/api/v2/status" "${TOKEN_VAR:-none}" "$TOKEN" '.cluster != null or .versionInfo != null' "$METRICS_BASIC"
     fi
   else
     row alertmanager configured no - skipped - "set prometheus.alertmanager_url if you run Alertmanager"
@@ -1347,20 +1409,20 @@ for STORE in loki tempo mimir; do
   fi
   CONFIGURED_COUNT=$((CONFIGURED_COUNT + 1))
   STORE_URL="${STORE_URL%/}"
-  resolve_token "$STORE"
+  resolve_metrics_token "$STORE"
   if token_gate "$STORE" ready; then
     note "doctor: checking ${STORE} ready: GET ${STORE_URL}/ready"
-    http_get "${STORE_URL}/ready" "$TOKEN"
+    http_get "${STORE_URL}/ready" "$TOKEN" "$METRICS_BASIC"
     if [ "$CURL_RC" -eq 0 ] && [ "$HTTP_CODE" = "200" ]; then
       row "$STORE" ready yes "${TOKEN_VAR:-none}" pass "$HTTP_CODE" "-"
     else
       note "doctor: ${STORE} /ready did not answer 200; trying /health (VictoriaLogs/VictoriaTraces shape)"
-      http_get "${STORE_URL}/health" "$TOKEN"
+      http_get "${STORE_URL}/health" "$TOKEN" "$METRICS_BASIC"
       if [ "$CURL_RC" -eq 0 ] && [ "$HTTP_CODE" = "200" ]; then
         row "$STORE" ready yes "${TOKEN_VAR:-none}" pass "$HTTP_CODE" "answers /health not /ready: VictoriaLogs/VictoriaTraces-style backend; audit-lgtm handles this automatically"
       else
         # both probes failed: report against the canonical /ready with full hints
-        live_check "$STORE" ready "${STORE_URL}/ready" "${TOKEN_VAR:-none}" "$TOKEN"
+        live_check "$STORE" ready "${STORE_URL}/ready" "${TOKEN_VAR:-none}" "$TOKEN" "" "$METRICS_BASIC"
       fi
     fi
   fi
@@ -1376,7 +1438,7 @@ elif [ -z "$VM_URL" ]; then
 else
   CONFIGURED_COUNT=$((CONFIGURED_COUNT + 1))
   VM_URL="${VM_URL%/}"
-  resolve_token victoriametrics
+  resolve_metrics_token victoriametrics
   if token_gate victoriametrics health vmalert-health; then
     # Single-node VM answers /health at the root. Cluster VM serves reads through vmselect
     # under /select/<tenant>/prometheus (audit-lgtm uses tenant 0), and vmselect 400/404s on
@@ -1384,19 +1446,19 @@ else
     # root first; on a non-200 (not a transport failure), retry the tenant-0 vmselect query
     # path before calling it unhealthy. http_get is the shared status helper; the retry uses
     # live_check's JSON-asserting path (query engine returns {"status":"success"}).
-    http_get "${VM_URL}/health" "$TOKEN"
+    http_get "${VM_URL}/health" "$TOKEN" "$METRICS_BASIC"
     if [ "$CURL_RC" -eq 0 ] && [ "$HTTP_CODE" = "200" ]; then
       row victoriametrics health yes "${TOKEN_VAR:-none}" pass "$HTTP_CODE" "-"
     elif [ "$CURL_RC" -ne 0 ]; then
       row victoriametrics health yes "${TOKEN_VAR:-none}" fail "000" "$(transport_hint "$CURL_RC") (${VM_URL}/health)"
     else
       note "doctor: victoriametrics ${VM_URL}/health returned ${HTTP_CODE}; retrying cluster-mode vmselect path (/select/0/prometheus — assumes tenant 0; a non-default tenant serves under /select/<tenant>)"
-      live_check victoriametrics health "${VM_URL}/select/0/prometheus/api/v1/query?query=1" "${TOKEN_VAR:-none}" "$TOKEN" '.status=="success"'
+      live_check victoriametrics health "${VM_URL}/select/0/prometheus/api/v1/query?query=1" "${TOKEN_VAR:-none}" "$TOKEN" '.status=="success"' "$METRICS_BASIC"
     fi
     VMALERT_URL="$(cfg victoriametrics vmalert_url)"
     if [ -n "$VMALERT_URL" ]; then
       VMALERT_URL="${VMALERT_URL%/}"
-      live_check vmalert health "${VMALERT_URL}/health" "${TOKEN_VAR:-none}" "$TOKEN"
+      live_check vmalert health "${VMALERT_URL}/health" "${TOKEN_VAR:-none}" "$TOKEN" "" "$METRICS_BASIC"
     else
       row vmalert configured no - skipped - "set victoriametrics.vmalert_url if vmalert evaluates your rules"
     fi
@@ -1477,15 +1539,7 @@ else
         if [ -n "$SIG_CH_PW_VAR" ] && [ -z "$SIG_CH_PW" ]; then
           row "$SG_INT" clickhouse yes "$SIG_CH_PW_VAR" env-missing - "signoz.clickhouse_password_env names ${SIG_CH_PW_VAR} but it is not set; add it to ~/.scoutflo/env or run /scoutflo:connect — SIG-030/060/061 (the ClickHouse deep lane) need it"
         else
-          note "doctor: checking ${SG_INT} clickhouse: SELECT 1 against ${SIG_CH_URL}"
-          SIG_CH_BODY="$(curl -s --connect-timeout "$CONNECT_TIMEOUT" --max-time "$MAX_TIME" \
-            -H "X-ClickHouse-User: ${SIG_CH_USER}" ${SIG_CH_PW:+-H "X-ClickHouse-Key: ${SIG_CH_PW}"} \
-            --data-binary 'SELECT 1' "${SIG_CH_URL%/}/" 2>/dev/null)" || SIG_CH_BODY=""
-          if [ "$SIG_CH_BODY" = "1" ]; then
-            row "$SG_INT" clickhouse yes "${SIG_CH_PW_VAR:-none}" pass 200 -
-          else
-            row "$SG_INT" clickhouse yes "${SIG_CH_PW_VAR:-none}" fail - "SELECT 1 as ${SIG_CH_USER} against ${SIG_CH_URL} did not return 1 — check the URL/port-forward, user, and password variable; audit-signoz SIG-030/060/061 (the ClickHouse deep lane) cannot read until this passes"
-          fi
+          clickhouse_check "$SG_INT" "$SIG_CH_URL" "$SIG_CH_USER" "$SIG_CH_PW" "${SIG_CH_PW_VAR:-none}"
         fi
       fi
     fi
@@ -1535,7 +1589,7 @@ else
         elif [ "$NRC" = "401" ]; then
           row "$NR_INT" nerdgraph-read yes "$NR_KEY_VAR" fail "$NRC" "401 authentication required: the User key is missing or invalid (indistinguishable) — mint/re-paste a USER key (NRAK-, not a license key) into ${NR_KEY_VAR}"
         elif [ "$NRC" = "403" ]; then
-          row "$NR_INT" nerdgraph-read yes "$NR_KEY_VAR" fail "$NRC" "403: valid key on the WRONG REGION endpoint — set newrelic.region to this account's region (US or EU)"
+          row "$NR_INT" nerdgraph-read yes "$NR_KEY_VAR" fail "$NRC" "403: access refused; verify the User key, account permissions and configured newrelic.region (US or EU). The status alone cannot identify the cause"
         elif [ "$NRC" = "200" ] && printf '%s' "$NRCT" | grep -qi json && jq -e '.data.actor.user.name' "$NRB" >/dev/null 2>&1; then
           if jq -e --argjson a "$NR_ACCT" '.data.actor.accounts | any(.[]; .id == $a)' "$NRB" >/dev/null 2>&1; then
             row "$NR_INT" nerdgraph-read yes "$NR_KEY_VAR" pass "$NRC" "-"
@@ -1575,7 +1629,7 @@ else
       fi
       resolve_token_t digitalocean "$DO_KIND" "$_doi"
       if token_gate "$DO_INT" account; then
-        live_check "$DO_INT" account "https://api.digitalocean.com/v2/account" "${TOKEN_VAR:-none}" "$TOKEN"
+        live_check "$DO_INT" account "https://api.digitalocean.com/v2/account" "${TOKEN_VAR:-none}" "$TOKEN" 'type=="object" and (.account|type=="object") and (.account.uuid|type=="string" and length>0) and (has("error")|not)'
       fi
     fi
     _doi=$((_doi+1))
@@ -1612,7 +1666,7 @@ else
             GCP_BLOCKED=1
           else
             row "$GCP_INT" env yes "$GCP_CRED_VAR" pass - -
-            GCP_TOKEN="$(gcloud auth application-default print-access-token 2>/dev/null || true)"
+            GCP_TOKEN="$(GOOGLE_APPLICATION_CREDENTIALS="$GCP_CRED_PATH" CLOUDSDK_CORE_DISABLE_PROMPTS=1 gcloud auth application-default print-access-token 2>/dev/null || true)"
           fi
         else
           row "$GCP_INT" env yes none pass - -
@@ -1623,7 +1677,7 @@ else
         elif [ -z "$GCP_TOKEN" ]; then
           row "$GCP_INT" identity yes "${GCP_CRED_VAR:-none}" fail - "gcloud produced no access token; run gcloud auth login (or point credentials_env at a service-account key) and rerun doctor"
         else
-          live_check "$GCP_INT" monitoring-api "https://monitoring.googleapis.com/v3/projects/${GCP_PROJECT}/notificationChannels?pageSize=1" "${GCP_CRED_VAR:-none}" "$GCP_TOKEN"
+          live_check "$GCP_INT" monitoring-api "https://monitoring.googleapis.com/v3/projects/${GCP_PROJECT}/notificationChannels?pageSize=1" "${GCP_CRED_VAR:-none}" "$GCP_TOKEN" 'type=="object" and (has("error")|not) and ((has("notificationChannels")|not) or (.notificationChannels|type=="array"))'
           # Informational cost probe (like the AWS/Datadog ones): never fails doctor.
           # audit-cost reads this row to run GCP Recommender native-dollar checks or
           # report them excluded; the presence-fact GCP checks run regardless.
@@ -1683,7 +1737,12 @@ else
             if [ "$GCP_REC_RC" -eq 0 ] && [ "$GCP_CUD_RC" -eq 0 ]; then
               row "$GCP_INT" cost-permissions yes "${GCP_CRED_VAR:-none}" pass - "compute + commitment families readable via gcloud recommender (the same call audit-cost makes); Cloud SQL / GKE / Cloud Run families are read per-check and reported excluded individually if denied"
             elif [ "$GCP_REC_RC" -eq 0 ]; then
-              row "$GCP_INT" cost-permissions yes "${GCP_CRED_VAR:-none}" skipped - "PARTIAL: compute family reads but the commitment/committed-use-discount family does not ($(_gcause "$GCP_CUD_ERR")) in ${GCP_REC_REGION}; audit-cost reports COST-GCP-007 (committed-use discounts) excluded with that reason. ${GCP_REC_UNLOCK}"
+              GCP_CUD_CAUSE="$(_gcause "$GCP_CUD_ERR")"
+              GCP_CUD_NEXT="$GCP_REC_UNLOCK"
+              if [ "$GCP_CUD_CAUSE" = unresolved ]; then
+                GCP_CUD_NEXT="The cause was not recognised; inspect the same read-only call before changing access: CLOUDSDK_CORE_DISABLE_PROMPTS=1 gcloud recommender recommendations list --project=${GCP_PROJECT} --location=${GCP_REC_REGION} --recommender=google.compute.commitment.UsageCommitmentRecommender --limit=1"
+              fi
+              row "$GCP_INT" cost-permissions yes "${GCP_CRED_VAR:-none}" skipped - "PARTIAL: compute family reads but the commitment/committed-use-discount family does not (${GCP_CUD_CAUSE}) in ${GCP_REC_REGION}; audit-cost reports COST-GCP-007 (committed-use discounts) excluded with that reason. ${GCP_CUD_NEXT}"
             else
               GCP_REC_CAUSE="$(_gcause "$GCP_REC_ERR")"
               # Only assert the enable/grant unlock for a cause we actually identified.
@@ -1722,7 +1781,7 @@ else
             # Match BOTH flavours. The detailed, resource-level export is named
             # gcp_billing_export_RESOURCE_v1_* and therefore does NOT contain the
             # substring "gcp_billing_export_v1" — so a grep for the standard name
-            # alone reports "no export present" to a customer who enabled the very
+            # alone reports "no export present" when the configured export uses the very
             # flavour the audit prefers (and the only one GKE cost allocation can
             # attribute per cluster/namespace). Say which flavour was found, because
             # the two support different checks.
@@ -1794,7 +1853,10 @@ else
           row "$AWS_INT" identity yes "${AWS_ROLE_VAR:-none}" fail - "aws sts get-caller-identity failed: run aws configure (or export AWS credentials), then rerun doctor"
         else
           LIVE_ACCOUNT="$(printf '%s' "$STS_OUT" | jq -r '.Account // empty' 2>/dev/null || true)"
-          if [ -z "$AWS_ACCOUNT" ]; then
+          if [ -z "$LIVE_ACCOUNT" ]; then
+            AWS_BLOCKED=1
+            row "$AWS_INT" identity yes "${AWS_ROLE_VAR:-none}" fail - 'STS returned no account identity; downstream reads are blocked'
+          elif [ -z "$AWS_ACCOUNT" ]; then
             # account_id not pinned in toolkit.yaml: prove identity on the credential chain
             # (the audit uses the same chain) with no account match to assert. Surface the live
             # account so a wrong-account credential is still visible; pin aws.account_id to have
@@ -1803,8 +1865,13 @@ else
           elif [ "$LIVE_ACCOUNT" = "$AWS_ACCOUNT" ]; then
             row "$AWS_INT" identity yes "${AWS_ROLE_VAR:-none}" pass - -
           else
+            AWS_BLOCKED=1
             row "$AWS_INT" identity yes "${AWS_ROLE_VAR:-none}" fail - "live account ${LIVE_ACCOUNT:-unknown} does not match aws.account_id ${AWS_ACCOUNT} in toolkit.yaml; fix the config or switch credentials"
           fi
+          if [ "$AWS_BLOCKED" -eq 1 ]; then
+            row "$AWS_INT" cloudwatch-read yes "${AWS_ROLE_VAR:-none}" skipped - 'blocked: selected account identity did not match; no downstream read made'
+            row "$AWS_INT" cost-permissions yes "${AWS_ROLE_VAR:-none}" skipped - 'blocked: selected account identity did not match; no downstream read made'
+          else
           note "doctor: checking ${AWS_INT} cloudwatch reachability: aws cloudwatch describe-alarms --max-records 1"
           CW_RC=0
           aws_cli cloudwatch describe-alarms --max-records 1 >/dev/null 2>&1 || CW_RC=$?
@@ -1824,10 +1891,11 @@ else
             CO_RC=0
             aws_cli compute-optimizer get-enrollment-status >/dev/null 2>&1 || CO_RC=$?
             if [ "$CO_RC" -eq 0 ]; then
-              row "$AWS_INT" cost-permissions yes "${AWS_ROLE_VAR:-none}" pass - -
+              row "$AWS_INT" cost-permissions yes "${AWS_ROLE_VAR:-none}" pass - "Only compute-optimizer:GetEnrollmentStatus completed successfully. Enrollment state, recommendation reads, Cost Explorer and Support access are not verified by this probe; audit-aws validates them per check"
             else
-              row "$AWS_INT" cost-permissions yes "${AWS_ROLE_VAR:-none}" skipped - "compute-optimizer/ce/support permissions not confirmed; audit-aws will report the affected Cost & Resource Optimization rows as excluded with this reason, not fail"
+              row "$AWS_INT" cost-permissions yes "${AWS_ROLE_VAR:-none}" skipped - "compute-optimizer:GetEnrollmentStatus did not complete successfully; optional cost access is unverified. This probe does not test recommendation reads, Cost Explorer or Support; audit-aws records affected checks separately"
             fi
+          fi
           fi
         fi
       fi
@@ -1845,19 +1913,23 @@ else
   CONFIGURED_COUNT=$((CONFIGURED_COUNT + 1))
   resolve_token github
   if token_gate github org; then
+    GH_EXPECTED="$(printf '%s' "$GITHUB_ORG" | jq -Rs 'ascii_downcase')"
+    GH_PREDICATE="type==\"object\" and (.login|type==\"string\") and (.id|type==\"number\" and .>0) and ((.login|ascii_downcase)==${GH_EXPECTED})"
     note "doctor: checking github org: GET https://api.github.com/orgs/${GITHUB_ORG}"
-    http_get "https://api.github.com/orgs/${GITHUB_ORG}" "$TOKEN"
+    http_get "https://api.github.com/orgs/${GITHUB_ORG}" "$TOKEN" "" "$GH_PREDICATE"
     if [ "$CURL_RC" -ne 0 ]; then
-      row github org yes "${TOKEN_VAR:-none}" fail "000" "$(transport_hint "$CURL_RC") (https://api.github.com/orgs/${GITHUB_ORG})"
+      row github org yes "${TOKEN_VAR:-none}" fail "000" "${HTTP_PROBE_HINT:-$(transport_hint "$CURL_RC")} (https://api.github.com/orgs/${GITHUB_ORG})"
     elif [ "$HTTP_CODE" = "200" ]; then
-      row github org yes "${TOKEN_VAR:-none}" pass "$HTTP_CODE" -
+      if [ "$HTTP_JSON_VALID" -eq 1 ]; then row github org yes "${TOKEN_VAR:-none}" pass "$HTTP_CODE" -
+      else row github org yes "${TOKEN_VAR:-none}" fail "$HTTP_CODE" '200 but not the expected GitHub login/id JSON; access is unverified'; fi
     elif [ "$HTTP_CODE" = "404" ]; then
       note "doctor: checking github user (org lookup 404'd): GET https://api.github.com/users/${GITHUB_ORG}"
-      http_get "https://api.github.com/users/${GITHUB_ORG}" "$TOKEN"
+      http_get "https://api.github.com/users/${GITHUB_ORG}" "$TOKEN" "" "$GH_PREDICATE"
       if [ "$CURL_RC" -ne 0 ]; then
-        row github org yes "${TOKEN_VAR:-none}" fail "000" "$(transport_hint "$CURL_RC") (https://api.github.com/users/${GITHUB_ORG})"
+        row github org yes "${TOKEN_VAR:-none}" fail "000" "${HTTP_PROBE_HINT:-$(transport_hint "$CURL_RC")} (https://api.github.com/users/${GITHUB_ORG})"
       elif [ "$HTTP_CODE" = "200" ]; then
-        row github org yes "${TOKEN_VAR:-none}" pass "$HTTP_CODE" "-"
+        if [ "$HTTP_JSON_VALID" -eq 1 ]; then row github org yes "${TOKEN_VAR:-none}" pass "$HTTP_CODE" -
+        else row github org yes "${TOKEN_VAR:-none}" fail "$HTTP_CODE" '200 but not the expected GitHub login/id JSON; access is unverified'; fi
       else
         row github org yes "${TOKEN_VAR:-none}" fail "$HTTP_CODE" "$(http_hint "$HTTP_CODE") (github.org is not an org or a user login GitHub recognizes)"
       fi
@@ -1902,11 +1974,11 @@ else
           esac
         fi
       fi
-      # Cost allocation. On GKE this needs NO third-party tool and NO customer install: node
+      # Cost allocation. On GKE this needs no third-party tool or additional installation: node
       # cost comes from the GCP billing export (GKE nodes are Compute Engine VMs) and
       # per-namespace attribution from GKE cost allocation, both first-party. An existing
       # Kubecost/OpenCost endpoint is only an accelerator whose figures we read verbatim.
-      # Never ask a customer to install a tool so that we can audit them.
+      # Do not require a new tool installation merely to run this audit.
       K_COST_URL="$(tv kubernetes "$KUBE_KIND" "$_ki" cost_integration_url)"
       if [ -z "$K_COST_URL" ]; then
         row "$K_INT" cost-allocation yes - skipped - "no kubernetes.cost_integration_url (expected, and fine): on GKE the audit attributes cost from the GCP billing export plus GKE cost allocation and this cluster's own requests/node data — set gcp.billing_bq_dataset for that. Point this key at an EXISTING Kubecost/OpenCost only if you already run one"
@@ -1969,15 +2041,7 @@ while [ "$_csi" -lt "${CS_N:-0}" ]; do
     if [ -n "$CH_PW_VAR" ] && [ -z "$CH_PW" ]; then
       row "$CS_INT" clickhouse yes "$CH_PW_VAR" env-missing - "$(missing_hint "$CH_PW_VAR")"
     else
-      note "doctor: checking ${CS_INT} clickhouse: SELECT 1 against ${CH_URL_CFG}"
-      CH_BODY="$(curl -s --connect-timeout "$CONNECT_TIMEOUT" --max-time "$MAX_TIME" \
-        -H "X-ClickHouse-User: ${CH_USER_CFG}" ${CH_PW:+-H "X-ClickHouse-Key: ${CH_PW}"} \
-        --data-binary 'SELECT 1' "${CH_URL_CFG%/}/" 2>/dev/null)" || CH_BODY=""
-      if [ "$CH_BODY" = "1" ]; then
-        row "$CS_INT" clickhouse yes "${CH_PW_VAR:-none}" pass 200 -
-      else
-        row "$CS_INT" clickhouse yes "${CH_PW_VAR:-none}" fail - "SELECT 1 as ${CH_USER_CFG} against ${CH_URL_CFG} did not return 1 — check the URL/port-forward, user, and password variable; audit-clickstack cannot read anything until this passes"
-      fi
+      clickhouse_check "$CS_INT" "$CH_URL_CFG" "$CH_USER_CFG" "$CH_PW" "${CH_PW_VAR:-none}"
     fi
   fi
   # HyperDX lane: runs whenever hyperdx_url is set, INDEPENDENT of ClickHouse.
@@ -1985,7 +2049,7 @@ while [ "$_csi" -lt "${CS_N:-0}" ]; do
     # status-probe-ok: unauthenticated /api/health reachability ping (no credential sent); the authed read is the /api/v2 Bearer probe below with the Personal API Access Key.
     HDX_HC="$(curl -s -o /dev/null -w '%{http_code}' --connect-timeout "$CONNECT_TIMEOUT" --max-time "$MAX_TIME" "${HDX_URL_CFG%/}/api/health")" || HDX_HC="000"
     if [ "$HDX_HC" = "200" ]; then
-      row "$CS_INT" hyperdx-health yes - pass 200 "reachable; note: HyperDX reads via the external API v2 (/api/v2/*) with the per-user Personal API Access Key (Authorization: Bearer) set in hyperdx_api_key_env — NOT the team ingestion key (which 401s there). Legacy fallback: hyperdx_email_env + hyperdx_password_env (session login). With neither, the HyperDX categories are marked not-in-scope (expected)"
+      row "$CS_INT" hyperdx-health yes - pass 200 "reachable; note: HyperDX reads via the external API v2 (/api/v2/*) with the per-user Personal API Access Key (Authorization: Bearer) set in hyperdx_api_key_env — NOT the team ingestion key (which 401s there). Legacy fallback: hyperdx_email_env + hyperdx_password_env (session login). Without usable read access, checks for this configured HyperDX target are blocked; absent evidence does not establish a scope exclusion"
     else
       row "$CS_INT" hyperdx-health yes - fail "$HDX_HC" "GET ${HDX_URL_CFG%/}/api/health did not return 200 — check clickstack.hyperdx_url"
     fi
@@ -1997,9 +2061,9 @@ while [ "$_csi" -lt "${CS_N:-0}" ]; do
       HDX_EMAIL_VAL=""; [ -n "$HDX_EMAIL_VAR" ] && HDX_EMAIL_VAL="$(printenv "$HDX_EMAIL_VAR" 2>/dev/null || true)"
       HDX_PW_VAL=""; [ -n "$HDX_PW_VAR" ] && HDX_PW_VAL="$(printenv "$HDX_PW_VAR" 2>/dev/null || true)"
       if [ -n "$HDX_EMAIL_VAR" ] && [ -n "$HDX_PW_VAR" ] && [ -n "$HDX_EMAIL_VAL" ] && [ -n "$HDX_PW_VAL" ]; then
-        row "$CS_INT" hyperdx-login-env yes "$HDX_PW_VAR" pass - "v2 login credentials present (presence-checked only) — audit-clickstack obtains a session via POST /api/login/password (cookie in a 0600 mktemp jar, deleted on exit) and scores CS-040/CS-041"
+        row "$CS_INT" hyperdx-login-env yes "$HDX_PW_VAR" pass - "Session credentials present (presence-checked only) — audit-clickstack attempts the supported application login and keeps its cookie in memory; successful compatible reads are still required before assessing checks"
       else
-        row "$CS_INT" hyperdx-login-env yes "${HDX_PW_VAR:-$HDX_EMAIL_VAR}" env-missing - "clickstack.hyperdx_email_env/hyperdx_password_env are configured but incomplete (both keys and both variables must be set); add the missing piece to ~/.scoutflo/env or run /scoutflo:connect — until then the v2 HyperDX categories stay not-in-scope"
+        row "$CS_INT" hyperdx-login-env yes "${HDX_PW_VAR:-$HDX_EMAIL_VAR}" env-missing - "clickstack.hyperdx_email_env/hyperdx_password_env are configured but incomplete (both keys and both variables must be set); add the missing piece to ~/.scoutflo/env or run /scoutflo:connect — until then checks requiring this configured login remain blocked unless the configured Personal API Access Key supplies compatible read access"
       fi
     fi
     # Personal API Access Key: a LIVE JSON-asserting Bearer probe (the same pattern
@@ -2012,24 +2076,31 @@ while [ "$_csi" -lt "${CS_N:-0}" ]; do
         row "$CS_INT" hyperdx-api-key yes "$HDX_KEY_VAR" env-missing - "$(missing_hint "$HDX_KEY_VAR")"
       else
         note "doctor: checking ${CS_INT} hyperdx-api-key: GET ${HDX_URL_CFG%/}/api/v2/alerts (Bearer)"
+        _hdx_curl_version="$(curl --version 2>/dev/null | awk 'NR==1 {print $2}')"
+        if ! printf '%s\n' "$_hdx_curl_version" | awk -F. '$1 ~ /^[0-9]+$/ && $2 ~ /^[0-9]+$/ && ($1+0>8 || ($1+0==8 && $2+0>=4)) {ok=1} END {exit !ok}'; then
+          row "$CS_INT" hyperdx-api-key yes "$HDX_KEY_VAR" fail - 'curl 8.4 or newer is required for bounded HyperDX alert reads'
+        else
         _hdx_ok=0; _hdx_c=""
         for _b in "/api/v2" "/api/api/v2"; do
-          _hb="$(mktemp)"
-          _meta="$(curl -s -o "$_hb" -w '%{http_code} %{content_type}' --max-time 10 -H "Authorization: Bearer ${HDX_API_KEY}" "${HDX_URL_CFG%/}${_b}/alerts")" || _meta="000 -"
+          # Alert definitions may contain sensitive queries or destinations. Keep the
+          # bounded body in memory; doctor needs only JSON shape and status.
+          _hdx_response="$(curl -q -s --proto '=http,https' --max-filesize 2097152 -w '\n%{http_code} %{content_type}' --connect-timeout "$CONNECT_TIMEOUT" --max-time 10 -H "Authorization: Bearer ${HDX_API_KEY}" "${HDX_URL_CFG%/}${_b}/alerts")" || _hdx_response="$(printf '\n000 -')"
+          _meta="$(printf '%s\n' "$_hdx_response" | tail -n 1)"
           _hdx_c="${_meta%% *}"; _hdx_ct="${_meta#* }"
-          if [ "$_hdx_c" = "200" ] && printf '%s' "$_hdx_ct" | grep -qi json && jq -e 'type=="array" or has("data") or has("alerts")' "$_hb" >/dev/null 2>&1; then
-            _hdx_ok=1; rm -f "$_hb"; break
+          if [ "$_hdx_c" = "200" ] && printf '%s' "$_hdx_ct" | grep -qi json && printf '%s\n' "$_hdx_response" | sed '$d' | jq -se 'length==1 and (.[0] | type=="array" or (type=="object" and ((.data|type)=="array" or (.alerts|type)=="array")))' >/dev/null 2>&1; then
+            _hdx_response=""; _hdx_ok=1; break
           fi
-          rm -f "$_hb"
+          _hdx_response=""
         done
         if [ "$_hdx_ok" = "1" ]; then
           row "$CS_INT" hyperdx-api-key yes "$HDX_KEY_VAR" pass 200 "Personal API Access Key verified (GET /api/v2/alerts -> 200 JSON)"
         elif [ "$_hdx_c" = "401" ] || [ "$_hdx_c" = "403" ]; then
-          row "$CS_INT" hyperdx-api-key yes "$HDX_KEY_VAR" fail "$_hdx_c" "HTTP ${_hdx_c} on GET ${HDX_URL_CFG%/}/api/v2/alerts (also tried /api/api/v2): this looks like the team INGESTION key, not the per-user Personal API Access Key (Settings -> API Keys) — recreate per connect references/providers.md; legacy fallback: the hyperdx_email_env + hyperdx_password_env session pair"
+          row "$CS_INT" hyperdx-api-key yes "$HDX_KEY_VAR" fail "$_hdx_c" "HTTP ${_hdx_c} on GET ${HDX_URL_CFG%/}/api/v2/alerts (also tried /api/api/v2): read access was refused; this status alone cannot identify a wrong key type, expired key or missing permission. Verify the selected Personal API Access Key and target with its administrator. The separately configured session pair is presence-checked only, not verified fallback access"
         elif [ "$_hdx_c" = "000" ] || [ -z "$_hdx_c" ]; then
           row "$CS_INT" hyperdx-api-key yes "$HDX_KEY_VAR" fail "000" "could not reach ${HDX_URL_CFG%/}/api/v2/alerts (also tried /api/api/v2) — transport failure, not an auth error; check clickstack.hyperdx_url and the network path"
         else
-          row "$CS_INT" hyperdx-api-key yes "$HDX_KEY_VAR" fail "$_hdx_c" "GET ${HDX_URL_CFG%/}/api/v2/alerts (also tried /api/api/v2) returned HTTP ${_hdx_c} without the expected JSON alerts body — $(http_hint "$_hdx_c"); if this fronts an SSO/SPA the Personal API Access Key never reached the API"
+          row "$CS_INT" hyperdx-api-key yes "$HDX_KEY_VAR" fail "$_hdx_c" "GET ${HDX_URL_CFG%/}/api/v2/alerts (also tried /api/api/v2) returned HTTP ${_hdx_c} without the expected JSON alerts body — $(http_hint "$_hdx_c"); verify the API path and any SSO/proxy. The response does not establish whether the key reached the API"
+        fi
         fi
       fi
     fi

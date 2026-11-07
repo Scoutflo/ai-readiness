@@ -41,9 +41,9 @@ this credential actually has, so the run announces its ceiling instead of
 half-failing later:
 
 ```bash
-set -eu
-AWS_PROFILE_CFG="your-aws-profile"   # from toolkit.yaml aws.profile (resolved in Phase 0)
-AWS_REGION_CFG="your-aws-region"     # from toolkit.yaml aws.region
+set -euo pipefail
+: "${AWS_PROFILE_CFG:?Set the selected AWS_PROFILE_CFG from the verified source config}"   # from toolkit.yaml aws.profile (resolved in Phase 0)
+: "${AWS_REGION_CFG:?Set the selected AWS_REGION_CFG from the verified source config}"     # from toolkit.yaml aws.region
 A() { aws --profile "${AWS_PROFILE_CFG}" --region "${AWS_REGION_CFG}" "$@"; }
 A sts get-caller-identity --output json | jq -e '.Account' >/dev/null || { echo "AWS identity check failed — fix the aws block"; exit 1; }
 
@@ -78,8 +78,8 @@ The join table for everything else: one row per resource with its
 `kind  id  endpoint_host  endpoint_port  engine  logical_names`.
 
 ```bash
-set -eu
-AWS_PROFILE_CFG="your-aws-profile"; AWS_REGION_CFG="your-aws-region"   # from toolkit.yaml aws block (Phase 0)
+set -euo pipefail
+: "${AWS_PROFILE_CFG:?Set the selected AWS_PROFILE_CFG from the verified source config}"; : "${AWS_REGION_CFG:?Set the selected AWS_REGION_CFG from the verified source config}"   # from toolkit.yaml aws block (Phase 0)
 A() { aws --profile "${AWS_PROFILE_CFG}" --region "${AWS_REGION_CFG}" "$@"; }
 CAT="${TMPDIR:-/tmp}/cloudmode-aws-catalog.tsv"; : > "$CAT"
 # RDS instances + Aurora clusters (writer/reader endpoints both catalogued)
@@ -95,7 +95,9 @@ A elasticache describe-cache-clusters --show-cache-node-info \
 | jq -r '.[] | (.ep // .n) as $ep | select($ep != null) | ["cache", .id, $ep.Address, ($ep.Port|tostring), .e, "-"] | @tsv' >> "$CAT"
 # SQS queues (the URL is the endpoint; the queue NAME is the logical name).
 # Host cut in shell, not sed — BSD sed has no \t. Guard "None" (empty text output).
-for q in $(A sqs list-queues --query 'QueueUrls[]' --output text 2>/dev/null | tr '\t' '\n'); do
+QUEUE_URLS=$(A sqs list-queues --query 'QueueUrls[]' --output text 2>/dev/null) \
+  || { QUEUE_URLS=""; echo "sqs catalog: unknown; queue list failed. Record incomplete coverage and check list access." >&2; }
+for q in $(printf '%s' "$QUEUE_URLS" | tr '\t' '\n'); do
   { [ -n "$q" ] && [ "$q" != "None" ]; } || continue
   qh=${q#https://}; qh=${qh%%/*}
   printf 'message_queue\t%s\t%s\t443\tsqs\t%s\n' "${q##*/}" "$qh" "${q##*/}" >> "$CAT"
@@ -105,11 +107,15 @@ A sns list-topics --query 'Topics[].TopicArn' --output json | jq -r '.[] | ["mes
 # S3 buckets (global service; region filter happens at the join, not here)
 A s3api list-buckets --query 'Buckets[].Name' --output json | jq -r '.[] | ["object_storage", ., (. + ".s3.amazonaws.com"), "443", "s3", .] | @tsv' >> "$CAT"
 # MSK bootstrap brokers + OpenSearch domains (skip cleanly when the service is unused)
-for arn in $(A kafka list-clusters-v2 --query 'ClusterInfoList[].ClusterArn' --output text 2>/dev/null | tr '\t' '\n'); do
+KAFKA_ARNS=$(A kafka list-clusters-v2 --query 'ClusterInfoList[].ClusterArn' --output text 2>/dev/null) \
+  || { KAFKA_ARNS=""; echo "kafka catalog: unknown; cluster list failed. Record incomplete coverage and check list access." >&2; }
+for arn in $(printf '%s' "$KAFKA_ARNS" | tr '\t' '\n'); do
   [ -n "$arn" ] && A kafka get-bootstrap-brokers --cluster-arn "$arn" --output json 2>/dev/null \
   | jq -r --arg id "${arn##*/}" '[.. | strings] | map(select(test("^[a-z0-9.-]+:[0-9]+")))[0] // empty | split(",")[0] | split(":") | ["message_queue", $id, .[0], .[1], "kafka", $id] | @tsv' >> "$CAT"
 done
-for d in $(A opensearch list-domain-names --query 'DomainNames[].DomainName' --output text 2>/dev/null | tr '\t' '\n'); do
+SEARCH_DOMAINS=$(A opensearch list-domain-names --query 'DomainNames[].DomainName' --output text 2>/dev/null) \
+  || { SEARCH_DOMAINS=""; echo "opensearch catalog: unknown; domain list failed. Record incomplete coverage and check list access." >&2; }
+for d in $(printf '%s' "$SEARCH_DOMAINS" | tr '\t' '\n'); do
   [ -n "$d" ] && A opensearch describe-domain --domain-name "$d" --query 'DomainStatus.{h:Endpoint,hs:Endpoints}' --output json \
   | jq -r --arg id "$d" '(.h // (.hs // {} | to_entries | .[0].value // empty)) | select(. != null and . != "") | ["database", $id, ., "443", "opensearch", $id] | @tsv' >> "$CAT"
 done
@@ -128,20 +134,22 @@ Resolve both so the join doesn't miss the real edge, and record every hop in
 the edge's `resolution_chain`:
 
 ```bash
-set -eu
-AWS_PROFILE_CFG="your-aws-profile"; AWS_REGION_CFG="your-aws-region"   # from toolkit.yaml aws block (Phase 0)
+set -euo pipefail
+: "${AWS_PROFILE_CFG:?Set the selected AWS_PROFILE_CFG from the verified source config}"; : "${AWS_REGION_CFG:?Set the selected AWS_REGION_CFG from the verified source config}"   # from toolkit.yaml aws block (Phase 0)
 A() { aws --profile "${AWS_PROFILE_CFG}" --region "${AWS_REGION_CFG}" "$@"; }
 # Route53 private/public CNAMEs pointing at catalog hosts (bounded: CNAME rows only)
-for z in $(A route53 list-hosted-zones --query 'HostedZones[].Id' --output text | tr '\t' '\n'); do
+ZONES=$(A route53 list-hosted-zones --query 'HostedZones[].Id' --output text) \
+  || { ZONES=""; echo "route53 resolution: unknown; hosted-zone list failed. Record incomplete coverage." >&2; }
+for z in $(printf '%s' "$ZONES" | tr '\t' '\n'); do
   A route53 list-resource-record-sets --hosted-zone-id "$z" --query "ResourceRecordSets[?Type=='CNAME'].{n:Name,v:ResourceRecords[0].Value}" --output json \
   | jq -r '.[] | [.n, .v] | @tsv'
-done > "${TMPDIR:-/tmp}/cloudmode-aws-cnames.tsv" 2>/dev/null || true
+done > "${TMPDIR:-/tmp}/cloudmode-aws-cnames.tsv" 2>/dev/null || echo "route53 resolution: unknown; record read or projection failed. Record incomplete coverage." >&2
 # RDS Proxy: proxy endpoint -> target DB (a service declaring the proxy host stores data in the TARGET)
 A rds describe-db-proxies --query 'DBProxies[].{name:DBProxyName,h:Endpoint}' --output json 2>/dev/null \
 | jq -r '.[] | [.name, .h] | @tsv' | while IFS="$(printf '\t')" read -r pn ph; do
   A rds describe-db-proxy-targets --db-proxy-name "$pn" --query 'Targets[].{t:RdsResourceId,type:Type}' --output json \
   | jq -r --arg pn "$pn" --arg ph "$ph" '.[] | [$pn, $ph, .t, .type] | @tsv'
-done > "${TMPDIR:-/tmp}/cloudmode-aws-proxies.tsv" 2>/dev/null || true
+done > "${TMPDIR:-/tmp}/cloudmode-aws-proxies.tsv" 2>/dev/null || echo "rds proxy resolution: unknown; read or projection failed. Record incomplete coverage." >&2
 ```
 
 ## Declared configuration: ECS
@@ -152,29 +160,30 @@ checkpoint), read its **active** task definition once and extract two things —
 section) and **secret references** (ARNs/names only, values never fetched):
 
 ```bash
-set -eu
-AWS_PROFILE_CFG="your-aws-profile"; AWS_REGION_CFG="your-aws-region"   # from toolkit.yaml aws block (Phase 0)
+set -euo pipefail
+: "${AWS_PROFILE_CFG:?Set the selected AWS_PROFILE_CFG from the verified source config}"; : "${AWS_REGION_CFG:?Set the selected AWS_REGION_CFG from the verified source config}"   # from toolkit.yaml aws block (Phase 0)
 A() { aws --profile "${AWS_PROFILE_CFG}" --region "${AWS_REGION_CFG}" "$@"; }
-CLUSTER="your-cluster"; SVC="your-service"      # one in-scope service per pass
+: "${CLUSTER:?Set the selected CLUSTER from the verified source config}"; : "${SVC:?Set the selected SVC from the verified source config}"      # one in-scope service per pass
 TDARN=$(A ecs describe-services --cluster "$CLUSTER" --services "$SVC" --query 'services[0].taskDefinition' --output text)
-A ecs describe-task-definition --task-definition "$TDARN" --output json > "${TMPDIR:-/tmp}/cloudmode-td.json"
+TD_BODY=$(A ecs describe-task-definition --task-definition "$TDARN" --output json)
+# Never write the raw task definition: literal env values may contain credentials.
 # (a) env KEYS whose VALUE contains a host[:port] — extract key + host:port + path db name ONLY,
 #     into a temp join file (never to screen): secret-named keys are skipped outright, and URL
 #     userinfo (user:password@) is stripped BEFORE capture so credentials can never match.
-jq -r '.taskDefinition.containerDefinitions[] | .environment // [] | .[]
+printf '%s' "$TD_BODY" | jq -r '.taskDefinition.containerDefinitions[] | .environment // [] | .[]
   | select(.name | test("(?i)password|passwd|secret|token|api_?key|private|credential") | not)
   | .name as $k | (.value // "") | gsub("://[^@/]*@"; "://")
   | capture("(?<h>[A-Za-z0-9][A-Za-z0-9.-]+\\.[A-Za-z]{2,})(:(?<p>[0-9]{2,5}))?(/(?<db>[A-Za-z0-9_-]+))?"; "g")
-  | [$k, .h, (.p // "-"), (.db // "-")] | @tsv' "${TMPDIR:-/tmp}/cloudmode-td.json" 2>/dev/null \
+  | [$k, .h, (.p // "-"), (.db // "-")] | @tsv' 2>/dev/null \
   | sort -u > "${TMPDIR:-/tmp}/cloudmode-extract-ecs-${SVC}.tsv"
 echo "extraction rows: $(wc -l < "${TMPDIR:-/tmp}/cloudmode-extract-ecs-${SVC}.tsv" | tr -d ' ') (consumed by the synthesis join, then deleted — extractions are join probes, not output)"
 # (b) secret REFERENCES: name + the ref ARN/path (this is CONFIGURED_BY evidence and a join key by name)
-jq -r '.taskDefinition.containerDefinitions[] | .secrets // [] | .[] | [.name, .valueFrom] | @tsv' "${TMPDIR:-/tmp}/cloudmode-td.json"
+printf '%s' "$TD_BODY" | jq -r '.taskDefinition.containerDefinitions[] | .secrets // [] | .[] | [.name, .valueFrom] | @tsv'
 # (c) the task role for the permitted lane, and the awsvpc security groups for the reachable lane
-jq -r '.taskDefinition.taskRoleArn // empty' "${TMPDIR:-/tmp}/cloudmode-td.json"
+printf '%s' "$TD_BODY" | jq -r '.taskDefinition.taskRoleArn // empty'
 A ecs describe-services --cluster "$CLUSTER" --services "$SVC" \
   --query 'services[0].networkConfiguration.awsvpcConfiguration.securityGroups' --output json | jq -r '.[]?'
-rm -f "${TMPDIR:-/tmp}/cloudmode-td.json"
+unset TD_BODY
 ```
 
 A secret reference like `.../prod/checkout/DATABASE_URL` is evidence twice
@@ -185,10 +194,10 @@ over: a `CONFIGURED_BY` edge to the secrets store, and a **named** join hint
 ## Declared configuration: Lambda
 
 ```bash
-set -eu
-AWS_PROFILE_CFG="your-aws-profile"; AWS_REGION_CFG="your-aws-region"   # from toolkit.yaml aws block (Phase 0)
+set -euo pipefail
+: "${AWS_PROFILE_CFG:?Set the selected AWS_PROFILE_CFG from the verified source config}"; : "${AWS_REGION_CFG:?Set the selected AWS_REGION_CFG from the verified source config}"   # from toolkit.yaml aws block (Phase 0)
 A() { aws --profile "${AWS_PROFILE_CFG}" --region "${AWS_REGION_CFG}" "$@"; }
-FN="your-function"                                # one in-scope function per pass
+: "${FN:?Set the selected FN from the verified source config}"                                # one in-scope function per pass
 # Env keys -> host extraction, same redaction discipline as ECS (secret-named keys skipped,
 # URL userinfo stripped before capture, extraction to the temp join file, never to screen)
 A lambda get-function-configuration --function-name "$FN" --output json \
@@ -205,7 +214,8 @@ A lambda get-function-configuration --function-name "$FN" --query '{dlq:DeadLett
 A lambda list-event-source-mappings --function-name "$FN" \
   --query 'EventSourceMappings[].{src:EventSourceArn,state:State}' --output json | jq -c '.[]'
 # On-failure/on-success destinations (capture-then-branch: jq exits 0 on empty input)
-EIC=$(A lambda get-function-event-invoke-config --function-name "$FN" --output json 2>/dev/null) || EIC=""
+EIC=$(A lambda get-function-event-invoke-config --function-name "$FN" --output json 2>/dev/null) \
+  || { echo "event-invoke destinations: unknown; read failed or no configuration was accessible. Check read access before assessing absence."; exit 0; }
 [ -n "$EIC" ] && printf '%s' "$EIC" | jq -r '.DestinationConfig // {} | to_entries[] | select(.value.Destination != null) | [.key, .value.Destination] | @tsv' \
   || echo "no event-invoke destinations configured"
 ```
@@ -227,17 +237,17 @@ Resource-side declarations that point AT services — these work even at the
 reads:
 
 ```bash
-set -eu
-AWS_PROFILE_CFG="your-aws-profile"; AWS_REGION_CFG="your-aws-region"   # from toolkit.yaml aws block (Phase 0)
+set -euo pipefail
+: "${AWS_PROFILE_CFG:?Set the selected AWS_PROFILE_CFG from the verified source config}"; : "${AWS_REGION_CFG:?Set the selected AWS_REGION_CFG from the verified source config}"   # from toolkit.yaml aws block (Phase 0)
 A() { aws --profile "${AWS_PROFILE_CFG}" --region "${AWS_REGION_CFG}" "$@"; }
 # S3 -> who gets notified (Lambda/SQS/SNS)
-BUCKET="your-bucket"
+: "${BUCKET:?Set the selected BUCKET from the verified source config}"
 A s3api get-bucket-notification-configuration --bucket "$BUCKET" --output json \
 | jq -r '[(.LambdaFunctionConfigurations // [])[] | ["lambda", .LambdaFunctionArn]],
          [(.QueueConfigurations // [])[] | ["sqs", .QueueArn]],
-         [(.TopicConfigurations // [])[] | ["sns", .TopicArn]] | .[] | @tsv' 2>/dev/null || true
+         [(.TopicConfigurations // [])[] | ["sns", .TopicArn]] | .[] | @tsv' 2>/dev/null || echo "s3 notifications: unknown; read or projection failed. Record incomplete coverage." >&2
 # SNS topic -> subscribers (Lambda/SQS/HTTP endpoints)
-TOPIC_ARN="your-topic-arn"
+: "${TOPIC_ARN:?Set the selected TOPIC_ARN from the verified source config}"
 A sns list-subscriptions-by-topic --topic-arn "$TOPIC_ARN" \
   --query 'Subscriptions[].{proto:Protocol,ep:Endpoint}' --output json | jq -c '.[]'
 # EventBridge rules -> targets (bounded to the default bus unless the estate names more)
@@ -297,8 +307,8 @@ For each **distinct** task/function role (dedupe first — many services share a
 role, and a shared role means shared, weaker evidence):
 
 ```bash
-set -eu
-AWS_PROFILE_CFG="your-aws-profile"; AWS_REGION_CFG="your-aws-region"   # from toolkit.yaml aws block (Phase 0)
+set -euo pipefail
+: "${AWS_PROFILE_CFG:?Set the selected AWS_PROFILE_CFG from the verified source config}"; : "${AWS_REGION_CFG:?Set the selected AWS_REGION_CFG from the verified source config}"   # from toolkit.yaml aws block (Phase 0)
 A() { aws --profile "${AWS_PROFILE_CFG}" --region "${AWS_REGION_CFG}" "$@"; }
 ROLE_ARN="arn:aws:iam::123456789012:role/your-task-role"   # from the declared sections (one distinct role per pass)
 ROLE="${ROLE_ARN##*/}"
@@ -337,8 +347,8 @@ candidates for corroboration, it does not adjudicate IAM.
 ## Reachable lane: security groups and VPC endpoints
 
 ```bash
-set -eu
-AWS_PROFILE_CFG="your-aws-profile"; AWS_REGION_CFG="your-aws-region"   # from toolkit.yaml aws block (Phase 0)
+set -euo pipefail
+: "${AWS_PROFILE_CFG:?Set the selected AWS_PROFILE_CFG from the verified source config}"; : "${AWS_REGION_CFG:?Set the selected AWS_REGION_CFG from the verified source config}"   # from toolkit.yaml aws block (Phase 0)
 A() { aws --profile "${AWS_PROFILE_CFG}" --region "${AWS_REGION_CFG}" "$@"; }
 # One call: every SG's inbound rules that reference OTHER SGs, with ports
 A ec2 describe-security-groups --query 'SecurityGroups[].{id:GroupId,perms:IpPermissions}' --output json \
@@ -367,8 +377,8 @@ All three are availability-gated: probe once, use when present, skip cleanly
 when not — never a failure, always a one-line note in the map header.
 
 ```bash
-set -eu
-AWS_PROFILE_CFG="your-aws-profile"; AWS_REGION_CFG="your-aws-region"   # from toolkit.yaml aws block (Phase 0)
+set -euo pipefail
+: "${AWS_PROFILE_CFG:?Set the selected AWS_PROFILE_CFG from the verified source config}"; : "${AWS_REGION_CFG:?Set the selected AWS_REGION_CFG from the verified source config}"   # from toolkit.yaml aws block (Phase 0)
 A() { aws --profile "${AWS_PROFILE_CFG}" --region "${AWS_REGION_CFG}" "$@"; }
 # Capture-then-branch, never `aws | jq || echo`: jq exits 0 on EMPTY input, so a
 # piped fallback message never fires and a failed probe looks like silence
@@ -386,7 +396,7 @@ XB=$(A xray get-service-graph --start-time "$ST" --end-time "$ET" --output json 
   || echo "x-ray: unavailable/no trace data — skipping"
 # (3) RDS Performance Insights — the DB-side view of WHO connects (db.host dimension; verify the
 #     exact dimension group live on first use — availability varies by engine)
-DBI="your-db-resource-id"   # DbiResourceId from the catalog read
+: "${DBI:?Set the selected DBI from the verified source config}"   # DbiResourceId from the catalog read
 PIB=$(A pi get-resource-metrics --service-type RDS --identifier "$DBI" \
   --metric-queries '[{"Metric":"db.load.avg","GroupBy":{"Group":"db.host"}}]' \
   --start-time "$(date -u -v-1H '+%s' 2>/dev/null || date -u -d '1 hour ago' '+%s')" --end-time "$(date -u '+%s')" \
@@ -408,8 +418,8 @@ only when flow logs already exist and land in CloudWatch Logs; the discovery
 read is live-proven (a clean "none" on an estate without them):
 
 ```bash
-set -eu
-AWS_PROFILE_CFG="your-aws-profile"; AWS_REGION_CFG="your-aws-region"   # from toolkit.yaml aws block (Phase 0)
+set -euo pipefail
+: "${AWS_PROFILE_CFG:?Set the selected AWS_PROFILE_CFG from the verified source config}"; : "${AWS_REGION_CFG:?Set the selected AWS_REGION_CFG from the verified source config}"   # from toolkit.yaml aws block (Phase 0)
 A() { aws --profile "${AWS_PROFILE_CFG}" --region "${AWS_REGION_CFG}" "$@"; }
 # Discovery: which flow logs exist, and where do they deliver?
 FL=$(A ec2 describe-flow-logs --output json)
@@ -624,37 +634,16 @@ more than one owner (shared NAT) is recorded as ambiguous, not duplicated into
 several edges.
 
 ```bash
-set -eu
-SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.scoutflo/env" ]; then SCOUTFLO_ENV="./.scoutflo/env"; else SCOUTFLO_ENV="$HOME/.scoutflo/env"; fi; }
-_SF_CFG="${SCOUTFLO_CONFIG:-}"; [ -n "$_SF_CFG" ] || for _sf_c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_sf_c" ] && { _SF_CFG="$_sf_c"; break; }; done
-_SF_TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
-if [ "$(sh "$_SF_TT" "$_SF_CFG" digitalocean kind 2>/dev/null || true)" = seq ]; then _sf_i=0; while [ "$_sf_i" -lt "$(sh "$_SF_TT" "$_SF_CFG" digitalocean count 2>/dev/null || echo 0)" ]; do [ -z "$(sh "$_SF_TT" "$_SF_CFG" digitalocean get "$_sf_i" token_env 2>/dev/null || true)" ] || { echo "digitalocean in ${_SF_CFG} is a list of targets that each name their own token_env: skipping the DigitalOcean part of this catalog" >&2; _sf_skip_do=1; break; }; _sf_i=$((_sf_i+1)); done; fi
-_sf_tv="$(sh "$_SF_TT" "$_SF_CFG" digitalocean get 0 token_env 2>/dev/null || true)"; if [ -n "$_sf_tv" ] && [ "$(sh "$_SF_TT" "$_SF_CFG" digitalocean kind 2>/dev/null || true)" != seq ]; then _sf_v="$(sh -c '( [ -f "$1" ] && . "$1" >/dev/null 2>&1; printenv -- "$2" ) 2>/dev/null || printenv -- "$2"' _ "$SCOUTFLO_ENV" "$_sf_tv" 2>/dev/null || true)"; if [ -n "$_sf_v" ]; then DIGITALOCEAN_ACCESS_TOKEN="$_sf_v"; export DIGITALOCEAN_ACCESS_TOKEN; else unset DIGITALOCEAN_ACCESS_TOKEN; echo "note: ${_sf_tv} (named by digitalocean.token_env) is not set in the secret store or the shell" >&2; fi; fi
-[ -z "${_sf_tv:-}" ] || [ -n "${DIGITALOCEAN_ACCESS_TOKEN:-}" ] || { echo "${_sf_tv} is not set: skipping the DigitalOcean part of this catalog" >&2; _sf_skip_do=1; }
-# combined IP->owner catalog (extend per configured cloud; AWS+GCP+DO shown)
-CAT="${TMPDIR:-/tmp}/xcloud-ipcat.tsv"; : > "$CAT"
-# AWS (needs the aws block + identity gate above)
-A ec2 describe-network-interfaces --query 'NetworkInterfaces[].{ip:PrivateIpAddress,pub:Association.PublicIp,own:Description,inst:Attachment.InstanceId}' --output json 2>/dev/null \
-  | jq -r '.[] | [(.ip//empty),( .own // .inst // "aws-eni"),"aws"] | @tsv' >> "$CAT" || true
-# GCP (needs --configuration; both internal + nat IP)
-gcloud --configuration="${GCP_CONFIG:-}" compute instances list --project "${GCP_PROJECT:-}" \
-  --format="json(name,networkInterfaces)" 2>/dev/null \
-  | jq -r '.[] | .name as $n | .networkInterfaces[]? | [(.networkIP//empty),$n,"gcp"], [((.accessConfigs[]?.natIP)//empty),$n,"gcp"] | select(.[0]!="") | @tsv' >> "$CAT" || true
-# DigitalOcean (skipped when its token cannot be resolved; the other clouds still run)
-if [ -z "${_sf_skip_do:-}" ]; then
-  doctl compute droplet list --output json 2>/dev/null \
-    | jq -r '.[] | .name as $n | (.networks.v4[]?) | [(.ip_address//empty),$n,"do"] | select(.[0]!="") | @tsv' >> "$CAT" || true
-fi
-sort -u "$CAT" -o "$CAT"
-# resolve one cloud's openings (openings file: ip<TAB>resource, per that cloud's lane)
-OPENINGS="${1:?openings tsv: ip<TAB>resource}"
-while IFS="$(printf '\t')" read -r ip resource; do
-  ipx=${ip%/32}
-  owner=$(awk -F'\t' -v i="$ipx" '$1==i{print $2" ("$3")"}' "$CAT" | head -1)
-  if [ -n "$owner" ]; then echo "EDGE  ${owner} -> ${resource}  [reachable · cross-cloud IP-attributed · ${ipx}]"
-  else echo "OPEN  ${resource} allows ${ipx} — owner not in any configured cloud (finding, not an edge)"; fi
-done < "$OPENINGS"
+set -euo pipefail
+: "${CLAUDE_PLUGIN_ROOT:?Set the installed plugin root}"
+: "${SCOUTFLO_IP_CATALOG:?Set the private scoped catalog JSON path}"
+: "${SCOUTFLO_IP_OPENINGS:?Set the private openings TSV path}"
+python3 "$CLAUDE_PLUGIN_ROOT/skills/map-topology/lib/ip-attribution.py" "$SCOUTFLO_IP_CATALOG" "$SCOUTFLO_IP_OPENINGS"
 ```
+
+The catalog is `scoutflo-topology-ip-catalog/v1`: `audit_date` and `sources[]`, each with a unique qualified `target`, strict UTC `observed_at`, `status` (`complete`, `partial`, `blocked`, `unknown`) and `records[]` containing only `ip` and provider resource `owner` identity. Build it from the selected providers' independently validated address reads, then verify completeness against those reads. The local transform cannot authenticate an imported catalog. Select at least two provider targets. An openings TSV has `address<TAB>resource` rows. Use the actual audit date; no assumed ambient cloud profile is read by this step.
+
+Expected: `CANDIDATE` only for one uniquely attributed host in complete selected catalogs. Shared addresses are `AMBIGUOUS`; partial catalogs are `UNKNOWN`; wide CIDRs and missing owners remain `OPEN`. A candidate proves a configured network permission only and still needs review. Never use the first matching owner or infer live traffic.
 
 ## Environment coverage
 
@@ -693,7 +682,7 @@ Environment is a **heuristic** here: the check flags for confirmation, it never
 silently drops or re-buckets an entity.
 
 ```bash
-set -eu
+set -euo pipefail
 EXPORT="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/topology-export.json"
 jq -r '
   def norm($e): ($e|ascii_downcase|gsub("[-_ ]";"")) as $c

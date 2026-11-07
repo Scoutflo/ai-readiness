@@ -67,3 +67,7 @@ every healthy object) and never fold inventory rows into the score.
   honestly (and it pairs with the empty/hidden-scope guardrail, which distinguishes
   "genuinely empty" from "can't see it").
 - Never emit a secret value in `attrs` or anywhere in `inventory.json`.
+
+## Optional collection and qualified identity evidence
+
+See [service-evidence.md](service-evidence.md) for `collection`, inventory `service_identity`/`identity_evidence`, and finding `correlation_bindings`. These additive fields preserve historical readability while preventing same-name cross-account coverage claims. Missing evidence remains unmappable; `enabled` must be literal true for active coverage. Validate present fields with `check-correlation-evidence.sh`.

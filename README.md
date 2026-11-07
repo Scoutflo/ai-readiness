@@ -24,7 +24,7 @@ flowchart TD
     subgraph SETUP["① Set up once — read-only credentials & context"]
         connect["/scoutflo:connect<br/>scoped tokens to toolkit.yaml"]
         doctor["/scoutflo:doctor<br/>preflight: reachable?"]
-        topo["/scoutflo:map-topology<br/>service graph to topology-export.json"]
+        topo["/scoutflo:map-topology<br/>per-target graph + local estate composition"]
         bctx["/scoutflo:business-context<br/>SLAs, critical svcs, per-env to business_context.md"]
     end
 
@@ -37,7 +37,7 @@ flowchart TD
     findings[("findings.json + report.md<br/>per target — the source of truth")]
 
     subgraph CORRELATE["③ Understand across everything — read-only analysis"]
-        corr["/scoutflo:correlation-engine<br/>overlaps + cause-to-effect cascades"]
+        corr["/scoutflo:correlation-engine<br/>qualified overlaps + evidence-bound cascades"]
         rca["/scoutflo:rca<br/>why is X failing? evidence-cited<br/>root cause + confidence + honest gaps"]
         mig["/scoutflo:migration-plan<br/>plan a provider migration (Datadog→SigNoz):<br/>evidence-cited inventory + cutover — plan-only"]
     end
@@ -83,6 +83,8 @@ Green = read-only (safe, changes nothing) · amber = write, gated behind your co
 | --- | --- |
 | Score one stack's health | an `audit-*` skill (step ②) |
 | Assess your Splunk On-Call setup, response readiness and incident noise | `/scoutflo:audit-splunk-oncall`, then `/scoutflo:setup-splunk-oncall` for confirmed repairs and re-audit |
+| Trace monitoring through a regional stack to On-Call | Source audit → qualified source evidence → `/scoutflo:audit-splunk-oncall`; candidate mappings stay explicit |
+| Combine separate cluster maps without merging same-name services | `/scoutflo:map-topology` local estate composition; preserve each source and evidence tier |
 | Score everything at once | `/scoutflo:audit-all` |
 | Find where you're wasting cloud spend | `/scoutflo:audit-cost` |
 | Ask *"why is `<service>` failing — give me the RCA?"* | `/scoutflo:rca` (step ③, after audits + topology + business-context) |
@@ -98,10 +100,11 @@ Green = read-only (safe, changes nothing) · amber = write, gated behind your co
 
 ## What's new (latest release)
 
-- **Deeper On-Call readiness.** Eighteen scored checks cover effective paging, suppression, future coverage, response quality, recurring incidents, context and source continuity. Missing evidence lowers assessment coverage instead of creating an all-clear.
-- **Native incident history in alert-fatigue.** Bounded all-phase history retains open and censored cases, response sample counts and the actual observation window. Incidents, source fires, lifetime alert totals and delivered notifications keep their separate meanings.
-- **Setup follows the same checks.** Complete custom policy, contact and global-policy observations support guarded before/after verification. Fix guidance connects each issue to its owning paging or monitoring setup workflow.
-- **Compatible reports and safe reads.** Existing configurations and historical artifacts remain readable. New check sets are distinguished in trends, and read-only audits never send a page or load the setup key.
+- **Stronger source-to-paging proof.** Datadog and HyperDX source evidence can feed On-Call verification with exact target and collection binding. Several routes share one bounded management read; handles and intermediate webhooks stay unverified until matched.
+- **Safer, more accurate collection.** Secret-bearing messages, queries and URLs are projected before saving. Datadog reads the selected account/site; HyperDX distinguishes missing receivers from partial reads and keeps source/dashboard checks independent of alert count.
+- **Current reports stay tied to this run.** Combined views use validated completed targets and show unfinished targets as unassessed; old same-day files cannot inflate coverage.
+- **Regional identities stay separate.** Correlation requires evidenced account/cluster identity and active state. Missing target inventories remain unknown. A local estate topology view preserves configuration links separately from observed traffic.
+- **Useful fatigue analysis without invented history.** Standalone HyperDX configuration review joins the existing noise analysis. Source fires, On-Call incidents and human receipt keep their separate meanings; existing configs, reports and skill names remain supported.
 
 ## Install
 
@@ -227,7 +230,7 @@ Secrets live only in environment variables you export yourself. `~/.scoutflo/too
 | Skill | What it fixes |
 | --- | --- |
 | `/scoutflo:setup-lgtm` | Alert receivers/routing, retention, HA, exposure, service-label alignment |
-| `/scoutflo:setup-clickstack` | ClickHouse retention TTL, read-only audit user, HyperDX alerts, auth hardening |
+| `/scoutflo:setup-clickstack` | Attended ClickHouse retention TTL, read-only audit user, HyperDX alerts and auth hardening, with exact change confirmation and readback |
 | `/scoutflo:setup-grafana` | Datasources, dashboards, contact points, notification policies, alert rules |
 | `/scoutflo:setup-sentry` | Projects, environments, privacy scrubbing, alert routing, monitors |
 | `/scoutflo:setup-newrelic` | Workflow wiring for uncaught policies (incl. the auto-created SLO default), per-service conditions from golden metrics, tiering/loss-of-signal fixes, muting schedules, SLOs, ownership tags, synthetics, change tracking |

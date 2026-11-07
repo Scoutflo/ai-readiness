@@ -12,7 +12,7 @@ AFJ="$SCOUTFLO_AUDIT_DIR/alert-fatigue.json"
 VIZ="$ROOT/report-standard/render-report-viz.sh"
 PASS=0; FAIL=0
 check() { if [ "$2" = "$3" ]; then PASS=$((PASS+1)); echo "ok $1"; else FAIL=$((FAIL+1)); echo "FAIL $1 (wanted $3, got $2)"; fi; }
-run_af() { /bin/sh -c '. "$CLAUDE_PLUGIN_ROOT/skills/alert-fatigue/lib/alert-fatigue.sh"; alert_fatigue_run "$1"' sh "$RD" > "$WORK/run.log" 2>&1; }
+run_af() { python3 "$ROOT/skills/correlation-engine/tests/qualified-fixtures.py" "$SCOUTFLO_AUDIT_DIR" "$RD"; /bin/sh -c '. "$CLAUDE_PLUGIN_ROOT/skills/alert-fatigue/lib/alert-fatigue.sh"; alert_fatigue_run "$1"' sh "$RD" > "$WORK/run.log" 2>&1; }
 finding() {
   mkdir -p "$SCOUTFLO_AUDIT_DIR/$1/$RD"
   printf '%s\n' "$2" > "$SCOUTFLO_AUDIT_DIR/$1/$RD/findings.json"
@@ -33,7 +33,7 @@ check "two same-named account policies do not overlap" "$(jq -r '.totals.cross_s
 check "file target identity keeps both accounts" "$(jq -r '.totals.tools_with_noise' "$AFJ")" 2
 for t in primary secondary; do
   f="$SCOUTFLO_AUDIT_DIR/splunk_oncall/$t/$RD/findings.json"
-  jq '.findings[0].affected += ["checkout","route-1"] | .findings[0].correlation_affected=["checkout","route-1","fabricated"]' "$f" > "$WORK/f.json"; mv "$WORK/f.json" "$f"
+  jq --arg t "splunk_oncall/$t" '.target=$t | .findings[0].affected += ["checkout","route-1"] | .findings[0].correlation_affected=["checkout","route-1","fabricated"]' "$f" > "$WORK/f.json"; mv "$WORK/f.json" "$f"
 done
 run_af
 check "verified service subset joins but aliases/non-subsets do not" "$(jq -r '[.af_findings[]|select(.af_id=="AF-002")|.storms[].service]|join(",")' "$AFJ")" checkout
@@ -41,14 +41,14 @@ render
 check "local policy remains available in rendered fix detail" "$(grep -c 'policy-1' "$WORK/report.md")" 2
 
 # Empty and config-only HTML must distinguish no measurement from measured zero.
-check "config-only HTML contains no measured-zero cards" "$(grep -Ec '0</span><span class="l">(can.t reach a human|chronic / stuck) \(measured\)' "$WORK/report.html")" 0
+check "config-only HTML contains no measured-zero cards" "$(grep -Ec '0</span><span class="l">(no configured receiver|chronic / stuck) \(measured\)' "$WORK/report.html")" 0
 rm -rf "$SCOUTFLO_AUDIT_DIR/splunk_oncall"
 run_af; render
 check "empty HTML explicitly says not measured" "$(grep -o 'not measured' "$WORK/report.html" | wc -l | tr -d ' ')" 2
 signal '{"provider":"grafana","target":"grafana","object_id":"rule-1","object_kind":"grafana_rule","fires":0,"reaches_human":true,"stuck":false,"source_finding_ids":[]}'
 run_af; render
 check "standalone measured zero accepted" "$(jq -r '.af_findings[]|select(.af_id=="AF-005")|.status' "$AFJ")" measured
-check "measured zero retained in HTML" "$(grep -Ec '0</span><span class="l">(can.t reach a human|chronic / stuck) \(measured\)' "$WORK/report.html")" 2
+check "measured zero retained in HTML" "$(grep -Ec '0</span><span class="l">(no configured receiver|chronic / stuck) \(measured\)' "$WORK/report.html")" 2
 
 # Validation rejection must replace old measurements and invalidate old renders.
 for fault in stale missing-time phantom impossible malformed coverage negative; do
