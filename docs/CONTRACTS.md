@@ -891,7 +891,10 @@ Follow `../integration-kit/PLAYBOOK.md`. Every contract above applies; the ones 
 new provider most often breaks: C1 (schema + registered prefix), C2/C3
 (multi-target output + resolver), C6 (Metadata Load block — copy the canonical
 one verbatim), C9 (providers.md ↔ doctor ↔ audit keys), C10 (audit-all map row),
-C11 (connect/start/README/template). Run all four gates + the selftest before the
+C11 (connect/start/README/template). A provider with a setup skill also needs its
+finding IDs in `docs/finding-remediation-map.json` and its prefix in
+`ci/remediation-map-check.sh`; every audit needs one catalog sample in
+`tests/test-finding-catalog.sh`. Run all four gates + the selftest before the
 PR; the live smoke against a real estate is a hard merge gate (`AGENTS.md`).
 
 ## C18 — Cost lane (scoutflo-cost/v1 + the non-scored *OPT sections → the cost roll-up)
