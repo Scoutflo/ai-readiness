@@ -30,11 +30,21 @@
 # file). No secrets: it renders only structured fields (scores, counts, titles,
 # ids, points) — never evidence values or raw command output.
 set -eu
+SF_RUN_SCRIPT_ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
+. "$SF_RUN_SCRIPT_ROOT/report-standard/run-selection.sh"
 
 MODE="${1:-}"; shift 2>/dev/null || true
 command -v jq >/dev/null 2>&1 || { echo "render-report-viz: jq not installed" >&2; exit 1; }
 
 GATE="${SCOUTFLO_SCORE_GATE:-85}"   # end-to-end gate (example, tune to your bar)
+
+selected_run_notice() {
+  [ "$SF_RUN_MODE" = selected ] || return 0
+  printf '%s' "$SF_RUN_DOCUMENT" | jq -r '
+    "Selected run: \(.completed_targets|length)/\(.targets|length) targets have validated completed reports. Unfinished targets remain unassessed."
+    + (if (.targets-.completed_targets|length)>0 then " Missing: \(.targets-.completed_targets|join(", "))." else "" end)'
+  echo
+}
 
 # viz_bar <value> <max> [width] — Unicode progress bar (█ filled, ░ empty).
 viz_bar() {
@@ -151,9 +161,11 @@ inventory_scope_notice() {  # use the matching audit envelope when inventory has
 # single-block signoz/kubernetes or a multi-target label is never dropped.
 af_enriched_noise() {  # $1=alert-fatigue.json  $2=audits-dir  $3=run-date -> JSON array
   ae_afj="$1"; ae_d="$2"; ae_dt="$3"
+  sf_run_prepare "$ae_d" "$ae_dt" || return 1
   set --
   for ae_f in "$ae_d"/*/"$ae_dt"/findings.json "$ae_d"/*/*/"$ae_dt"/findings.json; do
     [ -e "$ae_f" ] || continue
+    sf_run_file "$ae_f" || continue
     ae_rel="${ae_f#"$ae_d"/}"
     case "${ae_rel%%/*}" in all|cost-analysis|cost|doctor|alert-fatigue) continue ;; esac
     set -- "$@" "$ae_f"
@@ -596,6 +608,11 @@ HTMLFOOT
       echo "_No \`correlation.json\` — cross-stack correlation runs in \`/scoutflo:audit-all\` (needs two or more audits)._"
       exit 0
     fi
+    CORR_ROOT=$(dirname -- "$C")
+    if [ -e "$CORR_ROOT/run-plan.json" ]; then CORR_DATE=$(jq -er '.audit_date' "$CORR_ROOT/run-plan.json")
+    else CORR_DATE=$(jq -r '.audit_date // empty' "$C"); fi
+    sf_run_prepare "$CORR_ROOT" "$CORR_DATE"
+    sf_run_aggregate_file "$C"
     NOVL="$(jq '(.overlaps // []) | length' "$C" 2>/dev/null || echo 0)"
     NCAS="$(jq '(.cascades // []) | length' "$C" 2>/dev/null || echo 0)"
     NCOV="$(jq '(.coverage // []) | length' "$C" 2>/dev/null || echo 0)"
@@ -604,7 +621,7 @@ HTMLFOOT
       exit 0
     fi
     if [ "${NOVL:-0}" -gt 0 ]; then
-      echo "**Redundant monitoring — one service flagged by multiple stacks. Review whether the coverage overlaps and consolidate the paging path:**"
+      echo "**Cross-tool review candidates — qualified service observations from multiple targets; verify signal equivalence and source independence before consolidation:**"
       echo
       echo "| Service | Stacks | Findings | Consolidation review |"
       echo "| --- | --- | ---: | --- |"
@@ -619,7 +636,7 @@ HTMLFOOT
       echo
     fi
     if [ "${NCAS:-0}" -gt 0 ]; then
-      echo "**Cascade chains — a root cause with the downstream failures it explains:**"
+      echo "**Possible cascade chains — verify temporal and runtime evidence before naming a root cause:**"
       echo
       jq -r '.cascades[]? | "- ROOT \(.root_cause.finding_id) \(.root_cause.title)\n  → effects: " + ((.effects // []) | map("\(.finding_id) \(.title)") | join(" | "))' "$C"
     else
@@ -635,7 +652,7 @@ HTMLFOOT
       if [ "${NCE:-0}" -gt 0 ]; then
         echo "**Covered by another tool (single-tool dependency, NOT zero coverage — confirm the covering monitor watches the signal the gap names):**"
         echo
-        echo "| Resource | Gap flagged by | Actively covered by | Note |"
+        echo "| Resource | Gap flagged by | Configured coverage in | Note |"
         echo "| --- | --- | --- | --- |"
         jq -r 'def esc: tostring | gsub("\\|"; "\\|");
           .coverage[]? | select(.classification=="covered-elsewhere")
@@ -648,15 +665,15 @@ HTMLFOOT
         echo
       fi
       if [ "${NTG:-0}" -gt 0 ]; then
-        echo "**True gaps — no active cross-tool coverage anywhere; these are real and should be elevated:**"
+        echo "**Scoped gaps — no matching active coverage observed within the declared, completely assessed targets:**"
         echo
         jq -r '.coverage[]? | select(.classification=="true-gap") | "- \(.resource) (flagged by \(.target), \(.finding_id))"' "$C"
         echo
       fi
       if [ "${NUM:-0}" -gt 0 ]; then
-        echo "**Possible coverage, unconfirmed — a name-only/fuzzy match; run \`/scoutflo:map-topology\` to join by canonical service name:**"
+        echo "**Coverage unresolved — missing identity, activation, routing or complete collection evidence; retain the exact unlock below:**"
         echo
-        jq -r '.coverage[]? | select(.classification=="unmappable") | "- \(.resource) (flagged by \(.target)) — maybe covered by \([.covered_by[]?.provider] | join(", "))"' "$C"
+        jq -r '.coverage[]? | select(.classification=="unmappable") | "- \(.resource) (flagged by \(.target)) — \(.recommendation)"' "$C"
         echo
       fi
     fi
@@ -667,8 +684,10 @@ HTMLFOOT
     # score bars, read from every target's findings.json for the run date. Never a
     # mean (an average hides a failing stack behind a healthy one).
     D="${1:?audits-dir}"; RD="${2:?run-date}"
+    sf_run_prepare "$D" "$RD"
     echo "## At a glance (all stacks)"
     echo
+    selected_run_notice
     # Glob BOTH the one-level `<target>/<date>/` and two-level
     # `<integration>/<label>/<date>/` layouts (multi-target labels, and single-block
     # signoz/kubernetes which always nest), mirroring audit-all's Phase-3 loops.
@@ -682,6 +701,7 @@ HTMLFOOT
     ROWS=""; total=0; passing=0
     for f in "$D"/*/"$RD"/findings.json "$D"/*/*/"$RD"/findings.json; do
       [ -f "$f" ] || continue
+      sf_run_file "$f" || continue
       tgt="$(jq -r '.target // "?"' "$f" 2>/dev/null)"
       case "$tgt" in all|cost|cost-analysis|doctor|"?") continue;; esac
       sc="$(jq -r 'if .score.overall == null then "unassessed" else .score.overall end' "$f" 2>/dev/null)"
@@ -704,7 +724,9 @@ HTMLFOOT
 "
     done
     if [ "$total" -eq 0 ]; then echo "_No completed audits for ${RD}._"; exit 0; fi
-    echo "**Stacks end-to-end (>= ${GATE} gate and fully assessed): ${passing}/${total}**  \`$(viz_bar "$passing" "$total" 12)\`"
+    denominator=$total
+    if [ "$SF_RUN_MODE" = selected ]; then denominator=$(printf '%s' "$SF_RUN_DOCUMENT" | jq '.targets|length'); fi
+    echo "**Stacks end-to-end (>= ${GATE} gate and fully assessed): ${passing}/${denominator}**  \`$(viz_bar "$passing" "$denominator" 12)\`"
     echo
     echo "| Stack | Score | | |"
     echo "| --- | ---: | --- | --- |"
@@ -724,6 +746,7 @@ HTMLFOOT
     done
     for f in "$D"/*/"$RD"/findings.json "$D"/*/*/"$RD"/findings.json; do
       [ -f "$f" ] || continue
+      sf_run_file "$f" || continue
       tgt="$(jq -r '.target // "?"' "$f")"
       case "$tgt" in all|cost|cost-analysis|doctor|"?") continue;; esac
       SCOPE_NOTICE="$(scope_notice "$f")"
@@ -903,10 +926,16 @@ HTMLFOOT
     # audit-all estate inventory: per-stack object counts by kind, from every
     # target's inventory.json for the run date.
     D="${1:?audits-dir}"; RD="${2:?run-date}"
+    sf_run_prepare "$D" "$RD"
     echo "## Estate inventory (all stacks)"
     echo
+    selected_run_notice
     found=0
-    for f in "$D"/*/"$RD"/inventory.json "$D"/*/*/"$RD"/inventory.json; do [ -f "$f" ] && found=1; done
+    for f in "$D"/*/"$RD"/inventory.json "$D"/*/*/"$RD"/inventory.json; do
+      [ -f "$f" ] || continue
+      sf_run_file "$f" || continue
+      found=1
+    done
     if [ "$found" -eq 0 ]; then echo "_No \`inventory.json\` for ${RD}._"; exit 0; fi
     echo "Observed objects by type in the supplied inventories. Counts do not establish complete estate coverage; each report retains its scope and collection limits."
     echo
@@ -915,6 +944,7 @@ HTMLFOOT
     # Two-level glob included so multi-target labels and single-block signoz/kubernetes appear.
     for f in "$D"/*/"$RD"/inventory.json "$D"/*/*/"$RD"/inventory.json; do
       [ -f "$f" ] || continue
+      sf_run_file "$f" || continue
       tgt="$(jq -r '.target // "?"' "$f" 2>/dev/null)"
       case "$tgt" in all|cost|cost-analysis|doctor|"?") continue;; esac
       tot="$(jq -r '.counts.total // (.items|length) // 0' "$f" 2>/dev/null)"
@@ -923,6 +953,7 @@ HTMLFOOT
     done
     for f in "$D"/*/"$RD"/inventory.json "$D"/*/*/"$RD"/inventory.json; do
       [ -f "$f" ] || continue
+      sf_run_file "$f" || continue
       tgt="$(jq -r '.target // "?"' "$f")"
       case "$tgt" in all|cost|cost-analysis|doctor|"?") continue;; esac
       SCOPE_NOTICE="$(inventory_scope_notice "$f")"
@@ -942,6 +973,8 @@ HTMLFOOT
     # not-in-scope), and the cited benchmarks. Renders only structured fields
     # (never a secret/raw command output). Read-only.
     AFJ="${1:?alert-fatigue.json}"; D="${2:?audits-dir}"; RD="${3:?run-date}"
+    sf_run_prepare "$D" "$RD"
+    sf_run_aggregate_file "$AFJ"
     echo "## Alert noise & fatigue"
     echo
     if [ ! -f "$AFJ" ]; then
@@ -1036,12 +1069,12 @@ EOF
       fi
       if [ "$REACH_STATUS" = "measured" ]; then
         jq -r '.af_findings[]? | select(.af_id=="AF-004")
-          | "**Reachability — \(.unreachable_objects) of \(.measured_objects) alerting objects cannot reach a human by construction.** These fire into the void (a page that pages nobody):"' "$AFJ"
+          | "**Reachability — \(.unreachable_objects) of \(.measured_objects) alerting objects have no configured receiver in the assessed path.** Alternative paths and human delivery remain unverified:"' "$AFJ"
         echo
         # honest coverage: if routing was resolved for only a subset of objects seen, say so
         jq -r '.af_findings[]? | select(.af_id=="AF-004") | select(.routing_coverage_note != null) | "_(" + .routing_coverage_note + ".)_"' "$AFJ"
         echo
-        echo "| Can't reach a human because | Objects |"
+        echo "| Missing configured route because | Objects |"
         echo "| --- | ---: |"
         jq -r 'def esc: tostring | gsub("\\|"; "\\|"); .af_findings[]? | select(.af_id=="AF-004") | .by_reason[]? | [ (.reason|esc), (.count|tostring) ] | @tsv' "$AFJ" \
         | while IFS="$(printf '\t')" read -r rsn cnt; do echo "| ${rsn} | ${cnt} |"; done
@@ -1051,7 +1084,7 @@ EOF
         jq -r '.af_findings[]? | select(.af_id=="AF-005")
           | "**Top offenders — ranked by measured fatigue impact** (\(.total_fires) total fires across \(.objects_with_history) object(s); \(.flapping_objects) flapping). Fatigue impact weights raw fires by flapping, off-hours share, and dead-end routing:"' "$AFJ"
         echo
-        echo "| Object | Tool | Fires | Flapping | Off-hours | Reaches human | Fatigue impact |"
+        echo "| Object | Tool | Fires | Flapping | Off-hours | Configured routing | Fatigue impact |"
         echo "| --- | --- | ---: | --- | ---: | --- | ---: |"
         jq -r 'def esc: tostring | gsub("\\|"; "\\|");
           .af_findings[]? | select(.af_id=="AF-005") | .top_offenders[]?
@@ -1170,6 +1203,8 @@ EOF
     # the alert-noise/fatigue view. Renders only structured fields, HTML-escaped via
     # jq @html; never a secret or raw command output. Read-only over local files.
     AFJ="${1:?alert-fatigue.json}"; OUT="${2:?out.html}"; D="${3:?audits-dir}"; RD="${4:?run-date}"
+    sf_run_prepare "$D" "$RD"
+    sf_run_aggregate_file "$AFJ"
     [ -f "$AFJ" ] || { echo "no such file: $AFJ" >&2; exit 1; }
     read -r TN TS TT <<EOF
 $(jq -r '.totals | "\(.alerting_noise_findings // 0) \(.cross_source_storms // 0) \(.tools_with_noise // 0)"' "$AFJ")
@@ -1186,7 +1221,7 @@ $(printf '%s' "$NOISE" | jq -r 'reduce .[] as $f ({critical:0,high:0,medium:0,lo
 EOF
     UNREACH_STATUS="$(jq -r '[.af_findings[]?|select(.af_id=="AF-004")|.status][0] // "not-in-scope"' "$AFJ")"
     CHRON_STATUS="$(jq -r '[.af_findings[]?|select(.af_id=="AF-006")|.status][0] // "not-in-scope"' "$AFJ")"
-    UNREACH_LABEL="can't reach a human"; CHRON_LABEL="chronic / stuck"
+    UNREACH_LABEL="no configured receiver"; CHRON_LABEL="chronic / stuck"
     UNREACH="not measured"; CHRON="not measured"
     if [ "$UNREACH_STATUS" = "measured" ]; then
       UNREACH="$(jq -r '.af_findings[]|select(.af_id=="AF-004")|.unreachable_objects' "$AFJ")"
@@ -1281,7 +1316,7 @@ HTMLSTORM
     if [ "$REACH_ST" = "measured" ] || [ "$VOL_ST" = "measured" ]; then
       echo '<div class="card"><h1 style="font-size:16px">Measured fire-history</h1>'
       if [ "$REACH_ST" = "measured" ]; then
-        jq -r '.af_findings[]? | select(.af_id=="AF-004") | "<p><strong style=\"color:#c53030\">\(.unreachable_objects) of \(.measured_objects)</strong> alerting objects cannot reach a human by construction — a page that pages nobody. By reason: " + (([.by_reason[]? | "\(.reason|@html) (\(.count))"]) | join("; ")) + ".</p>"' "$AFJ"
+        jq -r '.af_findings[]? | select(.af_id=="AF-004") | "<p><strong style=\"color:#c53030\">\(.unreachable_objects) of \(.measured_objects)</strong> alerting objects have no configured receiver in the assessed path; alternative paths and human delivery remain unverified. By reason: " + (([.by_reason[]? | "\(.reason|@html) (\(.count))"]) | join("; ")) + ".</p>"' "$AFJ"
       fi
       if [ "$VOL_ST" = "measured" ]; then
         echo '<p class="sub">Top offenders ranked by measured fatigue impact (fires weighted by flapping / off-hours share / dead-end routing):</p>'
@@ -1342,9 +1377,11 @@ HTMLFOOT
     # (CVSS / AWS Security Hub both keep severity separate from $/criticality). No
     # blended composite score. Read-only; renders only structured fields.
     D="${1:?audits-dir}"; RD="${2:?run-date}"; TOPN="${3:-6}"
+    sf_run_prepare "$D" "$RD"
     set --
     for f in "$D"/*/"$RD"/findings.json "$D"/*/*/"$RD"/findings.json; do
       [ -e "$f" ] || continue
+      sf_run_file "$f" || continue
       relative="${f#"$D"/}"
       case "${relative%%/*}" in all|doctor|alert-fatigue|cost-analysis) continue ;; esac
       case "$(jq -r '.target // "?"' "$f")" in all|cost-analysis|doctor|"?") continue ;; esac
@@ -1358,6 +1395,7 @@ HTMLFOOT
     done
     echo "## Executive summary"
     echo
+    selected_run_notice
     if [ "$#" -eq 0 ]; then
       echo "_No audit findings for ${RD} yet — run \`/scoutflo:audit-all\` (or a triage pass) first._"
       exit 0
@@ -1437,9 +1475,9 @@ EOF
     echo
     # measured reachability headline (alert-fatigue AF-004) — the fatigue-adjacent exec signal
     AFJ="$D/alert-fatigue.json"
-    if [ -f "$AFJ" ]; then
+    if [ -f "$AFJ" ] && sf_run_aggregate_file "$AFJ"; then
       jq -r '.af_findings[]? | select(.af_id=="AF-004" and .status=="measured" and ((.unreachable_objects // 0) > 0))
-        | "**Alerting reachability:** \(.unreachable_objects) of \(.measured_objects) alerting objects cannot reach a human by construction — a page that pages nobody (see Alert noise & fatigue)." + (if .routing_coverage_note != null then " _(routing resolved for \(.measured_objects) of \(.objects_seen) objects seen — over the resolved subset, not the whole estate.)_" else "" end)' "$AFJ"
+        | "**Alerting reachability:** \(.unreachable_objects) of \(.measured_objects) alerting objects have no configured receiver in the assessed path; alternative paths and human delivery remain unverified (see Alert noise & fatigue)." + (if .routing_coverage_note != null then " _(routing resolved for \(.measured_objects) of \(.objects_seen) objects seen — over the resolved subset, not the whole estate.)_" else "" end)' "$AFJ"
     fi
     # top real cost lever (never modeled — only a provider-native $)
     TOPSAVE="$(printf '%s' "$ALL" | jq -r '[.[] | select((.estimated_monthly_savings_usd // 0) > 0)] | sort_by(-(.estimated_monthly_savings_usd)) | (.[0] // empty) | "\(.estimated_monthly_savings_usd)\t\(.title)"')"
@@ -1641,10 +1679,12 @@ HTMLFOOT
     TB="$(printf '\t')"
     while [ "$#" -ge 2 ]; do
       _lbl="$1"; _dir="$2"; shift 2
+      sf_run_prepare "$_dir" "$RD"
       ENVS="${ENVS} ${_lbl}"
       # dual-glob one-level <target>/<date>/ and two-level <integration>/<label>/<date>/
       for f in "$_dir"/*/"$RD"/findings.json "$_dir"/*/*/"$RD"/findings.json; do
         [ -f "$f" ] || continue
+        sf_run_file "$f" || continue
         tgt="$(jq -r '.target // "?"' "$f" 2>/dev/null || echo "?")"
         case "$tgt" in all|doctor|alert-fatigue|"?") continue ;; esac
         sc="$(jq -r 'if .score.overall == null then "na" else (.score.overall|tostring) end' "$f" 2>/dev/null || echo na)"

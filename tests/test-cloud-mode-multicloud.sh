@@ -52,7 +52,7 @@ grep -q "cloud-mode-apm-overlay.md" "$SKILL" || fail "SKILL: overlay cookbook no
 grep -q "for src in kubernetes aws digitalocean azure gcp newrelic sentry prometheus mimir victoriametrics" "$SKILL" || fail "SKILL: Phase-0 routing loop missing azure/gcp/metrics-stores"
 grep -q "APM overlay" "$SKILL" || fail "SKILL: overlay step missing from Phase 2E"
 RCA="$ROOT/skills/rca/SKILL.md"
-grep -q "STORES_DATA_IN|CACHES_IN" "$RCA" || fail "rca: classifier lost the resource-dependency suspect branch (C7 promise)"
+grep -q "STORES_DATA_IN|CACHES_IN" "$ROOT/skills/rca/scripts/read-evidence.sh" || fail "rca: classifier lost the resource-dependency suspect branch (C7 promise)"
 
 # --- 6b. fallback playbook: every denial has a next move ----------------------
 FB="$REF/cloud-mode-fallbacks.md"

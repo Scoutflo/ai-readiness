@@ -382,3 +382,11 @@ A: Yes. The audit reports are saved to `./scoutflo-audits/<target>/history.jsonl
 
 **Q: Does Scoutflo get a copy of my estate data for analysis?**
 A: No. All analysis happens on your machine in Claude Code. Your credentials stay in `~/.scoutflo/` and your reports stay in `./scoutflo-audits/` — nothing is sent to Scoutflo's servers. See [docs/install.md](install.md) for the full data-residency guarantee.
+
+## Source evidence and regional composition
+
+Datadog and HyperDX project source configuration locally before it enters reports. Each selected account/site still needs its own read; safe projection is not a measured token-saving claim. HyperDX bounds paginated alert/webhook collections at 100 rows per page and 50 pages per resource, with explicit incomplete status at a limit; source/dashboard lists without totals do not certify target completeness.
+
+On-Call batch verification reuses one management collection for all selected source records in the packet. This avoids repeating the whole team/user/policy census for each route; source capture and required detailed reads remain separate work. No fixed percentage or wall-time saving is claimed. Local qualified correlation and estate composition add no provider calls. Alert-fatigue's HyperDX configuration lane does not include native fire-history collection.
+
+Selected-run validation and completion hashes are local operations. They add no provider calls. ClickStack uses one bounded read-only mode probe per target/credential generation, then reuses it for at most 30 minutes; each actual query still validates access and output. Assessment worklists avoid repeating reviewed rows only while their captured evidence is unchanged. Detailed live evidence remains the main cost driver, so state scope and unresolved populations before a broad read.

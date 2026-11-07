@@ -24,5 +24,6 @@ obviously the same thing as checkout, just merge them; that New-Relic-only
    service that infrastructure inventory does not is a real finding-shaped fact
    (serverless, or infra discovery not configured), not noise. Infrastructure
    wins on existence, APM wins on connectivity — neither deletes the other.
-4. Edges in the merged Traffic map cite their observing source (Istio or New
-   Relic spans) per edge; an edge with no observing source does not exist.
+4. Edges in the merged Traffic map cite their evidence class per edge: Istio
+   routing objects are configured paths; New Relic spans are observed calls.
+   Configuration never becomes observed traffic merely because it is merged.

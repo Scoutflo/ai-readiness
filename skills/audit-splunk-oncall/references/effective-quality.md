@@ -301,13 +301,27 @@ try:
         leaves,refs=path(policy); staffing(refs); evidence={'referenced_rotations':len(refs)}
     elif check in ('SOC-005','SOC-007'):
         if check=='SOC-007':
-            match=s.get('source_match')
-            if not isinstance(match,dict): blocked('Exact source-key comparison is unavailable')
+            batch=s.get('source_matches'); record=os.environ.get('SCOUTFLO_VERIFY_SOURCE_RECORD','')
+            if not isinstance(batch,dict) or batch.get('schema')!='scoutflo-oncall-source-matches/v1': blocked('Source provenance requires a fresh bound source packet; legacy key-only matches cannot certify SOC-007')
+            cred=s.get('credential_binding')
+            if not isinstance(cred,dict) or not re.fullmatch(r'[a-f0-9]{64}',str(cred.get('fingerprint',''))) or batch.get('credential_binding')!=cred or batch.get('target')!=s.get('target'): blocked('Source evidence belongs to another On-Call target or credential generation')
+            if not all(isinstance(batch.get(k),str) and batch[k] for k in ('source_target','source_provider','observed_at','source_sha256','receipt_sha256')): blocked('Source provenance is incomplete')
+            if not all(re.fullmatch(r'[a-f0-9]{64}',batch[k]) for k in ('source_sha256','receipt_sha256')): blocked('Source generation digests are unavailable')
+            age=os.environ.get('SCOUTFLO_VERIFY_SOURCE_MAX_AGE_SECONDS','3600'); skew=os.environ.get('SCOUTFLO_VERIFY_CLOCK_SKEW_SECONDS','60')
+            if not re.fullmatch(r'[1-9][0-9]{0,7}',age) or not re.fullmatch(r'[1-9][0-9]{0,7}',skew): blocked('Declare valid source freshness windows')
+            elapsed=(dt.datetime.now(dt.timezone.utc)-stamp(batch['observed_at'])).total_seconds()
+            if not -int(skew)<=elapsed<=int(age): blocked('Source evidence is stale or ahead of the allowed clock skew')
+            selected=[r for r in arr(batch.get('records')) if isinstance(r,dict) and r.get('record_id')==record]
+            if not record or len(selected)!=1: blocked('Select one unique bound source-path record')
+            match=selected[0]
+            if match.get('status')!='compared' or match.get('binding_verified') is not True or match.get('verification_kind') not in ('api-read','attended'): blocked('Source route or intended mapping is unverified; retain this record in the blocked denominator')
+            if match.get('expected_policy')!=policy or match.get('expected_team')!=os.environ.get('SCOUTFLO_VERIFY_TEAM'): blocked('Source record was bound to another intended policy or team')
             aliases=arr(match.get('route_aliases'))
             if len(aliases)>1: blocked('Source key matched multiple route identities')
             if not aliases or policy not in arr(match.get('policies')): unmet('Exact source key does not select the intended policy')
             if ownership(policy)!=os.environ.get('SCOUTFLO_VERIFY_TEAM'): unmet('Source path owner differs from intended team')
         users,leaves,refs=current_path(policy); evidence={'users':sorted(users),'delivery_proven':False}
+        if check=='SOC-007': evidence.update({'record_id':record,'source_id':match.get('source_id'),'source_target':batch['source_target'],'oncall_target':batch['target'],'source_definition_sha256':match.get('source_definition_sha256'),'verification_kind':match['verification_kind']})
     elif check=='SOC-006':
         minimum=os.environ.get('SCOUTFLO_VERIFY_MIN_RESPONDERS','')
         if minimum=='none': stop('inapplicable','Explicit declaration: no responder redundancy requirement')

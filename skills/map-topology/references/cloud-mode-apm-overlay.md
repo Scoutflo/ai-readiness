@@ -35,8 +35,8 @@ is doc-cited — **verify the first live datastore row before bulk-trusting**,
 then treat the shape as locked for that estate.
 
 ```bash
-set -eu
-NR_API_HOST="api.newrelic.com"        # or api.eu.newrelic.com — from newrelic.region (Phase 0)
+set -euo pipefail
+: "${NR_API_HOST:?Set api.newrelic.com or api.eu.newrelic.com from the selected New Relic config}"        # or api.eu.newrelic.com — from newrelic.region (Phase 0)
 # NEW_RELIC_USER_KEY resolved from newrelic.api_key_env by the Phase-0 source gate
 [ -n "${NEW_RELIC_USER_KEY:-}" ] || { echo "NEW_RELIC_USER_KEY is not set — run the Phase-0 source gate first"; exit 1; }
 GUID="one-in-scope-service-entity-guid"   # from the 2D service discovery (bounded: per in-scope service)
@@ -76,8 +76,8 @@ plain service→service calls have `connection_type` UNSET, database edges have
 `connection_type="database"`):
 
 ```bash
-set -eu
-PROM_URL="your-metrics-endpoint"      # the prometheus/mimir/victoriametrics endpoint from the config
+set -euo pipefail
+: "${PROM_URL:?Set the selected PROM_URL from the verified source config}"      # the prometheus/mimir/victoriametrics endpoint from the config
 MS_TOKEN="${MS_TOKEN:-}"              # that block's token_env value, if any
 AUTH="Authorization: Bearer ${MS_TOKEN}"
 [ -n "$MS_TOKEN" ] || AUTH="Accept: application/json"

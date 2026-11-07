@@ -9,6 +9,7 @@
 set -eu
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+export CLAUDE_PLUGIN_ROOT="$ROOT"
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
 
@@ -28,7 +29,7 @@ cat > "$TOPOLOGY_FILE" <<'EOF'
 EOF
 
 cat > "$SCOUTFLO_AUDIT_DIR/aws/$D/findings.json" <<EOF
-{"target":"aws","date":"$D",
+{"schema":"scoutflo-findings/v2","target":"aws","run_date":"$D",
  "findings":[
   {"id":"AWS-030","title":"RDS payments-db has no automated backup retention","severity":"high","area":"managed-data-durability","lifecycle":"new","affected":["payments-db"]},
   {"id":"AWS-010","title":"SNS alert delivery route has no subscription","severity":"high","area":"alert-routing","lifecycle":"new","affected":["alerts-topic"]},
@@ -38,13 +39,22 @@ cat > "$SCOUTFLO_AUDIT_DIR/aws/$D/findings.json" <<EOF
 EOF
 
 cat > "$SCOUTFLO_AUDIT_DIR/grafana/$D/findings.json" <<EOF
-{"target":"grafana","date":"$D",
+{"schema":"scoutflo-findings/v2","target":"grafana","run_date":"$D",
  "findings":[
   {"id":"GRAF-050","title":"Alert rule for payments-db routes to no contact point","severity":"high","area":"alert-rules","lifecycle":"new","affected":["payments-db"]}
  ]}
 EOF
 
 # ---- Phase 3.5: correlation ------------------------------------------------
+echo "Test 0: legacy name-only findings remain visible but cannot create joins"
+( . "$ROOT/skills/correlation-engine/lib/correlation-engine.sh"; correlation_run "$D" ) > /dev/null
+jq -e '.total_findings_raw==5 and (.overlaps|length)==0 and (.cascades|length)==0 and all(.coverage[]; .classification=="unmappable")' \
+  "$SCOUTFLO_AUDIT_DIR/correlation.json" > /dev/null || fail "legacy display names were promoted to service proof"
+echo "PASS"
+# Synthetic positive fixtures now explicitly declare their shared cluster,
+# namespace and service identity, with canonical run_date/generated_at and a
+# complete collection generation. Production never derives identity from names.
+python3 "$ROOT/skills/correlation-engine/tests/qualified-fixtures.py" "$SCOUTFLO_AUDIT_DIR" "$D"
 echo "Test 1: correlation_run writes correlation.json with real counts"
 ( . "$ROOT/skills/correlation-engine/lib/correlation-engine.sh"; correlation_run "$D" ) > /dev/null
 CORR="$SCOUTFLO_AUDIT_DIR/correlation.json"
@@ -88,6 +98,7 @@ EOF
 cat > "$NOJOIN/grafana/$D/findings.json" <<EOF
 {"target":"grafana","findings":[{"id":"GRAF-050","title":"Alert on checkout-api routes nowhere","severity":"high","area":"alert-rules","affected":["checkout-api"]}]}
 EOF
+python3 "$ROOT/skills/correlation-engine/tests/qualified-fixtures.py" "$NOJOIN" "$D"
 ( SCOUTFLO_AUDIT_DIR="$NOJOIN" TOPOLOGY_FILE="$NOJOIN/none.json" \
   . "$ROOT/skills/correlation-engine/lib/correlation-engine.sh"; \
   SCOUTFLO_AUDIT_DIR="$NOJOIN" correlation_run "$D" ) > /dev/null

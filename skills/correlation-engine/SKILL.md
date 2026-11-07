@@ -1,13 +1,15 @@
 ---
 name: correlation-engine
-description: 'Harness skill (run it directly, or let audit-all run it for you): after any audit(s) (audit-all, sequential, or targeted 2-3), builds correlation.json that identifies shared-resource monitoring candidates and possible dependency chains, and advisory cross-tool coverage candidates; downstream consumers apply business context. Works incrementally with partial coverage. Use when the user says correlate my audits, find overlapping monitoring, or review cross-tool coverage. Do not use for provider collection or fixes; use the relevant audit-* or setup-* skill. Run automatically by audit-all (Phase 3.5); its output is also consumed by rca and the topology-guided-setup helper.'
+description: 'Harness skill (run it directly, or let audit-all run it for you): after any audit(s) (audit-all, sequential, or targeted 2-3), builds correlation.json that identifies shared-resource monitoring candidates and possible dependency chains, and advisory cross-tool coverage candidates; downstream consumers apply business context. Works incrementally with partial coverage. Use when the user says correlate my audits, find overlapping monitoring, or review cross-tool coverage. Do not use for provider collection or fixes; use the relevant audit-* or setup-* skill. Run automatically by audit-all (Phase 3.5); its output is also used by rca and cost-analysis for advisory context.'
 ---
 
 # Correlation Engine
 
 After you run any audit (full audit-all, or sequential audits for the same run date, or targeted 2-3 audits), the correlation engine analyzes findings across all skills to detect overlaps, cascade risks, and apply business context intelligence.
 
-Output: `scoutflo-audits/correlation.json` — machine-readable deduplication + prioritization. It is written once at the audit-dir root (not under a per-date subdir); the per-audit `findings.json` files it reads are target-first (`<target>/<date>/findings.json`).
+Output: `scoutflo-audits/correlation.json` — machine-readable overlap candidates and prioritization. It is written once at the audit-dir root (not under a per-date subdir); the per-audit `findings.json` files it reads are target-first (`<target>/<date>/findings.json`).
+
+The output does not authorize removing or skipping monitoring. Review candidates with the owning setup skill, using exact target evidence and its normal change confirmation. The older `topology-guided-setup` helper is not wired into setup execution and does not enforce current run/target bindings; do not use it for automatic pruning.
 
 ## How it works
 
@@ -31,6 +33,8 @@ Run the provider audits under the same `RUN_DATE`, then invoke the manual block 
 → Review candidate shared resources; verify signal equivalence before changing either paging path
 ```
 
+Planned runs use only validated completed artifact generations. A saved roll-up retains its `run_selection` snapshot; changed inputs or later completions require regeneration before a combined report. See [service evidence](../../report-standard/service-evidence.md).
+
 ## What correlation.json contains
 
 ### Source eligibility and identity
@@ -39,7 +43,7 @@ Use only observed, open findings for overlaps, cascades and coverage claims. `st
 
 Non-scored cost and topology observations can participate in overlaps, but their titles alone cannot declare a coverage gap. A non-scored finding needs an explicit `coverage_gap` object with a nonempty `signal` to support that classification. Readiness and legacy findings retain the area/title fallback after source eligibility is checked.
 
-On-Call uses only its explicit `correlation_affected` subset of `affected` for cross-target joins. That field names canonical service identities verified by independent source evidence; policy/team slugs belong to an account, and `route-N` aliases belong to a run. Neither establishes shared service identity. Without a valid declaration, even a historical On-Call finding contributes no join tokens and remains visible in its own report/raw counts. The consumer rejects tokens outside `affected` and route aliases. Other providers retain their existing `affected` behavior.
+On-Call uses only its explicit `correlation_affected` subset of `affected` for cross-target joins. That field names canonical service identities verified by independent source evidence; policy/team slugs belong to an account, and `route-N` aliases belong to a run. Neither establishes shared service identity. Without a valid declaration, even a historical On-Call finding contributes no join tokens and remains visible in its own report/raw counts. The consumer rejects tokens outside `affected` and route aliases. Every provider additionally requires the current `correlation_bindings` contract described in [evidence-joins.md](references/evidence-joins.md). Legacy `affected` names remain readable and raw-counted, but cannot establish cross-target identity.
 
 ### Overlaps: Redundant Monitoring
 
@@ -63,19 +67,19 @@ On-Call uses only its explicit `correlation_affected` subset of `affected` for c
       "severity": "medium"
     }
   ],
-  "recommendation": "Multiple stacks report findings against payment-svc; review whether the monitoring overlaps and consolidate the paging path"
+  "recommendation": "Multiple targets share a verified resource identity; inspect the signal paths before changing routing"
 }
 ```
 
-The `overlap_id` is `OVL-<service>` and `service` is the single shared affected service the group is keyed on; `targets` lists the distinct stacks that named it. The `recommendation` is a fixed template built from the service name.
+The `overlap_id` uses `OVL-` plus an encoded qualified identity; `service` is a display label. Additive `service_identity` and evidence define the shared resource. `targets` lists the distinct source targets.
 
-**Interpretation:** Both stacks report findings against the same service — candidate redundant monitoring. Review whether they overlap and consolidate onto one paging path to cut alert fatigue.
+**Interpretation:** both targets have current findings for the same verified scoped identity. Inspect whether they describe one linked path or independent paths; this alone does not establish duplicate events, pages or delivery.
 
 ### Cascades: Dependency Chains
 
 ```json
 {
-  "cascade_id": "CASC-AWS-030",
+  "cascade_id": "CASC-WyJhd3MiLCJBV1MtMDMwIl0=",
   "root_cause": {
     "finding_id": "AWS-030",
     "title": "Production database lacks engine-appropriate availability coverage",
@@ -99,7 +103,7 @@ The `overlap_id` is `OVL-<service>` and `service` is the single shared affected 
 }
 ```
 
-The `cascade_id` is `CASC-<root finding id>`. `shared_resources` are the concrete affected tokens the root names; each effect is emitted only because it shares one of those tokens (a real join, not a keyword guess), so `condition` is the same fixed sentence on every effect. There is no `chain_length`, `service`, `impact`, or `step` field.
+The `cascade_id` is `CASC-` plus the encoded source target/finding-ID pair; equal check IDs in different accounts remain distinct. `shared_resources` are display tokens; additive `service_identities` and generation-bound bindings establish the resource shared with each effect. This remains a dependency candidate requiring investigation, not proven causality. There is no `chain_length`, `service`, `impact`, or `step` field.
 
 **Interpretation:** Shared resources identify a dependency hypothesis to investigate. The field is named `root_cause` for compatibility; this heuristic does not establish causation or prove that one fix prevents another failure. Verify the dependency and its signal path before choosing a fix order.
 
@@ -160,7 +164,7 @@ scoutflo-audits/
   ...
 ```
 
-correlation.json schema (exactly what the lib writes):
+Abbreviated correlation.json example (qualified bindings, assessment and selected-run receipts are additional fields):
 
 ```json
 {
@@ -183,16 +187,16 @@ correlation.json schema (exactly what the lib writes):
       "resource": "checkout",
       "classification": "covered-elsewhere",
       "covered_by": [ { "provider": "datadog", "inventory_name": "checkout latency", "routes_to": "pagerduty", "match": "exact" } ],
-      "recommendation": "single-tool-dependency: datadog monitor checkout latency actively covers checkout and routes to pagerduty; confirm it covers the specific signal this gap names before de-prioritizing"
+      "recommendation": "single-tool-dependency: datadog monitor checkout latency is configured for the qualified service with a pagerduty route; confirm it covers the specific signal this gap names before de-prioritizing"
     }
   ],
-  "method": "same-affected-service overlap grouping + database-to-alerting cascade heuristic + cross-tool coverage join; every referenced finding_id and inventory item exists in this run"
+  "method": "current scope-qualified identity joins; candidate overlaps and dependencies; scoped absence only with complete declared assessed inputs; advisory only"
 }
 ```
 
-There is no `confidence` or `business_context_applied` field — the engine does not assign a confidence percentage; it groups by shared `affected` service, joins cascades on shared resources, and reframes coverage from `inventory.json`, and `method` states exactly how.
+There is no `confidence` or `business_context_applied` field — the engine does not assign a confidence percentage; it groups by current scope-qualified service identity, joins cascades on that same proof, and reframes coverage from `inventory.json`, and `method` states exactly how.
 
-**Cross-tool coverage (`coverage[]`).** A coverage-gap finding in one provider (e.g. Azure "no metric alerts on checkout") is joined against **other** providers' *active, routed* monitors from their `inventory.json` (an item is active only when `kind` is a monitor/alert-type, `enabled != false`, and `routes_to` names a real receiver). Each affected resource is classified `covered-elsewhere` (an exact canonical-name match on an active monitor in a different provider — reframed as **single-tool-dependency**, never "covered"; the audit-owned severity is never mutated), `unmappable` (only a fuzzy/substring match — verify-pending, run `/scoutflo:map-topology` to join by canonical name), or `true-gap` (no active cross-tool coverage — a real gap to elevate). This is advisory only: `coverage[]` reframes how a gap is *presented* by `rca` and the report renderer; it never changes `findings.json`. Match confidence is highest when `map-topology` has run so both sides use the canonical service name. A finding may also carry an optional `coverage_gap: {signal, kind}` (see the findings schema): when present it identifies the gap precisely (so the engine doesn't rely on the area+title heuristic) and the `covered-elsewhere` reframe names that exact signal ("confirm the covering monitor watches `<signal>`") — closing the service-matches-but-signal-differs blind spot.
+**Cross-tool coverage (`coverage[]`).** Require literal `enabled: true`, a real route and a current scope-qualified identity at another provider. `covered-elsewhere` is a candidate single-tool dependency; confirm the specific `coverage_gap.signal` before changing priority. `unmappable` preserves unknown activation, missing identity and incomplete assessment. `true-gap` applies only within an explicit selected-target set whose current inventories are all complete with target scope; it is never inferred from missing files. See [evidence-joins.md](references/evidence-joins.md) for the exact generation, identity and `coverage-assessment.json` contracts. `assessment` in the output retains missing/blocked/subset states. Source scores and severities are unchanged; no coverage classification proves notification delivery.
 
 ## When correlation engine runs
 
@@ -211,7 +215,7 @@ correlation_run "$RUN_DATE"
 
 ## Limitations
 
-- **Overlaps** are exact: two findings are grouped only when they name the same `affected` service, so a grouped overlap is a real shared-resource match, not a guess. The engine assigns no confidence percentage.
+- **Overlaps** require compatible current scope-qualified bindings on both findings. A common name alone is unmappable. The engine assigns no confidence percentage and proves no duplicate delivery.
 - **Cascade detection uses heuristics** (database → monitoring → incident response) and is not exhaustive.
 - **One run date only.** Cross-date merging is unsupported; rerun audits for a common date before comparing current observations.
 - Requires `jq` on PATH.

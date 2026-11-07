@@ -21,7 +21,7 @@ Expected behavior:
 - Equal policy/team slugs in two accounts do not join either. On-Call contributes
   only declared `correlation_affected` service identities verified from source
   evidence and present in `affected`; missing or invalid declarations yield no
-  join tokens, while a valid shared-service declaration still joins.
+  join tokens. A valid declaration joins only with matching current scope-qualified `correlation_bindings` and collection evidence on both source artifacts.
 - Non-scored prose cannot create a coverage gap without an explicit named
   signal. Legacy findings lacking status/lifecycle and cost overlaps still work.
 - A high fully assessed score with `end_to_end: false` earns no end-to-end

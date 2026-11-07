@@ -20,17 +20,14 @@ monitor looks covered in the report and delivers to nobody.
    `@example-...-handle`, `@handle`, and similarly-templated forms) even when
    DD-001 already passed.
 3. Classifies the finding by whether ANY non-placeholder handle survives:
-   if the monitor's only `@`-tokens are all placeholder-shaped, this is the
-   DD-001 blind spot exactly — score it critical on a critical-service
-   monitor, high otherwise. If a real handle is also present, the placeholder
-   is still a hygiene defect (Datadog will try to notify it too) but delivery
-   is not fully dead — medium.
+   if the monitor's only `@`-tokens are all placeholder-shaped, assess org notification rules before concluding there is no configured route. If a real handle is also present, the placeholder
+   is still a hygiene defect (Datadog will try to notify it too) but the complete destination remains unverified; classify the placeholder hygiene issue separately.
 4. Feeds the same placeholder-only set into the DD-033 effective-coverage
    flagship as an additional suppressor, alongside the no-handle and
    dead-handle sets, so a service whose only monitor has a placeholder-only
-   handle is correctly reported as having zero effective monitors, not one.
+   handle is correctly reported as having zero inline source-eligible candidates, pending rule-routing assessment.
 
 **Must not:** let DD-001's pass stand as the final word on delivery for a
 monitor, treat a placeholder handle as equivalent to a real one because both
-"contain an `@`", or count a placeholder-only monitor as an effective monitor
+"contain an `@`", or count a placeholder-only monitor as an source-eligible candidate
 in the DD-033 coverage computation.

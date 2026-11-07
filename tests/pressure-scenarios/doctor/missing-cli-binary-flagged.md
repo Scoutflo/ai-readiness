@@ -11,8 +11,7 @@ deep inside a check, instead of doctor telling them plainly the CLI is missing.
 **Expected behavior:**
 1. Doctor emits a `binary-<cli>` row for each CLI-backed provider that is
    configured: `binary-kubectl` (kubernetes), `binary-aws` (aws),
-   `binary-gcloud` (gcp), `binary-doctl` (digitalocean). Each is `pass` when the
-   CLI is on `PATH`, `fail` with an install hint when it is not.
+   `binary-gcloud` (gcp), `binary-doctl` (digitalocean). A missing CLI emits `fail` with an install hint; successful availability may be represented by the subsequent provider probe instead of a separate binary pass row. Include `binary-az` for configured Azure.
 2. The check is **conditional on the provider being configured** — doctor never
    nags about `doctl` when there is no `digitalocean:` block, or `aws` when AWS is
    not configured.

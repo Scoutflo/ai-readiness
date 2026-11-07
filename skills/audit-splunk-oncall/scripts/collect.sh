@@ -4,7 +4,8 @@ set -eu
 set +x
 ROOT=$(CDPATH= cd -- "$(dirname "$0")/../../.." && pwd)
 TT="$ROOT/report-standard/toolkit-targets.sh"
-MODE=collect; ONLY_TEAM=""; SOURCE_ENV=""
+MODE=collect; ONLY_TEAM=""; SOURCE_ENV=""; SOURCE_PACKET=""; SOURCE_FILE=""; SOURCE_MAP=""
+SOURCE_HELPER="$ROOT/skills/audit-splunk-oncall/scripts/source-evidence.sh"
 DAYS_FORWARD="${SCOUTFLO_ONCALL_DAYS_FORWARD:-14}"
 DAYS_SKIP="${SCOUTFLO_ONCALL_DAYS_SKIP:-0}"
 QUALITY_MAX_USERS="${SCOUTFLO_ONCALL_QUALITY_MAX_USERS:-100}"
@@ -19,11 +20,13 @@ case "${1:-}" in
   --plan) [ "$#" -eq 1 ] || { echo 'Use exactly one collector mode' >&2; exit 2; }; MODE=plan ;;
   --team) [ "$#" -eq 2 ] || { echo 'Use --team with exactly one team slug' >&2; exit 2; }; ONLY_TEAM="$2" ;;
   --source-route-env) [ "$#" -eq 2 ] && [ -n "$2" ] || { echo 'Use --source-route-env with exactly one variable name' >&2; exit 2; }; SOURCE_ENV="$2" ;;
+  --source-records) [ "$#" -eq 2 ] && [ -n "$2" ] || { echo 'Use --source-records with one bound packet' >&2; exit 2; }; SOURCE_PACKET="$2" ;;
+  --bind-source-evidence) [ "$#" -eq 3 ] || { echo 'Use --bind-source-evidence SOURCE_FILE MAPPING_FILE' >&2; exit 2; }; MODE=bind; SOURCE_FILE="$2"; SOURCE_MAP="$3" ;;
   '') [ "$#" -eq 0 ] || { echo 'Empty collector argument' >&2; exit 2; } ;;
-  *) echo 'usage: collect.sh [--plan | --team TEAM_SLUG | --source-route-env VARIABLE_NAME]' >&2; exit 2 ;;
+  *) echo 'usage: collect.sh [--plan | --team TEAM_SLUG | --source-route-env VARIABLE_NAME | --source-records BOUND_PACKET | --bind-source-evidence SOURCE_FILE MAPPING_FILE]' >&2; exit 2 ;;
 esac
 fail() { echo "splunk-oncall: $1" >&2; exit 1; }
-if [ "$TRIAGE" = 1 ] && { [ -n "$ONLY_TEAM" ] || [ -n "$SOURCE_ENV" ]; }; then
+if [ "$TRIAGE" = 1 ] && { [ -n "$ONLY_TEAM" ] || [ -n "$SOURCE_ENV" ] || [ -n "$SOURCE_PACKET" ] || [ "$MODE" = bind ]; }; then
   fail 'triage supports only the bulk routing census; scoped deep verification requires SCOUTFLO_TRIAGE=0'
 fi
 slug_ok() { case "$1" in ''|*[!A-Za-z0-9_-]*) return 1 ;; esac; }
@@ -82,6 +85,24 @@ case "$API_ID$API_KEY" in *'
 '*|*"$CR"*) fail 'invalid credential encoding' ;; esac
 CREDENTIAL_FINGERPRINT=$(printf '%s\n%s' "$API_ID" "$API_KEY" | python3 -c 'import hashlib,hmac,sys; p=sys.stdin.buffer.read().split(b"\n",1); print(hmac.new(p[1],p[0],hashlib.sha256).hexdigest())')
 CREDENTIAL_BINDING=$(jq -nc --arg id_env "$ID_ENV" --arg key_env "$KEY_ENV" --arg fingerprint "$CREDENTIAL_FINGERPRINT" '{api_id_env:$id_env,api_key_env:$key_env,fingerprint:$fingerprint}')
+# Bound source packets are checked before the first provider call. Legacy exact
+# comparison remains available, but carries no SOC-007 provenance certification.
+SOURCE_SECRETS='{}'; SOURCE_MATCHES=null
+if [ -n "$SOURCE_PACKET" ] || [ "$MODE" = bind ]; then
+  if [ "$MODE" = bind ]; then SOURCE_VARS=$(sh "$SOURCE_HELPER" source-vars "$SOURCE_FILE") || fail 'source export is not verified';
+  else SOURCE_VARS=$(sh "$SOURCE_HELPER" packet-vars "$SOURCE_PACKET") || fail 'source packet is not bound'; fi
+  for SOURCE_VAR in $SOURCE_VARS; do
+    SOURCE_VALUE=$(read_secret "$SOURCE_VAR")
+    SOURCE_ITEM=$(printf '%s' "$SOURCE_VALUE" | jq -Rsc --arg name "$SOURCE_VAR" '{($name):.}')
+    SOURCE_SECRETS=$(printf '%s\n' "$SOURCE_SECRETS" "$SOURCE_ITEM" | jq -sc '.[0]+.[1]')
+  done
+  SOURCE_VALUE=''; SOURCE_ITEM=''
+  if [ "$MODE" = bind ]; then
+    { printf '%s\n' "$API_KEY" "$CREDENTIAL_BINDING" "$SOURCE_SECRETS"; } | sh "$SOURCE_HELPER" bind "$SOURCE_FILE" "$SOC_SEG" "$SOURCE_MAP"
+    exit $?
+  fi
+  { printf '%s\n' "$API_KEY" "$CREDENTIAL_BINDING" "$SOURCE_SECRETS"; } | sh "$SOURCE_HELPER" validate "$SOURCE_PACKET" "$SOC_SEG" >/dev/null || fail 'source packet target, generation or route binding changed'
+fi
 STARTED=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 private_fingerprint() {
   # Input is the read key on the first line and one already validated JSON body.
@@ -147,6 +168,10 @@ if [ -n "$SOURCE_ENV" ]; then
       [.[0].routingKeys|to_entries[]|select(.value.routingKey==$key)] as $matches |
       {route_aliases:[$matches[]|"route-"+((.key+1)|tostring)],policies:[$matches[].value.targets[].policySlug]|unique}
     else error("route shape") end' 2>/dev/null) || fail 'source routing comparison is unverified'
+fi
+if [ -n "$SOURCE_PACKET" ]; then
+  SOURCE_MATCHES=$( { printf '%s\n' "$API_KEY" "$CREDENTIAL_BINDING" "$SOURCE_SECRETS"; printf '%s' "$ROUTES"; } | sh "$SOURCE_HELPER" match "$SOURCE_PACKET" "$SOC_SEG") || fail 'source batch comparison is unverified'
+  SOURCE_SECRETS='{}'
 fi
 # Keys and _selfUrl never leave memory. Aliases are run-local, NOT cross-run identity.
 ROUTES=$(printf '%s' "$ROUTES" | jq -ce 'if (.routingKeys|type)=="array" and all(.routingKeys[]; (.routingKey|type)=="string" and (.targets|type)=="array" and all(.targets[];(.policySlug|type)=="string")) then [.routingKeys|to_entries[]|{alias:("route-"+((.key+1)|tostring)),is_default:(if (.value.isDefault|type)=="boolean" then .value.isDefault else null end),multi_responder:(if (.value.isMultiResponder|type)=="boolean" then .value.isMultiResponder else null end),policies:[.value.targets[].policySlug]}] else error("route shape") end' 2>/dev/null) || fail 'routing inventory shape is unverified'
@@ -285,5 +310,5 @@ QUALITY=$(printf '%s\n' "$USERS" "$MAINTENANCE" "$RULES" "$SCHEDULES" "$OVERRIDE
 ANCHOR=$(get "/api-public/v1/team/$TEAM")
 printf '%s' "$ANCHOR" | jq -e --arg team "$TEAM" '.slug==$team' >/dev/null 2>&1 || fail 'identity changed during collection'
 printf '%s\n' "$TEAMS" "$POLICIES" "$ROUTES" "$CURRENT" "$DETAILS" "$TEAM_DATA" "$QUALITY" | jq -sc \
-  --arg target "$SOC_SEG" --arg started "$STARTED" --arg finished "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg scope "$ONLY_TEAM" --argjson source_match "$SOURCE_MATCH" --arg routing_fingerprint "$ROUTING_FINGERPRINT" --argjson credential_binding "$CREDENTIAL_BINDING" \
-  '{routing_definition_fingerprint:$routing_fingerprint,credential_binding:$credential_binding,target:$target,started_at:$started,finished_at:$finished,scope:(if $scope=="" then "account" else $scope end),complete_reads:true,atomic_snapshot:false,source_match:$source_match,teams:.[0],policies:.[1],routes:.[2],current:.[3],policy_details:.[4],team_details:.[5],quality:.[6]}'
+  --arg target "$SOC_SEG" --arg started "$STARTED" --arg finished "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg scope "$ONLY_TEAM" --argjson source_match "$SOURCE_MATCH" --argjson source_matches "$SOURCE_MATCHES" --arg routing_fingerprint "$ROUTING_FINGERPRINT" --argjson credential_binding "$CREDENTIAL_BINDING" \
+  '{routing_definition_fingerprint:$routing_fingerprint,credential_binding:$credential_binding,target:$target,started_at:$started,finished_at:$finished,scope:(if $scope=="" then "account" else $scope end),complete_reads:true,atomic_snapshot:false,source_match:$source_match,source_matches:$source_matches,teams:.[0],policies:.[1],routes:.[2],current:.[3],policy_details:.[4],team_details:.[5],quality:.[6]}'

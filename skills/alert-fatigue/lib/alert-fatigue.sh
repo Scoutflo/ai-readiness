@@ -35,6 +35,7 @@ set -eu
 
 AUDITS_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}"
 FATIGUE_FILE="${AUDITS_DIR}/alert-fatigue.json"
+AF_IDENTITY_LIB="${CLAUDE_PLUGIN_ROOT:-.}/skills/correlation-engine/lib"
 SIGNAL_FILE="${ALERT_FATIGUE_SIGNAL:-${AUDITS_DIR}/fatigue.json}"
 SIGNALS_FILE="${ALERT_FATIGUE_SIGNALS:-${AUDITS_DIR}/fatigue-signals.json}"
 
@@ -43,9 +44,12 @@ SIGNALS_FILE="${ALERT_FATIGUE_SIGNALS:-${AUDITS_DIR}/fatigue-signals.json}"
 # (a one-level glob silently drops signoz/kubernetes/multi-target stacks).
 alert_fatigue_collect_findings() {
   date="$1"
+  . "${CLAUDE_PLUGIN_ROOT:-.}/report-standard/run-selection.sh"
+  sf_run_prepare "$AUDITS_DIR" "$date" || return 1
   set --
   for f in "$AUDITS_DIR"/*/"$date"/findings.json "$AUDITS_DIR"/*/*/"$date"/findings.json; do
     [ -e "$f" ] || continue
+    sf_run_file "$f" || continue
     relative="${f#"$AUDITS_DIR"/}"
     case "$relative" in
       all/*|cost-analysis/*|cost/*|doctor/*|alert-fatigue/*) continue ;;
@@ -55,9 +59,9 @@ alert_fatigue_collect_findings() {
   if [ "$#" -eq 0 ]; then echo "[]"; return 0; fi
   # The artifact directory is the stable source identity, including labels.
   # Legacy structured .target metadata remains in the source, never concatenated.
-  jq -n --arg root "$AUDITS_DIR/" --arg suffix "/$date/findings.json" '[
-    inputs | (input_filename | ltrimstr($root) | rtrimstr($suffix)) as $t
-    | (.findings // [])[] | . + {target: $t}
+  jq -n --arg root "$AUDITS_DIR/" --arg date "$date" --arg suffix "/$date/findings.json" '[
+    inputs | . as $doc | (input_filename | ltrimstr($root) | rtrimstr($suffix)) as $t
+    | (.findings // [])[] | . + {target: $t, _audit_date:$date, _document_date:$doc.run_date, _document_target:$doc.target, _generated_at:$doc.generated_at, _collection:$doc.collection}
   ]' "$@"
 }
 
@@ -66,7 +70,8 @@ alert_fatigue_collect_findings() {
 # `area` names the alerting/routing/hygiene plane OR its title carries noise vocabulary.
 # area+title, both already in the data — no new per-audit field. Reads findings on stdin.
 alert_fatigue_select_noise() {
-  jq '
+  jq -L "$AF_IDENTITY_LIB" '
+    include "service-identity";
     [ .[]
       | select(((.status as $s | [null, "configured", "validated-live"] | index($s)) != null
            and (.lifecycle as $l | [null, "new", "unchanged", "regressed"] | index($l)) != null))
@@ -79,6 +84,7 @@ alert_fatigue_select_noise() {
         )
       | {target: $f.target, id: $f.id, title: $f.title, severity: ($f.severity // "info"),
          affected: ($f.affected // []), area: ($f.area // ""),
+         _bindings: ($f|si_finding_bindings),
          correlation_affected: (if (($f.target // "") | split("/")[0])=="splunk_oncall" then
            if ($f.correlation_affected|type)=="array" then
              [$f.correlation_affected[] | select(type=="string")
@@ -90,23 +96,19 @@ alert_fatigue_select_noise() {
   '
 }
 
-# Potential cross-source overlap: a service (an `affected` token) with alerting-noise
-# findings from TWO OR MORE DIFFERENT audit targets. Reads the noise list on stdin.
+# Candidate overlap uses the same generation-bound typed identity as coverage.
+# Name-only legacy data still contributes to AF-001, never to a cross-target join.
 alert_fatigue_storms() {
-  jq '
-    [ .[] | . as $n | (($n.correlation_affected // $n.affected // [])[]) as $svc
-      | {service: $svc, target: $n.target, id: $n.id, title: $n.title, severity: $n.severity} ]
-    | group_by(.service)
-    | map(select((map(.target) | unique | length) > 1))
-    | map({
-        af_id: ("AF-STORM-" + .[0].service),
-        service: .[0].service,
-        tools: (map(.target) | unique),
-        tool_count: (map(.target) | unique | length),
-        source_findings: map({target, finding_id: .id, title, severity}),
-        note: ((map(.target) | unique | length | tostring) + " audit targets carry alerting configuration findings on " + .[0].service + "; inspect whether they describe one linked path or independent paths. Shared findings do not prove duplicate events, pages or human delivery")
-      })
-  '
+  jq -L "$AF_IDENTITY_LIB" '
+    include "service-identity";
+    [ .[] | . as $n | (._bindings // [])[]
+      | {service:.affected,service_identity,key,evidence,target:$n.target,id:$n.id,title:$n.title,severity:$n.severity} ]
+    | group_by(.key)
+    | map(select(si_rows_consistent and (map(.target)|unique|length)>1))
+    | map({af_id:("AF-STORM-"+(.[0].key|@base64)),service:.[0].service,service_identity:.[0].service_identity,
+        tools:(map(.target)|unique),tool_count:(map(.target)|unique|length),
+        source_findings:(map({target,finding_id:.id,title,severity,evidence})|unique),
+        note:((map(.target)|unique|length|tostring)+" audit targets carry alerting configuration findings for this verified scoped identity; inspect whether they describe one linked path or independent paths. Shared findings do not prove duplicate events, pages or human delivery")})'
 }
 
 # Roll noise up by source target: where does the alerting noise concentrate?
@@ -121,11 +123,35 @@ alert_fatigue_by_source() {
   '
 }
 
+# ClickStack/HyperDX standalone dispatch uses audit-clickstack for config.
+# Its history is not implemented by the native AF collection harness. Preserve
+# other provider measurements and record that boundary even for zero findings.
+alert_fatigue_clickstack_coverage() {
+  af_date="$1"
+  . "${CLAUDE_PLUGIN_ROOT:-.}/report-standard/run-selection.sh"
+  sf_run_prepare "$AUDITS_DIR" "$af_date" || return 1
+  set --
+  for af_file in "$AUDITS_DIR"/clickstack/"$af_date"/findings.json "$AUDITS_DIR"/clickstack/*/"$af_date"/findings.json; do
+    [ -f "$af_file" ] || continue
+    sf_run_file "$af_file" || continue
+    set -- "$@" "$af_file"
+  done
+  if [ "$#" -eq 0 ]; then cat; return; fi
+  af_clickstack_targets=$(jq -n --arg root "$AUDITS_DIR/" --arg suffix "/$af_date/findings.json" --arg d "$af_date" '
+    [inputs | . as $doc | (input_filename|ltrimstr($root)|rtrimstr($suffix)) as $target | select($doc.run_date==$d and $doc.target==$target) | $target] | unique' "$@") || return 1
+  jq --argjson targets "$af_clickstack_targets" '. as $existing | . + [$targets[] | . as $target
+    | select(any($existing[]; .provider=="clickstack" and (.target // "clickstack")==$target)|not)
+    | {provider:"clickstack",target:$target,tier:"fire-history",status:"verify-pending",verification:"spec-only",
+       reason:"Native ClickStack/HyperDX fire-history collection is not implemented here; audit-clickstack supplies configuration findings only. No event or notification totals inferred"}]'
+}
+
 # --- FIRE-HISTORY (measured) tier --------------------------------------------
 # Validate an immutable local snapshot before either the measurements OR incident
 # feed can be read. Invalid input is retained for correction; the new roll-up
 # carries a blocked tier and the entry point returns nonzero after writing it.
 alert_fatigue_prepare_signals() {
+  . "${CLAUDE_PLUGIN_ROOT:-.}/report-standard/run-selection.sh"
+  sf_run_prepare "$AUDITS_DIR" "$audit_date" || return 1
   AF_SIGNAL_STATE="absent"; AF_SIGNAL_REASON=""
   AF_SIGNALS_DOCUMENT='{"signals":[],"provider_coverage":[]}'
   if [ ! -e "$SIGNALS_FILE" ] && [ ! -L "$SIGNALS_FILE" ]; then return 0; fi
@@ -140,6 +166,17 @@ alert_fatigue_prepare_signals() {
   if [ -f "$SIGNALS_FILE" ] && cat < "$SIGNALS_FILE" > "$af_tmp/signals.json" 2>/dev/null \
      && sh "$af_validator" "$af_tmp/signals.json" "$AUDITS_DIR" "$audit_date" >&2; then
     AF_SIGNALS_DOCUMENT="$(cat "$af_tmp/signals.json")" || { rm -rf "$af_tmp"; return 1; }
+    if [ "$SF_RUN_MODE" = selected ]; then
+      AF_SIGNALS_DOCUMENT=$(printf '%s' "$AF_SIGNALS_DOCUMENT" | jq --argjson run "$SF_RUN_DOCUMENT" '
+        . as $doc
+        | (try (.generated_at|sub("\\.[0-9]+Z$";"Z")|fromdateiso8601|.<=now) catch false) as $not_future
+        | .signals = [(.signals // [])[] | select($not_future and $doc.generated_at >= $run.started_at and ((.target // .provider) as $t | ($run.completed_targets|index($t))!=null))]
+        | .provider_coverage = [(.provider_coverage // [])[] | select((.target // .provider) as $t | ($run.targets|index($t))!=null)
+           | if .status=="collected" and (($not_future|not) or ($doc.generated_at < $run.started_at) or ((.target // .provider) as $t | ($run.completed_targets|index($t))==null))
+             then .status="verify-pending" | .reason="No fresh completed target evidence in this selected run" else . end]
+        | if .incident_feed.status=="collected" and (($not_future|not) or ($doc.generated_at < $run.started_at) or (.incident_feed.target as $t | ($run.completed_targets|index($t))==null))
+          then .incident_feed={status:"verify-pending",reason:"Incident population lacks a fresh completed target binding for this selected run"} else . end') || { rm -rf "$af_tmp"; return 1; }
+    fi
     AF_SIGNAL_STATE="validated"
     AF_SIGNAL_REASON=""
   fi
@@ -157,9 +194,12 @@ alert_fatigue_signal_coverage() {
 # incident-lifetime alertCount as `fires` or manufacture an AF-003 ratio.
 alert_fatigue_oncall_history() {
   AF_ONCALL_HISTORY='[]'
+  . "${CLAUDE_PLUGIN_ROOT:-.}/report-standard/run-selection.sh"
+  sf_run_prepare "$AUDITS_DIR" "$audit_date" || return 1
   af_history_reader="${CLAUDE_PLUGIN_ROOT:-.}/skills/audit-splunk-oncall/scripts/history.sh"
   for af_history_file in "$AUDITS_DIR"/splunk_oncall/"$audit_date"/oncall-history.json "$AUDITS_DIR"/splunk_oncall/*/"$audit_date"/oncall-history.json; do
     [ -e "$af_history_file" ] || [ -L "$af_history_file" ] || continue
+    sf_run_file "$af_history_file" || continue
     af_relative="${af_history_file#"$AUDITS_DIR"/}"
     af_target="${af_relative%/"$audit_date"/oncall-history.json}"
     if [ -f "$af_history_reader" ] && af_history_summary=$(sh "$af_history_reader" --summarize "$af_history_file" --run-date "$audit_date" --target "$af_target" 2>/dev/null); then
@@ -181,6 +221,13 @@ alert_fatigue_prepare_operator() {
   [ "$AF_SIGNAL_STATE" != "blocked" ] || return 0
   if printf '%s' "$AF_SIGNALS_DOCUMENT" | jq -e '.incident_feed.status=="collected"' >/dev/null; then return 0; fi
   if [ ! -e "$SIGNAL_FILE" ] && [ ! -L "$SIGNAL_FILE" ]; then return 0; fi
+  . "${CLAUDE_PLUGIN_ROOT:-.}/report-standard/run-selection.sh"
+  sf_run_prepare "$AUDITS_DIR" "$audit_date" || return 1
+  if [ "$SF_RUN_MODE" = selected ]; then
+    AF_OPERATOR_INVALID=1; AF_INPUT_STATE=blocked
+    AF_INPUT_REASON='Legacy operator fatigue counts have no target/generation binding for this selected run; provide a validated scoped measured snapshot'
+    return 0
+  fi
   if [ -f "$SIGNAL_FILE" ] && AF_OPERATOR_DOCUMENT="$(cat < "$SIGNAL_FILE" 2>/dev/null)" \
      && printf '%s' "$AF_OPERATOR_DOCUMENT" | jq -se 'length==1 and (.[0] | type=="object"
        and (.window|type)=="string" and (.window|test("\\S"))
@@ -337,6 +384,7 @@ alert_fatigue_save() {
   jq -n \
     --arg version "1.1" \
     --arg generated_at "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" \
+    --argjson run_selection "${AF_RUN_SELECTION:-null}" \
     --arg audit_date "$audit_date" \
     --arg input_status "$AF_INPUT_STATE" \
     --arg input_reason "$AF_INPUT_REASON" \
@@ -354,7 +402,8 @@ alert_fatigue_save() {
     --argjson total_storms "$total_storms" \
     --argjson tools_with_noise "$tools_with_noise" \
     --argjson fh_objects "$fh_objects" \
-    '{
+    -L "$AF_IDENTITY_LIB" \
+    'include "service-identity"; {
       schema: "scoutflo-alert-fatigue/v1",
       scoring_scope: "non-scored",
       version: $version,
@@ -374,12 +423,16 @@ alert_fatigue_save() {
          note: "advisory roll-up of the audits own alerting/hygiene findings; each is scored once in its home audit — this never re-scores, it aggregates and cites."},
         {af_id: "AF-002", type: "cross-source-alert-storm", severity: (if $total_storms > 0 then "medium" else "info" end),
          summary: (($total_storms|tostring) + " service(s) have potentially overlapping alerting configuration findings across audit targets; paging duplication and delivery are unverified"),
+         identity_assessment:{status:(if any($noise[]; (._bindings|length)<(.correlation_affected|unique|length)) then "partial" else "complete-for-supplied-findings" end),
+           unmappable_findings:[$noise[]|select((._bindings|length)<(.correlation_affected|unique|length))|{target,finding_id:.id}],
+           conflicting_identities:([$noise[]._bindings[]]|group_by(.key)|map(select(si_rows_consistent|not)|.[0].service_identity)),
+           reason:"Only current scope-qualified bindings support joins; zero groups is not proof of no duplicate paging"},
          storms: $storms},
         ({af_id: "AF-003", type: "alert-to-incident-ratio"} + $ratio),
         ({af_id: "AF-004", type: "alerting-reachability",
           severity: (if ($reachability.unreachable_objects // 0) > 0 then "high" else "info" end),
           summary: (if $reachability.status == "measured"
-                    then (($reachability.unreachable_objects|tostring) + " of " + ($reachability.measured_objects|tostring) + " alerting objects cannot reach a human by construction (measured)")
+                    then (($reachability.unreachable_objects|tostring) + " of " + ($reachability.measured_objects|tostring) + " alerting objects have no configured receiver in the assessed routing path; alternative delivery and human receipt are unverified")
                     else "reachability not measured this run (fire-history lane did not resolve routing)" end)} + $reachability),
         ({af_id: "AF-005", type: "measured-noise-volume",
           severity: "info",
@@ -400,7 +453,11 @@ alert_fatigue_save() {
          histogram: $antipatterns.histogram}
       ],
       method: "non-scored alert-fatigue ANALYSIS over local audit findings, optional validated fatigue-signals.json, and optional validated native On-Call history. AF-005 preserves incident-cohort counts separately from source fires, incident-lifetime alerts, notification attempts and human receipt. AF-003 requires independently supported matching units and cohorts. This library makes ZERO provider calls and never changes an audit finding or its severity."
-    }' > "$FATIGUE_FILE.tmp.$$" || { rm -f "$FATIGUE_FILE.tmp.$$"; return 1; }
+    } | if $run_selection.mode=="selected" then . + {run_selection:$run_selection} else . end' > "$FATIGUE_FILE.tmp.$$" || { rm -f "$FATIGUE_FILE.tmp.$$"; return 1; }
+  if [ -n "${AF_RUN_SELECTION:-}" ]; then
+    sf_run_prepare "$AUDITS_DIR" "$audit_date" || { rm -f "$FATIGUE_FILE.tmp.$$"; return 1; }
+    jq -en --argjson before "$AF_RUN_SELECTION" --argjson after "$SF_RUN_DOCUMENT" '$before==$after' >/dev/null || { rm -f "$FATIGUE_FILE.tmp.$$"; echo '[alert-fatigue] selected run changed during analysis; rerun' >&2; return 1; }
+  fi
   mv "$FATIGUE_FILE.tmp.$$" "$FATIGUE_FILE" || return 1
   # Precompute the summary scalars into vars first — bash 3.2 (macOS /bin/sh)
   # mis-parses MULTIPLE $(... '...' ...) command substitutions inside one
@@ -417,6 +474,9 @@ alert_fatigue_run() {
   audit_date="${1:-.}"
   [ "$audit_date" = "." ] && audit_date="$(date -u +%Y-%m-%d)"
   echo "[alert-fatigue] Starting analysis for $audit_date..."
+  . "${CLAUDE_PLUGIN_ROOT:-.}/report-standard/run-selection.sh"
+  sf_run_prepare "$AUDITS_DIR" "$audit_date" || return 1
+  AF_RUN_SELECTION=$SF_RUN_DOCUMENT
   # No earlier generated result may survive a failed attempt as current evidence.
   rm -f "$FATIGUE_FILE" "$AUDITS_DIR/alert-fatigue-report.md" "$AUDITS_DIR/alert-fatigue-report.html" || return 1
   findings=$(alert_fatigue_collect_findings "$audit_date") || return 1
@@ -424,7 +484,7 @@ alert_fatigue_run() {
   alert_fatigue_prepare_operator || return 1
   alert_fatigue_oncall_history || return 1
   signals=$(alert_fatigue_load_signals) || return 1
-  coverage=$(alert_fatigue_signal_coverage) || return 1
+  coverage=$(alert_fatigue_signal_coverage | alert_fatigue_clickstack_coverage "$audit_date") || return 1
   if [ "$(printf '%s\n' "$findings" | jq 'length')" -eq 0 ] && [ "$(printf '%s\n' "$signals" | jq 'length')" -eq 0 ]; then
     echo "[alert-fatigue] No findings and no fire-history signals for $audit_date; replacing the roll-up with empty configuration evidence and explicit measured gaps"
   fi

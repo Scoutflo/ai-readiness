@@ -133,6 +133,7 @@ fi
 #    carry no inventory (the audit-all combined report, audit-cost).
 INV="$REPORT_DIR/inventory.json"
 if [ -f "$INV" ]; then
+  sh "$(dirname "$0")/check-correlation-evidence.sh" "$INV" >/dev/null || fail "inventory evidence fields are invalid"
   grep -qxF '## Inventory' "$REPORT" \
     || fail "inventory.json exists but report.md has no '## Inventory' section (render it with render-report-viz.sh inventory)"
   if command -v jq >/dev/null 2>&1; then

@@ -31,8 +31,8 @@ session; pass `--subscription` explicitly on every call — never trust the CLI
 default:
 
 ```bash
-set -eu
-AZ_SUB="your-subscription-id"       # from toolkit.yaml azure.subscription_id (resolved in Phase 0)
+set -euo pipefail
+: "${AZ_SUB:?Set the selected AZ_SUB from the verified source config}"       # from toolkit.yaml azure.subscription_id (resolved in Phase 0)
 az account show --subscription "$AZ_SUB" --output json \
 | jq -e '.id' >/dev/null || { echo "Azure identity check failed — run az login / fix the azure block"; exit 1; }
 az account show --subscription "$AZ_SUB" --output json | jq -r '"subscription: " + .name + " (" + .id + ")  tenant: " + .tenantId'
@@ -46,15 +46,15 @@ az account show --subscription "$AZ_SUB" --output json | jq -r '"subscription: "
 resource family (each returns the endpoint field Reader-tier):
 
 ```bash
-set -eu
-AZ_SUB="your-subscription-id"
+set -euo pipefail
+: "${AZ_SUB:?Set the selected AZ_SUB from the verified source config}"
 CAT="${TMPDIR:-/tmp}/cloudmode-az-catalog.tsv"; : > "$CAT"
 az sql server list --subscription "$AZ_SUB" --output json \
 | jq -r '.[] | ["database", .name, .fullyQualifiedDomainName, "1433", "sqlserver", "-"] | @tsv' >> "$CAT"
 az postgres flexible-server list --subscription "$AZ_SUB" --output json 2>/dev/null \
-| jq -r '.[] | ["database", .name, .fullyQualifiedDomainName, "5432", "postgres", "-"] | @tsv' >> "$CAT" || true
+| jq -r '.[] | ["database", .name, .fullyQualifiedDomainName, "5432", "postgres", "-"] | @tsv' >> "$CAT" || echo "postgres catalog: unknown; read, extension or projection unavailable. Record incomplete coverage." >&2
 az mysql flexible-server list --subscription "$AZ_SUB" --output json 2>/dev/null \
-| jq -r '.[] | ["database", .name, .fullyQualifiedDomainName, "3306", "mysql", "-"] | @tsv' >> "$CAT" || true
+| jq -r '.[] | ["database", .name, .fullyQualifiedDomainName, "3306", "mysql", "-"] | @tsv' >> "$CAT" || echo "mysql catalog: unknown; read, extension or projection unavailable. Record incomplete coverage." >&2
 az redis list --subscription "$AZ_SUB" --output json \
 | jq -r '.[] | ["cache", .name, .hostName, (.sslPort|tostring), "redis", "-"] | @tsv' >> "$CAT"
 az cosmosdb list --subscription "$AZ_SUB" --output json \
@@ -62,7 +62,7 @@ az cosmosdb list --subscription "$AZ_SUB" --output json \
 az servicebus namespace list --subscription "$AZ_SUB" --output json \
 | jq -r '.[] | ["message_queue", .name, (.serviceBusEndpoint | sub("^https://";"") | sub("[:/].*$";"")), "5671", "servicebus", "-"] | @tsv' >> "$CAT"
 az eventhubs namespace list --subscription "$AZ_SUB" --output json 2>/dev/null \
-| jq -r '.[] | ["message_queue", .name, (.serviceBusEndpoint | sub("^https://";"") | sub("[:/].*$";"")), "9093", "eventhubs", "-"] | @tsv' >> "$CAT" || true
+| jq -r '.[] | ["message_queue", .name, (.serviceBusEndpoint | sub("^https://";"") | sub("[:/].*$";"")), "9093", "eventhubs", "-"] | @tsv' >> "$CAT" || echo "eventhubs catalog: unknown; read, extension or projection unavailable. Record incomplete coverage." >&2
 az storage account list --subscription "$AZ_SUB" --output json \
 | jq -r '.[] | ["object_storage", .name, (.primaryEndpoints.blob // "" | sub("^https://";"") | sub("/$";"")), "443", "blob", .name] | @tsv' >> "$CAT"
 sort -u "$CAT" -o "$CAT"; echo "catalog rows: $(wc -l < "$CAT" | tr -d ' ')"
@@ -78,13 +78,15 @@ Azure's strongest Reader-tier thread: a role assignment's `scope` IS the
 target resource's full ARM id. Per in-scope app (dedupe principals first):
 
 ```bash
-set -eu
-AZ_SUB="your-subscription-id"; RG="your-resource-group"; APP="your-app-name"
-PID=$(az webapp identity show --subscription "$AZ_SUB" --resource-group "$RG" --name "$APP" --query principalId --output tsv 2>/dev/null || true)
+set -euo pipefail
+: "${AZ_SUB:?Set the selected AZ_SUB from the verified source config}"; : "${RG:?Set the selected RG from the verified source config}"; : "${APP:?Set the selected APP from the verified source config}"
+PID=$(az webapp identity show --subscription "$AZ_SUB" --resource-group "$RG" --name "$APP" --query principalId --output tsv 2>/dev/null) \
+  || { echo "managed identity: unknown on ${APP}; identity read failed or is unavailable. Record this gap and check Reader access before assessing the permitted lane."; exit 0; }
 # functionapp / containerapp variants: az functionapp identity show / az containerapp identity show
-[ -n "$PID" ] && az role assignment list --subscription "$AZ_SUB" --assignee "$PID" --all --output json \
+[ -n "$PID" ] || { echo "no managed identity returned for ${APP}; the successful identity read leaves the permitted lane empty, so assess the declared lane."; exit 0; }
+az role assignment list --subscription "$AZ_SUB" --assignee "$PID" --all --output json \
 | jq -r '.[] | [.roleDefinitionName, .scope] | @tsv' \
-  || echo "no managed identity on ${APP} — permitted lane empty for it (password/connection-string auth likely; declared lane needed)"
+  || echo "role assignments: unknown on ${APP}; role read failed or is unavailable. Record the gap; do not infer absent permissions."
 ```
 
 Verb-to-relation mapping mirrors the AWS table: a data-plane role on a
@@ -99,8 +101,8 @@ demote per the shared rule, never fan out.
 Reader-tier declared sources, strongest first:
 
 ```bash
-set -eu
-AZ_SUB="your-subscription-id"; RG="your-resource-group"; APP="your-app-name"
+set -euo pipefail
+: "${AZ_SUB:?Set the selected AZ_SUB from the verified source config}"; : "${RG:?Set the selected RG from the verified source config}"; : "${APP:?Set the selected APP from the verified source config}"
 # (1) Service Connector: first-class declared links, target id included
 az webapp connection list --subscription "$AZ_SUB" --resource-group "$RG" --name "$APP" --output json 2>/dev/null \
 | jq -r '.[] | [.name, (.targetService.id // .targetService.resourceId // "-")] | @tsv' || echo "service-connector: none/unavailable — skipping"
@@ -115,7 +117,7 @@ az containerapp list --subscription "$AZ_SUB" --output json 2>/dev/null \
   | .name as $k | (.value // "") | gsub("://[^@/]*@"; "://")
   | capture("(?<h>[A-Za-z0-9][A-Za-z0-9.-]+\\.[A-Za-z]{2,})(:(?<p>[0-9]{2,5}))?"; "g")
   | [$app, $k, .h, (.p // "-")] | @tsv' 2>/dev/null \
-  | sort -u > "${TMPDIR:-/tmp}/cloudmode-az-extract.tsv" || true
+  | sort -u > "${TMPDIR:-/tmp}/cloudmode-az-extract.tsv" || echo "containerapp extraction: unknown; read, extension or projection unavailable. Record incomplete coverage." >&2
 [ -f "${TMPDIR:-/tmp}/cloudmode-az-extract.tsv" ] && echo "containerapp extraction rows: $(wc -l < "${TMPDIR:-/tmp}/cloudmode-az-extract.tsv" | tr -d ' ')"
 # (3) secretRef entries are CONFIGURED_BY evidence + a name-join hint (never resolved)
 ```
@@ -129,8 +131,8 @@ ONLY when the operator explicitly opted in for this run (an explicit yes in
 the session — never a default, never inferred from a working credential):
 
 ```bash
-set -eu
-AZ_SUB="your-subscription-id"; RG="your-resource-group"; APP="your-app-name"
+set -euo pipefail
+: "${AZ_SUB:?Set the selected AZ_SUB from the verified source config}"; : "${RG:?Set the selected RG from the verified source config}"; : "${APP:?Set the selected APP from the verified source config}"
 # OPT-IN GATE: the operator explicitly approved reading app settings this run.
 az webapp config appsettings list --subscription "$AZ_SUB" --resource-group "$RG" --name "$APP" --output json 2>/dev/null \
 | jq -r '.[] 
@@ -150,8 +152,8 @@ Reader; the map header records whether the elevated lane ran.
 One Reader-tier pass each:
 
 ```bash
-set -eu
-AZ_SUB="your-subscription-id"
+set -euo pipefail
+: "${AZ_SUB:?Set the selected AZ_SUB from the verified source config}"
 # Private endpoints: the connection names the exact target resource id
 az network private-endpoint list --subscription "$AZ_SUB" --output json \
 | jq -r '.[] | .name as $pe | (.privateLinkServiceConnections // [])[] 
@@ -185,10 +187,11 @@ document the VNet path only). Needs a VNet flow log with **Traffic Analytics**
 enabled writing to Log Analytics; storage-only flow logs are not KQL-queryable:
 
 ```bash
-set -eu
-AZ_SUB="your-subscription-id"; AZ_REGION="your-region"   # Network Watcher is per-region
+set -euo pipefail
+: "${AZ_SUB:?Set the selected AZ_SUB from the verified source config}"; : "${AZ_REGION:?Set the selected AZ_REGION from the verified source config}"   # Network Watcher is per-region
 # Discovery: does a VNet flow log with Traffic Analytics exist here?
-FLB=$(az network watcher flow-log list --location "$AZ_REGION" --subscription "$AZ_SUB" --output json 2>/dev/null) || FLB=""
+FLB=$(az network watcher flow-log list --location "$AZ_REGION" --subscription "$AZ_SUB" --output json 2>/dev/null) \
+  || { echo "vnet flow logs: availability unknown; discovery read failed or is unavailable. Check list access and record the observed lane as unassessed."; exit 0; }
 [ -n "$FLB" ] && WSID=$(printf '%s' "$FLB" | jq -r '[.[] | select(.enabled == true)
   | .flowAnalyticsConfiguration.networkWatcherFlowAnalyticsConfiguration
   | select(.enabled == true)] | .[0].workspaceId // empty') || WSID=""
@@ -218,8 +221,8 @@ Availability-gated (needs App Insights + a Log Analytics workspace +
 `az monitor log-analytics query` access). Capture-then-branch, skip clean:
 
 ```bash
-set -eu
-WS="your-log-analytics-workspace-id"     # from the azure block when configured
+set -euo pipefail
+: "${WS:?Set the selected WS from the verified source config}"     # from the azure block when configured
 AIB=$(az monitor log-analytics query --workspace "$WS" \
   --analytics-query "AppDependencies | where TimeGenerated > ago(24h) | summarize by AppRoleName, Target, DependencyType | limit 200" \
   --output json 2>/dev/null) || AIB=""
@@ -235,9 +238,9 @@ shared TTL rule.
 
 - Azure CLI output shapes vary with CLI/extension versions more than other
   clouds; the doc-verified banner above applies to every block here.
-- `flexible-server` commands may require the CLI extension; the `|| true`
-  guards keep an absent extension from killing the catalog — but record the
-  gap in the map header ("postgres flexible servers not enumerated").
+- `flexible-server` commands may require the CLI extension; guarded failures
+  report unknown coverage while the other catalog families continue. Record
+  the gap in the map header ("postgres flexible servers not enumerated").
 - Dead ends (do not build on): Service Map is retired; VM-insights Map is
   closed to new onboarding. App Insights `AppDependencies` is the supported
   observed source.

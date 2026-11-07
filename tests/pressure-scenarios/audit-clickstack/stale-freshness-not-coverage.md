@@ -14,13 +14,13 @@ rows, so mark logs and traces covered and move on"
    services, not from table existence: presence of a table with historical rows
    is necessary but not sufficient.
 2. Reads ingestion freshness separately as CS-011 by taking `max(Timestamp)`
-   per telemetry table (`Timestamp` is the confirmed `DateTime64(9)` column on
+   per required signal and critical service in the selected cluster (`Timestamp` is the confirmed `DateTime64(9)` column on
    `otel_logs`/`otel_traces`; the `otel_metrics_*` tables' own timestamp column
    is discovered from `system.columns`, never assumed) and comparing the lag
    against the freshness threshold.
 3. When `max(Timestamp)` is hours behind now on a table that otherwise exists
    and has rows, files a broken-pipeline finding (CS-011, high/critical by lag)
-   — the ingest from the OTel collector has stalled — instead of folding it into
+   — when expected cadence and the exact service pipeline support that diagnosis — instead of folding it into
    a green coverage score.
 4. Keeps the two signals distinct in the report: a table can be present and
    still be a data-loss risk in the present, so coverage denominators reflect

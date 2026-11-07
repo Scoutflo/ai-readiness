@@ -19,7 +19,7 @@ cat > "$WORK/bin/curl" <<'SH'
 #!/bin/sh
 set -eu
 if [ "${1:-}" = --version ]; then
-  if [ "$SOC_DOCTOR_MODE" = old-curl ]; then printf 'curl 8.3.0 fixture\n'; else printf 'curl 8.4.0 fixture\n'; fi
+  if [ "$SOC_DOCTOR_MODE" = unknown-curl ]; then printf 'curl unknown fixture\n'; elif [ "$SOC_DOCTOR_MODE" = old-curl ]; then printf 'curl 8.3.0 fixture\n'; else printf 'curl 8.4.0 fixture\n'; fi
   exit 0
 fi
 [ "${1:-}" = -q ] || exit 90
@@ -139,6 +139,9 @@ run_case missing-team good missing-team.yaml
 run_case old-curl old-curl single.yaml
 [ "$rc" = 3 ] || fail 'old curl was accepted'
 [ ! -s "$WORK/calls" ] || fail 'old curl reached the network'
+run_case unknown-curl unknown-curl single.yaml
+[ "$rc" = 3 ] || fail 'unparseable curl was accepted'
+[ ! -s "$WORK/calls" ] || fail 'unparseable curl reached the network'
 sed 's/label: beta/label: alpha/' "$WORK/list.yaml" > "$WORK/duplicate-label.yaml"
 run_case duplicate-label good duplicate-label.yaml
 [ "$rc" = 3 ] || fail 'duplicate labels were accepted'
@@ -157,4 +160,4 @@ sed '/  - label: beta/,$d; s/- label: alpha/- api_id_env: SOC_FIXTURE_ID_A/' "$W
 run_case unlabeled-single-list good unlabeled-single-list.yaml
 [ "$rc" = 3 ] || fail 'one-item list received an implicit label'
 [ ! -s "$WORK/calls" ] || fail 'unlabeled one-item list reached the network'
-printf 'ONCALL-DOCTOR-OK (29 behavior cases; fixed origin, credential isolation and body privacy)\n'
+printf 'ONCALL-DOCTOR-OK (30 behavior cases; fixed origin, credential isolation and body privacy)\n'

@@ -27,8 +27,8 @@ without it, the active gcloud login is the identity, exactly as `audit-gcp`
 works). Pass `--project` explicitly on every call:
 
 ```bash
-set -eu
-GCP_PROJECT="your-project-id"        # from toolkit.yaml gcp.project (resolved in Phase 0)
+set -euo pipefail
+: "${GCP_PROJECT:?Set the selected GCP_PROJECT from the verified source config}"        # from toolkit.yaml gcp.project (resolved in Phase 0)
 export CLOUDSDK_CORE_DISABLE_PROMPTS=1   # read-only safety: a disabled API must fail, never prompt to enable itself
 gcloud auth list --filter=status:ACTIVE --format="value(account)" | head -n1 | grep -q . \
   || { echo "no active gcloud identity — run gcloud auth login / set credentials_env"; exit 1; }
@@ -42,14 +42,14 @@ echo "gcp project: ${GCP_PROJECT}  identity: $(gcloud auth list --filter=status:
 `kind  id  endpoint_host  endpoint_port  engine  logical_names`:
 
 ```bash
-set -eu
-GCP_PROJECT="your-project-id"
+set -euo pipefail
+: "${GCP_PROJECT:?Set the selected GCP_PROJECT from the verified source config}"
 CAT="${TMPDIR:-/tmp}/cloudmode-gcp-catalog.tsv"; : > "$CAT"
 # Cloud SQL: connectionName is ALSO a join key (the Cloud Run annotation names it verbatim)
 gcloud sql instances list --project "$GCP_PROJECT" --format=json 2>/dev/null \
 | jq -r '.[] | . as $i
   | (.ipAddresses // [])[]? 
-  | ["database", $i.name, .ipAddress, "5432", ($i.databaseVersion // "-" | ascii_downcase), ($i.connectionName // "-")] | @tsv' >> "$CAT" || true
+  | ["database", $i.name, .ipAddress, (if ($i.databaseVersion | startswith("POSTGRES")) then "5432" elif ($i.databaseVersion | startswith("MYSQL")) then "3306" elif ($i.databaseVersion | startswith("SQLSERVER")) then "1433" else "unknown" end), ($i.databaseVersion // "-" | ascii_downcase), ($i.connectionName // "-")] | @tsv' >> "$CAT" || echo "cloud sql catalog: unknown; read or projection failed. Record incomplete coverage and check list access." >&2
 # Memorystore Redis: region-scoped list. Try the wildcard first; a gcloud release
 # without it falls back to the configured region(s) — say which path ran.
 MSB=$(gcloud redis instances list --project "$GCP_PROJECT" --region=- --format=json 2>/dev/null) || MSB=""
@@ -58,14 +58,14 @@ MSB=$(gcloud redis instances list --project "$GCP_PROJECT" --region=- --format=j
   || echo "memorystore: region-wildcard unavailable — re-run this line per configured gcp.region (verify live)"
 # Pub/Sub topics + subscriptions (logical names ARE the identity; no host)
 gcloud pubsub topics list --project "$GCP_PROJECT" --format=json 2>/dev/null \
-| jq -r '.[] | ["message_queue", (.name|split("/")|last), "pubsub.googleapis.com", "443", "pubsub", (.name|split("/")|last)] | @tsv' >> "$CAT" || true
+| jq -r '.[] | ["message_queue", (.name|split("/")|last), "pubsub.googleapis.com", "443", "pubsub", (.name|split("/")|last)] | @tsv' >> "$CAT" || echo "pubsub catalog: unknown; read or projection failed. Record incomplete coverage and check list access." >&2
 # Cloud Storage buckets
 gcloud storage buckets list --project "$GCP_PROJECT" --format=json 2>/dev/null \
-| jq -r '.[] | ["object_storage", (.name // .id), ((.name // .id) + ".storage.googleapis.com"), "443", "gcs", (.name // .id)] | @tsv' >> "$CAT" || true
+| jq -r '.[] | ["object_storage", (.name // .id), ((.name // .id) + ".storage.googleapis.com"), "443", "gcs", (.name // .id)] | @tsv' >> "$CAT" || echo "storage catalog: unknown; read or projection failed. Record incomplete coverage and check list access." >&2
 sort -u "$CAT" -o "$CAT"; echo "catalog rows: $(wc -l < "$CAT" | tr -d ' ')"
 ```
 
-The Cloud SQL port default above is engine-dependent (5432/3306/1433) — set
+The Cloud SQL port is derived from the observed engine (5432/3306/1433); an unsupported engine remains unknown. Verify
 it from `databaseVersion` when composing real rows.
 
 ## Declared configuration
@@ -75,13 +75,13 @@ carries the exact `PROJECT:REGION:INSTANCE` that the catalog's
 `connectionName` matches verbatim:
 
 ```bash
-set -eu
-GCP_PROJECT="your-project-id"; GCP_REGION="your-region"
+set -euo pipefail
+: "${GCP_PROJECT:?Set the selected GCP_PROJECT from the verified source config}"; : "${GCP_REGION:?Set the selected GCP_REGION from the verified source config}"
 gcloud run services list --project "$GCP_PROJECT" --region "$GCP_REGION" --format=json 2>/dev/null \
 | jq -r '.[] | .metadata.name as $svc
   | (.spec.template.metadata.annotations["run.googleapis.com/cloudsql-instances"] // "")
   | select(. != "") | split(",")[] 
-  | [$svc, "cloudsql", .] | @tsv' || echo "cloud run: none in ${GCP_REGION} — skipping"
+  | [$svc, "cloudsql", .] | @tsv' || echo "cloud run: unknown in ${GCP_REGION}; read or projection failed. Check list access and record this lane as unassessed."
 # Env extraction (same shared redaction discipline: secret-named keys skipped, secretKeyRef
 # recorded as a reference by NAME, userinfo stripped, extractions to the temp join file)
 gcloud run services list --project "$GCP_PROJECT" --region "$GCP_REGION" --format=json 2>/dev/null \
@@ -91,12 +91,12 @@ gcloud run services list --project "$GCP_PROJECT" --region "$GCP_REGION" --forma
   | select(.name | test("(?i)password|passwd|secret|token|api_?key|private|credential") | not)
   | .name as $k | (.value // "") | gsub("://[^@/]*@"; "://")
   | capture("(?<h>[A-Za-z0-9][A-Za-z0-9.-]+\\.[A-Za-z]{2,})(:(?<p>[0-9]{2,5}))?"; "g")
-  | [$svc, $k, .h, (.p // "-")] | @tsv' 2>/dev/null | sort -u > "${TMPDIR:-/tmp}/cloudmode-gcp-extract.tsv" || true
+  | [$svc, $k, .h, (.p // "-")] | @tsv' 2>/dev/null | sort -u > "${TMPDIR:-/tmp}/cloudmode-gcp-extract.tsv" || echo "cloud run extraction: unknown; read or projection failed. Record incomplete coverage." >&2
 [ -f "${TMPDIR:-/tmp}/cloudmode-gcp-extract.tsv" ] && echo "extraction rows: $(wc -l < "${TMPDIR:-/tmp}/cloudmode-gcp-extract.tsv" | tr -d ' ')"
 # secretKeyRef entries -> CONFIGURED_BY + name-join hints (never resolved)
 # Pub/Sub wiring from the resource side: push subscriptions name their consumer URL
 gcloud pubsub subscriptions list --project "$GCP_PROJECT" --format=json 2>/dev/null \
-| jq -r '.[] | [(.name|split("/")|last), (.topic|split("/")|last), (.pushConfig.pushEndpoint // "pull")] | @tsv' || true
+| jq -r '.[] | [(.name|split("/")|last), (.topic|split("/")|last), (.pushConfig.pushEndpoint // "pull")] | @tsv' || echo "pubsub subscriptions: unknown; read or projection failed. Record incomplete coverage." >&2
 ```
 
 Cloud Functions (`gcloud functions list --format=json` → env, event
@@ -108,8 +108,8 @@ triggers) follow the same pattern; the trigger is the ESM-equivalent
 Per distinct runtime service account (Cloud Run: `spec.template.spec.serviceAccountName`):
 
 ```bash
-set -eu
-GCP_PROJECT="your-project-id"; SA="runtime-sa@<project-id>.iam.gserviceaccount.com"   # the full SA address from the Cloud Run spec
+set -euo pipefail
+: "${GCP_PROJECT:?Set the selected GCP_PROJECT from the verified source config}"; SA="runtime-sa@<project-id>.iam.gserviceaccount.com"   # the full SA address from the Cloud Run spec
 # Preferred: one Asset-Inventory search per SA (needs cloudasset API enabled; skip clean)
 AIB=$(gcloud asset search-all-iam-policies --scope="projects/${GCP_PROJECT}" \
   --query="policy:${SA}" --format=json 2>/dev/null) || AIB=""
@@ -134,11 +134,11 @@ service in the VPC) can reach a private-IP instance whose address sits in the
 peered private-services range:
 
 ```bash
-set -eu
-GCP_PROJECT="your-project-id"
+set -euo pipefail
+: "${GCP_PROJECT:?Set the selected GCP_PROJECT from the verified source config}"
 gcloud compute networks list --project "$GCP_PROJECT" --format="value(name)" | while IFS= read -r NET; do
   gcloud services vpc-peerings list --network "$NET" --project "$GCP_PROJECT" --format=json 2>/dev/null \
-  | jq -r --arg n "$NET" '.[] | [$n, .peering, ((.reservedPeeringRanges // []) | join(","))] | @tsv' || true
+  | jq -r --arg n "$NET" '.[] | [$n, .peering, ((.reservedPeeringRanges // []) | join(","))] | @tsv' || echo "vpc peering: unknown for ${NET}; read or projection failed. Check read access and record the gap." >&2
 done
 ```
 
@@ -154,17 +154,17 @@ openings feed the cross-cloud attribution pass (shared rules, cookbook:
 one side, DO managed-DB allowlists on the other):
 
 ```bash
-set -eu
-GCP_PROJECT="your-project-id"
+set -euo pipefail
+: "${GCP_PROJECT:?Set the selected GCP_PROJECT from the verified source config}"
 # Cloud SQL public-IP authorized networks -> ip<TAB>instance (unattributed openings)
 gcloud sql instances list --project "$GCP_PROJECT" --format=json 2>/dev/null \
 | jq -r '.[] | .name as $i | ((.settings.ipConfiguration.authorizedNetworks // [])[]
-    | [.value, $i] | @tsv)' || true
+    | [.value, $i] | @tsv)' || echo "cloud sql authorized networks: unknown; read or projection failed. Record incomplete coverage." >&2
 # Firewall source ranges guarding db-tier tags -> range<TAB>target-tag
 gcloud compute firewall-rules list --project "$GCP_PROJECT" --format=json 2>/dev/null \
 | jq -r '.[] | select(.direction=="INGRESS") | .name as $r
     | ((.sourceRanges // [])[]) as $sr | ((.targetTags // ["*"])[])
-    | [$sr, .] | @tsv' || true
+    | [$sr, .] | @tsv' || echo "firewall source ranges: unknown; read or projection failed. Record incomplete coverage." >&2
 ```
 
 ## Observed lane: VPC flow logs
@@ -176,14 +176,23 @@ returned, including genuine service→datastore connections). Availability
 check first, then a bounded read:
 
 ```bash
-set -eu
-GCP_PROJECT="your-project-id"
+set -euo pipefail
+: "${GCP_PROJECT:?Set the selected GCP_PROJECT from the verified source config}"
 # Are flow logs enabled anywhere? (per-subnet setting)
-N=$(gcloud compute networks subnets list --project "$GCP_PROJECT" --format="value(enableFlowLogs)" 2>/dev/null | grep -c True || true)
+if SUBNET_FLAGS=$(gcloud compute networks subnets list --project "$GCP_PROJECT" --format="value(enableFlowLogs)" 2>/dev/null); then
+  N=$(printf '%s\n' "$SUBNET_FLAGS" | grep -c True || true)
+else
+  N=unknown
+fi
 # ⚠️ Two config surfaces exist (doc-verified): the classic per-subnet setting AND
 # Network Management API configs — the NM-API kind does NOT set enableFlowLogs on
 # subnets, so a zero count here does not prove flow logs are off. Probe both.
-NM=$(gcloud network-management vpc-flow-logs-configs list --location=global --project "$GCP_PROJECT" --filter="state:ENABLED" --format="value(name)" 2>/dev/null | grep -c . || true)
+if NM_CONFIGS=$(gcloud network-management vpc-flow-logs-configs list --location=global --project "$GCP_PROJECT" --filter="state:ENABLED" --format="value(name)" 2>/dev/null); then
+  NM=$(printf '%s\n' "$NM_CONFIGS" | grep -c . || true)
+else
+  NM=unknown
+fi
+[ "$N" != unknown ] && [ "$NM" != unknown ] || { echo "vpc flow logs: availability unknown (subnet=${N}, NM-API=${NM}); a discovery read failed or is unavailable. Record the missing source and check list access before assessing absence."; exit 0; }
 [ "$(( ${N:-0} + ${NM:-0} ))" -gt 0 ] || { echo "vpc flow logs: not enabled (subnet setting and NM-API configs both empty) — skipping (the unlock: enable flow logs on the subnets that matter)"; exit 0; }
 echo "flow-log config: subnet-enabled=${N} nm-api-configs=${NM}"
 # Bounded read. ⚠️ Use --freshness for the window — an in-query timestamp
@@ -217,8 +226,8 @@ Default-OFF on GCP and needs `roles/logging.privateLogViewer` — probe once,
 skip clean:
 
 ```bash
-set -eu
-GCP_PROJECT="your-project-id"
+set -euo pipefail
+: "${GCP_PROJECT:?Set the selected GCP_PROJECT from the verified source config}"
 DAB=$(gcloud logging read 'logName:"cloudaudit.googleapis.com%2Fdata_access" AND timestamp>="-24h"' \
   --project "$GCP_PROJECT" --limit 20 --format=json 2>/dev/null) || DAB=""
 [ -n "$DAB" ] && printf '%s' "$DAB" | jq -c '.[] | {sa: .protoPayload.authenticationInfo.principalEmail, res: .resource.type}' \

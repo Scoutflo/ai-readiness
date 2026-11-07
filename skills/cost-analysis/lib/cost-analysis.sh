@@ -58,6 +58,8 @@ cost_analysis_load_context() {
 # recommendation; findings without it are presence facts and carry no figure.
 cost_analysis_aggregate_findings() {
   audit_date="$1"
+  . "${CLAUDE_PLUGIN_ROOT:-.}/report-standard/run-selection.sh"
+  sf_run_prepare "$AUDITS_DIR" "$audit_date" || return 1
 
   # Glob BOTH the one-level `<target>/<date>/` and the two-level
   # `<integration>/<label>/<date>/` layouts (multi-target labels, and single-block
@@ -66,6 +68,7 @@ cost_analysis_aggregate_findings() {
   set --
   for findings_file in "$AUDITS_DIR"/*/"$audit_date"/findings.json "$AUDITS_DIR"/*/*/"$audit_date"/findings.json; do
     [ -e "$findings_file" ] || continue
+    sf_run_file "$findings_file" || continue
     relative="${findings_file#"$AUDITS_DIR"/}"
     case "$relative" in
       all/*|cost-analysis/*|cost/*|doctor/*) continue ;;
@@ -98,16 +101,24 @@ cost_analysis_aggregate_findings() {
 cost_analysis_deduplicate() {
   findings="$1"; cost_run_date="${2:-${audit_date:-}}"
 
-  if [ ! -f "$CORRELATION_FILE" ]; then
+  . "${CLAUDE_PLUGIN_ROOT:-.}/report-standard/run-selection.sh"
+  sf_run_prepare "$AUDITS_DIR" "$cost_run_date" || return 1
+  if [ "$SF_RUN_MODE" = selected ]; then
+    correlation=$(
+      . "${CLAUDE_PLUGIN_ROOT:-.}/skills/correlation-engine/lib/correlation-engine.sh"
+      current_findings=$(correlation_collect_findings "$cost_run_date") || exit 1
+      printf '%s' "$current_findings" | correlation_find_overlaps
+    ) || return 1
+  elif [ ! -f "$CORRELATION_FILE" ]; then
     # No correlation = no dedup possible, return as-is
     printf '%s\n' "$findings"
     return 0
-  fi
-
+  else
   correlation=$(jq -ce --arg date "$cost_run_date" 'if $date!="" and .audit_date==$date then (.overlaps // []) else [] end' "$CORRELATION_FILE") || {
     echo 'cost-analysis: correlation is unreadable; overlap annotation unavailable' >&2
     printf '%s\n' "$findings"; return 0
   }
+  fi
 
   printf '%s\n' "$findings" | jq \
     --argjson overlaps "$correlation" \
@@ -182,7 +193,7 @@ cost_analysis_build_report() {
         deduplicated_overlaps:
           ($findings | map(select(.deduplicated == true)) | length)
       },
-      note: "Savings totals sum only provider-native recommendation figures (Compute Optimizer, Cost Explorer, Datadog usage). Presence-fact findings carry no invented dollar value. Overlap flags annotate monitoring evidence only; totals are unadjusted sums, not proven unique savings. An empty result means no cost findings were supplied for this run; it does not establish zero spend or absence of waste.",
+      note: "Savings totals sum only provider-native recommendation figures (for example Compute Optimizer or Cost Explorer recommendations). Presence-fact findings carry no invented dollar value. Overlap flags annotate monitoring evidence only; totals are unadjusted sums, not proven unique savings. An empty result means no cost findings were supplied for this run; it does not establish zero spend or absence of waste.",
       trend: {last_5_runs: $trend}
     }
     '
@@ -204,6 +215,9 @@ cost_analysis_run() {
   # bias we removed from the deep cost path. There is no skip and no --force:
   # every invocation rebuilds from the findings present now.
   echo "[cost-analysis] Starting analysis for $audit_date"
+  . "${CLAUDE_PLUGIN_ROOT:-.}/report-standard/run-selection.sh"
+  sf_run_prepare "$AUDITS_DIR" "$audit_date" || return 1
+  COST_RUN_SELECTION=$SF_RUN_DOCUMENT
 
   # Load context
   context=$(cost_analysis_load_context)
@@ -220,11 +234,15 @@ cost_analysis_run() {
 
   # Build report
   report=$(cost_analysis_build_report "$audit_date" "$deduped" "$context")
+  report=$(printf '%s' "$report" | jq --argjson run_selection "$COST_RUN_SELECTION" 'if $run_selection.mode=="selected" then . + {run_selection:$run_selection} else . end') || return 1
+  sf_run_prepare "$AUDITS_DIR" "$audit_date" || return 1
+  jq -en --argjson before "$COST_RUN_SELECTION" --argjson after "$SF_RUN_DOCUMENT" '$before==$after' >/dev/null || { echo '[cost-analysis] selected run changed during analysis; rerun' >&2; return 1; }
 
   # Write report to cost-analysis.json
   report_dir="$AUDITS_DIR/cost-analysis/$audit_date"
   mkdir -p "$report_dir"
-  printf '%s\n' "$report" > "$report_dir/findings.json"
+  printf '%s\n' "$report" > "$report_dir/.findings.json.tmp.$$" || return 1
+  mv "$report_dir/.findings.json.tmp.$$" "$report_dir/findings.json" || return 1
 
   # Append to history (cost-analysis.jsonl) — ONE LINE per entry
   count=$(printf '%s\n' "$report" | jq '.summary.total_findings')

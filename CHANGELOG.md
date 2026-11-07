@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.247
+
+Bind source-to-On-Call verification to the source capture, exact definition, selected management target and protected credential generation. Evaluate multiple source routes against one bounded management snapshot; unbound legacy records and candidate handles remain readable without gaining verification credit.
+
+Project Datadog and HyperDX configuration before persistence. Resolve each Datadog site, named credential and output path in fresh shells; separate configured notification eligibility from human delivery and apply no-data policy only to declared heartbeat checks. Recognize v2 downtime scope strings and keep monitor-group suppression separate from whole-monitor coverage. HyperDX uses mode-specific bounded pagination, exact per-channel receiver joins and independent source/dashboard checks when local alerting is intentionally absent. Doctor keeps its HyperDX probe body in memory and treats refused access as an evidence gap without guessing the credential type. Preflight stops after mismatched identities or malformed stores, honors selected GCP credential files and metrics Basic pairs, verifies ClickHouse HTTP status as well as its result, and rejects HTML or malformed account/API responses without persisting raw JSON. Optional cost probes state their narrow evidence scope and avoid prescribing access changes for an unknown failure.
+
+Require qualified service identity, observed activation and collection evidence for cross-target correlation and fatigue. A missing target or partial inventory cannot prove a whole-estate coverage gap. Compose selected topology maps into a separate local estate view that preserves regional identities and configured-versus-observed links. Add HyperDX configuration analysis to standalone alert fatigue, while preserving explicit history limitations and existing report schemas.
+
+Bind combined reports, correlation, cost and fatigue to the selected run's validated completed artifacts. Stale same-day reports and roll-ups cannot inflate coverage; native fractional-second history timestamps retain their precision during completion checks. RCA selects exact target/date/resource evidence and redacts event and rollout messages before output. ClickStack adds bounded read-only SQL, per-service freshness, conservative retention/capacity conclusions and resumable assessments; setup retains its four capabilities through verified attended changes with explicit restore limits.
+
 ## 0.1.246
 
 Expand Splunk On-Call from routing and current staffing into 18 scored checks for

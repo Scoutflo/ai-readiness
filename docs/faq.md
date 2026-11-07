@@ -51,7 +51,7 @@ No. Audit skills are read-only by design and doctor-gated; the only writes are l
 Yes, even in a new session days later. Every setup change backs up what it touches and comes with an undo step that names the exact cluster, account, project, subscription or team it acts on. The undo refuses to run until you fill in the ids it prints, checks you are signed in to the right place before changing anything, and never deletes something that existed before the setup. Run it the same way as the change: it is announced first and waits for your confirmation.
 
 **We use MCP servers for our integrations instead of CLIs — does this still work?**
-Yes — the toolkit uses **both** and picks the best transport per operation, so you don't choose and don't configure anything. Most integrations (Grafana, Prometheus, Loki, Tempo, VictoriaMetrics/Logs, Sentry, Datadog, New Relic, PagerDuty, ELK, JSM, Zenduty, Splunk On-Call, Groundcover, SigNoz, ClickStack) are reached over HTTPS with a token, so a read needs only `curl` + `jq` — no vendor CLI; only Kubernetes and AWS/GCP/DigitalOcean use a CLI. Reads take the fast direct CLI/HTTP path; a connected MCP tool is used when it is the equivalent read route or the only reachable one, and for a write whose typed MCP tool is the safer path than a hand-built call. A stack with only CLIs, only MCP servers, or a mix all work. Configuration inspection can add local parsing dependencies: Alertmanager requires Python 3 with PyYAML and curl 8.4 or newer. Safety is unchanged: audits only ever call read-only tools (classified by effect, not name), never anything that mutates state.
+Yes — the toolkit uses **both** and picks the best transport per operation, so you don't choose and don't configure anything. Most integrations (Grafana, Prometheus, Loki, Tempo, VictoriaMetrics/Logs, Sentry, Datadog, New Relic, PagerDuty, ELK, JSM, Zenduty, Splunk On-Call, Groundcover, SigNoz, ClickStack) are reached over HTTPS with a token, so many reads need `curl` + `jq` — no vendor CLI; the Datadog/HyperDX safe projection recipes also require Python 3; only Kubernetes and AWS/GCP/DigitalOcean use a CLI. Reads take the fast direct CLI/HTTP path; a connected MCP tool is used when it is the equivalent read route or the only reachable one, and for a write whose typed MCP tool is the safer path than a hand-built call. A stack with only CLIs, only MCP servers, or a mix all work. Configuration inspection can add local parsing dependencies: Alertmanager requires Python 3 with PyYAML and curl 8.4 or newer. Safety is unchanged: audits only ever call read-only tools (classified by effect, not name), never anything that mutates state.
 
 **The report says a check is "not applicable" — is that the same as passing?**
 No. The report distinguishes four things, and only one of them is "nothing to do": a check can be
@@ -163,3 +163,25 @@ Prometheus, Grafana, Sentry and cloud audits own the alert source: whether its r
 `audit-all` includes the configured On-Call targets and preserves each audit's scope. Correlation and RCA use independently verified service identities; paging policies are not service monitors and do not establish application root cause. Alert-fatigue consumes current configuration findings and validates the On-Call history artifact for the same target and run date. Native history has its own window, completeness and incident counts; observed response means show acknowledgement/resolution sample sizes and missing transitions. It never invents source fires, actionability or notification counts. One incident or notification receipt is not representative history or proof of another channel.
 
 The On-Call management audit has no billing or provider-computed savings lane. Cloud cost audits continue to assess their own resources; cost-analysis never turns routing or staffing findings into dollars. Migration-plan supports only its published provider pairs, currently Datadog to SigNoz; it does not invent an On-Call migration recipe.
+
+### Can a matching service name or VictorOps handle prove coverage?
+
+No. New cross-target conclusions require qualified account or cluster/namespace identities, current source evidence and observed activation. A legacy name-only record remains readable but unmappable. `audit-all` retains the full selected queue, so missing/partial target inventories cannot produce a confident scoped absence conclusion. See [service evidence](../report-standard/service-evidence.md).
+
+Datadog and HyperDX project configuration before saving it. Their source packets distinguish a verified source read from a verified route. On-Call binds the source capture, exact safe definition, expected management target and private credential generation, then can check several routes against one management snapshot. A matching handle, webhook host or intermediate service is not proof of the exact routing key or human receipt.
+
+### Is an empty HyperDX alert list necessarily bad?
+
+No. The audit checks whether local alerts are required or another tool owns them by declared design. Source, connection and dashboard quality remain independently assessed. A denied or truncated read is unknown, not empty. Standalone alert-fatigue includes HyperDX configuration findings; it does not invent fire history or notification counts.
+
+### Can I review all regional topology maps together?
+
+Yes. Local estate composition preserves each map's qualified identities, timestamp and source hash. Configured exporter links remain distinct from observed traffic, including parallel telemetry and archive destinations. This local view does not add a new server import type or promise backend support for an unsupported provider.
+
+### Can a previous report be counted in a new combined run?
+
+A selected `audit-all` run records its start, target queue and validated completion receipts. The combined report, cost, fatigue and correlation readers use only those completed artifact generations. Missing targets stay unassessed; changed files or stale roll-ups require regeneration. Historical standalone reports remain readable with their dates and limits.
+
+### How are ClickStack setup changes applied?
+
+The setup skill retains retention, audit-user creation, HyperDX alerts and authentication hardening. It guides an attended change in the supported administrator surface, compares the exact target and before/after fields, preserves neighbouring settings and re-runs the read-only audit. Unknown API/DDL semantics block application. Restoring TTL configuration cannot recover data already deleted.

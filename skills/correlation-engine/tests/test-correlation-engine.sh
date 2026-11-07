@@ -19,6 +19,7 @@
 set -eu
 
 LIB_DIR="$(cd "$(dirname "$0")/../lib" && pwd)"
+export CLAUDE_PLUGIN_ROOT="$(cd "$LIB_DIR/../../.." && pwd)"
 
 fail() { echo "FAIL: $1" >&2; exit 1; }
 
@@ -33,6 +34,7 @@ write_findings() {
   jq -n --arg t "$2" --argjson f "$3" \
     '{target: $t, audit_date: "2026-01-15", findings: $f}' \
     > "$1/$2/$DATE/findings.json"
+  python3 "$LIB_DIR/../tests/qualified-fixtures.py" "$1" "$DATE"
 }
 
 # write_findings_2level <dir> <integration> <label> <target-field> <findings-json-array>
@@ -43,12 +45,14 @@ write_findings_2level() {
   jq -n --arg t "$4" --argjson f "$5" \
     '{target: $t, audit_date: "2026-01-15", findings: $f}' \
     > "$1/$2/$3/$DATE/findings.json"
+  python3 "$LIB_DIR/../tests/qualified-fixtures.py" "$1" "$DATE"
 }
 
 # run_engine <audit-dir> — runs correlation_run in a subshell so each case gets
 # its own SCOUTFLO_AUDIT_DIR (the lib resolves paths at source time) and no
 # machine state (~/.scoutflo business context / topology) leaks in.
 run_engine() {
+  python3 "$LIB_DIR/../tests/qualified-fixtures.py" "$1" "$DATE"
   (
     SCOUTFLO_AUDIT_DIR="$1"
     BC_JSON="$1/absent-business-context.json"
@@ -446,7 +450,7 @@ jq '.target={type:"signoz",host:"example.invalid",version:"legacy"}' "$f" > "$f.
 mkdir -p "$D18/datadog/secondary/$DATE"
 printf '%s\n' '{"target":{"type":"datadog","name":"secondary"},"items":[{"kind":"monitor","name":"checkout-alert","covers":"checkout","enabled":true,"routes_to":"oncall"}]}' > "$D18/datadog/secondary/$DATE/inventory.json"
 run_engine "$D18"
-jq -e '.total_findings_raw==1 and [.coverage[].target]==["signoz/primary"] and [.coverage[].classification]==["covered-elsewhere"]' "$D18/correlation.json" >/dev/null || fail 'case18: legacy target object crashed or lost canonical identity'
+jq -e '.total_findings_raw==1 and [.coverage[].target]==["signoz/primary"] and [.coverage[].classification]==["unmappable"]' "$D18/correlation.json" >/dev/null || fail 'case18: legacy target object crashed or lost canonical identity'
 echo "PASS"
 
 printf 'testing: failed consumer reads cannot masquerade as empty output ... '

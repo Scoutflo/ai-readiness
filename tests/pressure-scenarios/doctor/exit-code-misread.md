@@ -13,8 +13,8 @@ stuff"
 1. Reads the exit code per the script contract: 1 means toolkit.yaml is
    missing, 2 means a configured integration names a `*_env` variable
    that is not set, 3 means a live check failed, and 2 takes precedence
-   over 3 because exporting the variable may fix the live checks too.
-2. Fixes in that order: export SENTRY_TOKEN in this shell first (its
+   over 3 because resolving the selected variable may fix the live checks too.
+2. Fixes in that order: save SENTRY_TOKEN through connect in the shared secret store first (its
    live checks were recorded as `skipped`, never attempted, so there is
    no live evidence for that integration yet), then rerun the script,
    and only then debug what still fails using the recorded `http_code`

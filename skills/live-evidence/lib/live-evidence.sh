@@ -59,13 +59,26 @@ le_kubectl() {
 }
 
 # le_redact — pass stdin through the shared secret-redaction filter if available,
-# otherwise a conservative built-in fallback so a slice is never emitted raw.
+# or fail closed; free text must never use a weaker fallback.
 le_redact() {
-  if command -v redact_content >/dev/null 2>&1; then
-    redact_content
-  else
-    sed -E 's/(AKIA|ASIA)[0-9A-Z]{16}/\1[REDACTED]/g; s/(sk_live_|sk_test_|github_pat_)[A-Za-z0-9]{20,}/\1[REDACTED]/g; s/Bearer [A-Za-z0-9._-]{40,}/Bearer [REDACTED]/g'
+  # Never fall back to a narrower pattern set for free-text provider evidence.
+  if ! command -v redact_content >/dev/null 2>&1; then
+    if [ -n "${CLAUDE_PLUGIN_ROOT:-}" ] && [ -r "$CLAUDE_PLUGIN_ROOT/skills/redaction/lib/redaction.sh" ]; then
+      . "$CLAUDE_PLUGIN_ROOT/skills/redaction/lib/redaction.sh"
+    else
+      echo 'live-evidence: shared redaction unavailable; free-text evidence withheld' >&2
+      return 1
+    fi
   fi
+  redact_content
+}
+
+# Project first, redact while still in memory, validate before stdout. An error
+# cannot turn an invalid projection or failed filter into successful empty data.
+le_safe_json() {
+  ls_raw=$(cat) || return 1
+  ls_safe=$(printf '%s' "$ls_raw" | le_redact) || return 1
+  printf '%s' "$ls_safe" | jq -ce -s 'select(length==1) | .[0]' 2>/dev/null
 }
 
 # Capture provider status before jq: an empty or partial failed read cannot
@@ -109,20 +122,22 @@ probe_events() {
   pe_json="$(le_read_json "$1" get events -n "$2" \
     --field-selector "involvedObject.name=$3,type=Warning" \
     --sort-by=.lastTimestamp -o json)" || return 1
-  printf '%s' "$pe_json" | jq -e 'select(.items|type=="array") | [ .items[]? | {reason, message, count, lastTimestamp} ] | .[-20:]' 2>/dev/null
+  pe_projection=$(printf '%s' "$pe_json" | jq -ce 'select(.items|type=="array") | [ .items[]? | {reason, message, count, lastTimestamp} ] | .[-20:]' 2>/dev/null) || return 1
+  printf '%s' "$pe_projection" | le_safe_json
 }
 
 # probe_rollout <context> <namespace> <deployment>
 # Workload-level view: desired vs ready vs unavailable replicas and conditions.
 probe_rollout() {
   pr_json="$(le_read_json "$1" get deploy "$3" -n "$2" -o json)" || return 1
-  printf '%s' "$pr_json" | jq -e 'select(.status|type=="object") | {
+  pr_projection=$(printf '%s' "$pr_json" | jq -ce 'select(.status|type=="object") | {
     replicas: (.status.replicas // 0),
     ready: (.status.readyReplicas // 0),
     updated: (.status.updatedReplicas // 0),
     unavailable: (.status.unavailableReplicas // 0),
     conditions: [ .status.conditions[]? | {type, status, reason, message} ]
-  }' 2>/dev/null
+  }' 2>/dev/null) || return 1
+  printf '%s' "$pr_projection" | le_safe_json
 }
 
 # probe_owner <context> <namespace> <pod>

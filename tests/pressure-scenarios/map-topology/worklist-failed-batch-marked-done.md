@@ -26,3 +26,5 @@ mark it done in the worklist and publish the map, we're out of time"
 **Must not:** mark a namespace `done` after a failed pull, rebuild the
 worklist over an interrupted run, or overwrite the shared topology.md
 with a partial map.
+
+The run identity binds target, context and namespace filter. A different context cannot resume its state. The batch owns an atomic directory lock, never reclaims it by age, and completion verifies captured-file digests. Corrupting a projected file after `done` blocks publication. Literal workload env values, arguments and arbitrary annotations never enter batch files.

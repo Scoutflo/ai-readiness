@@ -5,7 +5,7 @@ description: 'Read-only, non-scored alert-fatigue analysis from existing audit f
 
 # alert-fatigue
 
-Alert noise & fatigue, two ways: identify potential overlap in alerting configuration, then report measured noise only where current fire-history or incident counts are available. It is a sibling of `/scoutflo:correlation-engine` and the `cost-analysis` roll-up. It **never mutates a finding or its severity and never re-scores**; each alerting-noise finding is scored **once**, in its home audit (`audit-alertmanager`, `audit-grafana`, `audit-datadog`, `audit-lgtm`, `audit-prometheus`, `audit-sentry`, `audit-pagerduty`, `audit-jsm`, `audit-zenduty`, `audit-splunk-oncall`, `audit-signoz`, `audit-newrelic`, `audit-groundcover`, `audit-digitalocean`); this skill **cites** those source finding-IDs and adds the estate-wide view.
+Alert noise & fatigue, two ways: identify potential overlap in alerting configuration, then report measured noise only where current fire-history or incident counts are available. It is a sibling of `/scoutflo:correlation-engine` and the `cost-analysis` roll-up. It **never mutates a finding or its severity and never re-scores**; each alerting-noise finding is scored **once**, in its home audit (`audit-alertmanager`, `audit-grafana`, `audit-datadog`, `audit-lgtm`, `audit-prometheus`, `audit-sentry`, `audit-pagerduty`, `audit-jsm`, `audit-zenduty`, `audit-splunk-oncall`, `audit-signoz`, `audit-newrelic`, `audit-groundcover`, `audit-digitalocean`, `audit-clickstack`); this skill **cites** those source finding-IDs and adds the estate-wide view.
 
 Current conclusions use only open, observed findings: `configured` or `validated-live`,
 with lifecycle `new`, `unchanged` or `regressed`. Missing status/lifecycle fields
@@ -28,7 +28,7 @@ When the user asks for an alert-noise/fatigue read on **one integration** (or a 
 **Doctor gate, live-safety gate and resume are mandatory for provider reads.**
 For config-lane checks, first run the owning audit's complete selected-target
 preflight, auth, live-safety and resume steps. This path stays **outside the history harness**;
-DigitalOcean's DO-017/026/073 config lane remains supported. Native DigitalOcean
+DigitalOcean's DO-017/026/073 and ClickStack/HyperDX's CS-040 + relevant CS-007 config lanes remain supported. Native DigitalOcean
 history is unavailable here: mark that measured tier `verify-pending`, then use
 its config findings. For supported measured reads, follow
 [collection-workflow.md](references/collection-workflow.md) to freeze the target,
@@ -42,12 +42,13 @@ completed receipts resume without extra reads. Local roll-up has no provider cal
    | Provider block | Run these alerting-lane checks (in its audit's references) |
    | --- | --- |
    | `alertmanager` (+`prometheus`) | `audit-alertmanager`; routing→live-receiver, flapping, permanently-firing, missing `for`, missing grouping/inhibition, duplicate delivery, resolve-noise |
-   | `datadog` | `audit-datadog`; DD-006/007/008/018/019/023/035-038/039 (measured alert-event volume, placeholder handles, `@all`, no-floor ratio, tautological threshold, downtime decay, dupes, never-evaluated, paused synthetic, partial-window flap) |
+   | `datadog` | `audit-datadog`; DD-006/007/008/018/019/023/035-038/039 (measured alert-event volume, placeholder handles, `@all`, no-floor ratio, tautological threshold, downtime decay, overlap candidates, missing transition history, paused synthetic, partial-window flap) |
    | `sentry` | `audit-sentry`; SNTRY-101/102/103/106/107/108/109/110 + SNTRY-014 (un-gated rules, all-env scope, flap-prone metric, fire-history, chronic re-page, name/scope, dead-weight, ownerless) |
    | `pagerduty` | `audit-pagerduty`; PD-016/017/026/043 (verify-pending: needs a live key) |
    | `splunk_oncall` | `audit-splunk-oncall`; routing, response, recurrence, recovery, workload and actionable-context checks from its catalog. Reuse bounded native `oncall-history.json` evidence under AF-005 and preserve blocked outcomes. Incident counts are not notification counts |
    | `zenduty` | `audit-zenduty`; ZD-007/008/025/033/034 (orphaned EP, bus factor, dormancy, GET-only actionability, timeout posture) |
    | `grafana` | `audit-grafana`; alert-rule wiring, receiver delivery |
+   | `clickstack` (including HyperDX) | `audit-clickstack`; CS-040 alert enablement, channel/reference and routing assessment, plus relevant CS-007 telemetry ownership. Reuse the owning audit's current envelopes and auth; native AF history is not implemented. See [the standalone lane](references/clickstack-standalone.md) |
    | `signoz` | `audit-signoz`; SIG-040 routing + SIG-042 SLO-aware alert quality |
    | `newrelic` | `audit-newrelic`; NR-010/011/012/013 (unwatched estate, uncaught policy, broken workflow→channel→destination linkage, destination posture) + NR-020-026 noise lane (single-tier terms, evaluation sanity incl. charts-vs-alerts divergence and sparse-signal stall, loss-of-signal, dead-weight disabled conditions, open-ended mutes, **measured `NrAiIncident` fire-history**; chronic opens, top-noisy, muted fires; and incidentPreference judgment) |
    | `elk` | `audit-elk`; ELK-007/015 (zero connectors, never-alerted stale rule) |
@@ -62,7 +63,7 @@ completed receipts resume without extra reads. Local roll-up has no provider cal
 3b. **Validate the signals file before analyzing it.** Run [`report-standard/check-fatigue-signals.sh`](../../report-standard/check-fatigue-signals.sh) `<fatigue-signals.json> <audits-dir> <run-date>`; it must print `FATIGUE-SIGNALS-OK`. It fails closed on a malformed schema, a wrong field type, an `off_hours_fires > fires` impossibility, a reasonless `verify-pending`, or a `source_finding_ids` that cites a finding absent from this run. Do not feed a file that fails validation into the roll-up.
 4. **Roll up** exactly as `alert_fatigue_run` does below. With one provider you still get its config + measured picture; with two or more you also get the cross-source view (AF-002). The library validates a snapshot of `fatigue-signals.json` before loading it. Invalid or stale input blocks the measured tier, replaces prior output, and returns nonzero.
 
-**If the operator has already run those audits today**, skip step 2; the findings exist; go straight to the roll-up (that is roll-up mode). This is the "handle both": standalone drives the checks; roll-up consumes them; the same `alert-fatigue.json` comes out.
+**If matching current artifacts already belong to this selected run**, skip step 2 and go straight to the roll-up; a same-date file alone is insufficient for a planned run (that is roll-up mode). This is the "handle both": standalone drives the checks; roll-up consumes them; the same `alert-fatigue.json` comes out.
 
 ## Fire-history collection lane (the measured tier; how this skill goes deeper than a re-list)
 
@@ -85,9 +86,9 @@ Absent source fire history, its AF-004/005/006 fields remain `not-in-scope`. AF-
 | ID | What it computes |
 | --- | --- |
 | `AF-001` | **Alerting-noise concentration** (config); every alerting/hygiene finding across all audits, grouped by source tool and severity. Cites each source finding-ID; re-scores nothing. |
-| `AF-002` | **Potential cross-source overlap** (config): a service carrying alerting-noise findings from **two or more** audit targets. They may describe one linked path or independent paths; configuration findings do not prove duplicate events, pages or human delivery. Verify the actual paths before changing routing. |
+| `AF-002` | **Potential cross-source overlap** (config): a current scope-qualified service identity carrying alerting-noise findings from **two or more** audit targets. They may describe one linked path or independent paths; configuration findings do not prove duplicate events, pages or human delivery. Verify the actual paths before changing routing. |
 | `AF-003` | **Alert-to-incident ratio** (incident-feed); computed from a **live incident feed** (`fatigue-signals.json` `.incident_feed`, collected read-only from PagerDuty/incident.io/Opsgenie) **or** an operator `fatigue.json`. Absent both → `not-in-scope`, never a fabricated percentage (with MTTA/MTTR/%-actionable when the feed supplies them). |
-| `AF-004` | **Alerting reachability** (measured); of the alerting objects whose routing was resolved, **how many can reach NOBODY** by construction (zero-subscriber SNS / zero-workflow detector / no channel), grouped by reason. The headline fatigue-adjacent finding. `not-in-scope` if no signal resolved routing. |
+| `AF-004` | **Alerting reachability** (measured); of the alerting objects whose routing was resolved, **how many have no configured receiver in the assessed path** (zero-subscriber SNS / zero-workflow detector / no channel), grouped by reason. Alternative paths and actual human receipt remain unverified. `not-in-scope` if no signal resolved routing. |
 | `AF-005` | **Measured noise volume & flapping**: real source fires and supported flapping indicators. Native On-Call `incident_history[]` adds separately labeled incident cohorts, recurrence candidates, response samples and assignment counts. Its `incident_history_status` does not change source fire counts or imply notification totals. |
 | `AF-006` | **Chronic / stuck alerts** (measured); objects firing continuously for a long time (desensitization risk), ranked by duration. |
 | `AF-007` | **Fatigue anti-pattern histogram** (config+measured); every noise finding classified into a named failure mode (dead-end, chronic-stuck, flap-prone, un-gated-repage, ownerless, decoration-or-dead-weight), with counts. Turns "N noise findings" into "what KIND of noise". |
@@ -96,7 +97,7 @@ Plus the **human report** (see §Running it): `alert-fatigue-report.md` and a st
 
 ## How it selects the noise (cites, never re-scores)
 
-A finding is rolled into the fatigue view when its `area` names the alerting/routing/hygiene plane **or** its title carries noise vocabulary (flapping, permanently-firing, missing `for`/debounce, duplicate delivery, re-notify/repeat storms, resolve-noise, missing grouping/inhibition, noisy volume, over-broad mute/silence). Both signals are already in each audit's `findings.json`, so every audit's noise checks aggregate here without a hardcoded ID list that would go stale, and without any change to the audits themselves. The finding keeps its own `id` and `severity`; this roll-up only tags it as a fatigue signal and cites it.
+A finding is rolled into the fatigue view when its `area` names the alerting/routing/hygiene plane **or** its title carries noise vocabulary (flapping, permanently-firing, missing `for`/debounce, duplicate delivery, re-notify/repeat storms, resolve-noise, missing grouping/inhibition, noisy volume, over-broad mute/silence). Both signals are already in each audit's `findings.json`, so every audit's noise checks aggregate here without a hardcoded ID list that would go stale, and without any change to the audits themselves. The finding keeps its own `id` and `severity`; this roll-up only tags it as a fatigue signal and cites it. AF-002 additionally requires the shared generation-bound `correlation_bindings` contract from [correlation-engine](../correlation-engine/SKILL.md). Bare names, stale evidence and conflicting cluster/account/environment scopes remain unmappable; AF-001 still counts their eligible source findings. AF-002 includes `identity_assessment`; zero joined groups is not proof that paging is free of duplicates.
 
 ## The optional fatigue-signal block (for AF-003 only)
 
@@ -188,7 +189,7 @@ Show the operator the rendered `alert-fatigue-report.md` (the worst-first, probl
 | Fabricated "N% of alerts are actionable" | Counts or acknowledgement alone do not establish actionability; use explicit reviewed labels and denominators. AF-003 ratios require matching grounded source-event/incident counts |
 | Re-scoring noise that an audit already scored | This roll-up never emits a scored result; it cites source finding-IDs and aggregates. Noise is scored once, in its home audit |
 | A single-block signoz/kubernetes or a multi-target label dropped from the roll-up | The findings collector globs BOTH `<target>/<date>/` and `<integration>/<label>/<date>/`, matching correlation-engine and the report standard |
-| A storm reported without evidence | `AF-002` identifies potential overlap only when a service's `affected` token appears in alerting-noise findings from two or more distinct target directories; each contributing finding is cited by its artifact-directory target + id. On-Call joins only the explicit source-verified `correlation_affected` subset, never account-local policy/team names or run-local route aliases. Its raw `affected` remains available for remediation. It never asserts that pages were delivered or duplicated |
+| A storm reported without evidence | `AF-002` identifies potential overlap only when current generation-bound, scope-qualified service bindings match across alerting-noise findings from two or more distinct target directories; each contributing finding is cited by its artifact-directory target + id. On-Call joins only the explicit source-verified `correlation_affected` subset, never account-local policy/team names or run-local route aliases. Its raw `affected` remains available for remediation. It never asserts that pages were delivered or duplicated |
 | Stale or invalid measured input appears current | The library gates the actual entry path with the signals validator; a blocked run replaces previous measurements and removes stale generated reports. Correct the retained source input and rerun |
 | A legacy structured target crashes or two named accounts collapse | Collector and renderer use the artifact-directory identity; old unambiguous envelope aliases remain readable for earlier roll-ups |
 | Mutating a finding's severity from the roll-up | The library only reads findings.json; it writes alert-fatigue.json and touches no per-audit artifact |

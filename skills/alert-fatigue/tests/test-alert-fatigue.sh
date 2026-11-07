@@ -48,6 +48,7 @@ mkfindings kubernetes "$DATE" '[
   {"id":"K8S-004","title":"Missing resource limits for deployment payments","severity":"high","area":"workload","affected":["payments"]}
 ]'
 
+python3 "$CLAUDE_PLUGIN_ROOT/skills/correlation-engine/tests/qualified-fixtures.py" "$SCOUTFLO_AUDIT_DIR" "$DATE"
 . "$LIB"
 alert_fatigue_run "$DATE" >/dev/null 2>&1
 OUT="$SCOUTFLO_AUDIT_DIR/alert-fatigue.json"

@@ -22,7 +22,7 @@ current conclusions. Historical missing status/lifecycle fields remain readable.
 
 1. Give two On-Call accounts the same local policy ID with an empty or absent
    `correlation_affected`. Both findings remain visible, but AF-002 must not join
-   them. An explicit canonical service token present in `affected` may join; a
+   them. An explicit service token present in `affected`, paired with a current matching scope-qualified binding, may join; a
    route alias or a token absent from `affected` may not.
 2. Run real entry blocks against stale/undated, malformed, negative-count or
    off-hours-greater-than-fires signals, including a phantom source ID when no
