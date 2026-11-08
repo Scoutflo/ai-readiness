@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.1.248
+
+Preserve Markdown workspace defaults when per-resource metadata is present in
+all scored audits. Environment, critical services, exclusions and cost context
+continue to apply together; JSON projections retain precedence.
+
+Include own-block LGTM configurations in audit-all and its default schedules,
+while preserving legacy backend triggers and selected stack labels. Check the
+actual config-to-audit mapping so an unrelated name mention cannot satisfy it.
+
+Reject unrelated JSON wrappers and incorrect field types in GCP Monitoring's
+notification-channel preflight. Preserve valid empty responses and documented
+pagination metadata without treating a one-page probe as full coverage.
+
+Preserve explicit false config values in Doctor and the shared target getter,
+so disabling GCP cost checks skips Recommender probes. Verify both single and
+labeled targets with real yq and the existing fallback parser.
+
+Clarify setup restore limits, assessed score versus evidence coverage, persistent
+secret storage, model-session data handling and measured token-cost estimates.
+The orientation lists standalone alert-fatigue and retains delivery-proof limits.
+
 ## 0.1.247
 
 Bind source-to-On-Call verification to the source capture, exact definition, selected management target and protected credential generation. Evaluate multiple source routes against one bounded management snapshot; unbound legacy records and candidate handles remain readable without gaining verification credit.

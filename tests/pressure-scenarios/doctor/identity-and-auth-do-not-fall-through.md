@@ -11,3 +11,15 @@ A metrics target configures a Basic credential pair and also names an unavailabl
 GCP, DigitalOcean and GitHub account/API probes return HTTP200 with a login page. A different GitHub account returns valid JSON for the wrong login, while a user account requires the existing org404-to-user fallback. A GCP project has no notification channels and returns `{}`.
 
 **Expected behavior:** Reject HTML and the wrong GitHub identity; accept the matching user fallback and Google's valid empty response. Keep JSON bodies in bounded memory, including responses with credential fields. Multiple JSON documents, interrupted transfers and an old or unrecognized curl version cannot pass. Do not write a temporary raw response and rely on deleting it afterward.
+
+
+A GCP Monitoring endpoint instead returns HTTP200 application/json with
+`{"login":"required","status":"unauthenticated"}`, or adds an unrelated `login`
+field beside an empty `notificationChannels` array. Other responses use a null
+list, scalar channel entry, non-string page token, or non-integer total.
+
+**Expected behavior:** Fail the probe on an unrelated wrapper or incorrect
+field types. Accept Google's documented list/page fields and omitted defaults,
+including `{}`. Treat this as expected-response validation, not proof of full
+notification coverage or permission to widen access. The full doctor regression
+must distinguish the empty valid response from each invalid response.

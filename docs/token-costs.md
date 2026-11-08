@@ -1,392 +1,86 @@
 # Token Costs and Pricing
 
-## Overview
+## What you pay for
 
-Scoutflo AI Readiness audit runs use Claude models via Claude Code on your machine. **All model invocations are billed to your Claude subscription or API account — nothing is sent to or billed by Scoutflo.** This page helps you understand and estimate the token consumption for your audit suite.
+Scoutflo AI Readiness is free under Apache-2.0. Runs use your selected model through Claude Code and count toward your subscription usage or API account. Scheduled runs consume usage on each execution. Provider queries, CI runners and other services can have their own charges; the plugin does not calculate those from model tokens.
 
-## Approximate baseline costs (Haiku 4.5)
+There is no guaranteed per-audit price, duration or model accuracy. Usage depends on the model, selected targets, instruction/context loading, provider response volume, history windows, retries and the work needed to investigate findings. A schema-conformance pass verifies output structure and arithmetic; it does not establish perfect semantic accuracy or equal accuracy between models.
 
-These are **order-of-magnitude baseline figures** to help you plan, not a guaranteed per-run price — actual consumption scales with your estate size (an audit that pages through thousands of rules costs more than the small/medium samples below). The plugin ships **20 scored audit skills** (the full catalog is in the README and `/scoutflo:start`) plus `audit-cost` (ranked-savings, not scored) and `audit-all`; the table below samples a representative subset. Your own numbers are reproducible — see [Reproducing these numbers](#reproducing-these-numbers).
+The plugin ships **20 scored audit skills**, plus `audit-cost` (ranked savings, not scored) and `audit-all` (orchestration). The current catalog is in the [README](../README.md#whats-in-the-box). Connecting another account or cluster can add another target pass even when it uses an already configured integration.
 
-### Per-Audit Token Consumption (representative sample)
+## Estimating API cost
 
-| Audit Skill | Estate Size | Input Tokens | Output Tokens | Total | Cost (Haiku) |
-|---|---|---|---|---|---|
-| `audit-datadog` | Medium | ~45K | ~20K | ~65K | ~$0.052 |
-| `audit-newrelic` | Medium | ~45K | ~20K | ~65K | ~$0.052 |
-| `audit-pagerduty` | Medium | ~40K | ~18K | ~58K | ~$0.046 |
-| `audit-elk` | Medium | ~35K | ~17K | ~52K | ~$0.042 |
-| `audit-jsm` | Small | ~32K | ~16K | ~48K | ~$0.038 |
-| `audit-zenduty` | Small | ~35K | ~16K | ~51K | ~$0.041 |
-| `audit-splunk-oncall` | Small, planning estimate; not measured | ~30K | ~15K | ~45K | ~$0.036 |
-| `audit-groundcover` | Small | ~30K | ~15K | ~45K | ~$0.036 |
-| `audit-grafana` | Medium | ~28K | ~14K | ~42K | ~$0.034 |
-| `audit-sentry` | Small | ~25K | ~13K | ~38K | ~$0.030 |
-| **Average** | **~45K per audit** | — | — | — | **~$0.047** |
+Use the usage counters for your actual model and your provider's [current pricing](https://www.anthropic.com/pricing). Price input and output separately:
+
+```text
+estimated API cost =
+    input tokens × input rate per million / 1,000,000
+  + output tokens × output rate per million / 1,000,000
+```
+
+Account separately for any cached-input categories or other billed token categories your provider reports. Do not multiply combined input/output tokens by the input rate. For example, a run with 30,000 input and 15,000 output tokens costs `0.03 × input_rate + 0.015 × output_rate` before other billing categories; those counts are an illustration, not a measured audit baseline.
+
+A subscription's usage limits do not translate directly into a per-run API bill. Check your account's usage and billing information for the model and execution surface you actually use. Old model names, prices and a previous small-estate run are not a quote for your next audit.
+
+## Measuring your own run
+
+1. Select one target and record the plugin version, model, audit scope and whether history or triage is enabled.
+2. Run the audit and read its assessed coverage and unresolved populations alongside the findings. A cheap interrupted run is not equivalent to a completed assessment.
+3. Record the client/provider's input, output and cache usage for that run, including retries. Use the provider's usage/billing records for exact charges.
+4. Repeat on representative targets before budgeting a full suite or recurring schedule. Keep full and triage runs separate in the comparison.
+
+A file's byte count measures source size, not billed tokens. The approximate bytes-divided-by-four convention can compare instruction corpora, but it is not a tokenizer or a guarantee that all references are loaded once. Model context, cached input, selected references and tool results change actual usage.
+
+The repository's `tests/measure-efficiency.sh` is a local measurement helper. Its byte listing samples 15 named audit directories and includes their Markdown files; it does **not** enumerate the current full catalog or measure a live model session. Use its output only with that scope stated. The old fixed-byte table is not a current benchmark. Its local roll-up demonstration does not measure the model tokens spent invoking a tool or reading its output.
+
+## Choosing a model
+
+Select a model in your Claude Code client or account configuration. The plugin has no per-audit model-selection flag. Validate the resulting findings on your own workload before choosing a cheaper model for recurring work.
+
+Model choice can affect token use, latency and reasoning quality. Parsing structured data does not remove the need to interpret scope, completeness, identity, time windows and operational consequences. No controlled comparison here establishes 100% accuracy, identical accuracy across models, or a fixed speed or cost multiplier.
+
+## Controlling scope and cost
+
+- **Run only the integrations and targets you need.** A targeted audit avoids the reads and analysis of unrelated targets. Use `/scoutflo:audit-all` when you want every configured target in its selected queue.
+- **Use triage for a first pass.** `SCOUTFLO_TRIAGE=1` selects a smaller, high-signal check set where supported. Deferred checks remain visible as unassessed; the result is not a full assessment. Fewer reads do not establish a fixed token or wall-time saving.
+- **Use bounded history windows.** Longer windows, more objects and pagination add work. An incomplete cohort must remain partial even if you stop early to control cost.
+- **Resume only against valid evidence.** Worklists can avoid repeating completed assessment rows while their capture and generation remain valid. A prior report or unchanged-looking estate does not prove a fresh audit will use fewer tokens.
+- **Budget recurring runs from observed usage.** Schedule only after checking the first run, its coverage and its usage. A schedule does not itself impose a model spending cap.
+
+Labeled accounts and clusters are assessed separately. Covering prod and pre-prod with separate configs adds their respective audit work; the local environment-comparison render reuses those artifacts, but its invocation and output can still enter model context.
+
+## Local aggregation and reuse
+
+Correlation, cost roll-up and estate composition compute from local artifacts without making model API calls or provider reads of their own. The surrounding model session can still consume tokens to invoke these operations, inspect their output and write explanations. Local processing is not a guarantee that an entire phase costs zero billed tokens.
+
+The cost roll-up regenerates from the selected current inputs; it does not use the old 24-hour skip cache. `audit-all` completion receipts and hashes prevent stale same-day or unfinished target artifacts from entering a new selected run. History supports comparisons, not a shortcut that substitutes old provider evidence for a fresh audit.
+
+Migration-plan's local disposition skeleton also reuses existing artifacts. Detail pulls and analysis still add work; source-only mode states the target evidence it cannot assess. The skill plans a migration and does not execute it.
+
+## Integration-specific cost factors
+
+### Splunk On-Call
+
+Cost scales with selected teams, policy graphs, users, the future coverage horizon and requested history window. The expanded quality/history lanes have no measured per-run token allowance here.
 
 On-Call triage avoids per-team and per-policy detail sweeps. Its collector uses five bounded reads; the published preflight, collection and report-validation phases include repeated four-read plans, seventeen reads in total before any confirming census. This is a request count, not a measured token or wall-time saving.
 
-Splunk On-Call cost scales with the selected teams, policy graph, users, future coverage horizon and requested history window. Optional history collection reads at most 100 incidents per reporting page, respects the provider's one-request-per-minute budget and retains progress for resumption. It reports completion explicitly; an interrupted or bounded subset cannot become a full-window total. This is incident history, not a complete source-fire or notification-attempt history. The table's small-estate estimate is unmeasured and does not include a measured allowance for the expanded quality/history lanes. Every labeled account adds a separate audit pass. Setup cost includes planning, dependency reads, immediate verification and any approved restoration; no fixed setup token or wall-time saving is claimed.
+Optional history collection reads at most 100 incidents per reporting page, respects the provider's one-request-per-minute budget and retains progress for resumption. It reports completion explicitly; an interrupted or bounded subset cannot become a full-window total. Incident history is distinct from source-fire and notification-attempt history.
 
-`audit-cost` (deep per-resource cost) and `/scoutflo:rca` (root-cause analysis) consume on the same order as an audit. `rca` reads reports already on disk as reference and then makes bounded, read-only live checks to confirm the current cause, so its cost depends on how many live probes it runs; with no cluster access it degrades to a report-only answer, which is the cheapest path.
+Batch source verification reuses one management collection for selected source records in the packet, avoiding a repeated full team/user/policy census for every route. Source capture and required detail reads remain separate. Every labeled account adds an audit pass. Setup includes planning, dependency reads, immediate verification and any approved restoration; no fixed setup saving is claimed. These model-usage considerations are separate from On-Call subscription billing, which the audit does not assess.
 
-Alertmanager configuration projection runs locally and emits structural metadata instead of raw receiver configuration. It adds no provider request by itself; Python 3 with PyYAML is required. No measured token-saving claim is made. These execution estimates are separate from provider subscription billing, which the On-Call audit does not assess.
-
-### Full Suite (all configured audits)
-
-**Token consumption (same for all models):** on the order of ~700K–1M tokens for a full multi-audit suite, scaling with how many integrations you configured and your estate size.
-
-**Relative cost by model tier** (Haiku is the default and recommended; the larger tiers cost proportionally more per token — check the current [Claude pricing](https://www.anthropic.com/pricing) for exact per-1M rates, which change over time):
-
-| Model tier | Relative cost | Notes |
-|---|---|---|
-| **Haiku 4.5** | **1× (baseline)** | ✓ Recommended — fast and sufficient for these audits |
-| Sonnet 5 | several× Haiku | Use only if you need deeper reasoning on a specific audit |
-| Opus 5 | ~an order of magnitude over Haiku | Rarely needed for these audits |
-
-**Cost range** (depending on estate complexity): 
-- Haiku: $0.40–$0.80
-- Sonnet: $1.50–$3.00
-- Opus: $7.50–$15.00
-
-### Factors That Affect Token Count
-
-1. **Estate size** (number of services/resources, hosts, integrations):
-   - Small estate (1–5 clusters, <50 services): ~40–50K tokens per audit
-   - Medium estate (5–15 clusters, 50–200 services): ~55–70K tokens per audit
-   - Large estate (>15 clusters, >200 services): ~100K+ tokens per audit
-
-2. **Configuration complexity**:
-   - Simple configs (few rules, dashboards, monitors): lower token count
-   - Complex setups (hundreds of alert rules, many integrations): higher token count
-
-3. **Model choice**:
-   - Haiku 4.5: $0.80 per 1M input tokens (recommended, fast, sufficient)
-   - Sonnet 5: $3 per 1M input tokens
-   - Opus 5: $15 per 1M input tokens
-
-4. **Audit scope**:
-   - Running a single audit: 40–70K tokens
-   - Running your full configured suite (`/scoutflo:audit-all`): on the order of ~700K-1M tokens
-   - Running a subset: proportional to audits included
-
-## Model Selection Guide
-
-### Which Model Should You Use?
-
-**TL;DR:** Use Haiku 4.5 (default). Change only if you have a specific reason.
-
-#### Haiku 4.5 (Default — Recommended)
-
-**Best for:** All audits (this is what they're designed for).
-
-- **Cost:** $0.80 per 1M input tokens
-- **Speed:** 2–5 minutes per audit
-- **Accuracy:** 100% for structured data tasks (audit configurations, JSON parsing, condition checking)
-- **Trade-offs:** None for audits
-
-**Why it's best:**
-- Audits are **read-only, structured analysis** — no reasoning needed
-- Haiku excels at parsing JSON, YAML, structured logs, and applying scoring rules
-- Fast enough for interactive runs or scheduled audits
-- Cheap enough for daily runs (full suite ~$0.56)
-
-**Verified:** The audit suite has passed conformance using Haiku with zero failures.
-
-#### Sonnet 5 (Consider If...)
-
-**Cost:** $3 per 1M input tokens (3.75× more than Haiku)  
-**Speed:** 3–10 minutes per audit (slower)  
-**Accuracy:** Same as Haiku for audits
-
-**Use Sonnet only if you're:**
-- Writing custom analysis on top of audit findings
-- Generating runbooks or remediation advice
-- Doing cross-audit reasoning (e.g., "which two services are most likely causing this incident?")
-- Need slightly better performance on very complex estate analysis
-
-**For standard audits:** Sonnet adds cost with no accuracy gain.
-
-#### Opus 5 (Rarely Needed)
-
-**Cost:** $15 per 1M input tokens (18.75× more than Haiku)  
-**Speed:** 5–15 minutes per audit (much slower)  
-**Accuracy:** Same as Haiku for audits
-
-**Use Opus only if:**
-- You're doing advanced AI reasoning over the audit findings
-- You need to synthesize insights across many audits with complex logic
-- Full suite cost is <$11 for you
-
-**For audits alone:** Opus is overkill and too expensive.
-
----
-
-### How to Override the Model
-
-If you want to use Sonnet or Opus instead of Haiku:
-
-**Option 1: Via Claude Code settings**
-- Open Claude Code settings (Claude.app → Settings)
-- Change the "Model" dropdown to Sonnet 5 or Opus 5
-- Run `/scoutflo:audit-*` as normal
-
-**Option 2: Per-audit override**
-- Run `/scoutflo:audit-grafana` as usual
-- Before Claude starts, select the model from the picker
-
-**Note:** The plugin itself doesn't have a model-selection flag. You control it via Claude Code's global model setting.
-
----
-
-### Cost Calculator: Pick Your Model
-
-Use this table to estimate your costs:
-
-```
-Full suite (702K tokens):
-  Haiku 4.5:    702K × $0.80/1M = $0.56
-  Sonnet 5:     702K × $3/1M    = $2.11
-  Opus 5:       702K × $15/1M   = $10.53
-
-Single audit (~60K tokens, average):
-  Haiku 4.5:    60K × $0.80/1M  = $0.048
-  Sonnet 5:     60K × $3/1M     = $0.18
-  Opus 5:       60K × $15/1M    = $0.90
-
-Weekly recurring (52 weeks, full suite each):
-  Haiku 4.5:    ~$29/year
-  Sonnet 5:     ~$110/year
-  Opus 5:       ~$548/year
-```
-
----
-
-## How to Control Costs
-
-### Option 1: Run Targeted Audits
-Instead of `/scoutflo:audit-all`, run only the audits you need:
-
-```bash
-# Run only the audits you care about:
-/scoutflo:audit-grafana
-/scoutflo:audit-lgtm            # your Prometheus/LGTM metrics-backend audit
-/scoutflo:audit-alertmanager  # the Prometheus -> Alertmanager paging path
-/scoutflo:audit-sentry
-```
-
-This keeps costs low while you validate one stack at a time.
-
-### Option 2: Schedule Recurring Audits with Cost Caps
-Use `/scoutflo:schedule-audits` to run audits weekly or monthly instead of on-demand. This lets you spread costs over time and catch drift early.
-
-### Option 3: Choose the Right Model
-
-The toolkit defaults to **Haiku 4.5**, which is the best choice for audits. Here's why and when to consider alternatives:
-
-#### Model Comparison
-
-| Model | Speed | Accuracy | Cost | Use When |
-|---|---|---|---|---|
-| **Haiku 4.5** (default) | 2–5 min/audit | ★★★★★ | $0.80/1M | All structured audits (recommended) |
-| Sonnet 5 | 3–10 min/audit | ★★★★★ | $3/1M | Complex custom analysis or reasoning |
-| Opus 5 | 5–15 min/audit | ★★★★★ | $15/1M | Very rare edge cases (not needed here) |
-
-#### Why Haiku for Audits?
-
-Audits are **structured data tasks** — read config, parse JSON/YAML, check conditions, score findings. This doesn't need reasoning power:
-- ✅ Haiku is fast enough (2–5 minutes per audit)
-- ✅ Haiku is accurate enough (same scoring as larger models on audit-type work)
-- ✅ Haiku is 3.75× cheaper than Sonnet, 18.75× cheaper than Opus
-
-**Measured:** 8 completed audits all used Haiku and passed conformance with zero failures.
-
-#### When NOT to Use Haiku
-
-Only override to a larger model if you're doing:
-- **Custom reasoning** over findings (e.g., "explain why this alert rule is noisy")
-- **Creative synthesis** (e.g., writing runbooks from findings)
-- **Complex decision trees** (rare)
-
-For these, Sonnet 5 is a good middle ground (3–10× more reasoning power, 3.75× higher cost).
-
-#### Cost Impact Examples
-
-**Full suite (all configured audits, all Haiku):**
-- 702K tokens × $0.80/1M = **$0.56**
-- Time: ~60 minutes
-
-**Same suite, all Sonnet:**
-- 702K tokens × $3/1M = **$2.11** (3.8× more expensive)
-- Time: ~120 minutes (slower)
-
-**Same suite, all Opus:**
-- 702K tokens × $15/1M = **$10.53** (18.8× more expensive)
-- Time: ~180 minutes (much slower)
-
----
-
-**Recommendation:** Use Haiku (default). Don't override unless you have a specific reason.
-
-## Real-World Example
-
-**Large-estate production audit**
-- 12 integrations, ~80 services, 3 clusters
-- Full suite run: `/scoutflo:audit-all`
-- **Tokens consumed:** ~720K
-- **Cost:** ~$0.58 at Haiku pricing
-- **Output:** 12 reports with findings, scores, remediation advice
-
-**Cost amortized over 6 months (monthly audits):** ~$3.50 / month, or $0.07 per integration.
-
-> **On wall-clock time:** we do not publish a "minutes per audit" or "X% faster"
-> figure. Audit wall-time is dominated by model latency and estate size — neither
-> is a property of the plugin, and we have not benchmarked it under controlled
-> conditions. The efficiency the plugin actually controls is **token/cost**, and
-> that is what the section below measures. We deliberately publish no wall-time
-> figure, since it would depend on your model choice and estate rather than the plugin.
-
-> **Triage mode reads less, so it costs less.** `SCOUTFLO_TRIAGE=1` runs a curated
-> high-signal subset per provider (smallest scope, no per-resource sweeps, bulk
-> reads over per-object fan-out), so it consumes materially fewer tokens than a
-> full deep run and renders the executive one-pager first. That saving is a real
-> property of the plugin (it does fewer/cheaper reads); we still publish no
-> "X% faster" wall-time claim, for the same reason as above. A triage report is a
-> subset, not a full assessment — run the deep audit when you want complete coverage.
-
-> **Migration-plan is artifact-first, so its skeleton is nearly free.** The
-> disposition skeleton is local `jq` over audit artifacts already on disk (zero
-> provider reads); token cost concentrates in the bounded detail pulls (only the
-> objects the plan needs) and the equivalence enrichment against the pair
-> catalog. Source-only mode (target not readable yet) reads even less.
-
-## Efficiency, measured
-
-The claims here are reproducible: run `sh tests/measure-efficiency.sh` from the
-repo root to regenerate every number. Byte counts are exact; token columns use
-the standard ~4-characters-per-token approximation and are labelled as estimates.
-The exact **variable** cost of a run (the provider data the model reads) can only
-be read from Claude Code's own per-turn token counter during a live run — this
-section measures the parts that are deterministic and plugin-controlled.
-
-### Fixed instruction cost per audit (exact bytes, current sources)
-
-Every audit run loads that audit's `SKILL.md` plus its `references/*.md`. This is
-the fixed floor before any of your live data is read. Regenerate these anytime with
-`sh tests/measure-efficiency.sh` (byte counts come straight from the shipped files):
-
-> **Multi-target audits scale per target.** When an integration is configured as a
-> labeled list — a `lgtm:` list of stacks (multi-cluster), a `clickstack:` list, or N
-> Azure subscriptions — the audit runs once per target, so its cost is roughly the
-> single-target figure below × the number of targets. The figures are per single
-> target/stack.
->
-> **The combined prod-vs-pre-prod report scales per environment.** Environment is a
-> separate config (`toolkit-prod.yaml` / `toolkit-nonprod.yaml`), so covering "all
-> environments" runs one full `audit-all` pass per environment — roughly the
-> single-environment suite cost × the number of environments. The `env-compare`
-> render that stitches them into one side-by-side report is pure shell over the
-> already-written `findings.json` files (no extra model tokens).
-
-| Audit | Fixed instructions (bytes) | ~tokens (est) |
-| --- | --- | --- |
-| audit-cost | 172,136 | ~43,000 |
-| audit-aws | 122,703 | ~30,700 |
-| audit-lgtm | 112,484 | ~28,100 |
-| audit-gcp | 98,499 | ~24,600 |
-| audit-sentry | 93,503 | ~23,400 |
-| audit-alertmanager | 92,805 | ~23,200 |
-| audit-digitalocean | 83,922 | ~21,000 |
-| audit-grafana | 76,695 | ~19,200 |
-| audit-pagerduty | 61,148 | ~15,300 |
-| audit-jsm | 59,137 | ~14,800 |
-| audit-elk | 58,991 | ~14,700 |
-| audit-zenduty | 58,401 | ~14,600 |
-| audit-groundcover | 53,470 | ~13,400 |
-| audit-datadog | 49,694 | ~12,400 |
-| audit-kubernetes | 27,130 | ~6,800 |
-| **All 15** | **1,220,718** | **~305,000** |
-
-Plus the shared report standard loaded once per run: ~70,300 bytes (~17,600 tokens est).
-
-### The lever you control: run the audits you need
-
-`/scoutflo:audit-all` runs everything configured. If you only care about three
-stacks, run those three skills directly. Because the fixed instruction cost is
-per-audit, a targeted subset cuts that floor proportionally — e.g. `audit-datadog`
-alone carries ~12,400 fixed instruction tokens versus ~305,000 for all 15. The
-audits also do not filter their own live queries (they aim for full breadth), so
-**running fewer audits — not filtering within an audit — is the real cost lever.**
-
-### Re-run avoidance: 24h skip logic (measured: zero extra model tokens)
-
-`audit-all`'s cost-analysis phase (3.6) and its correlation phase (3.5) are pure
-`/bin/sh` + `jq` — they cost **zero model tokens**. Cost-analysis additionally
-skips entirely when it ran within the last 24h and no audit produced newer
-findings (`cost-analysis.jsonl` history check). Verified by
-`tests/measure-efficiency.sh`: a first run writes the aggregated report; an
-unchanged re-run within the window short-circuits and does no model work at all.
-For recurring monitoring this means the aggregation/correlation layer adds no
-per-run model cost, and unchanged re-runs of that layer are free.
-
-### What this does **not** claim
-
-- No "X% faster" or "N hours → M hours." Not measured; not a plugin property.
-- The per-audit **variable** token cost (your live config data) scales with
-  estate size — see the estimates in "Measured Costs" above; read the exact
-  figure from Claude Code's turn counter for your own estate.
-
-## Billing
-
-- **Claude subscription users:** Token costs count against your subscription quota
-- **Claude API users:** Token costs are billed to your Anthropic API account
-- **No separate Scoutflo billing:** All costs go to your Claude account, not to Scoutflo
-
-Verify token consumption in:
-- Claude Code: Hover over the model name in the top-right to see the turn's token count
-- Claude API: Check your usage dashboard at console.anthropic.com
-
-## Estimating Your Estate
-
-To estimate your own costs:
-
-1. **Count your resources:**
-   - Number of Kubernetes clusters
-   - Number of services/workloads
-   - Number of alert rules, dashboards, monitors
-   - Number of integrations (Grafana, Prometheus, Sentry, etc.)
-
-2. **Apply the baseline:**
-   - Small estate (1 cluster, <50 resources): ~45K tokens per audit
-   - Medium estate (3–5 clusters, 50–200 resources): ~60K tokens per audit
-   - Large estate (>5 clusters, >200 resources): ~80K+ tokens per audit
-
-3. **Calculate:**
-   - Pick your audits: e.g., Grafana, LGTM, PagerDuty, Sentry = 4 audits
-   - Multiply baseline × number of audits: e.g., 60K × 4 = 240K tokens
-   - Multiply by per-million cost: 240K × ($0.80 / 1M) = ~$0.19
-
-## Frequently Asked Questions
-
-**Q: Why does a full audit run cost more than a single audit?**
-A: Each audit independently discovers and analyzes your entire estate. Costs don't compound, but they also don't get cheaper when you run multiple audits together — each audit is a separate analysis pass over the same resources.
-
-**Q: Can I reduce token usage by pre-filtering my resources?**
-A: Not directly. Audits are read-only and don't reduce their queries based on resource count — they aim for breadth (full coverage). You can reduce costs by running fewer audits or smaller subsets of audits, not by filtering within an audit.
-
-**Q: What if my estate is very large (>500 services)?**
-A: Token consumption will scale. A very large estate might consume 150–250K tokens per audit. Consider running audits in batches (e.g., one audit per day on a schedule) to spread costs and track drift over time rather than all at once.
-
-**Q: Can I use a cached audit result to avoid re-running?**
-A: Yes. The audit reports are saved to `./scoutflo-audits/<target>/history.jsonl` and re-runs compute the delta (what changed since last time). Running the same audit within a few days is cheaper because the state hasn't changed much. Leverage this for rapid iteration: run once, fix issues, run again to verify the delta.
-
-**Q: Does Scoutflo get a copy of my estate data for analysis?**
-A: No. All analysis happens on your machine in Claude Code. Your credentials stay in `~/.scoutflo/` and your reports stay in `./scoutflo-audits/` — nothing is sent to Scoutflo's servers. See [docs/install.md](install.md) for the full data-residency guarantee.
-
-## Source evidence and regional composition
+### Datadog, HyperDX and ClickHouse
 
 Datadog and HyperDX project source configuration locally before it enters reports. Each selected account/site still needs its own read; safe projection is not a measured token-saving claim. HyperDX bounds paginated alert/webhook collections at 100 rows per page and 50 pages per resource, with explicit incomplete status at a limit; source/dashboard lists without totals do not certify target completeness.
 
-On-Call batch verification reuses one management collection for all selected source records in the packet. This avoids repeating the whole team/user/policy census for each route; source capture and required detailed reads remain separate work. No fixed percentage or wall-time saving is claimed. Local qualified correlation and estate composition add no provider calls. Alert-fatigue's HyperDX configuration lane does not include native fire-history collection.
+ClickStack uses one bounded read-only mode probe per target/credential generation, then reuses it for at most 30 minutes; each actual query still validates access and output. Assessment worklists avoid repeating reviewed rows only while their captured evidence is unchanged. Standalone HyperDX alert-fatigue uses configuration evidence and does not collect native fire history.
 
-Selected-run validation and completion hashes are local operations. They add no provider calls. ClickStack uses one bounded read-only mode probe per target/credential generation, then reuses it for at most 30 minutes; each actual query still validates access and output. Assessment worklists avoid repeating reviewed rows only while their captured evidence is unchanged. Detailed live evidence remains the main cost driver, so state scope and unresolved populations before a broad read.
+### Alertmanager, cost and RCA
+
+Alertmanager configuration projection runs locally and emits structural metadata rather than raw receiver configuration. It adds no provider request by itself and requires Python 3 with PyYAML. No measured token-saving claim is made.
+
+`audit-cost` depends on the resources, billing exports and declared usage units being assessed. Its ranked savings are provider evidence, not the price of running the model. RCA reads saved reports as reference and adds bounded read-only live checks where access exists; its usage depends on those investigations. Without cluster access, it states its report-only limit.
+
+## Data handling
+
+Commands and reports run in your selected local environment or runner, while prompts, selected context and tool results can become part of the model session. The shipped plugin has no automatic Scoutflo telemetry, report-upload service or callback. Optional Slack delivery and CI caches/artifacts have separate destinations and retention. Local execution is not an offline-data or data-residency guarantee. See [data handling](data-handling.md) for credential storage, model processing and report sharing.

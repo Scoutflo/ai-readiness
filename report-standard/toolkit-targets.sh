@@ -63,9 +63,10 @@ yq_label() {
   else echo "$BLOCK"; fi
 }
 yq_get() {
+  # The default operator also replaces boolean false; drop only null/missing.
   k=$(yq_kind)
-  if [ "$k" = '!!seq' ]; then yq -r '.["'"$BLOCK"'"]['"$1"'].["'"$2"'"] // ""' "$CFG" 2>/dev/null
-  else yq -r '.["'"$BLOCK"'"].["'"$2"'"] // ""' "$CFG" 2>/dev/null; fi
+  if [ "$k" = '!!seq' ]; then yq -r '.["'"$BLOCK"'"]['"$1"'].["'"$2"'"] | select(tag != "!!null")' "$CFG" 2>/dev/null
+  else yq -r '.["'"$BLOCK"'"].["'"$2"'"] | select(tag != "!!null")' "$CFG" 2>/dev/null; fi
 }
 
 # --- awk fallback (no yq) -----------------------------------------------------

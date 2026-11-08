@@ -28,9 +28,9 @@ flowchart TD
         bctx["/scoutflo:business-context<br/>SLAs, critical svcs, per-env to business_context.md"]
     end
 
-    subgraph AUDIT["② Audit — read-only, scored 0–100, changes nothing"]
-        aud["20 audit skills: prometheus · lgtm · grafana · sentry · pagerduty · datadog<br/>elk · jsm · zenduty · splunk-oncall · groundcover · alertmanager<br/>kubernetes · digitalocean · gcp · aws · azure · clickstack · signoz · newrelic"]
-        cost["/scoutflo:audit-cost<br/>deep per-resource cost, ranked savings"]
+    subgraph AUDIT["② Audit — read-only, changes nothing"]
+        aud["20 audit skills — readiness 0–100 plus assessment coverage:<br/>prometheus · lgtm · grafana · sentry · pagerduty · datadog<br/>elk · jsm · zenduty · splunk-oncall · groundcover · alertmanager<br/>kubernetes · digitalocean · gcp · aws · azure · clickstack · signoz · newrelic"]
+        cost["/scoutflo:audit-cost<br/>deep per-resource cost, ranked savings — unscored"]
     end
 
     all["/scoutflo:audit-all<br/>runs every configured audit, then correlation +<br/>cost + alert-fatigue roll-ups + one Slack brief"]
@@ -100,6 +100,15 @@ Green = read-only (safe, changes nothing) · amber = write, gated behind your co
 
 ## What's new (latest release)
 
+**0.1.248** fixes four audit gaps: Markdown workspace defaults now load alongside
+per-resource metadata; `audit-all` includes every selected `lgtm:` stack; GCP
+Monitoring preflight rejects unrelated JSON responses while retaining valid empty
+lists; and explicit false settings survive config parsing, so disabled GCP cost
+checks stay disabled. The docs distinguish assessed scores from coverage, explain secret storage
+and state the limits of undo and model-cost estimates.
+
+The source-to-paging improvements from 0.1.247 remain:
+
 - **Stronger source-to-paging proof.** Datadog and HyperDX source evidence can feed On-Call verification with exact target and collection binding. Several routes share one bounded management read; handles and intermediate webhooks stay unverified until matched.
 - **Safer, more accurate collection.** Secret-bearing messages, queries and URLs are projected before saving. Datadog reads the selected account/site; HyperDX distinguishes missing receivers from partial reads and keeps source/dashboard checks independent of alert count.
 - **Current reports stay tied to this run.** Combined views use validated completed targets and show unfinished targets as unassessed; old same-day files cannot inflate coverage.
@@ -162,10 +171,10 @@ Then **fully restart** Claude Code / Claude.app so the new skills load — or, i
 ## Your first 15 minutes
 
 1. **`/scoutflo:connect`** — tell it which integrations you use (Grafana, Sentry, PagerDuty, Datadog, ELK/Kibana, JSM Operations, Zenduty, Splunk On-Call, groundcover, Prometheus, DigitalOcean, GCP, AWS, whatever applies). For each one it shows you the exact click-path to create a minimal-scope, read-only credential in that provider's own UI, and the exact command to export it in your own shell. It never asks you to paste a token into the chat, and never runs that command for you.
-2. **`/scoutflo:doctor`** — validates every credential you just set up with one cheap, read-only call per integration. Tells you exactly what's broken and how to fix it if anything is.
+2. **`/scoutflo:doctor`** — checks configuration, credential presence and scoped read-only access for each configured integration. A target can need several probes; each result states what was verified and what remains unknown.
 3. **`/scoutflo:map-topology`** (recommended, one time) — builds a real map of your services from the best source you have: Kubernetes/Istio, or your cloud inventory + APM on a non-Kubernetes estate; on AWS, Cloud Mode also maps the databases/caches/queues behind your services and the evidence-backed connections to them. Once this exists, every audit report uses your actual service names instead of generic ones.
 4. **Run your first audit** — pick whichever matches what you connected: `/scoutflo:audit-prometheus` (the deep **Prometheus** server + rule-engine plane — scrape/`up` coverage, TSDB cardinality, WAL/compaction, remote-write, config reload, rule health), `/scoutflo:audit-lgtm` (the LGTM/VictoriaMetrics stores; pair with `/scoutflo:audit-alertmanager` for the Prometheus→Alertmanager paging path), `/scoutflo:audit-grafana`, `/scoutflo:audit-sentry`, `/scoutflo:audit-pagerduty`, `/scoutflo:audit-datadog`, `/scoutflo:audit-elk`, `/scoutflo:audit-jsm`, `/scoutflo:audit-zenduty`, `/scoutflo:audit-splunk-oncall`, `/scoutflo:audit-groundcover`, `/scoutflo:audit-alertmanager`, `/scoutflo:audit-digitalocean`, `/scoutflo:audit-gcp`, `/scoutflo:audit-azure`, or `/scoutflo:audit-aws`. Or run everything you've configured at once with `/scoutflo:audit-all`.
-5. **Read the report** in `./scoutflo-audits/<target>/<date>/report.md` — a scored, evidence-backed breakdown of what's healthy and what isn't, with a direct pointer to the fix for each finding.
+5. **Read the report** in `./scoutflo-audits/<target>/<date>/report.md` — an evidence-backed breakdown with a direct pointer to the fix for each finding. Scored audits show readiness and assessment coverage; the cost audit ranks savings separately.
 
 That's it — nothing else is required to get real value out of this.
 
@@ -180,7 +189,7 @@ Every integration that supports scoped tokens gets one of two tiers:
 
 Start with read-only only. Add an elevated credential later, as a separate token, only when you're ready to actually fix something with a `setup-*` skill. `/scoutflo:connect` walks you through creating both, correctly scoped and named, per integration.
 
-Secrets live only in environment variables you export yourself. `~/.scoutflo/toolkit.yaml` (the one config file every skill reads) holds only hosts, org names, and the *names* of the environment variables — never a value.
+Credentials come from your environment, configured provider authentication or the protected local secret store. `/scoutflo:connect` guides you through storing a value or a trusted credential-fetch command; the store is a shell file with owner-only permissions, not an encrypted vault. `toolkit.yaml` holds endpoints and credential variable names, never secret values. Keep values out of chat and version control; see [data handling](docs/data-handling.md#configuration-and-credentials) for config/store locations and precedence.
 
 ## What's in the box
 
@@ -190,7 +199,7 @@ Secrets live only in environment variables you export yourself. `~/.scoutflo/too
 | --- | --- |
 | `/scoutflo:start` | Orientation: what's installed, what to do first, where reports land |
 | `/scoutflo:connect` | Guided credential setup per integration, two token tiers |
-| `/scoutflo:doctor` | Preflight: config parses, env vars are set, one live check per integration |
+| `/scoutflo:doctor` | Preflight: config, credential presence and scoped read-only probes per configured target |
 | `/scoutflo:map-topology` | Builds your real service map (Kubernetes/Istio, cloud inventories, APM) — on AWS incl. service→resource connections |
 | `/scoutflo:map-repos` | Maps each of your services to its GitHub repository — you confirm every match, it never auto-picks even an obvious one |
 | `/scoutflo:business-context` | Captures your SLAs, critical services, per-environment rules, and exclusions into one `business_context.md` that every audit reads to tune severity and scope |
@@ -199,7 +208,7 @@ Secrets live only in environment variables you export yourself. `~/.scoutflo/too
 | `/scoutflo:migration-plan` | Read-only migration **plan** between observability providers (currently Datadog → SigNoz): a complete evidence-cited inventory — what to migrate, what to fix first, what to drop (with the audit's proof), what the target already covers, what has no equivalent — plus the dual-write/cutover playbook. Plans only; it changes nothing on either side |
 | `/scoutflo:schedule-audits` | Sets up recurring audits via GitHub Actions, cron, or a Claude cloud schedule |
 
-**Audits** — read-only, scored 0–100, evidence-backed, change nothing. Beyond coverage, every audit also scores **alert hygiene** — flapping alerts, permanently-firing "wallpaper" rules, missing debounce, and noisy routing — so a healthy score means signal, not noise:
+**Audits** — read-only and evidence-backed. Scored audits show readiness alongside assessment coverage; `audit-cost` produces a separate ranked-savings report. Applicable alert-hygiene checks can assess debounce, grouping and routing, while measured flapping or fire counts need their own history evidence. A high score over a partial assessment is not an all-clear:
 
 | Skill | What it covers |
 | --- | --- |
@@ -258,7 +267,7 @@ Every `audit-all` report opens with an **executive one-pager**: a posture grade,
 
 ## Reading a report
 
-Every audit run writes three files:
+Scored audit reports use the following layout; the cost audit has its own ranked-savings schema:
 
 ```
 ./scoutflo-audits/
@@ -272,7 +281,7 @@ Every audit run writes three files:
 
 `report.md` opens with an **At a glance** dashboard (a score bar, a trend sparkline, checks-passed, a severity histogram, and a "start here" pointer to the highest-value fix), then an executive summary and a score out of 100, a weighted scorecard by category, a findings section (every finding has a severity, real evidence, and a direct pointer to the setup skill that fixes it), a **Findings by purpose** view that lists the same findings under a **General audit** heading (operational reliability) and an **AI SRE readiness** heading (each with what's wrong, why it matters, and the fix — same evidence, no second score), and a "next safe actions" list ordered so you can start at row 1 with nothing to prepare first. `report.html` is a self-contained visual version of the same data (score donut, severity bars, sortable scorecard and findings) that opens in any browser. Re-run the same audit later and it shows you the delta — what got fixed, what's new, how the score moved.
 
-A score of 85+ with full coverage of every critical service earns the "end-to-end" label; below that, the honest phrasing is "good base coverage" — this toolkit never inflates a partial setup into a false "you're covered." And a check it genuinely couldn't run — a denied API, a missing permission — is marked *unassessed* and kept **out** of the score (not counted as a failure); a fully-blocked audit reads **"Unassessed"** rather than a misleading `0/100`, and **assessment coverage** (how much was actually checked) is always shown next to the score.
+The "end-to-end" label requires a score of 85+, verified coverage of every critical service, no excluded category and 100% assessment coverage. A check that could not be assessed, such as a denied API read, stays **out** of the readiness score and lowers assessment coverage. A low score describes unhealthy or incomplete assessed results; a high score can still cover only a small subset. A fully blocked audit reads **"Unassessed"** rather than `0/100`. Read the score, coverage and stated evidence gaps together; see [scoring and coverage](report-standard/severity-and-scoring.md).
 
 Every `report.md` is validated against a fixed output-conformance standard before it is written, so the structure — at-a-glance dashboard, summary, scorecard, findings, next safe actions, evidence — is the same run to run and across every stack.
 
