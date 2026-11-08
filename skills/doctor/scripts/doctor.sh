@@ -183,7 +183,8 @@ fi
 # --- config parsing: yq fast path, sed fallback -------------------------------
 
 HAVE_YQ=0
-if command -v yq >/dev/null 2>&1 && yq -r '. | keys | length' "$CONFIG" >/dev/null 2>&1; then
+if command -v yq >/dev/null 2>&1 && yq -r '. | keys | length' "$CONFIG" >/dev/null 2>&1 && \
+  yq -r '. | tag' "$CONFIG" >/dev/null 2>&1; then
   HAVE_YQ=1
 else
   note "doctor: yq not usable; using the built-in flat parser (two-level keys only)"
@@ -194,7 +195,8 @@ fi
 # a top-level "block:" line followed by indented "key: value" lines.
 cfg() {
   if [ "$HAVE_YQ" -eq 1 ]; then
-    yq -r ".${1}.${2} // \"\"" "$CONFIG" 2>/dev/null || true
+    # A deliberate false value is not a missing key.
+    yq -r ".${1}.${2} | select(tag != \"!!null\")" "$CONFIG" 2>/dev/null || true
   else
     sed -n "/^${1}:/,/^[A-Za-z_]/p" "$CONFIG" \
       | sed -n "s/^[[:space:]]\{1,\}${2}:[[:space:]]*//p" \
@@ -1677,7 +1679,8 @@ else
         elif [ -z "$GCP_TOKEN" ]; then
           row "$GCP_INT" identity yes "${GCP_CRED_VAR:-none}" fail - "gcloud produced no access token; run gcloud auth login (or point credentials_env at a service-account key) and rerun doctor"
         else
-          live_check "$GCP_INT" monitoring-api "https://monitoring.googleapis.com/v3/projects/${GCP_PROJECT}/notificationChannels?pageSize=1" "${GCP_CRED_VAR:-none}" "$GCP_TOKEN" 'type=="object" and (has("error")|not) and ((has("notificationChannels")|not) or (.notificationChannels|type=="array"))'
+          # Google omits default fields, so {} is valid; unrelated objects are not.
+          live_check "$GCP_INT" monitoring-api "https://monitoring.googleapis.com/v3/projects/${GCP_PROJECT}/notificationChannels?pageSize=1" "${GCP_CRED_VAR:-none}" "$GCP_TOKEN" 'type=="object" and ((keys-["notificationChannels","nextPageToken","totalSize"])|length==0) and ((has("notificationChannels")|not) or (.notificationChannels|type=="array" and all(.[];type=="object"))) and ((has("nextPageToken")|not) or (.nextPageToken|type=="string")) and ((has("totalSize")|not) or (.totalSize|type=="number" and .==floor))'
           # Informational cost probe (like the AWS/Datadog ones): never fails doctor.
           # audit-cost reads this row to run GCP Recommender native-dollar checks or
           # report them excluded; the presence-fact GCP checks run regardless.

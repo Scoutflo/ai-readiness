@@ -50,10 +50,11 @@ the per-resource cache never replaces the workspace rules, it only adds detail.
 
 ## The Metadata Load block audit skills embed
 
-This is the **canonical block** every own-block `audit-*` embeds verbatim (the
-`business-context-parity` gate asserts it is present and names an apply behavior;
-`audit-lgtm` / `audit-alertmanager` are the shared-backend exemptions). It loads
-the workspace layer and the per-resource layer **together**:
+All 20 scored audits implement the following load order. Their runnable Metadata
+Load fences combine source detection and parsing; the examples below explain
+those steps separately. `business-context-parity` checks the wiring and concrete
+apply behavior, while `tests/test-business-context-metadata.sh` executes each
+audit's fence. The workspace and per-resource layers load **together**:
 
 ```bash
 set -eu
@@ -76,6 +77,7 @@ elif [ -f "$BC_MD" ]; then
 fi
 
 if   [ "$HAVE_PER_RESOURCE" -eq 1 ] && [ "$HAVE_WORKSPACE" -eq 1 ]; then LOAD_METADATA_MODE="per-resource+workspace"
+elif [ "$HAVE_PER_RESOURCE" -eq 1 ] && [ -n "$BC_SRC" ];             then LOAD_METADATA_MODE="per-resource+ssot-md"
 elif [ "$HAVE_PER_RESOURCE" -eq 1 ];                                then LOAD_METADATA_MODE="per-resource"
 elif [ "$HAVE_WORKSPACE" -eq 1 ];                                   then LOAD_METADATA_MODE="workspace"
 elif [ -n "$BC_SRC" ];                                              then LOAD_METADATA_MODE="ssot-md"
@@ -100,8 +102,9 @@ jq -r --arg e "$ENVIRONMENT" '.environment_map[]? | select(.environment==$e)' "$
 jq -r '.service_slas[]? | "\(.service)=\(.sla)"' "$BC_JSON" 2>/dev/null || true
 ```
 
-When only the markdown SSOT exists (`LOAD_METADATA_MODE="ssot-md"`), read the same
-rules straight from `business_context.md` — the sections `business-context` writes:
+When the selected workspace source is Markdown (`BC_SRC="$BC_MD"`), read the
+same rules from `business_context.md`, including when the resource cache is
+present (`LOAD_METADATA_MODE="per-resource+ssot-md"`) — the sections `business-context` writes:
 
 ```bash
 set -eu

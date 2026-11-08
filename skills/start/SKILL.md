@@ -5,7 +5,7 @@ description: 'Orientation for the Scoutflo AI Readiness: execution and data hand
 
 # Scoutflo AI Readiness: Start Here
 
-This toolkit audits, hardens, and monitors your infrastructure and observability stacks from Claude Code. Audit skills produce a scored report with command-level evidence. Setup skills fix what an audit found, one confirmed change at a time. Harness skills, this one included, wire everything together.
+This toolkit audits, hardens, and monitors your infrastructure and observability stacks from Claude Code. Scored audits report readiness and assessment coverage with command-level evidence; the cost audit produces a separate, unscored ranked-savings report. Setup skills fix what an audit found, one confirmed change at a time. Harness skills, this one included, wire everything together.
 
 **Open this orientation with the loaded toolkit version as the first line — this is mandatory, not optional** (read `version` from `${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json`). Plugins do not auto-update: if a teammate's skill list or picker looks different, compare versions first and update with `claude plugin update scoutflo@scoutflo`. And updating on disk is not enough while a session is live: a running Claude Code session keeps whatever plugin version it loaded at startup; after `claude plugin update scoutflo@scoutflo` run `/reload-plugins` (or restart Claude Code), then re-run — otherwise you are still on the old version.
 
@@ -14,14 +14,14 @@ This toolkit audits, hardens, and monitors your infrastructure and observability
 - Your machine or selected runner executes integration commands and stores working data and reports.
 - Claude Code can include prompts, selected context and tool results in the model session. Your client, account and configured model provider govern that processing; running commands locally does not make the model session offline.
 - The shipped plugin has no automatic Scoutflo telemetry, report-upload service or callback. Optional Slack delivery and scheduled CI caches/artifacts can send data to services you configure. Read the [data-handling guide](../../docs/data-handling.md) before sharing reports or enabling a schedule.
-- Configuration lives in `~/.scoutflo/toolkit.yaml`: hosts, orgs, and names in plain text. Secrets never go in that file; every `*_env` key names an environment variable that holds the secret, and skills check presence only, never the value.
+- Configuration lives in `~/.scoutflo/toolkit.yaml`: hosts, orgs, and names in plain text. Secrets never go in that file; each `*_env` key names a variable loaded from the protected local store or exported environment. Skills use the selected credential for authenticated requests without printing or recording its value.
 - Audit skills are strictly read-only: GET, list, describe, query. No test notifications, no silences, no state creation of any kind.
 - Setup skills show you the exact change, wait for your explicit confirmation, apply it, then re-read the object to prove the change landed.
 
 ## First steps
 
 1. `/scoutflo:connect` sets up `~/.scoutflo/toolkit.yaml` and walks you through creating credentials per integration: exact scopes, where to click, read-only tokens for audits. It first scans for credentials you already have and offers to reuse them, and it stores tokens in the home-anchored `~/.scoutflo/env` so you set each one **once** — new terminals, new sessions, and other directories all pick them up automatically.
-2. `/scoutflo:doctor` validates everything live: config parses, env vars are set, binaries exist, one cheap call per integration succeeds. Run it whenever something feels off. Type the full name — bare `/doctor` is Claude Code's own built-in install-diagnostic, a different command with nothing to do with this toolkit.
+2. `/scoutflo:doctor` checks configuration, credential presence, required binaries and bounded live probes for each configured target. Run it whenever something feels off. Type the full name — bare `/doctor` is Claude Code's own built-in install-diagnostic, a different command with nothing to do with this toolkit.
 3. `/scoutflo:map-topology` (recommended) writes `./scoutflo-audits/topology.md`, your service map — from Kubernetes/Istio when you have a cluster, otherwise from cloud inventory + APM or a guided capture; on AWS/DigitalOcean/Azure/GCP it can also map the databases/caches/queues behind your services and the connections to them, reviewed with you before anything lands. With it, findings name your actual services instead of generic ones. On large estates it works in bounded batches and resumes if interrupted.
 4. Run your first audit: `/scoutflo:audit-prometheus` (the deep **Prometheus** server + rule-engine plane), `/scoutflo:audit-lgtm` (LGTM/VictoriaMetrics stores; pair with `/scoutflo:audit-alertmanager` for the Prometheus→Alertmanager paging path), `/scoutflo:audit-grafana`, `/scoutflo:audit-sentry`, `/scoutflo:audit-pagerduty`, `/scoutflo:audit-datadog`, `/scoutflo:audit-elk`, `/scoutflo:audit-jsm`, `/scoutflo:audit-zenduty`, `/scoutflo:audit-splunk-oncall`, `/scoutflo:audit-groundcover`, `/scoutflo:audit-clickstack`, `/scoutflo:audit-signoz`, `/scoutflo:audit-newrelic`, `/scoutflo:audit-kubernetes`, `/scoutflo:audit-alertmanager`, `/scoutflo:audit-digitalocean`, `/scoutflo:audit-gcp`, `/scoutflo:audit-azure`, `/scoutflo:audit-aws`, or `/scoutflo:audit-cost` (cross-provider cost). Or run everything configured at once with `/scoutflo:audit-all`. Every audit sizes your estate first with cheap list calls and says which path it picked: small estates get a single pass, large ones run in bounded, resumable batches.
 5. Optional: `/scoutflo:schedule-audits` makes the audits recurring, with a Slack brief per run.
@@ -32,11 +32,12 @@ This toolkit audits, hardens, and monitors your infrastructure and observability
 | --- | --- | --- |
 | `/scoutflo:start` | harness | This orientation |
 | `/scoutflo:connect` | harness | Guided credential setup per integration, two token tiers |
-| `/scoutflo:doctor` | harness | Preflight: config, env vars, one live check per integration |
+| `/scoutflo:doctor` | harness | Preflight: config, env vars and bounded live probes for configured targets |
 | `/scoutflo:map-topology` | harness | Service map into `./scoutflo-audits/topology.md` |
 | `/scoutflo:map-repos` | harness | Service→GitHub repo map into `./scoutflo-audits/repo-map.md`; every match is user-confirmed, never auto-picked |
 | `/scoutflo:business-context` | harness | Capture SLAs, critical services, per-environment rules, and exclusions into `business_context.md`; every audit reads it to tune severity and scope |
 | `/scoutflo:audit-all` | harness | Run every configured audit, then correlate across them, into one combined report and brief |
+| `/scoutflo:alert-fatigue` | harness | Standalone or combined non-scored noise analysis; distinguishes source fires, incident history and configuration-only evidence |
 | `/scoutflo:correlation-engine` | harness | Cross-audit correlation: redundant monitoring, cascade risks, business-context filtering (also run automatically by `audit-all`) |
 | `/scoutflo:rca` | harness | Ask "why is X failing — give me the RCA": uses reports as reference and topology as the blast-radius map, then makes read-only live checks to name an evidence-cited root cause with confidence and honest gaps; degrades to report-only without cluster access |
 | `/scoutflo:migration-plan` | harness | Read-only migration plan between providers (currently Datadog → SigNoz): evidence-cited migrate/fix/drop/covered/no-equivalent inventory + cutover playbook; plans only, changes nothing |
@@ -63,7 +64,7 @@ This toolkit audits, hardens, and monitors your infrastructure and observability
 | `/scoutflo:setup-sentry` | setup | Projects, environments, alert taxonomy, integrations |
 | `/scoutflo:setup-newrelic` | setup | Wire workflows to uncaught policies, per-service conditions from golden metrics, loss-of-signal, muting schedules, SLOs, tags, synthetics |
 | `/scoutflo:setup-splunk-oncall` | setup | Configure teams, schedules, escalation, routing and sources with separate setup credentials, exact confirmation, dependency checks and verified results |
-| `/scoutflo:audit-alertmanager` | audit | Proves your paging path is live, rule to receiver (the Prometheus→Alertmanager→receiver walk) |
+| `/scoutflo:audit-alertmanager` | audit | Assesses the Prometheus→Alertmanager→receiver path and noise controls; missing delivery evidence remains unverified |
 | `/scoutflo:audit-digitalocean` | audit | App Platform, managed databases, uptime, alert routing |
 | `/scoutflo:setup-digitalocean` | setup | Alert policies, uptime checks, database and app hardening |
 | `/scoutflo:audit-gcp` | audit | Cloud Monitoring, uptime checks, GKE telemetry, logging |
@@ -74,7 +75,7 @@ This toolkit audits, hardens, and monitors your infrastructure and observability
 | `/scoutflo:setup-aws` | setup | CloudWatch alarms, SNS routing, log forwarding, account observability |
 | `/scoutflo:audit-cost` | audit | Deep cross-provider cost: rightsizing, idle/unattached, commitment coverage, over-provisioned K8s requests — ranked by provider-native $ savings (never invented) |
 
-More audits are planned. This table lists the commands you invoke directly. A few helpers run **behind the scenes** and are not listed as rows: `business-context-resolver` (auto-discovers metadata for the audits), `cost-analysis` (the cost roll-up inside `audit-all`), `alert-fatigue` (the non-scored alert-fatigue roll-up inside `audit-all`, after correlation), and `topology-guided-setup` (a library the setup skills can source). Note `/scoutflo:checkpoint` and `/scoutflo:correlation-engine` are both — the audits invoke them for you, and you can also run them directly (`/scoutflo:checkpoint --reset-scope`, or `/scoutflo:correlation-engine` after a few audits).
+More audits are planned. This table lists the commands you invoke directly. A few helpers run **behind the scenes** and are not listed as rows: `business-context-resolver` (auto-discovers metadata for the audits), `cost-analysis` (the cost roll-up inside `audit-all`), and `topology-guided-setup` (a library the setup skills can source). `/scoutflo:alert-fatigue` also runs inside `audit-all` after correlation. Note `/scoutflo:checkpoint` and `/scoutflo:correlation-engine` are both — the audits invoke them for you, and you can also run them directly (`/scoutflo:checkpoint --reset-scope`, or `/scoutflo:correlation-engine` after a few audits).
 
 ## Where reports land
 
@@ -103,10 +104,10 @@ Every audit run writes its reports and runtime data under one reports directory:
 
 **You don't have to choose a location.** By default `<reports-dir>` is `./scoutflo-audits/` next to where you run — zero setup, and `/scoutflo:doctor` prints the exact absolute path so you always know where to look. Nothing asks you to pick a directory before you start.
 
-**Optional — pin it so it follows you across folders.** The default is folder-relative, so if you launch Claude from a *different* folder later, that run writes to a *different, empty* `scoutflo-audits/` (it reports "first run", and your `topology.md`/`exemptions.yaml` from the other folder aren't found). Your credentials are unaffected — they always live globally in `~/.scoutflo/`; only this reports/history layer is folder-relative. If you'd rather have one durable history regardless of where you launch, export `SCOUTFLO_AUDIT_DIR` to a fixed absolute path once — add it to your shell profile (`~/.zshrc`/`~/.bashrc`), and to `~/.scoutflo/env` too if you use scheduled runs; then every session, terminal, and scheduled run share it. `reports_dir` in `~/.scoutflo/toolkit.yaml` is just a reminder helper — doctor reads it to print that `export` line. Skip all of this for a first run.
+**Optional — pin it so it follows you across folders.** The default is folder-relative, so if you launch Claude from a *different* folder later, that run writes to a *different, empty* `scoutflo-audits/` (it reports "first run", and your `topology.md`/`exemptions.yaml` from the other folder aren't found). Credential-store selection is separate from this reports/history setting. If you'd rather have one durable history regardless of where you launch, export `SCOUTFLO_AUDIT_DIR` to a fixed absolute path once — add it to your shell profile (`~/.zshrc`/`~/.bashrc`), and to `~/.scoutflo/env` too if you use scheduled runs; then every session, terminal, and scheduled run share it. `reports_dir` in `~/.scoutflo/toolkit.yaml` is just a reminder helper — doctor reads it to print that `export` line. Skip all of this for a first run.
 
 - Re-runs on later dates compute a delta automatically: what got fixed, what is new, how the score moved. Each run also appends one line to its target's `history.jsonl`, and reports render the last-five-run score trend from it.
-- Scores run 0 to 100 per target. The end-to-end label needs 85 or better plus full coverage of every critical service; below that the honest phrasing is "good base coverage".
+- Scored audits show readiness from 0 to 100 alongside assessment coverage; the cost audit remains unscored. End-to-end readiness requires at least 85, verified coverage of every critical service, no excluded category and 100% assessment coverage. Blocked checks lower coverage, not the assessed score; a fully blocked run is **Unassessed**. See [scoring and coverage](../../report-standard/severity-and-scoring.md).
 - Keep the reports directory out of public version control. Reports contain infrastructure detail about your environment.
 
 ## Two credential tiers

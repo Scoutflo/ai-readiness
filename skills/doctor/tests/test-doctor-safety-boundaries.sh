@@ -37,6 +37,27 @@ if 'api.github.com' in url:body='{"login":"fixture-org","id":1}'
 if mode=='github-user-fallback' and '/orgs/' in url:code='404'
 if mode.endswith('-html'):body='<html>login</html>';ct='text/html'
 if mode=='gcp-empty-json':body='{}'
+if mode.startswith('gcp-schema-'):
+ fixtures={
+  'gcp-schema-empty-list':{'notificationChannels':[]},
+  'gcp-schema-page':{'notificationChannels':[{'name':'projects/fixture-project/notificationChannels/fixture','type':'email'}],'nextPageToken':'fixture-next','totalSize':2},
+  'gcp-schema-defaults':{'nextPageToken':'','totalSize':0},
+  'gcp-schema-wrapper':{'login':'required','status':'unauthenticated'},
+  'gcp-schema-unknown-with-list':{'notificationChannels':[],'login':'required'},
+  'gcp-schema-null-list':{'notificationChannels':None},
+  'gcp-schema-object-list':{'notificationChannels':{}},
+  'gcp-schema-scalar-item':{'notificationChannels':['not-a-channel']},
+  'gcp-schema-null-item':{'notificationChannels':[None]},
+  'gcp-schema-null-token':{'nextPageToken':None},
+  'gcp-schema-number-token':{'nextPageToken':1},
+  'gcp-schema-string-total':{'totalSize':'2'},
+  'gcp-schema-fraction-total':{'totalSize':1.5},
+  'gcp-schema-null-total':{'totalSize':None},
+  'gcp-schema-bool-total':{'totalSize':True},
+  'gcp-schema-error':{'error':{'code':403}},
+ }
+ body=json.dumps(fixtures[mode])
+
 if '-o' in a:pathlib.Path(a[a.index('-o')+1]).write_text(body)
 else:sys.stdout.write(body)
 if '-w' in a:sys.stdout.write(a[a.index('-w')+1].replace(chr(92)+'n',chr(10)).replace('%{http_code}',code).replace('%{content_type}',ct))
@@ -72,6 +93,10 @@ if '-w' in a:sys.stdout.write(a[a.index('-w')+1].replace(chr(92)+'n',chr(10)).re
       ('metrics-ready-health-denied',loki,{},None),
       ('metrics-no-leak',prom+'gcp:\n  project: fixture-project\n  cost_checks: false\n',{},None),
     ]
+    gcp_schema_pass={'gcp-schema-empty-list','gcp-schema-page','gcp-schema-defaults'}
+    gcp_schema_fail={'gcp-schema-wrapper','gcp-schema-unknown-with-list','gcp-schema-null-list','gcp-schema-object-list','gcp-schema-scalar-item','gcp-schema-null-item','gcp-schema-null-token','gcp-schema-number-token','gcp-schema-string-total','gcp-schema-fraction-total','gcp-schema-null-total','gcp-schema-bool-total','gcp-schema-error'}
+    for name in sorted(gcp_schema_pass|gcp_schema_fail):
+        cases.append((name,'gcp:\n  project: fixture-project\n  cost_checks: false\n',{},None))
     for name,cfg,extra,store in cases:
         d=work/name;d.mkdir();(d/'toolkit.yaml').write_text(cfg);(d/'calls').write_text('');(d/'credentials.json').write_text('{}')
         if store:(d/'env').write_text(store)
@@ -104,6 +129,11 @@ if '-w' in a:sys.stdout.write(a[a.index('-w')+1].replace(chr(92)+'n',chr(10)).re
         elif name in {'digitalocean-good','github-user-fallback','gcp-empty-json'}:
             assert r.returncode==0,(name,rows)
             if name=='github-user-fallback':assert len(reads)==2 and '/users/fixture-org' in reads[1]['args'][-1],(name,reads)
+        elif name.startswith('gcp-schema-'):
+            expected='pass' if name in gcp_schema_pass else 'fail'
+            assert r.returncode==(0 if expected=='pass' else 3) and row('gcp','monitoring-api')['result']==expected,(name,r.returncode,rows)
+            assert len(reads)==1 and reads[0]['args'][-1]=='https://monitoring.googleapis.com/v3/projects/fixture-project/notificationChannels?pageSize=1',(name,reads)
+            assert not any(x in reads[0]['args'] for x in ('-o','-L','--location')),(name,'unexpected output/redirect',reads)
         elif name=='gcp-selected-file':
             gs=[x for x in calls if x['command']=='gcloud']
             assert r.returncode==0 and len(gs)==1 and gs[0]['adc']==str(d/'credentials.json'),(name,gs,rows)
@@ -118,5 +148,5 @@ if '-w' in a:sys.stdout.write(a[a.index('-w')+1].replace(chr(92)+'n',chr(10)).re
                 if 'googleapis.com' in a[-1]:assert '--user' not in a and '-u' not in a,(name,'basic credentials crossed provider',a)
                 else:assert '--user' in a and a[a.index('--user')+1]=='fixture-user:fixture-password' and not any('Bearer ' in p for p in a),(name,a)
         print('PASS '+name)
-print('doctor safety boundaries: 22 passed, 0 failed; no real provider calls')
+print(f'doctor safety boundaries: {len(cases)} passed, 0 failed; no real provider calls')
 PY

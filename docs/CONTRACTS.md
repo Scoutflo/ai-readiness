@@ -143,6 +143,11 @@ forward routing from upstream policy references.
 
 ## C3 — Target resolution (multi-target enumerator)
 
+- **Scalar values:** the shared getter preserves explicit `false`, zero and
+  quoted strings in both single mappings and selected list entries. YAML null
+  and missing values are omitted by the mikefarah yq path. Unsupported yq
+  implementations use the existing flat fallback; this does not promise full
+  YAML typing in that fallback. Guard: `tests/test-config-scalar-values.sh`.
 - **Contract:** every own-block `audit-*` **and** `doctor` resolve targets
   through `report-standard/toolkit-targets.sh` (`count`/`label`/`get`/`labels`/
   `kind`; no `yq` required — POSIX-awk fallback), select the current target via
@@ -299,10 +304,12 @@ forward routing from upstream policy references.
   `~/.scoutflo/computed_metadata.jsonl` (per-resource); the `.md` is the SSOT and
   a valid fallback source.
 - **Import invariant:** `bc_import_file FILE [--confirm-replace]` validates and derives staged data before replacing either context file. Existing context requires explicit replacement consent, is backed up, and is restored if installation fails. Direct derivation preserves prior JSON on failure; dropped resource/unit declarations emit diagnostics. `skills/business-context/tests/test-business-context-import.sh` exercises these guarantees and the published fresh-shell recipes.
-- **Consumers:** all 17 own-block audits' **Metadata Load** block — the canonical
-  block (byte-identical across all 17) that loads the workspace layer
+- **Consumers:** every scored audit's **Metadata Load** block (currently 20)
+  loads the selected workspace layer
   (`business_context.json`, else the `.md` via the ssot-md fallback) **and** the
-  per-resource layer (`computed_metadata.jsonl`) **together**, then applies:
+  per-resource layer (`computed_metadata.jsonl`) **together**. Markdown plus a
+  resource cache reports `per-resource+ssot-md`; workspace parsing depends on
+  the selected `BC_SRC`, not a mode label that could hide that source. It applies:
   exclude (`.exclusions` → `not-in-scope` with `not_in_scope_reason: "by-design"`, never a fail), escalate
   `critical_dependencies`, per-env `uptime_sla` from `environment_map` with
   per-service `service_slas` winning, `cost_sensitivity` ordering.
@@ -310,7 +317,10 @@ forward routing from upstream policy references.
   do not mix environments across a block's labels (use a separate env/config file).
 - **SSOT:** `docs/BUSINESS-CONTEXT-INTEGRATION-v0168.md` (the canonical block).
 - **Guards:** `ci/business-context-parity-check.sh` (every audit reads the SSOT +
-  names an apply behavior). Tests: `skills/business-context/tests/`. Selftest:
+  names an apply behavior). Tests: `skills/business-context/tests/` and
+  `tests/test-business-context-metadata.sh` (every published metadata fence,
+  both workspace sources with/without resource caches, invalid-cache fallback,
+  precedence and fresh-shell state). Selftest:
   business-context exclusions/SLA round-trip.
 - **Ownership:** `/scoutflo:business-context` owns `business_context.md`;
   `/scoutflo:connect` proposes but never writes it (a resolver→connect dead-end
@@ -373,6 +383,10 @@ forward routing from upstream policy references.
 
 ## C9 — Config-key agreement (connect ↔ doctor ↔ audit) + prefix registry
 
+- **Value agreement:** Doctor and the shared target getter preserve an explicit
+  `false` setting rather than replacing it with a default. Doctor checks YAML
+  tag support before choosing yq. `tests/test-config-scalar-values.sh` exercises
+  real mikefarah yq, the flat fallback and a jq-backed yq implementation.
 - **Contract:** for each provider, the `toolkit.yaml` keys the user is told to
   write (`connect/references/providers.md`), the keys `doctor.sh` reads, and the
   keys the audit reads must **agree** — a key one side reads but another never
@@ -396,11 +410,15 @@ forward routing from upstream policy references.
   has a row in `audit-all`'s Phase-1 config→audit map; `schedule-audits`
   defaults to `audit-all`, so an unmapped provider is silently skipped by
   "audit everything" and scheduled runs using that default. An explicitly
-  selected single-audit schedule invokes that skill directly.
+  selected single-audit schedule invokes that skill directly. The own-block
+  `lgtm` map or list queues `audit-lgtm` for each selected stack label. Legacy
+  backend triggers remain supported; queue each selected target once.
 - **Brief invariant:** `audit-all` emits exactly **one** combined Slack brief per
   run — titles-only and safe to leak (no evidence values, hostnames, endpoints) —
   and the redaction pass runs over the roll-up report and brief before any send.
-- **Guards:** `ci/audit-all-map-check.sh`; the redaction lib tests
+- **Guards:** `ci/audit-all-map-check.sh` matches the actual config-key and audit
+  columns; `tests/test-audit-all-plan-linkage.sh` exercises published discovery and
+  selected stack labels with single/list and legacy triggers. The redaction lib tests
   (`skills/redaction/tests/`).
 
 ## C11 — Surface/catalog consistency
@@ -435,12 +453,17 @@ forward routing from upstream policy references.
   `signoz-viewer` role. A 401/403 alone cannot identify credential type or prove
   that wider permissions are required.) Doctor's generic JSON account/query probes retain their
   bounded responses only in memory, require one expected JSON document and
-  reject HTML, malformed responses, redirects and incomplete transfers.
+  reject HTML, malformed responses, redirects and incomplete transfers. The GCP
+  notification-channel list accepts omitted defaults (`{}`), or its documented
+  `notificationChannels`, `nextPageToken` and `totalSize` fields with their
+  expected types. An unrelated JSON wrapper or unexpected field fails; response
+  validity does not establish that the whole notification catalog was read.
 - **Guards:** `ci/content-type-probe-check.sh`,
   `skills/doctor/tests/test-json-status-memory.sh` (bounded transport, version
   refusal, one-document shape and transient-write canary),
   `skills/doctor/tests/test-doctor-safety-boundaries.sh` (GCP/DigitalOcean/GitHub
-  JSON checks and GitHub user fallback). Selftest: HyperDX + SigNoz auth
+  JSON checks, GCP empty/list/page controls and invalid-wrapper/type refusals,
+  plus GitHub user fallback). Selftest: HyperDX + SigNoz auth
   locks in `layer_depth`.
 
 ## C13 — Behavioral parity (scope / redaction / env-load)
@@ -594,6 +617,10 @@ forward routing from upstream policy references.
 
 ## C15 — Required vs optional config keys (per provider)
 
+- **Optional probes:** `gcp.cost_checks: false` skips both Recommender families
+  while retaining the Monitoring preflight, for single and labeled targets.
+  `tests/test-config-scalar-values.sh` verifies the actual Doctor call list and
+  keeps the missing-setting default distinct from an explicit false value.
 - **Contract:** each provider's config keys have a required/optional shape the
   operator-facing surfaces must reflect: a genuinely **required** key is present
   and uncommented in `templates/toolkit.yaml.example`; an **either-or lane** (e.g.
