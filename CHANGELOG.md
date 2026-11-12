@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.250
+## 0.1.249
 
 Map Azure and Splunk On-Call findings to their setup fixes, so a combined report
 row without a `remediation` still points at the right section. Azure entries
