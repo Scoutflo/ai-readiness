@@ -46,6 +46,10 @@ audit_for_prefix() {
     GC) echo audit-groundcover ;;
     CS) echo audit-clickstack ;;
     NR) echo audit-newrelic ;;
+    AZR) echo audit-azure ;;
+    PROM) echo audit-prometheus ;;
+    SIG) echo audit-signoz ;;
+    SOC) echo audit-splunk-oncall ;;
     *) echo "" ;;
   esac
 }

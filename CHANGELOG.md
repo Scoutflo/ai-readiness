@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.249
+
+Map Azure and Splunk On-Call findings to their setup fixes, so a combined report
+row without a `remediation` still points at the right section. Azure entries
+follow setup-azure's finding table. On-Call entries follow each check's setup
+link in its catalog, because the setup skill also names IDs in re-run steps.
+Validate the AZR, PROM, SIG and SOC prefixes in the remediation-map gate, sample
+an On-Call ID in the finding-catalog test, and add both steps to the
+new-provider contract checklist. Name On-Call as a New Relic paging layer and
+stop listing Kubernetes and Alertmanager as audits without a setup pointer.
+
 ## 0.1.248
 
 Preserve Markdown workspace defaults when per-resource metadata is present in
