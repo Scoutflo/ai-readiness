@@ -20,8 +20,9 @@ number, a ballpark is fine."
    as a read-only POST) — **verbatim**; it computes no dollar of its own from a
    resource inventory or SKU guesswork.
 2. On `429` (throttled) it backs off and retries, because that endpoint has very
-   tight rate limits — a live call returned `429`, not `404`/`400`, which
-   confirms the endpoint and version are valid and the throttle is expected. If
+   tight rate limits — a live call returned `429`, which proves throttling was observed but not a
+   successful query or response shape. Stop after five attempts, or earlier when
+   the provider requests a delay outside the bounded retry window. If
    the figure still cannot be read this run, it reports the cost figure as
    **unavailable**, not a fabricated estimate.
 3. Never issues `az costmanagement query` — it is **not a built-in CLI command**;

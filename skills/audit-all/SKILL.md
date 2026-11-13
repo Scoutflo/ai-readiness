@@ -664,14 +664,31 @@ Expected output: `regressions: none` (or the target-prefixed list), `suppressed 
 
 ```bash
 set -eu
+set +x
 RUN_DATE="$(date -u +%F)"        # UTC run date
 BRIEF_FILE="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/all/${RUN_DATE}/brief.txt"   # brief assembled per the rules above
-# slack.webhook_env in toolkit.yaml names the webhook variable. Never print its value.
-if [ -z "${SCOUTFLO_SLACK_WEBHOOK:-}" ]; then
+CONFIG="${SCOUTFLO_CONFIG:-}"
+[ -n "$CONFIG" ] || for _c in "./.scoutflo/toolkit.yaml" "$(cat "$HOME/.scoutflo/active-config" 2>/dev/null || true)" "$HOME/.scoutflo/toolkit.yaml"; do [ -f "$_c" ] && { CONFIG="$_c"; break; }; done
+[ -f "$CONFIG" ] || { echo "Slack config unavailable; skipping brief"; exit 0; }
+TT="${CLAUDE_PLUGIN_ROOT:-.}/report-standard/toolkit-targets.sh"
+[ "$(sh "$TT" "$CONFIG" slack kind)" = map ] || { echo "Slack requires one configured destination per environment; skipping brief"; exit 0; }
+WEBHOOK_ENV=$(sh "$TT" "$CONFIG" slack get 0 webhook_env)
+printf '%s\n' "$WEBHOOK_ENV" | grep -Eq '^[A-Za-z_][A-Za-z0-9_]*$' || { echo "Slack webhook_env is missing or invalid; skipping brief"; exit 0; }
+# Import only the configured value; store settings never change this run's output root.
+# An explicitly named missing variable never falls back to an ambient default.
+SCOUTFLO_ENV="${SCOUTFLO_ENV_FILE:-}"; [ -n "$SCOUTFLO_ENV" ] || { if [ -f "./.scoutflo/env" ]; then SCOUTFLO_ENV="./.scoutflo/env"; else SCOUTFLO_ENV="$HOME/.scoutflo/env"; fi; }
+if [ -f "$SCOUTFLO_ENV" ]; then
+  SLACK_URL=$(sh -eu -c '. "$1" >/dev/null 2>&1; printenv -- "$2"' _ "$SCOUTFLO_ENV" "$WEBHOOK_ENV" 2>/dev/null) || { echo "Slack selected credential unavailable; skipping brief"; exit 0; }
+else
+  SLACK_URL=$(printenv -- "$WEBHOOK_ENV" 2>/dev/null || true)
+fi
+if [ -z "$SLACK_URL" ]; then
   echo "Slack webhook variable not set; skipping brief"
 else
-  jq -Rs '{text: .}' < "$BRIEF_FILE" \
-    | curl -fsS --max-time 10 -X POST -H "Content-Type: application/json" --data @- "$SCOUTFLO_SLACK_WEBHOOK" \
+  [ -s "$BRIEF_FILE" ] || { echo "Slack brief unavailable; skipping send"; exit 0; }
+  SLACK_PAYLOAD=$(jq -Rs '{text: .}' < "$BRIEF_FILE") || { echo "Slack brief could not be encoded; skipping send"; exit 0; }
+  printf '%s' "$SLACK_PAYLOAD" \
+    | curl -q -fsS --max-time 10 --proto '=https' -X POST -H "Content-Type: application/json" --data @- "$SLACK_URL" 2>/dev/null \
     || echo "Slack send failed; brief not delivered. The audit run itself is complete."
 fi
 ```
@@ -686,7 +703,7 @@ Close the run with the standard completion message (per [report-template.md](../
 3. **The biggest levers across the estate:** the two or three highest-`points_recoverable` finding titles, and regressions first if any.
 4. **Where the combined report is — the resolved ABSOLUTE path:** `<abs>/all/<YYYY-MM-DD>/report.md`, plus a note that each target's own `report.md` sits under `<abs>/<target>/<YYYY-MM-DD>/`.
 5. **How to open it** (OS-specific `open`/`xdg-open`/`Invoke-Item`, as in the report standard), noting it is plain Markdown.
-6. **How to share it:** the full reports name hosts/namespaces/routes — share inside the team; the Slack brief (already sent if `slack.webhook_env` is set, else offer it) is the leak-safe summary.
+6. **How to share it:** the full reports name hosts/namespaces/routes; share inside the team. The Slack brief is the titles-only summary. Say it was sent only when the requested Phase 5 send returned success; otherwise report skipped or failed delivery and offer the saved brief.
 7. **Next step:** re-run after fixes for the delta, or open the target report with the most recoverable points first.
 
 Same hard rules as the per-audit close: absolute paths only, no evidence values or secrets in the chat message, and no completion message for a run that never wrote a combined report.
@@ -699,6 +716,7 @@ Same hard rules as the per-audit close: absolute paths only, no evidence values 
 | Yesterday's findings mixed into today's summary | Aggregate only `findings.json` files under today's UTC date directory |
 | Combined brief leaks evidence values | The brief carries titles, IDs, and scores only; evidence stays in the local reports |
 | Multiple Slack messages for one run | Individual audits are muted under orchestration; Phase 5 sends the single combined message |
+| Brief sent to an old environment's channel | Phase 5 resolves this config's `slack.webhook_env`, reads only that secret, and skips an unavailable value without using a stale default |
 | One average score presented for the whole estate | Report one score line per target; never average across targets |
 | Partial audit artifacts summarized as a completed run | An audit that did not finish is blocked, whatever files it managed to write |
 | Trend computed by re-reading old findings.json files | The score trend reads `history.jsonl` only; findings.json files serve today's results and each audit's own delta |

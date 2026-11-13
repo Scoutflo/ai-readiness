@@ -143,6 +143,15 @@ forward routing from upstream policy references.
 
 ## C3 — Target resolution (multi-target enumerator)
 
+- **Azure fresh-shell reads and resume:**
+  `skills/audit-azure/scripts/read-context.sh` resolves the same configured label,
+  subscription and output segment for inventory, checks, cost and reports.
+  Identity reads resolve subscription names only when unambiguous and verify
+  the selected tenant before resource reads. `scripts/worklist.sh` in that skill
+  preserves the selected run and date, claims resource rows by worker, and
+  requires content-checked safe receipts before completion. These internal run
+  files do not change the public date-based report layout. Guard:
+  `tests/test-audit-azure-read-contract.sh`.
 - **Scalar values:** the shared getter preserves explicit `false`, zero and
   quoted strings in both single mappings and selected list entries. YAML null
   and missing values are omitted by the mikefarah yq path. Unsupported yq
@@ -416,6 +425,10 @@ forward routing from upstream policy references.
 - **Brief invariant:** `audit-all` emits exactly **one** combined Slack brief per
   run — titles-only and safe to leak (no evidence values, hostnames, endpoints) —
   and the redaction pass runs over the roll-up report and brief before any send.
+  Its fresh-shell send resolves the selected environment's `slack.webhook_env`
+  and imports only that value from the layered store or shell. An unavailable
+  selected variable never falls back to an old default destination. Configured
+  delivery is not a successful send receipt. Guard: `tests/test-audit-all-slack-selection.sh`.
 - **Guards:** `ci/audit-all-map-check.sh` matches the actual config-key and audit
   columns; `tests/test-audit-all-plan-linkage.sh` exercises published discovery and
   selected stack labels with single/list and legacy triggers. The redaction lib tests
@@ -502,8 +515,20 @@ forward routing from upstream policy references.
   `lgtm` is not a list, since list stacks carry their own stores. Left out on purpose:
   `connect`, every setup skill (`setup-digitalocean` and `setup-gcp` compare the shell
   environment against the store; `setup-sentry` keeps its elevated-token bind),
-  `migration-plan` (its multi-target plan reads every label), the Slack webhook, and
-  identity selectors such as key-file paths.
+  `migration-plan` (its multi-target plan reads every label), the Slack webhook in
+  that original wave, and identity selectors such as key-file paths. The Azure
+  and combined-brief steps now resolve their selected `slack.webhook_env` value
+  in a fresh shell; they skip delivery if it is unavailable and cannot substitute
+  an ambient default webhook. Guards: `tests/test-audit-all-slack-selection.sh`
+  and `tests/test-audit-azure-read-contract.sh`.
+- **Azure read and capture boundary:** inventory pagination remains on the fixed
+  ARM origin and original collection path within the selected subscription.
+  Responses stay in memory until a field projection omits receiver credentials.
+  Failed, malformed, truncated or exhausted reads stop the dependent conclusion;
+  they never become a healthy empty inventory or a zero-cost result. Explicit
+  disabled state and full action-group resource IDs survive capture. Resource
+  Graph continuation must reconcile with its declared total. Guard:
+  `tests/test-audit-azure-read-contract.sh`.
 - **Alertmanager capture boundary:** status embeds rendered YAML and may expose
   native VictorOps routing keys. Doctor validates this response in memory;
   the audit uses `skills/audit-alertmanager/scripts/project-config.sh` to project

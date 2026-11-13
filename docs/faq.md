@@ -95,6 +95,20 @@ The top section of every `audit-all` report: a posture grade, the top few worst 
 **Which platforms and stacks does it cover?**
 Prometheus, LGTM and the VictoriaMetrics family (Loki, Tempo, Mimir, VictoriaMetrics/Logs/Traces, Alertmanager, vmalert), Grafana, Sentry, PagerDuty, Datadog, New Relic, ELK/Kibana, JSM Operations, Zenduty, Splunk On-Call (VictorOps), groundcover, ClickStack (ClickHouse + HyperDX), SigNoz, Prometheus/Alertmanager alert routing, Kubernetes (security + reliability config), DigitalOcean, Google Cloud, Azure, and AWS — plus a cross-provider **cost** audit (`/scoutflo:audit-cost`) and a root-cause skill (`/scoutflo:rca`) that reasons across all of the above. Splunk On-Call is the paging product formerly called VictorOps; its audit does not assess Splunk Enterprise, Cloud Platform or Observability Cloud. Connect only the ones you use; `/scoutflo:start` lists the full catalog.
 
+**How does an Azure audit avoid a false all-clear?**
+Each command resolves the selected subscription and report target again. Failed reads,
+missing pages and unknown enabled states cannot stand in for an empty or healthy
+inventory. Disabled alerts do not count as active coverage. Action groups are joined
+by their full resource IDs, and several action groups on one rule are only a
+candidate for duplicate paging until intent or notification evidence confirms it. Missing Azure destinations do not prove that other logging or paging systems are absent. Resource names do not establish business criticality; required-plane intent and observed impact govern coverage and severity.
+
+**Which Slack channel receives a combined or Azure brief?**
+The selected config's `slack.webhook_env` names the credential to use. These sends
+reload that named value from the selected local secret store, or use its exported
+value when the store does not supply it. They do not fall back to another default
+webhook. Missing credentials or an empty brief skip delivery, and a failed request
+is reported as failed. Saving the brief locally does not prove it was sent.
+
 **Where do reports go?**
 By default `./scoutflo-audits/` in the directory you launched Claude Code from. To point it anywhere, **export `SCOUTFLO_AUDIT_DIR`** to an absolute path — that env var is what actually moves the location (every command runs in a fresh shell, so an exported variable is what carries across them). `/scoutflo:doctor` prints the exact absolute path it resolved. You can also set `reports_dir` in `~/.scoutflo/toolkit.yaml`; that's a convenience — doctor reads it and prints the `export SCOUTFLO_AUDIT_DIR=...` line for you (and warns if it's set but not yet exported), but setting it alone doesn't move reports until the export is in your environment. **If you rely on the default and launch Claude from a different folder, that run writes to a different, empty `scoutflo-audits/`** — so it shows "first run" with no delta, and your `topology.md`/`exemptions.yaml` from the other folder aren't found (your credentials in `~/.scoutflo/` are unaffected). Auditing one estate over time? Export `SCOUTFLO_AUDIT_DIR` to a stable absolute path and every run — interactive or scheduled — shares one history. Keep the reports folder out of public version control; reports name your namespaces, hosts, and routes. The Slack brief carries finding titles and counts only, never evidence values.
 

@@ -30,8 +30,8 @@ one and get going."
    accepts `subscription_id` when it equals a visible subscription's `.id` **or** its
    `.name` — a valid name never produces a false "not visible" stop.
 2. **Resolve name → id, then use the id everywhere (Prompt A).** A name match is resolved
-   to that subscription's `.id`; the gate prints a `note:` that it matched a NAME and the id
-   it resolved to, and every subsequent `--subscription` (and the ARM REST path, which needs
+   to that subscription's `.id`; the gate prints the selected target, resolved subscription ID, tenant, and
+   identity, and every subsequent `--subscription` (and the ARM REST path, which needs
    the GUID) uses the resolved id, never the bare name. The doctor gate performs the same
    resolution up front so its ARM reachability probe hits the GUID path and returns `200`,
    not a `404`.

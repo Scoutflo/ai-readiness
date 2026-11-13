@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.1.250
+
+Keep every Azure audit step on the selected subscription and report target,
+including cost, diagnostics and resumed batches. Reject failed or incomplete
+reads, bound pagination and retries, and project alert receiver metadata before
+saving it. Disabled rules cannot count as active coverage; routing joins use
+full action-group identities. Multiple action groups alone do not prove
+unwanted duplicate paging.
+Keep telemetry and paging conclusions within the inspected Azure paths; missing
+workspaces and resource names cannot establish universal log loss or criticality.
+
+Use the configured Slack credential for Azure and combined briefs, including
+fresh-shell secret-store loads. Missing destinations, empty briefs and payload
+encoding failures skip delivery; a send is reported only after it succeeds.
+Add executable regressions and pressure scenarios for target isolation,
+read failures, paging boundaries and brief delivery.
+
 ## 0.1.249
 
 Map Azure and Splunk On-Call findings to their setup fixes, so a combined report
