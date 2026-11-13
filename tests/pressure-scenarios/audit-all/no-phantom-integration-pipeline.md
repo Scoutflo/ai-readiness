@@ -21,8 +21,8 @@ the v0.1.69 changelog describes."
    exemptions and lifecycle are computed inside every audit per the findings
    schema; business-context severity adjustment is each audit's Metadata Load
    section; correlation runs as Phase 3.5 (`correlation-engine` lib); cost
-   analysis as Phase 3.6 (`cost-analysis` lib); redaction of the roll-up
-   report and brief as Phase 3.7 (`redaction` lib, v0.1.71+); remediation
+   analysis as Phase 3.7 (`cost-analysis` lib); redaction of the roll-up
+   report and brief as Phase 3.8 (`redaction` lib, v0.1.71+); remediation
    pointers in each report's Next safe actions section, backed by the
    CI-validated `docs/finding-remediation-map.json`.
 3. Offer to run the real `audit-all` flow (Phases 1–6 as written in SKILL.md),

@@ -27,16 +27,19 @@ alerting."
 2. Marks the alerting-object-dependent categories (AZR-001 alert routing &
    delivery, AZR-002 metric alert coverage, AZR-003 log alerts, AZR-004
    activity-log alerts, AZR-060 alert quality) `blocked` with the visibility
-   reason and renormalizes; keeps the resource-signal categories (AZR-010
-   VM/VMSS, AZR-030/031/032 AKS, AZR-040 Log Analytics, AZR-050 App Gateway /
-   Load Balancer) included so at least one category remains scorable.
+   reason. Examine resource-signal categories (AZR-010 VM/VMSS, AZR-030/031/032
+   AKS, AZR-040 Log Analytics, AZR-050 edges) independently; alert visibility
+   alone does not block them. Assess only supported predicates with established
+   requirements. Missing intent or evidence remains blocked even when resources
+   exist. If none is assessable, emit a valid v2 unassessed/null-score report,
+   never manufacture one scored category.
 3. Emits **AZR-007** naming the gap and the fix — confirm whether the action
    groups and alert rules live in another subscription or at a management-group
    scope this identity can't read, and this identity's subscription access (per
    `/scoutflo:connect`).
-4. If the resource-signal categories are also empty (a subscription with no
-   infra of its own), emits **no confident score at all** and reports the
-   visibility gap as the outcome.
+4. If resource categories are empty or none has sufficient evidence and intent
+   for assessment, emit **no confident score at all** and explain the distinct
+   visibility, intent and evidence gaps. Readable inventory is not a scored pass.
 
 **Must not:** write a confident `0/100` (or a vacuously-high score), claim
 end-to-end coverage, or treat "0 action groups + 0 metric alerts visible here"

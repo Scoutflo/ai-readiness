@@ -86,6 +86,7 @@ Green = read-only (safe, changes nothing) · amber = write, gated behind your co
 | Trace monitoring through a regional stack to On-Call | Source audit → qualified source evidence → `/scoutflo:audit-splunk-oncall`; candidate mappings stay explicit |
 | Combine separate cluster maps without merging same-name services | `/scoutflo:map-topology` local estate composition; preserve each source and evidence tier |
 | Score everything at once | `/scoutflo:audit-all` |
+| Audit separate Azure subscriptions without mixing evidence | `/scoutflo:audit-azure` with one selected target per report; incomplete reads remain unassessed |
 | Find where you're wasting cloud spend | `/scoutflo:audit-cost` |
 | Ask *"why is `<service>` failing — give me the RCA?"* | `/scoutflo:rca` (step ③, after audits + topology + business-context) |
 | See redundant monitoring / cascade risk across stacks | `/scoutflo:correlation-engine` |
@@ -100,12 +101,14 @@ Green = read-only (safe, changes nothing) · amber = write, gated behind your co
 
 ## What's new (latest release)
 
-**0.1.248** fixes four audit gaps: Markdown workspace defaults now load alongside
-per-resource metadata; `audit-all` includes every selected `lgtm:` stack; GCP
-Monitoring preflight rejects unrelated JSON responses while retaining valid empty
-lists; and explicit false settings survive config parsing, so disabled GCP cost
-checks stay disabled. The docs distinguish assessed scores from coverage, explain secret storage
-and state the limits of undo and model-cost estimates.
+**0.1.250** keeps Azure reads, cost checks and resumed work on the selected
+subscription. Failed or incomplete reads stay unassessed, disabled alerts do
+not count as coverage, and same-name action groups remain distinct. Azure and
+combined Slack briefs use the selected environment's credential and report a
+send only when it succeeds.
+
+**0.1.249** added setup links for all 16 Azure and 18 Splunk On-Call findings in
+combined reports, so each finding can lead to the relevant guarded repair.
 
 The source-to-paging improvements from 0.1.247 remain:
 

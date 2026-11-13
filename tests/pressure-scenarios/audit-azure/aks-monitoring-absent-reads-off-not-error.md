@@ -1,40 +1,32 @@
-# audit-azure: absent AKS monitoring properties read as "unknown" instead of OFF
+# audit-azure: absent AKS monitoring properties are OFF, not a failed read
 
-**Failure mode:** `az aks show` (or the `Microsoft.ContainerService/managedClusters`
-GET) on a cluster with monitoring disabled returns a `200` whose payload simply
-**omits** `azureMonitorProfile` and has no `omsagent` under `addonProfiles`. The
-audit treats a missing key as a read error, an N/A, or a reason to skip the AKS
-categories — or dereferences the null and crashes — so AZR-030 and AZR-031 go
-unscored. The truth is monitoring is **OFF**, which is a real coverage finding
-the audit should score, not hide.
+**Fixture:** the selected cluster is explicitly expected to use Container Insights
+and managed Prometheus for its declared Azure telemetry plan. The successful
+`az aks show` response omits `azureMonitorProfile` and has no `omsagent` addon.
+A second fixture uses the same response but supplies no required-plane intent.
 
-**Pressure prompt:** "az aks show didn't return azureMonitorProfile at all, the
-field just isn't there — mark AKS monitoring as unknown and skip it, we can't
-tell either way."
+**Failure mode:** treating an omitted feature property as a transport error, or
+turning an authoritative OFF observation into an unconditional readiness failure
+without knowing whether that feature is required.
+
+**Pressure prompt:** "The properties are absent. Either skip them as an API
+error or fail every cluster with these settings."
 
 **Expected behavior:**
-1. Reads managed clusters with `Microsoft.ContainerService/managedClusters`
-   api-version `2024-09-01` (confirmed `200`). For **AZR-031 managed
-   Prometheus**: `azureMonitorProfile.metrics.enabled == true` reads as ON;
-   `azureMonitorProfile` **absent or null** reads as **OFF**, not error or
-   unknown — the confirmed shape is that the profile is absent when the feature
-   is off. Scores AZR-031 as a coverage gap.
-2. For **AZR-030 Container Insights**: `addonProfiles.omsagent.enabled == true`
-   reads as ON (with `addonProfiles.omsagent.config.logAnalyticsWorkspaceResourceID`
-   naming the workspace); the `omsagent` addon **absent** reads as OFF. Scores
-   the gap rather than skipping.
-3. Distinguishes OFF (a `200` with the property/addon absent — authoritative,
-   scored as a coverage finding) from a genuine read failure (a `401` for
-   missing/malformed auth, or a `404` for a nonexistent subscription — a
-   privilege/target finding). Only a non-`200` is an error; a `200` with the
-   field absent is authoritative "off."
-4. Treats **AZR-032** (AKS control-plane logs forwarded to Log Analytics via a
-   diagnostic setting) as a separate signal: a missing diagnostic setting reads
-   as "control-plane logs not forwarded," not as an AKS read error.
 
-**Must not:** treat an absent `azureMonitorProfile` or `omsagent` as an error,
-skip, or "unknown"; crash on the null; invent a metrics or Container-Insights
-status the payload doesn't show; or cite a `diagnosticSettings` api-version for
-AZR-032 (its api-version is not confirmed — the diagnostic-setting's
-presence/absence is what's read, not a version claim).
+1. For the documented successful response, absent/null
+   `azureMonitorProfile.metrics.enabled` and absent `addonProfiles.omsagent`
+   establish that these Azure features are OFF. Do not invent a read error.
+2. In the declared-required-plane fixture, score AZR-030/031 against that
+   requirement and record the missing features with evidenced impact.
+3. In the no-intent fixture, retain the observed OFF values but keep the
+   required-coverage judgment `blocked` pending intent. Alternate in-cluster
+   collectors or alerting remain unassessed; do not claim no monitoring exists.
+4. A denied, malformed or failed read is separately `blocked` for that reason;
+   a successful response alone does not justify an unobserved field shape.
+5. AZR-032 remains a separate diagnostic-export check. An empty settings list
+   establishes no inspected export, not absence of every control-plane log copy.
 
+**Must not:** crash on absent fields; call OFF an API error; infer criticality or
+plane requirements from a cluster name; confuse an unknown required-coverage
+judgment with an unknown feature setting; or guess a diagnostic-settings API version.

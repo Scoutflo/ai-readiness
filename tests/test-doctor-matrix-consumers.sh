@@ -62,7 +62,15 @@ awk -v d="$WORK/progs" '
 ' "$WORK/all-awks.txt"
 find "$WORK/progs" -name 'p*.sh' -size 0 -exec rm -f {} +
 COUNT="$(find "$WORK/progs" -name 'p*.sh' | wc -l | tr -d ' ')"
-[ "$COUNT" -ge 9 ] || fail "expected at least 9 consumer programs, extracted $COUNT"
+# audit-azure now probes real Cost/Advisor/Resource Graph access independently;
+# its former ninth matrix consumer depended on a row Doctor never emitted.
+# Count every remaining source program, not a stale historical total, and assert
+# that extraction/execution covers all of them (including future additions).
+EXPECTED="$(while IFS= read -r consumer; do
+  grep -c 'awk -F.\\t. -v b=' "$consumer"
+done < "$CONSUMERS" | awk '{n += $1} END {print n}')"
+[ "$EXPECTED" -ge 8 ] || fail "expected at least 8 current source consumers, found $EXPECTED"
+[ "$COUNT" -eq "$EXPECTED" ] || fail "found $EXPECTED source consumers but extracted $COUNT"
 echo "extracted $COUNT consumer program(s)"
 
 hdr() { printf 'block\tcheck\tconfigured\tenv\tresult\tcode\thint\n'; }
@@ -139,7 +147,7 @@ for prog in "$WORK"/progs/p*.sh; do
   checked=$((checked + 1))
 done
 
-[ "$checked" -ge 9 ] || fail "only exercised $checked consumers"
+[ "$checked" -eq "$EXPECTED" ] || fail "only exercised $checked of $EXPECTED source consumers"
 echo "PASS: $checked consumers each match a labeled row, stop on none/duplicates, and reject ambiguous or wrong-target rows"
 
 echo

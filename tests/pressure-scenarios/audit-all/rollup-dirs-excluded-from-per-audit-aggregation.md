@@ -1,6 +1,6 @@
 # audit-all: the cost-analysis / all roll-up dirs must never enter the per-audit aggregation
 
-**Failure mode:** Phase 3.6 writes `cost-analysis/<date>/findings.json`, whose
+**Failure mode:** Phase 3.7 writes `cost-analysis/<date>/findings.json`, whose
 schema is deliberately different from a per-audit findings.json — `target` is
 `null`, there is no `.score`, and its findings carry no `severity`/`lifecycle`.
 Every Phase 3 and Phase 5 aggregation loop globs

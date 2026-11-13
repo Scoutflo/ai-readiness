@@ -8,6 +8,11 @@ There is no guaranteed per-audit price, duration or model accuracy. Usage depend
 
 The plugin ships **20 scored audit skills**, plus `audit-cost` (ranked savings, not scored) and `audit-all` (orchestration). The current catalog is in the [README](../README.md#whats-in-the-box). Connecting another account or cluster can add another target pass even when it uses an already configured integration.
 
+Azure collection uses bounded pages and retry budgets. Hitting a bound leaves the
+relevant checks unassessed; rerunning them can consume more API and model usage.
+Resumed batches preserve the selected target and require saved evidence before
+completion. These limits do not establish a fixed audit price or duration.
+
 ## Estimating API cost
 
 Use the usage counters for your actual model and your provider's [current pricing](https://www.anthropic.com/pricing). Price input and output separately:

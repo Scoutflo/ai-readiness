@@ -21,8 +21,8 @@ Per the Azure SDK/API Validation Report, the following are **confirmed on a live
 
 | Surface | Confirmed fact |
 | --- | --- |
-| Cost Management Query | REST `POST /subscriptions/{id}/providers/Microsoft.CostManagement/query` at **api-version `2023-11-01`** — endpoint + version valid (live call returned HTTP 429, so it exists and is rate-limited); it is a **read that uses POST** (`readOnly`), and must **handle 429 with backoff**. The `az costmanagement query` CLI **does not exist** — do not use it. |
-| Azure Resource Graph | REST `POST /providers/Microsoft.ResourceGraph/resources` at **api-version `2022-10-01`** — 200 with live records; a **read that uses POST**. Enumerates any resource type in one cross-region query via KQL. |
+| Cost Management Query | REST `POST /subscriptions/{id}/providers/Microsoft.CostManagement/query` at **api-version `2023-11-01`** — endpoint/version attempted (live call returned HTTP 429; a successful response and request semantics remain unproven); it is a **read that uses POST** (`readOnly`), and must **handle 429 with backoff**. The `az costmanagement query` CLI **does not exist** — do not use it. |
+| Azure Resource Graph | REST `POST /providers/Microsoft.ResourceGraph/resources` at **api-version `2022-10-01`** — 200 with live records; a **read that uses POST**. Enumerates any resource type in a paginated cross-region query via KQL. |
 | Compute (VMs / VMSS) | `Microsoft.Compute/virtualMachines` and `Microsoft.Compute/virtualMachineScaleSets` at **api-version `2024-07-01`** (200). |
 | Auth | `DefaultAzureCredential` → `AzureCliCredential` fallback (via `az login`) — works against ARM. |
 
@@ -34,38 +34,19 @@ The following are **not** part of that confirmed run and are therefore authored 
 
 ## 3. Config placeholders and the scope rule
 
-Every command reads `azure.subscription_id` from `~/.scoutflo/toolkit.yaml` (empty means the `az` CLI's default subscription). Confirm the subscription with `az account show` before any read. The confirmed auth path is `DefaultAzureCredential` → `AzureCliCredential`, so an ARM bearer token for the two POST-read endpoints (Cost Management, Resource Graph — neither has a first-class `az` command) comes from that same login:
+Every command resolves the config with `SCOUTFLO_CONFIG` precedence and the exact `SCOUTFLO_TARGET` using the shared target enumerator. A subscription is required; an unselected list or missing subscription stops before a provider read. Each live block verifies `az account show --subscription "$SUB"`; the ambient default is never used. The confirmed auth path is `DefaultAzureCredential` → `AzureCliCredential`, so an ARM bearer token for the two POST-read endpoints (Cost Management, Resource Graph — neither has a first-class `az` command) comes from that same login:
 
 ```bash
 set -eu
-AZ_SUBSCRIPTION_CFG=""    # azure.subscription_id — set to the audited subscription (empty = az CLI default)
-az account show --query '{subscription:id, tenant:tenantId, user:user.name}' -o json   # confirm the target BEFORE any read
-SUB="${AZ_SUBSCRIPTION_CFG:-$(az account show --query id -o tsv)}"
-ARM_TOKEN="$(az account get-access-token --resource https://management.azure.com --query accessToken -o tsv)"
-
-# A read-only POST helper that retries HTTP 429 with exponential backoff (Cost Management is
-# tightly rate-limited; Resource Graph less so but shares the pattern). Honor a Retry-After
-# header when present; otherwise back off attempt^2 * 2 seconds, up to a small cap.
-arm_post() {   # $1 = full URL (with api-version), $2 = JSON body
-  _url="$1"; _body="$2"; _attempt=1; _max=5
-  while :; do
-    _resp="$(curl -sS -D /tmp/az-hdr -w '\n%{http_code}' -X POST "$_url" \
-      -H "Authorization: Bearer ${ARM_TOKEN}" -H 'Content-Type: application/json' -d "$_body")"
-    _code="$(printf '%s' "$_resp" | tail -n1)"
-    _payload="$(printf '%s' "$_resp" | sed '$d')"
-    if [ "$_code" = "429" ] && [ "$_attempt" -lt "$_max" ]; then
-      _ra="$(sed -n 's/^[Rr]etry-[Aa]fter:[[:space:]]*\([0-9]\{1,\}\).*/\1/p' /tmp/az-hdr | head -n1)"
-      sleep "${_ra:-$((_attempt * _attempt * 2))}"
-      _attempt=$((_attempt + 1)); continue
-    fi
-    printf '%s' "$_payload"; return 0
-  done
-}
+. "${CLAUDE_PLUGIN_ROOT}/skills/audit-azure/scripts/read-context.sh"
+azure_identity
+azure_token
+echo "selected Azure scope ready; query helpers reject incomplete reads"
 ```
 
-**The scope rule (how Azure differs from the AWS region fan-out).** AWS Compute Optimizer is regional and needs one call per active region; Azure's confirmed cost surfaces are **subscription-scoped and cross-region in a single call**, so there is no per-region loop:
+**The scope rule (how Azure differs from the AWS region fan-out).** AWS Compute Optimizer is regional and needs one call per active region; Azure's confirmed cost surfaces are **subscription-scoped and cross-region without a per-region fan-out**, so there is no per-region loop:
 
-- **Resource Graph** returns resources across **all regions** of the subscription(s) you pass in `subscriptions[]` in one query — never iterate regions.
+- **Resource Graph** returns resources across **all regions** of the subscription(s) you pass in `subscriptions[]` in one logical query, following every Resource Graph continuation token — never iterate regions.
 - **Cost Management Query** aggregates the whole subscription scope in one POST. To widen scope, change the scope path (`/providers/Microsoft.Management/managementGroups/{mg}` or a billing-account scope) rather than summing subscriptions yourself.
 
 For a **multi-subscription** estate, run once per audited subscription (Resource Graph accepts a `subscriptions[]` array; Cost Management is per-scope). Never blend two subscriptions' Cost Management totals into one number — report each scope's provider-returned total verbatim.
@@ -82,29 +63,42 @@ For a **multi-subscription** estate, run once per audited subscription (Resource
 | AZROPT-006 | VMSS over-provisioning (high fixed capacity, no autoscale) | Resource Graph `2022-10-01` (`Microsoft.Compute/virtualMachineScaleSets` + `Microsoft.Insights/autoscalesettings`) | None (presence fact) |
 | AZROPT-007 | Orphaned resources (unattached NICs, unused NSGs/route tables, aged snapshots) | Resource Graph `2022-10-01` (multiple types) | None (presence fact) |
 
-## 5. Doctor-probe dependency (which cost scope each check needs)
+## 5. Per-check access screen
 
-audit-azure's doctor gate runs one cheap read-only cost-permission probe and writes a matrix row. A **missing cost scope EXCLUDES the affected check(s) with the doctor's stated reason** — it never fails the run and never guesses a value. Read the row this run wrote:
+No Azure `cost-permissions` doctor row is produced. Probe each existing read surface
+on the selected subscription, and retain its own result. A Cost Management denial
+affects AZROPT-002; it says nothing about Advisor or Resource Graph access. This
+screen returns status metadata only. Each later check still validates its actual
+read, because permissions and throttling can change mid-run.
 
 ```bash
 set -eu
-RUN_DATE="$(date -u +%Y-%m-%d)"
-MATRIX="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}/doctor/${RUN_DATE}/matrix.tsv"   # this run's doctor gate, or most recent
-[ -f "$MATRIX" ] || { echo "no doctor matrix; run the doctor gate before the Azure cost section"; exit 1; }
-awk -F'\t' -v b="azure" -v c="cost-permissions" '
-  ($1 == b || substr($1, 1, length(b) + 2) == b " (") && $2 == c { n++; print $1, $5, $7 }
-  END { if (!n)    { print "no " b " " c " row in this matrix — re-run /scoutflo:doctor against this config before the cost phase; a missing row is NOT permission to skip the checks it gates" > "/dev/stderr"; exit 1 }
-        if (n > 1) { print "several " b " targets carry a " c " row — set SCOUTFLO_TARGET so this gate reads the one this run audits" > "/dev/stderr"; exit 1 } }' "$MATRIX"
+. "${CLAUDE_PLUGIN_ROOT}/skills/audit-azure/scripts/read-context.sh"
+azure_identity
+COST_ACCESS=unavailable; ADVISOR_ACCESS=unavailable; RG_ACCESS=unavailable
+COST_BODY='{"type":"ActualCost","timeframe":"MonthToDate","dataset":{"granularity":"None","aggregation":{"totalCost":{"name":"PreTaxCost","function":"Sum"}}}}'
+if PROBE=$(azure_http POST "$ARM/subscriptions/$SUB/providers/Microsoft.CostManagement/query?api-version=2023-11-01" "$COST_BODY") \
+  && printf '%s' "$PROBE"|azure_project -e '(.properties.columns|type)=="array" and (.properties.rows|type)=="array" and (.properties.nextLink//"")=="" and (.nextLink//"")==""' >/dev/null; then
+  COST_ACCESS=available
+fi
+if PROBE=$(azure_cli advisor recommendation list --category Cost) \
+  && printf '%s' "$PROBE"|azure_project -e 'type=="array"' >/dev/null; then ADVISOR_ACCESS=available; fi
+if PROBE=$(rg_query "Resources | summarize resource_count=count()") \
+  && printf '%s' "$PROBE"|azure_project -e '.complete==true' >/dev/null; then RG_ACCESS=available; fi
+jq -n --arg cost "$COST_ACCESS" --arg advisor "$ADVISOR_ACCESS" --arg graph "$RG_ACCESS" \
+  '{"AZROPT-001":$advisor,"AZROPT-002":$cost,"AZROPT-003..007":$graph}'
 ```
 
-The scope splits, so a partial block excludes only what it must rather than the whole section:
-
-| Scope group | Checks that need it | Probe | On missing scope |
+| Read surface | Checks | Successful evidence | Unavailable evidence |
 | --- | --- | --- | --- |
-| Cost Management read (Cost Management Reader / Billing Reader, or a role that grants it) | AZROPT-001, AZROPT-002 | Cost Management query for a 1-day `MonthToDate` window returns non-403 | Those report `excluded, reason: "Cost Management query denied (needs Cost Management Reader or equivalent on the subscription)"` — never a computed dollar |
-| Subscription `Reader` (already needed for the scored audit) | AZROPT-003…007 | covered by the base audit-azure doctor probe (`az account show` + a Resource Graph read succeed) | run even when the Cost Management scope above is missing — state the split explicitly, never exclude the whole section for a partial block |
+| Advisor recommendations | AZROPT-001 | Successful JSON array from Advisor's own read | Only Advisor findings unavailable; no inferred savings |
+| Cost Management query | AZROPT-002 | HTTP200, valid columns/rows and complete aggregate | Month-to-date spend unavailable; never a computed dollar |
+| Resource Graph | AZROPT-003…007 | Complete JSON rows, all continuations consumed | Affected presence checks unavailable; no absence claim |
 
-The presence-fact checks (AZROPT-003…007) need only the `Reader` role the scored audit already requires, so they still run when Cost Management access is missing. State that split rather than excluding the whole cost section when only the native-dollar path is blocked.
+These checks remain non-scored. Record failed reads as unavailable evidence with
+the failed surface/reason, continue independent checks, and do not claim an empty
+cost section proves no optimization opportunities. Successful access alone is not
+proof of a check's populated field semantics or a resource's idle state.
 
 ## 6. Read-only surface used (the whole set)
 
@@ -116,20 +110,15 @@ Advisor is the one place Azure itself may attach a **native savings figure**. Th
 
 ```bash
 set -eu
-# --category Cost filters to Advisor's cost recommendations. Print the whole recommendation
-# including its extendedProperties: Azure documents cost recommendations as carrying an impact
-# and (for many types) an own savings amount, but the exact key varies by recommendation type
-# and was not validated here — so emit the raw object and copy ONLY what Advisor itself returns.
-az advisor recommendation list --category Cost -o json 2>/tmp/adv-err \
-  | jq '[.[] | {
-      id: .id,
-      impacted_resource: (.impactedValue // .resourceMetadata.resourceId // null),
-      resource_type: (.impactedField // null),
-      impact: .impact,
-      problem: (.shortDescription.problem // null),
-      solution: (.shortDescription.solution // null),
-      extended_properties: .extendedProperties }]' \
-  || echo "AZROPT-001 excluded: az advisor recommendation list --category Cost denied/unavailable — $(cat /tmp/adv-err)"
+. "${CLAUDE_PLUGIN_ROOT}/skills/audit-azure/scripts/read-context.sh"
+azure_identity
+ADVISOR=$(azure_cli advisor recommendation list --category Cost)
+printf '%s' "$ADVISOR"|azure_project -e 'type=="array"' >/dev/null
+# Keep identifiers and field names; arbitrary recommendation text/properties are not safe evidence.
+printf '%s' "$ADVISOR"|azure_project '[.[]|{id,impacted_resource:(.resourceMetadata.resourceId//.impactedValue),
+  resource_type:.impactedField,impact,extended_property_names:(.extendedProperties//{}|keys)}]'
+# Inspect an actual savings field in memory, and record only the provider amount/unit/currency
+# after verifying its meaning. Never save the raw extendedProperties object or infer USD/month.
 ```
 
 **Expected & failure meaning.** Zero or more recommendations, each naming the impacted resource, Advisor's `impact` (`High`/`Medium`/`Low`), and an `extended_properties` object. Where that object contains Advisor's own **monthly USD** savings amount, copy it verbatim into `estimated_monthly_savings_usd` and name Advisor as the `savings_source`; where Advisor gives an **annual** or **non-USD** figure, record it verbatim in the finding body with its own unit/currency and leave `estimated_monthly_savings_usd` unset. Where Advisor gives no figure at all, the recommendation is still a presence fact worth reporting (e.g. "Advisor recommends shutting down VM `x`") — just with no dollar. A permission error or no Advisor data → `excluded` with the reason, never a guessed `0`.
@@ -143,31 +132,15 @@ The Cost Management Query REST API returns the subscription's **actual** spend. 
 
 ```bash
 set -eu
-AZ_SUBSCRIPTION_CFG=""
-SUB="${AZ_SUBSCRIPTION_CFG:-$(az account show --query id -o tsv)}"
-ARM_TOKEN="$(az account get-access-token --resource https://management.azure.com --query accessToken -o tsv)"
-arm_post() {   # 429-aware read-only POST (see §3 for the full helper)
-  _url="$1"; _body="$2"; _attempt=1; _max=5
-  while :; do
-    _resp="$(curl -sS -D /tmp/az-hdr -w '\n%{http_code}' -X POST "$_url" \
-      -H "Authorization: Bearer ${ARM_TOKEN}" -H 'Content-Type: application/json' -d "$_body")"
-    _code="$(printf '%s' "$_resp" | tail -n1)"; _payload="$(printf '%s' "$_resp" | sed '$d')"
-    if [ "$_code" = "429" ] && [ "$_attempt" -lt "$_max" ]; then
-      _ra="$(sed -n 's/^[Rr]etry-[Aa]fter:[[:space:]]*\([0-9]\{1,\}\).*/\1/p' /tmp/az-hdr | head -n1)"
-      sleep "${_ra:-$((_attempt * _attempt * 2))}"; _attempt=$((_attempt + 1)); continue
-    fi
-    printf '%s' "$_payload"; return 0
-  done
-}
-
-# Endpoint + api-version 2023-11-01 are CONFIRMED (a live call hit HTTP 429 — proving they exist and
-# are rate-limited); the request BODY below is the standard ActualCost / MonthToDate / Sum(PreTaxCost)
-# shape, but the 429 pre-empted a 200 in the confirmed run, so the body and the PreTaxCost response
-# column were NOT themselves validated — confirm the response columns against your tenant.
-COST_URL="https://management.azure.com/subscriptions/${SUB}/providers/Microsoft.CostManagement/query?api-version=2023-11-01"
+. "${CLAUDE_PLUGIN_ROOT}/skills/audit-azure/scripts/read-context.sh"
+azure_identity
+COST_URL="$ARM/subscriptions/${SUB}/providers/Microsoft.CostManagement/query?api-version=2023-11-01"
 COST_BODY='{"type":"ActualCost","timeframe":"MonthToDate","dataset":{"granularity":"None","aggregation":{"totalCost":{"name":"PreTaxCost","function":"Sum"}}}}'
-arm_post "$COST_URL" "$COST_BODY" \
-  | jq '{columns: [.properties.columns[]?.name], rows: .properties.rows}'
+COST=$(azure_http POST "$COST_URL" "$COST_BODY")
+printf '%s' "$COST"|azure_project -e '(.properties.columns|type)=="array" and (.properties.rows|type)=="array"
+  and (.properties.nextLink//"")=="" and (.nextLink//"")==""' >/dev/null \
+  || { echo "AZROPT-002 blocked: invalid or paginated aggregate; no spend inferred" >&2; exit 1; }
+printf '%s' "$COST"|azure_project '{columns:[.properties.columns[].name],rows:.properties.rows}'
 ```
 
 **Expected & failure meaning.** A `properties.rows` array whose row(s) carry the summed `PreTaxCost` and its currency (read the currency from `properties.columns`). Report that number **verbatim** as "current month-to-date spend (`PreTaxCost`, per Cost Management)" on its own context line — never in `estimated_monthly_savings_usd`, never summed into savings. An HTTP 403 → `excluded, reason: "Cost Management query denied (needs Cost Management Reader or equivalent)"`. A persistent 429 after the backoff exhausts → report `blocked, reason: "Cost Management throttled (429) after retries"`, never a guessed `0` and never a fabricated figure. Do not attempt `az costmanagement query` — that CLI command does not exist.
@@ -178,33 +151,9 @@ Enumerated through the confirmed Resource Graph endpoint (managed disks and publ
 
 ```bash
 set -eu
-AZ_SUBSCRIPTION_CFG=""
-SUB="${AZ_SUBSCRIPTION_CFG:-$(az account show --query id -o tsv)}"
-ARM_TOKEN="$(az account get-access-token --resource https://management.azure.com --query accessToken -o tsv)"
-arm_post() {   # 429-aware read-only POST (see §3)
-  _url="$1"; _body="$2"; _attempt=1; _max=5
-  while :; do
-    _resp="$(curl -sS -D /tmp/az-hdr -w '\n%{http_code}' -X POST "$_url" \
-      -H "Authorization: Bearer ${ARM_TOKEN}" -H 'Content-Type: application/json' -d "$_body")"
-    _code="$(printf '%s' "$_resp" | tail -n1)"; _payload="$(printf '%s' "$_resp" | sed '$d')"
-    if [ "$_code" = "429" ] && [ "$_attempt" -lt "$_max" ]; then
-      _ra="$(sed -n 's/^[Rr]etry-[Aa]fter:[[:space:]]*\([0-9]\{1,\}\).*/\1/p' /tmp/az-hdr | head -n1)"
-      sleep "${_ra:-$((_attempt * _attempt * 2))}"; _attempt=$((_attempt + 1)); continue
-    fi
-    printf '%s' "$_payload"; return 0
-  done
-}
-RG_URL="https://management.azure.com/providers/Microsoft.ResourceGraph/resources?api-version=2022-10-01"
-rg_query() {   # $1 = KQL; wraps it in the CONFIRMED body shape {subscriptions:[...], query:"..."}
-  _kql="$1"
-  arm_post "$RG_URL" "$(jq -n --arg s "$SUB" --arg q "$_kql" '{subscriptions:[$s], query:$q}')" \
-    | jq '{count: .count, rows: .data}'
-}
-
-# AZROPT-003 unattached managed disks — name, RG, region, SKU, size, age.
+. "${CLAUDE_PLUGIN_ROOT}/skills/audit-azure/scripts/read-context.sh"
+azure_identity
 rg_query "Resources | where type =~ 'microsoft.compute/disks' | where tostring(properties.diskState) == 'Unattached' | project name, id, resourceGroup, location, sku=tostring(sku.name), sizeGiB=toint(properties.diskSizeGB), timeCreated=tostring(properties.timeCreated)"
-
-# AZROPT-004 public IPs with no association (not bound to a NIC config or NAT gateway).
 rg_query "Resources | where type =~ 'microsoft.network/publicipaddresses' | where isnull(properties.ipConfiguration) and isnull(properties.natGateway) | project name, id, resourceGroup, location, sku=tostring(sku.name), method=tostring(properties.publicIPAllocationMethod)"
 ```
 
@@ -216,27 +165,10 @@ A VM in power state `PowerState/stopped` (as opposed to `PowerState/deallocated`
 
 ```bash
 set -eu
-AZ_SUBSCRIPTION_CFG=""
-SUB="${AZ_SUBSCRIPTION_CFG:-$(az account show --query id -o tsv)}"
-ARM_TOKEN="$(az account get-access-token --resource https://management.azure.com --query accessToken -o tsv)"
-arm_post() {   # 429-aware read-only POST (see §3)
-  _url="$1"; _body="$2"; _attempt=1; _max=5
-  while :; do
-    _resp="$(curl -sS -D /tmp/az-hdr -w '\n%{http_code}' -X POST "$_url" \
-      -H "Authorization: Bearer ${ARM_TOKEN}" -H 'Content-Type: application/json' -d "$_body")"
-    _code="$(printf '%s' "$_resp" | tail -n1)"; _payload="$(printf '%s' "$_resp" | sed '$d')"
-    if [ "$_code" = "429" ] && [ "$_attempt" -lt "$_max" ]; then
-      _ra="$(sed -n 's/^[Rr]etry-[Aa]fter:[[:space:]]*\([0-9]\{1,\}\).*/\1/p' /tmp/az-hdr | head -n1)"
-      sleep "${_ra:-$((_attempt * _attempt * 2))}"; _attempt=$((_attempt + 1)); continue
-    fi
-    printf '%s' "$_payload"; return 0
-  done
-}
-RG_URL="https://management.azure.com/providers/Microsoft.ResourceGraph/resources?api-version=2022-10-01"
-# powerState 'PowerState/stopped' == stopped-but-still-billed; 'PowerState/deallocated' == not billed for compute.
+. "${CLAUDE_PLUGIN_ROOT}/skills/audit-azure/scripts/read-context.sh"
+azure_identity
 KQL="Resources | where type =~ 'microsoft.compute/virtualmachines' | extend powerState = tostring(properties.extended.instanceView.powerState.code) | where powerState == 'PowerState/stopped' | project name, id, resourceGroup, location, vmSize=tostring(properties.hardwareProfile.vmSize), powerState"
-arm_post "$RG_URL" "$(jq -n --arg s "$SUB" --arg q "$KQL" '{subscriptions:[$s], query:$q}')" \
-  | jq '{count: .count, rows: .data}'
+rg_query "$KQL"
 ```
 
 **Expected & failure meaning.** Each row is a VM billing for compute while doing no work — the finding names the VM, its RG/region, and `vmSize`, with no dollar. Distinguish it clearly from a *deallocated* VM (not billed for compute), which is **not** a finding. If Resource Graph does not surface the power-state code on this tenant, fall back to the confirmed direct ARM path — `GET .../Microsoft.Compute/virtualMachines?api-version=2024-07-01` to list, then read each VM's instance view — and report the same presence fact; never guess a state.
@@ -247,28 +179,9 @@ A Virtual Machine Scale Set running a **high fixed capacity with no autoscale** 
 
 ```bash
 set -eu
-AZ_SUBSCRIPTION_CFG=""
-SUB="${AZ_SUBSCRIPTION_CFG:-$(az account show --query id -o tsv)}"
-ARM_TOKEN="$(az account get-access-token --resource https://management.azure.com --query accessToken -o tsv)"
-arm_post() {   # 429-aware read-only POST (see §3)
-  _url="$1"; _body="$2"; _attempt=1; _max=5
-  while :; do
-    _resp="$(curl -sS -D /tmp/az-hdr -w '\n%{http_code}' -X POST "$_url" \
-      -H "Authorization: Bearer ${ARM_TOKEN}" -H 'Content-Type: application/json' -d "$_body")"
-    _code="$(printf '%s' "$_resp" | tail -n1)"; _payload="$(printf '%s' "$_resp" | sed '$d')"
-    if [ "$_code" = "429" ] && [ "$_attempt" -lt "$_max" ]; then
-      _ra="$(sed -n 's/^[Rr]etry-[Aa]fter:[[:space:]]*\([0-9]\{1,\}\).*/\1/p' /tmp/az-hdr | head -n1)"
-      sleep "${_ra:-$((_attempt * _attempt * 2))}"; _attempt=$((_attempt + 1)); continue
-    fi
-    printf '%s' "$_payload"; return 0
-  done
-}
-RG_URL="https://management.azure.com/providers/Microsoft.ResourceGraph/resources?api-version=2022-10-01"
-rg_query() { _kql="$1"; arm_post "$RG_URL" "$(jq -n --arg s "$SUB" --arg q "$_kql" '{subscriptions:[$s], query:$q}')" | jq '{count: .count, rows: .data}'; }
-
-# Scale sets: SKU, current capacity, upgrade mode.
+. "${CLAUDE_PLUGIN_ROOT}/skills/audit-azure/scripts/read-context.sh"
+azure_identity
 rg_query "Resources | where type =~ 'microsoft.compute/virtualmachinescalesets' | project name, id, resourceGroup, location, sku=tostring(sku.name), capacity=toint(sku.capacity), upgradeMode=tostring(properties.upgradePolicy.mode)"
-# Autoscale settings and the resource each targets — a VMSS absent here has NO autoscale.
 rg_query "Resources | where type =~ 'microsoft.insights/autoscalesettings' | project name, resourceGroup, targetResourceUri=tostring(properties.targetResourceUri), enabled=tobool(properties.enabled)"
 ```
 
@@ -280,32 +193,11 @@ Resource Graph makes it cheap to sweep for the common orphan classes in one plac
 
 ```bash
 set -eu
-AZ_SUBSCRIPTION_CFG=""
-SUB="${AZ_SUBSCRIPTION_CFG:-$(az account show --query id -o tsv)}"
-ARM_TOKEN="$(az account get-access-token --resource https://management.azure.com --query accessToken -o tsv)"
-arm_post() {   # 429-aware read-only POST (see §3)
-  _url="$1"; _body="$2"; _attempt=1; _max=5
-  while :; do
-    _resp="$(curl -sS -D /tmp/az-hdr -w '\n%{http_code}' -X POST "$_url" \
-      -H "Authorization: Bearer ${ARM_TOKEN}" -H 'Content-Type: application/json' -d "$_body")"
-    _code="$(printf '%s' "$_resp" | tail -n1)"; _payload="$(printf '%s' "$_resp" | sed '$d')"
-    if [ "$_code" = "429" ] && [ "$_attempt" -lt "$_max" ]; then
-      _ra="$(sed -n 's/^[Rr]etry-[Aa]fter:[[:space:]]*\([0-9]\{1,\}\).*/\1/p' /tmp/az-hdr | head -n1)"
-      sleep "${_ra:-$((_attempt * _attempt * 2))}"; _attempt=$((_attempt + 1)); continue
-    fi
-    printf '%s' "$_payload"; return 0
-  done
-}
-RG_URL="https://management.azure.com/providers/Microsoft.ResourceGraph/resources?api-version=2022-10-01"
-rg_query() { _kql="$1"; arm_post "$RG_URL" "$(jq -n --arg s "$SUB" --arg q "$_kql" '{subscriptions:[$s], query:$q}')" | jq '{count: .count, rows: .data}'; }
-
-# Unattached network interfaces (no VM bound).
+. "${CLAUDE_PLUGIN_ROOT}/skills/audit-azure/scripts/read-context.sh"
+azure_identity
 rg_query "Resources | where type =~ 'microsoft.network/networkinterfaces' | where isnull(properties.virtualMachine) | project name, id, resourceGroup, location"
-# Network security groups bound to no subnet and no NIC.
 rg_query "Resources | where type =~ 'microsoft.network/networksecuritygroups' | where array_length(properties.subnets) == 0 and array_length(properties.networkInterfaces) == 0 | project name, id, resourceGroup, location"
-# Route tables bound to no subnet.
 rg_query "Resources | where type =~ 'microsoft.network/routetables' | where isnull(properties.subnets) or array_length(properties.subnets) == 0 | project name, id, resourceGroup, location"
-# Snapshots (report age vs the team's OWN stated retention — no assumed default).
 rg_query "Resources | where type =~ 'microsoft.compute/snapshots' | project name, id, resourceGroup, location, sizeGiB=toint(properties.diskSizeGB), timeCreated=tostring(properties.timeCreated)"
 ```
 
