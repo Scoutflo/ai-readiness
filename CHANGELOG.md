@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.1.251
+
+Save the checkpoint scope the user actually chose. Pass service names to jq as
+data, so a quote or backslash in a name no longer breaks the save, and trim
+whitespace and empty entries. Treat `all` or an empty answer as clearing the
+saved scope instead of storing `all` as a service name. Remove the unused
+`checkpoint_prompt_services` helper, which offered four placeholder names and
+saved them as the scope on `all`; the skill lists only discovered services.
+Say where each audit's `inventory.json` lives and how to load the checkpoint
+library, and match the reload message and batch-size ranges to the code. Add
+scope save/load/reset tests and a checkpoint pressure scenario.
+
 ## 0.1.250
 
 Keep every Azure audit step on the selected subscription and report target,
