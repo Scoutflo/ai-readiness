@@ -101,6 +101,13 @@ Green = read-only (safe, changes nothing) · amber = write, gated behind your co
 
 ## What's new (latest release)
 
+**0.1.251** makes `/scoutflo:checkpoint` save the scope you actually chose.
+Service names with quotes or backslashes now save correctly instead of silently
+falling back to auditing everything, choosing `all` clears the saved scope
+rather than storing `all` as a service name, and the skill lists only services
+discovered in your estate, never placeholder names. Contributed by
+[@milkandvodka](https://github.com/milkandvodka).
+
 **0.1.250** keeps Azure reads, cost checks and resumed work on the selected
 subscription. Failed or incomplete reads stay unassessed, disabled alerts do
 not count as coverage, and same-name action groups remain distinct. Azure and
