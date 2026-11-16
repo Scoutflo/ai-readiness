@@ -17,9 +17,10 @@ set -eu
 AUDITS_DIR="${SCOUTFLO_AUDIT_DIR:-./scoutflo-audits}"
 CORRELATION_FILE="${AUDITS_DIR}/correlation.json"
 # Pre-v0.1.80 migration remnant: business context now lives at ~/.scoutflo/business_context.json
-# (the primary source, used below). This ~/.scoutflo/topology.json path is written by no current
-# skill; the fallback below only fires when business_context.json is absent, then resolves to a
-# non-existent file and returns the hardcoded safe defaults — the intended no-context behavior.
+# (the primary source, used below). ~/.scoutflo/topology.json is still written by /scoutflo:checkpoint,
+# but only with .audit_scope; the fallback below fires when business_context.json is absent, reads a
+# legacy .business_context if one survives, and otherwise returns the hardcoded safe defaults — the
+# intended no-context behavior.
 TOPOLOGY_FILE="${TOPOLOGY_FILE:-$HOME/.scoutflo/topology.json}"
 CORRELATION_IDENTITY_LIB="${CLAUDE_PLUGIN_ROOT:-.}/skills/correlation-engine/lib"
 
