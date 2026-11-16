@@ -41,7 +41,7 @@ checkpoint_save_scope '<comma-separated names>'
 checkpoint_load_scope
 ```
 
-Write a single quote inside a name as `'\''`. Whitespace around each name is trimmed and names are stored verbatim, so quotes and backslashes are safe. `all` or an empty answer clears the saved scope rather than freezing today's list, so the next audit also covers services added since.
+Write a single quote inside a name as `'\''`. Whitespace around each name is trimmed and names are stored verbatim, so quotes and backslashes are safe. An answer that names no service (`all` in any case, with or without stray spaces or commas, or only separators) clears the saved scope rather than freezing today's list, so the next audit also covers services added since.
 
 The selection is saved to `~/.scoutflo/topology.json`:
 

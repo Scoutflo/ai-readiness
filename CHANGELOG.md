@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.252
+
+Clear the saved checkpoint scope for every answer that names no service. `all`
+in any case, with stray spaces or a trailing comma, was stored as a service
+name unless typed exactly, and an answer of only commas left an empty scope in
+`topology.json`. Normalize the answer after trimming, so both clear the scope
+as a plain `all` does. Names that only contain the word, such as `allocator`,
+are still saved as typed.
+
 ## 0.1.251
 
 Save the checkpoint scope the user actually chose. Pass service names to jq as
