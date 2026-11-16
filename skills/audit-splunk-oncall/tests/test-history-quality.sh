@@ -3,7 +3,7 @@
 set -eu
 ROOT=$(CDPATH= cd -- "$(dirname "$0")/../../.." && pwd)
 python3 - "$ROOT" <<'PY'
-import copy, datetime as dt, json, math, os, pathlib, shutil, subprocess, sys, tempfile
+import copy, datetime as dt, json, math, os, pathlib, shutil, subprocess, sys, tempfile, time
 root=pathlib.Path(sys.argv[1]); reader=root/'skills/audit-splunk-oncall/scripts/history.sh'
 with tempfile.TemporaryDirectory(prefix='oncall-history-tests-') as temp:
     base=pathlib.Path(temp); bins=base/'bin'; bins.mkdir(); home=base/'home'; home.mkdir()
@@ -159,8 +159,16 @@ print(json.dumps(out));print('200',end='')
     assert collect('multi',{'SCENARIO':'multi','TEST_API_KEY':'different-fixture-key'},okay=False) is None
     assert base.joinpath('requests').read_text()==before
     partial=collect('multi',{'SCENARIO':'multi'}); assert not partial['collection']['complete'] and partial['collection']['next_offset']==101
+    # The resumed process must wait out the reporting budget the previous process
+    # persisted. Judge only this run's waits, bounded by wall time measured around
+    # it, so a slow machine cannot fail the check and earlier runs cannot satisfy it.
+    budgets=list((home/'.scoutflo/runtime/oncall-history').glob('*.json')); assert budgets, 'no persisted reporting budget'
+    pending=max(json.loads(b.read_text())['next_request'] for b in budgets); seen=len(base.joinpath('sleeps').read_text().splitlines())
+    before=time.time()
     complete=collect('multi',{'SCENARIO':'multi'}); assert complete['collection']['complete'] and complete['collection']['pages']==3
-    assert any(float(n)>=59 for n in base.joinpath('sleeps').read_text().splitlines()), 'resume did not preserve rate budget'
+    after=time.time(); waits=[float(n) for n in base.joinpath('sleeps').read_text().splitlines()[seen:]]
+    assert pending-after>2, 'resumed run took too long to tell a budget wait from the 1 s request pause'
+    assert any(math.ceil(pending-after)<=w<=math.ceil(pending-before) for w in waits), f'resume did not preserve rate budget: waits {waits}, budget had {pending-before:.1f}s left'
     changed=collect('changed',{'SCENARIO':'changed'},opts=['--page-budget','3']); assert changed['collection']['status']=='blocked' and changed['collection']['reason']=='changed-cohort'
     duplicate=collect('duplicate',{'SCENARIO':'duplicate'},opts=['--page-budget','3']); assert duplicate['collection']['status']=='blocked' and duplicate['collection']['next_offset']==100
     for scenario in ['short','bad-json','denied']:
