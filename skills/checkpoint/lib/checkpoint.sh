@@ -15,26 +15,24 @@ checkpoint_init_topology() {
 }
 
 # --- Save scope to topology.json ---
-# $1: comma-separated service names. "all" or empty clears the saved scope
-# rather than storing "all" as a service name.
+# $1: comma-separated service names. An answer that names nothing but "all"
+# (any case, stray spaces or commas included), or names nothing at all, clears
+# the saved scope rather than storing "all" or an empty list as the scope.
 checkpoint_save_scope() {
   services="$1"
 
   checkpoint_init_topology
 
-  case "$services" in
-    ''|all) checkpoint_reset_scope; return 0 ;;
-  esac
-
   now=$(date -u +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || date +"%Y-%m-%dT%H:%M:%SZ")
 
   # Names enter jq via --arg, never the program text: a quote or backslash in a
   # name must not break (or rewrite) the saved scope.
-  jq --arg s "$services" --arg now "$now" '.audit_scope = {
-    services: ($s | split(",") | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0))),
-    selected_at: $now,
-    revision: 1
-  }' "$TOPOLOGY_FILE" > "$TOPOLOGY_FILE.tmp"
+  jq --arg s "$services" --arg now "$now" '
+    ($s | split(",") | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0))) as $names
+    | if ($names | map(select(ascii_downcase != "all")) | length) == 0
+      then del(.audit_scope)
+      else .audit_scope = {services: $names, selected_at: $now, revision: 1}
+      end' "$TOPOLOGY_FILE" > "$TOPOLOGY_FILE.tmp"
 
   mv "$TOPOLOGY_FILE.tmp" "$TOPOLOGY_FILE"
 }

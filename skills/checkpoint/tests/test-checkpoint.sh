@@ -29,6 +29,16 @@ scope=$(checkpoint_load_scope)
 checkpoint_save_scope "all"
 scope=$(checkpoint_load_scope)
 [ "$scope" = "all" ] && ! jq -e 'has("audit_scope")' "$TOPOLOGY_FILE" >/dev/null && echo "PASS" || { echo "FAIL: 'all' did not clear the scope: $scope"; exit 1; }
+for answer in "" " all " "all," "ALL" "all, All" ",," " , "; do
+  checkpoint_save_scope "api"
+  checkpoint_save_scope "$answer"
+  scope=$(checkpoint_load_scope)
+  [ "$scope" = "all" ] && ! jq -e 'has("audit_scope")' "$TOPOLOGY_FILE" >/dev/null && echo "PASS" || { echo "FAIL: '$answer' did not clear the scope: $scope"; exit 1; }
+done
+checkpoint_save_scope "allocator, All-Hands"
+scope=$(checkpoint_load_scope)
+[ "$scope" = "allocator,All-Hands" ] && echo "PASS" || { echo "FAIL: a name that only contains 'all' was not kept: $scope"; exit 1; }
+jq -e '.business_context.environment == "dr"' "$TOPOLOGY_FILE" >/dev/null && echo "PASS" || { echo "FAIL: clearing the scope dropped business_context"; exit 1; }
 checkpoint_save_scope "api"
 checkpoint_reset_scope
 scope=$(checkpoint_load_scope)
