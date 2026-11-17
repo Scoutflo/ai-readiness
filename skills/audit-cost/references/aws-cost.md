@@ -650,14 +650,35 @@ aws_cli ec2 describe-volumes --filters 'Name=volume-type,Values=gp2' --output js
       attached_to: ([.Attachments[]?.InstanceId] | join(",")) }]'
 
 # COST-AWS-021 S3 no-lifecycle buckets (candidate only if it holds aged Standard-class objects).
+# Only the S3 error NoSuchLifecycleConfiguration means "no lifecycle rule". Any other failure
+# (AccessDenied from a missing s3 permission, a redirect, a throttle) is UNKNOWN for that bucket —
+# never read it as "no lifecycle", or one missing permission flags every bucket in the account.
+START=$(date -u -d '3 days ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -v-3d +%Y-%m-%dT%H:%M:%SZ)
+END=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 for b in $(aws_cli s3api list-buckets --output json | jq -r '.Buckets[].Name'); do
-  if ! aws_cli s3api get-bucket-lifecycle-configuration --bucket "$b" >/dev/null 2>&1; then
+  if out=$(aws_cli s3api get-bucket-lifecycle-configuration --bucket "$b" --output json 2>&1); then
+    continue                                   # has a lifecycle configuration — not a candidate
+  elif printf '%s' "$out" | grep -q 'NoSuchLifecycleConfiguration'; then
     echo "no lifecycle: $b (COST-AWS-021 candidate — confirm aged Standard objects before flagging)"
+    # Size facts for the candidate (presence facts, no dollar): CloudWatch daily storage metrics,
+    # published in the BUCKET's own region. A bucket with no datapoints yet reports "unknown".
+    loc=$(aws_cli s3api get-bucket-location --bucket "$b" --output json 2>/dev/null | jq -r '.LocationConstraint // "us-east-1"')
+    for m in "BucketSizeBytes StandardStorage" "NumberOfObjects AllStorageTypes"; do
+      set -- $m
+      v=$(aws --region "$loc" ${AWS_PROFILE_CFG:+--profile "$AWS_PROFILE_CFG"} cloudwatch get-metric-statistics \
+            --namespace AWS/S3 --metric-name "$1" \
+            --dimensions "Name=BucketName,Value=$b" "Name=StorageType,Value=$2" \
+            --start-time "$START" --end-time "$END" --period 86400 --statistics Average \
+            --query 'sort_by(Datapoints,&Timestamp)[-1].Average' --output text 2>/dev/null || true)
+      echo "  $b $1 ($2): ${v:-unknown}"
+    done
+  else
+    echo "unknown: $b lifecycle not readable (permission or region) — COST-AWS-021 excluded for this bucket, not a finding"
   fi
 done
 ```
 
-**Expected & failure meaning.** COST-AWS-020: compare each snapshot's `StartTime`/`SnapshotCreateTime` against the team's **own stated** retention policy from business context — if none is stated, say so in the finding rather than pick a number for them; a snapshot far older than the stated policy is the finding, no dollar. COST-AWS-022: every `gp2` volume is a migration candidate — list them by ID/size (if Compute Optimizer COST-AWS-005 attached a native $ for the same volume, cross-reference it; the family check itself carries no dollar). COST-AWS-021: a bucket with no lifecycle config is a candidate **only** when a follow-up size check (`s3api list-objects-v2` sampled, or S3 Storage Lens if enabled) shows aged objects still in `STANDARD`; a lifecycle-free short-lived staging bucket is not a finding.
+**Expected & failure meaning.** COST-AWS-020: compare each snapshot's `StartTime`/`SnapshotCreateTime` against the team's **own stated** retention policy from business context — if none is stated, say so in the finding rather than pick a number for them; a snapshot far older than the stated policy is the finding, no dollar. COST-AWS-022: every `gp2` volume is a migration candidate — list them by ID/size (if Compute Optimizer COST-AWS-005 attached a native $ for the same volume, cross-reference it; the family check itself carries no dollar). COST-AWS-021: a bucket whose lifecycle read returns anything other than `NoSuchLifecycleConfiguration` is `unknown` for that bucket and excluded — it is never counted as "no lifecycle". For a genuine candidate, record the bucket's `BucketSizeBytes` and `NumberOfObjects` (from the block above) in the finding's evidence as presence facts — no dollar figure, `unknown` when CloudWatch has no datapoint yet; the same figures size a bulk data transfer. A bucket with no lifecycle config is a candidate **only** when a follow-up size check (`s3api list-objects-v2` sampled, or S3 Storage Lens if enabled) shows aged objects still in `STANDARD`; a lifecycle-free short-lived staging bucket is not a finding.
 
 ## 14. Previous-generation families and idle NAT gateways (COST-AWS-023, 024)
 

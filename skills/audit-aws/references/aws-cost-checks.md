@@ -236,8 +236,15 @@ aws_cli() {
   fi
 }
 BUCKET_NAME="your-bucket"   # each bucket from `aws s3api list-buckets`
-aws_cli s3api get-bucket-lifecycle-configuration --bucket "$BUCKET_NAME" --output json 2>&1 \
-  || echo "no lifecycle configuration on ${BUCKET_NAME}; AWSOPT-009 candidate if it holds aged Standard-class objects"
+# Only the S3 error NoSuchLifecycleConfiguration means "no lifecycle rule"; any other failure
+# (AccessDenied, redirect, throttle) is UNKNOWN for that bucket, never an AWSOPT-009 candidate.
+if out=$(aws_cli s3api get-bucket-lifecycle-configuration --bucket "$BUCKET_NAME" --output json 2>&1); then
+  printf '%s\n' "$out"
+elif printf '%s' "$out" | grep -q 'NoSuchLifecycleConfiguration'; then
+  echo "no lifecycle configuration on ${BUCKET_NAME}; AWSOPT-009 candidate if it holds aged Standard-class objects"
+else
+  echo "unknown: lifecycle on ${BUCKET_NAME} not readable (permission or region); AWSOPT-009 excluded for this bucket"
+fi
 
 # AWSOPT-010: snapshot age against the team's stated retention policy (no assumed default).
 aws_cli ec2 describe-snapshots --owner-ids self --output json \
