@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.1.252
+
+Close five AWS audit gaps found reading a migration-scoping run. A denied or
+redirected S3 lifecycle read is now `unknown` for that bucket instead of being
+counted as "no lifecycle", so one missing permission no longer flags every
+bucket (`COST-AWS-021`, `AWSOPT-009`). Candidate buckets record their size and
+object count from CloudWatch as presence facts, with no dollar figure. The
+documented policies now match the commands: `audit-aws` lists the `ecs`/`eks`
+List actions, and the cost row adds `cost-optimization-hub:List*` and the four
+S3 read actions. `audit-aws` captures the EKS version and managed node groups
+(instance types, capacity type, min/desired/max) in the `cluster` inventory
+item. The report now declares EC2 hosts that look like self-hosted databases
+or queues as not assessed (present / none detected / unknown), without a score
+change. Docs only; no check IDs or weights changed. The node group and
+datastore commands are drafted against the documented AWS APIs and are
+verify-pending until a first live run.
+
 ## 0.1.251
 
 Save the checkpoint scope the user actually chose. Pass service names to jq as

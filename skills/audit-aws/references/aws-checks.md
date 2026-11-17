@@ -145,8 +145,33 @@ aws_cli ecs list-clusters --output json | jq -r '.clusterArns[]' | while read -r
 done | jq -s '.' > "${RAW_DIR}/ecs-services.json"
 aws_cli eks list-clusters --output json | jq -r '.clusters[]' | while read -r name; do
   aws_cli eks describe-cluster --name "$name" --output json \
-    | jq '.cluster | {name: .name, logging: (.logging.clusterLogging // [])}'
+    | jq '.cluster | {name: .name, version: .version, logging: (.logging.clusterLogging // [])}'
 done | jq -s '.' > "${RAW_DIR}/eks.json"
+# EKS managed node groups: instance types, capacity type and min/desired/max. Inventory facts that
+# size a replacement estate; never scored. Self-managed groups and Karpenter nodes show up under
+# EC2/ASG instead. Needs eks:ListNodegroups + eks:DescribeNodegroup (covered by eks:Describe*/List*).
+aws_cli eks list-clusters --output json | jq -r '.clusters[]' | while read -r name; do
+  aws_cli eks list-nodegroups --cluster-name "$name" --output json | jq -r '.nodegroups[]?' | while read -r ng; do
+    aws_cli eks describe-nodegroup --cluster-name "$name" --nodegroup-name "$ng" --output json \
+      | jq '.nodegroup | {cluster: .clusterName, name: .nodegroupName, status: .status, capacity_type: .capacityType,
+          instance_types: .instanceTypes, ami_type: .amiType, disk_gib: .diskSize,
+          min: .scalingConfig.minSize, desired: .scalingConfig.desiredSize, max: .scalingConfig.maxSize}'
+  done
+done | jq -s '.' > "${RAW_DIR}/eks-nodegroups.json"
+# Self-hosted datastore declaration (a coverage declaration, NOT a check): EC2 instances that look like
+# a database/queue host by an ingress port in a security group they use, or by their Name tag. Port and
+# name heuristics find CANDIDATES; they never confirm the software, and absence is "none detected".
+aws_cli ec2 describe-security-groups --output json \
+  | jq '[.SecurityGroups[] | select([.IpPermissions[]? | (.FromPort // 0)]
+      | any(. as $p | [1433,2181,3306,5432,6379,9092,9200,27017] | index($p))) | .GroupId]' > "${RAW_DIR}/datastore-sg-ids.json"
+aws_cli ec2 describe-instances --output json \
+  | jq --slurpfile sg "${RAW_DIR}/datastore-sg-ids.json" '[.Reservations[].Instances[]
+      | select(.State.Name == "running")
+      | (((.Tags // []) | map(select(.Key == "Name")) | .[0].Value) // "") as $n
+      | {id: .InstanceId, name: $n,
+         via_port: ([.SecurityGroups[].GroupId] | any(. as $g | $sg[0] | index($g))),
+         via_name: ($n | test("mongo|redis|kafka|zookeeper|postgres|mysql|elastic|opensearch|clickhouse"; "i"))}
+      | select(.via_port or .via_name)]' > "${RAW_DIR}/ec2-datastore-candidates.json"
 aws_cli lambda list-functions --output json \
   | jq '[.Functions[] | {name: .FunctionName, timeout: .Timeout, reserved_concurrency: (.ReservedConcurrentExecutions // null)}]' > "${RAW_DIR}/lambda.json"
 
